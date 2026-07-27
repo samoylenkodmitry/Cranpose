@@ -31,7 +31,7 @@ use crate::scene::{
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
-    layer_contains_descendant_backdrop, layer_surface_target_scale,
+    layer_contains_descendant_backdrop, layer_surface_scale, layer_surface_target_scale,
     layer_uses_external_backdrop_input, translated_content_axes_for_layer,
     LayerSurfaceRenderOptions, LayerSurfaceRequest, LayerSurfaceRequirements,
     TranslatedContentAxes, TranslationRenderContext,
@@ -2028,6 +2028,10 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         translation_context.surface_capture_active,
         surface_requirements,
         root_scale,
+        // A scaling layer is composited by mapping this surface through its own
+        // transform, so the texture has to carry that magnification's worth of
+        // detail or the composite just resamples a 1x raster upward.
+        layer_surface_scale(layer),
     );
     let translation_context = layer_surface_translation_context(
         translation_context,

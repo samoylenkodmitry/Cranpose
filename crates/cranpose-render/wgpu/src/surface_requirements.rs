@@ -23,6 +23,16 @@ pub(crate) struct SurfaceRequirementSet {
     bits: u16,
 }
 
+/// The share of a layer's uniform scale that may raise its surface density.
+/// Garbage values fall back to `1.0`, and minification never lowers it.
+fn magnifying_layer_scale(layer_scale: f32) -> f32 {
+    if layer_scale.is_finite() {
+        layer_scale.max(1.0)
+    } else {
+        1.0
+    }
+}
+
 impl SurfaceRequirementSet {
     const EXPLICIT_OFFSCREEN: u16 = 1 << 0;
     const RENDER_EFFECT: u16 = 1 << 1;
@@ -135,9 +145,29 @@ impl SurfaceRequirementSet {
         }
     }
 
-    pub(crate) fn target_scale(self, root_scale: f32) -> f32 {
+    /// Device-pixel density the surface texture must be rasterized at.
+    ///
+    /// `layer_scale` is the uniform scale of the layer transform the composite
+    /// will map this surface through (see
+    /// `cranpose_render_common::layer_transform::layer_uniform_scale`). A forced
+    /// surface renders the layer's LOCAL, untransformed rect, so rasterizing a
+    /// magnifying layer at plain `root_scale` and then blowing the texture up
+    /// through the composite's sampler is precisely why zoomed content never
+    /// resolves more detail. A [`SurfaceRequirement::NonTranslationTransform`]
+    /// therefore resolves at the layer's *effective* device scale.
+    ///
+    /// Minification is deliberately not followed downward: `layer_scale` only
+    /// ever raises the density, because shrinking the texture would discard
+    /// detail an interactive scale may zoom straight back into.
+    ///
+    /// This is the *desired* scale. Callers still clamp it against the
+    /// texture-dimension limit and the `MAX_EFFECT_LAYER_SURFACE_BYTES` budget
+    /// via `clamp_effect_surface_scale`, which only clamps downward.
+    pub(crate) fn target_scale(self, root_scale: f32, layer_scale: f32) -> f32 {
         if self.contains(SurfaceRequirement::MotionStableCapture) {
             root_scale * MOTION_STABLE_SURFACE_SCALE_MULTIPLIER
+        } else if self.contains(SurfaceRequirement::NonTranslationTransform) {
+            root_scale * magnifying_layer_scale(layer_scale)
         } else {
             root_scale
         }
@@ -218,7 +248,57 @@ mod tests {
             requirements.composite_sample_mode(),
             CompositeSampleMode::Box4
         );
-        assert_eq!(requirements.target_scale(3.0), 3.0);
+        assert_eq!(requirements.target_scale(3.0, 1.0), 3.0);
+    }
+
+    /// Bug: a magnifying layer's forced surface was rasterized at plain
+    /// `root_scale` and then blown up by the composite's linear sampler, so zoom
+    /// never resolved more detail at any scale.
+    #[test]
+    fn non_translation_transform_resolves_at_the_layer_scale() {
+        let requirements = SurfaceRequirementSet::default()
+            .with(SurfaceRequirement::ExplicitOffscreen)
+            .with(SurfaceRequirement::NonTranslationTransform);
+
+        assert_eq!(
+            requirements.target_scale(3.0, 4.0),
+            12.0,
+            "a 4x layer on a 3x screen needs 12x device density, not 3x"
+        );
+    }
+
+    #[test]
+    fn minified_layer_keeps_the_root_scale_density() {
+        let requirements = SurfaceRequirementSet::default()
+            .with(SurfaceRequirement::ExplicitOffscreen)
+            .with(SurfaceRequirement::NonTranslationTransform);
+
+        assert_eq!(
+            requirements.target_scale(3.0, 0.25),
+            3.0,
+            "shrinking the texture would throw away detail an interactive scale zooms back into"
+        );
+    }
+
+    #[test]
+    fn non_finite_layer_scale_falls_back_to_the_root_scale() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::NonTranslationTransform);
+
+        assert_eq!(requirements.target_scale(2.0, f32::NAN), 2.0);
+        assert_eq!(requirements.target_scale(2.0, f32::INFINITY), 2.0);
+    }
+
+    #[test]
+    fn translation_only_surfaces_ignore_the_layer_scale() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::ExplicitOffscreen);
+
+        assert_eq!(
+            requirements.target_scale(2.0, 4.0),
+            2.0,
+            "without a scaling transform the composite is 1:1 and the extra density is waste"
+        );
     }
 
     #[test]

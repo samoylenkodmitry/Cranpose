@@ -6,6 +6,7 @@ use cranpose_render_common::graph::{
     LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderNode,
 };
 use cranpose_render_common::layer_composition::effective_layer_isolation;
+use cranpose_render_common::layer_transform::layer_uniform_scale;
 use cranpose_ui_graphics::{BlendMode, Brush, CompositingStrategy, Point, Rect};
 
 const SURFACE_PLAN_AFFINE_TOLERANCE: f32 = 1e-4;
@@ -277,11 +278,18 @@ pub(crate) fn composite_sample_mode_for_requirements(
     effective.composite_sample_mode()
 }
 
+/// The density a layer's forced surface must be rasterized at.
+///
+/// `layer_scale` is the uniform scale of the layer's own transform; it raises
+/// the density so a magnifying (pinch-zoomed) layer resolves real detail instead
+/// of being sampled up from a 1x raster. See
+/// [`SurfaceRequirementSet::target_scale`].
 pub(crate) fn layer_surface_target_scale(
     translated_content_context: bool,
     surface_capture_active: bool,
     requirements: LayerSurfaceRequirements,
     root_scale: f32,
+    layer_scale: f32,
 ) -> f32 {
     let effective = effective_surface_requirements(
         translated_content_context,
@@ -294,8 +302,14 @@ pub(crate) fn layer_surface_target_scale(
     if motion_stable_uses_root_scale {
         root_scale
     } else {
-        effective.target_scale(root_scale)
+        effective.target_scale(root_scale, layer_scale)
     }
+}
+
+/// The uniform scale of `layer`'s own transform, for
+/// [`layer_surface_target_scale`].
+pub(crate) fn layer_surface_scale(layer: &LayerNode) -> f32 {
+    layer_uniform_scale(&layer.graphics_layer)
 }
 
 pub(crate) fn composite_sample_mode_for_effect_layer(layer: &EffectLayer) -> CompositeSampleMode {
@@ -312,7 +326,9 @@ pub(crate) fn effect_layer_target_scale(layer: &EffectLayer, root_scale: f32) ->
     {
         root_scale
     } else {
-        layer.requirements.target_scale(root_scale)
+        // Effect layers are already flattened into the scene's device space;
+        // there is no residual layer transform for the composite to magnify.
+        layer.requirements.target_scale(root_scale, 1.0)
     }
 }
 
@@ -484,7 +500,7 @@ mod tests {
     use super::{
         composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
         effect_layer_target_scale, effective_surface_requirements, layer_surface_requirements,
-        layer_surface_target_scale,
+        layer_surface_scale, layer_surface_target_scale,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::EffectLayer;
@@ -567,7 +583,13 @@ mod tests {
             CompositeSampleMode::Box4
         );
         assert_eq!(
-            layer_surface_target_scale(false, false, requirements, 2.0),
+            layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                2.0,
+                layer_surface_scale(&layer)
+            ),
             2.0
         );
     }
@@ -664,7 +686,7 @@ mod tests {
         let effective = effective_surface_requirements(true, false, requirements);
         assert!(!effective.contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
-            layer_surface_target_scale(true, false, requirements, 2.0),
+            layer_surface_target_scale(true, false, requirements, 2.0, layer_surface_scale(&layer)),
             2.0
         );
         assert_eq!(
@@ -736,11 +758,23 @@ mod tests {
         assert!(!effective_surface_requirements(false, true, requirements)
             .contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
-            layer_surface_target_scale(false, false, requirements, 2.0),
+            layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                2.0,
+                layer_surface_scale(&viewport)
+            ),
             2.0
         );
         assert_eq!(
-            layer_surface_target_scale(false, true, requirements, 2.0),
+            layer_surface_target_scale(
+                false,
+                true,
+                requirements,
+                2.0,
+                layer_surface_scale(&viewport)
+            ),
             2.0
         );
     }
@@ -839,7 +873,7 @@ mod tests {
             CompositeSampleMode::Linear
         );
         assert_eq!(
-            layer_surface_target_scale(true, false, requirements, 9.0),
+            layer_surface_target_scale(true, false, requirements, 9.0, layer_surface_scale(&layer)),
             9.0
         );
     }
@@ -866,7 +900,7 @@ mod tests {
             CompositeSampleMode::Linear
         );
         assert_eq!(
-            layer_surface_target_scale(true, false, requirements, 9.0),
+            layer_surface_target_scale(true, false, requirements, 9.0, layer_surface_scale(&layer)),
             9.0
         );
     }
@@ -893,8 +927,101 @@ mod tests {
             CompositeSampleMode::Linear
         );
         assert_eq!(
-            layer_surface_target_scale(true, true, requirements, 9.0),
+            layer_surface_target_scale(true, true, requirements, 9.0, layer_surface_scale(&layer)),
             9.0
+        );
+    }
+
+    /// A pinch-zoomed layer: a scaling `transform_to_parent` forces an
+    /// offscreen surface, and that surface must be allocated at the layer's
+    /// EFFECTIVE device scale. Rasterizing it at plain `root_scale` and letting
+    /// the composite magnify the texture is what made zoom fuzzy.
+    #[test]
+    fn zoomed_layer_surface_resolves_at_root_scale_times_the_layer_scale() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.transform_to_parent = ProjectiveTransform::uniform_scale(4.0);
+        layer.graphics_layer.scale = 4.0;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::NonTranslationTransform),
+            "a scaling transform is not a direct translation, so it forces a surface"
+        );
+        assert!(requirements.has_renderer_forced_surface());
+        assert_eq!(
+            composite_sample_mode_for_requirements(false, false, requirements),
+            CompositeSampleMode::Linear,
+            "the composite resamples, so the source density is what decides sharpness"
+        );
+        assert_eq!(
+            layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                3.0,
+                layer_surface_scale(&layer)
+            ),
+            12.0
+        );
+    }
+
+    /// The scale must come off the layer, not off a constant: halving the zoom
+    /// halves the density the surface is allocated at.
+    #[test]
+    fn zoomed_layer_surface_scale_tracks_the_layer_scale() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+        layer.transform_to_parent = ProjectiveTransform::uniform_scale(2.0);
+        layer.graphics_layer.scale = 2.0;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(
+            layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                3.0,
+                layer_surface_scale(&layer)
+            ),
+            6.0
+        );
+    }
+
+    /// An unscaled layer is untouched: same texture density as before the fix.
+    #[test]
+    fn unscaled_layer_surface_keeps_the_root_scale_density() {
+        let layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        });
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert_eq!(layer_surface_scale(&layer), 1.0);
+        assert_eq!(
+            layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                3.0,
+                layer_surface_scale(&layer)
+            ),
+            3.0
         );
     }
 }

@@ -356,9 +356,10 @@ pub(crate) fn quantize_motion_stable_target_scale(
 #[cfg(test)]
 mod tests {
     use super::{
-        axis_aligned_quad_rect, fit_capture_rect_to_scale_budget_for_axes,
+        axis_aligned_quad_rect, clamp_effect_surface_scale,
+        fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
         quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
-        translation_stable_device_pixel_bounds,
+        translation_stable_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
@@ -624,6 +625,54 @@ mod tests {
         assert!(
             ((fitted.y + fitted.height) - 808.0).abs() < 0.001,
             "trimmed vertical captures must keep the viewport bottom stable instead of preserving phase-shifted trailing content"
+        );
+    }
+
+    /// Raising a zoomed layer's surface density must stay inside the existing
+    /// 8 MB budget: `clamp_effect_surface_scale` only clamps downward, so the
+    /// larger desired scale is bounded, not honoured.
+    #[test]
+    fn zoom_raised_surface_scale_stays_inside_the_byte_budget() {
+        // A full-screen zoomable at 3x device scale pinched to 4x.
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 390.0,
+            height: 844.0,
+        };
+        let desired_scale = 3.0 * 4.0;
+
+        let clamped = clamp_effect_surface_scale(rect, 1.0, desired_scale, 8192);
+        let (width, height) = surface_target_size(rect, clamped, 8192);
+
+        assert!(
+            clamped < desired_scale,
+            "a full-screen layer is already budget-bound, so the zoom scale must be clamped"
+        );
+        // `surface_target_size` ceils each axis, so allow that one row/column.
+        let ceil_slack = ((width as u64) + (height as u64) + 1) * 4;
+        assert!(
+            offscreen_byte_size(width, height) <= MAX_EFFECT_LAYER_SURFACE_BYTES + ceil_slack,
+            "{width}x{height} = {} bytes exceeds the surface budget",
+            offscreen_byte_size(width, height)
+        );
+    }
+
+    /// The other side of the budget: a widget-sized zoomable does get the full
+    /// effective density, which is the whole point of the fix.
+    #[test]
+    fn zoom_raised_surface_scale_is_honoured_when_it_fits_the_budget() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        let desired_scale = 3.0 * 4.0;
+
+        assert_eq!(
+            clamp_effect_surface_scale(rect, 1.0, desired_scale, 8192),
+            desired_scale
         );
     }
 
