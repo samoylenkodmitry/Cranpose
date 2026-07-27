@@ -23,14 +23,27 @@ pub(crate) struct SurfaceRequirementSet {
     bits: u16,
 }
 
+/// Quantisation ladder for a magnifying layer's surface density: quarter
+/// steps. `ScaleBucket` (~0.004 wide) exists to absorb float noise, not
+/// animation, so an animated or pinched scale walked straight through it and
+/// allocated a fresh texture every frame.
+const LAYER_SCALE_QUANTUM: f32 = 4.0;
+
 /// The share of a layer's uniform scale that may raise its surface density.
 /// Garbage values fall back to `1.0`, and minification never lowers it.
+///
+/// The result is rounded UP to the next [`LAYER_SCALE_QUANTUM`] step, so an
+/// animating or pinched scale holds one surface across a range of frames
+/// instead of reallocating per frame, and the density is never below the
+/// layer's effective scale (rounding down would reintroduce the softness this
+/// whole path exists to remove). The overshoot is at most one quarter step,
+/// and `clamp_effect_surface_scale` still bounds the result against the
+/// texture-dimension limit and the per-surface byte budget.
 fn magnifying_layer_scale(layer_scale: f32) -> f32 {
-    if layer_scale.is_finite() {
-        layer_scale.max(1.0)
-    } else {
-        1.0
+    if !layer_scale.is_finite() || layer_scale <= 1.0 {
+        return 1.0;
     }
+    (layer_scale * LAYER_SCALE_QUANTUM).ceil() / LAYER_SCALE_QUANTUM
 }
 
 impl SurfaceRequirementSet {
@@ -299,6 +312,67 @@ mod tests {
             2.0,
             "without a scaling transform the composite is 1:1 and the extra density is waste"
         );
+    }
+
+    /// Regression: an ANIMATING scale walked straight through `ScaleBucket`'s
+    /// ~0.004 float-noise quantisation and produced a distinct surface size
+    /// every frame, so the layer's antialiasing was recomputed at a new
+    /// sub-pixel phase per frame. Neighbouring frames must land on one scale.
+    #[test]
+    fn neighbouring_animation_frames_share_one_target_scale() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::NonTranslationTransform);
+
+        // The demo's "Scale + Fade" lambda sweeps 0.85 -> 1.15.
+        let scales: Vec<f32> = (0..=40)
+            .map(|frame| 0.85 + 0.3 * (frame as f32 / 40.0))
+            .collect();
+        let mut distinct: Vec<f32> = scales
+            .iter()
+            .map(|scale| requirements.target_scale(1.0, *scale))
+            .collect();
+        distinct.dedup();
+
+        assert_eq!(
+            distinct,
+            vec![1.0, 1.25],
+            "a 41-frame sweep must resolve to two densities, not 41"
+        );
+    }
+
+    /// The quantisation may only ever round UP: rounding down would put the
+    /// texture below the layer's effective device scale and hand back exactly
+    /// the softness this path exists to remove.
+    #[test]
+    fn quantised_target_scale_is_never_below_the_effective_scale() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::NonTranslationTransform);
+
+        for step in 0..=64 {
+            let layer_scale = 1.0 + step as f32 * 0.0625;
+            let target_scale = requirements.target_scale(2.0, layer_scale);
+            assert!(
+                target_scale >= 2.0 * layer_scale - 1e-4,
+                "layer_scale={layer_scale} resolved at {target_scale}, below its own density"
+            );
+            assert!(
+                target_scale <= 2.0 * (layer_scale + 0.25),
+                "layer_scale={layer_scale} overshot a quarter step at {target_scale}"
+            );
+        }
+    }
+
+    /// Whole and quarter scales are already on the ladder, so the density they
+    /// ask for is the density they get.
+    #[test]
+    fn scales_on_the_quantisation_ladder_are_exact() {
+        let requirements =
+            SurfaceRequirementSet::default().with(SurfaceRequirement::NonTranslationTransform);
+
+        assert_eq!(requirements.target_scale(3.0, 4.0), 12.0);
+        assert_eq!(requirements.target_scale(3.0, 2.0), 6.0);
+        assert_eq!(requirements.target_scale(2.0, 1.25), 2.5);
+        assert_eq!(requirements.target_scale(2.0, 1.0), 2.0);
     }
 
     #[test]

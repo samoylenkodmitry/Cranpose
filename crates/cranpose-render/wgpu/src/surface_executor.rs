@@ -10,7 +10,9 @@ pub(crate) use geometry::{
     translation_stable_device_pixel_bounds,
 };
 #[cfg(test)]
-pub(crate) use geometry::{clamp_effect_surface_scale, visible_layer_rect};
+pub(crate) use geometry::{
+    clamp_effect_surface_scale, device_pixel_exact_surface_rect, visible_layer_rect,
+};
 pub(crate) use render_paths::{
     apply_backdrop_layer_to_target, backdrop_underlay_is_covered_by_local_content,
     composite_surface_to_view, render_effect_layer_to_target, render_layer_surface,

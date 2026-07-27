@@ -1024,4 +1024,94 @@ mod tests {
             3.0
         );
     }
+
+    /// The invariant the robot's layout-jitter contract watches, without a GPU:
+    /// a layer whose scale ANIMATES must stay put in layout space and must not
+    /// re-rasterize every frame.
+    ///
+    /// Raising `target_scale` to the live layer scale made both false at once.
+    /// A 36 dp box sweeping 0.85 -> 1.15 got a distinct surface size on nearly
+    /// every frame (measured on the demo's Animations tab: 37, 38, 39, 40, 41,
+    /// 42 px within one sweep), so its rounded-corner antialiasing was
+    /// recomputed at a new sub-pixel phase per frame, and the ceil'd texture
+    /// was stretched across a destination quad built from the unpadded rect,
+    /// compressing the content toward the quad's origin by up to half a device
+    /// pixel. Nothing moved in layout space, but every edge pixel did.
+    #[test]
+    fn an_animated_layer_scale_holds_its_surface_and_its_layout_rect() {
+        use crate::surface_executor::{device_pixel_exact_surface_rect, surface_target_size};
+        use cranpose_render_common::layer_transform::layer_transform_to_parent;
+        use cranpose_ui_graphics::TransformOrigin;
+
+        const MAX_TEXTURE_DIM: u32 = 8192;
+        const ROOT_SCALE: f32 = 1.0;
+        let local_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 36.0,
+            height: 36.0,
+        };
+        let placement = Point { x: 54.0, y: 416.0 };
+
+        let mut surface_sizes: Vec<(u32, u32)> = Vec::new();
+        for frame in 0..=40 {
+            // The demo's "Scale + Fade (layer lambda)" animation.
+            let progress = frame as f32 / 40.0;
+            let mut layer = test_layer(local_bounds);
+            layer.graphics_layer.scale = 0.85 + 0.3 * progress;
+            layer.graphics_layer.alpha = 0.4 + 0.6 * progress;
+            layer.graphics_layer.transform_origin = TransformOrigin::CENTER;
+            layer.transform_to_parent =
+                layer_transform_to_parent(local_bounds, placement, &layer.graphics_layer);
+
+            let requirements = layer_surface_requirements(&layer);
+            let target_scale = layer_surface_target_scale(
+                false,
+                false,
+                requirements,
+                ROOT_SCALE,
+                layer_surface_scale(&layer),
+            );
+            let (width, height) = surface_target_size(local_bounds, target_scale, MAX_TEXTURE_DIM);
+            if surface_sizes.last() != Some(&(width, height)) {
+                surface_sizes.push((width, height));
+            }
+
+            // What the composite actually maps: the whole texture onto the quad
+            // the surface rect maps to. The layer's own content stops at
+            // `local_bounds * target_scale` texels, so its layout-space extent
+            // is that fraction of the quad.
+            let surface_rect =
+                device_pixel_exact_surface_rect(local_bounds, target_scale, width, height);
+            let quad = layer.transform_to_parent.bounds_for_rect(surface_rect);
+            let composited = Rect {
+                x: quad.x,
+                y: quad.y,
+                width: quad.width * (local_bounds.width * target_scale) / width as f32,
+                height: quad.height * (local_bounds.height * target_scale) / height as f32,
+            };
+
+            // ... and that has to be exactly where layout put the layer,
+            // whatever resolution the texture happened to get.
+            let laid_out = layer.transform_to_parent.bounds_for_rect(local_bounds);
+            for (label, composited, laid_out) in [
+                ("x", composited.x, laid_out.x),
+                ("y", composited.y, laid_out.y),
+                ("width", composited.width, laid_out.width),
+                ("height", composited.height, laid_out.height),
+            ] {
+                assert!(
+                    (composited - laid_out).abs() < 1e-2,
+                    "frame {frame} (scale {}) composited {label} {composited} away from its laid-out {laid_out}",
+                    layer.graphics_layer.scale
+                );
+            }
+        }
+
+        assert_eq!(
+            surface_sizes,
+            vec![(36, 36), (45, 45)],
+            "a 41-frame scale sweep must reuse two surfaces, not reallocate per frame"
+        );
+    }
 }
