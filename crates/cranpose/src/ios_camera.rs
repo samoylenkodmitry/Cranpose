@@ -20,7 +20,7 @@ use objc2_av_foundation::{
     AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput, AVCapturePhotoSettings,
     AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions,
     AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureSession,
-    AVCaptureSessionPresetPhoto, AVCaptureVideoDataOutput,
+    AVCaptureSessionPresetPhoto, AVCaptureTorchMode, AVCaptureVideoDataOutput,
     AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaType, AVMediaTypeVideo, AVVideoCodecKey,
     AVVideoCodecTypeJPEG,
 };
@@ -45,6 +45,18 @@ fn latest() -> &'static Mutex<Option<CameraFrame>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+/// Recycled RGBA buffers for [`frame_from_sample`]. The delegate replaces
+/// [`latest`] ~25×/s; a fresh multi-MB `Vec` per frame fragments the app
+/// heap against any concurrently running inference's transient buffers
+/// (measured on a phone: each SAM encode grew the process footprint ~500MB
+/// while frames interleaved, straight into a jetsam kill — with frame
+/// delivery paused the identical workload stayed flat). Replaced frames
+/// park their allocation here; steady state allocates nothing.
+fn buffer_pool() -> &'static Mutex<Vec<Vec<u8>>> {
+    static POOL: OnceLock<Mutex<Vec<Vec<u8>>>> = OnceLock::new();
+    POOL.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 /// Holds the running session alive. Its AVFoundation objects are only touched
 /// from `start`/`stop` (the app's single preview-pump thread) and the frame
 /// delegate (its own dispatch queue, which only writes [`latest`]); marking it
@@ -52,6 +64,8 @@ fn latest() -> &'static Mutex<Option<CameraFrame>> {
 struct SessionHolder {
     session: Retained<AVCaptureSession>,
     photo_output: Retained<AVCapturePhotoOutput>,
+    /// The capture device, kept for mid-session reconfiguration (torch).
+    device: Retained<AVCaptureDevice>,
     _delegate: Retained<FrameDelegate>,
     _queue: DispatchRetained<DispatchQueue>,
 }
@@ -85,6 +99,30 @@ impl Camera for IosCamera {
         capture_photo()
     }
 
+    fn set_torch(&self, on: bool) -> bool {
+        let Ok(slot) = session_slot().lock() else {
+            return false;
+        };
+        let Some(holder) = slot.as_ref() else {
+            return false;
+        };
+        let device = &holder.device;
+        let mode = if on {
+            AVCaptureTorchMode::On
+        } else {
+            AVCaptureTorchMode::Off
+        };
+        if !unsafe { device.hasTorch() } || !unsafe { device.isTorchModeSupported(mode) } {
+            return false;
+        }
+        if unsafe { device.lockForConfiguration() }.is_err() {
+            return false;
+        }
+        unsafe { device.setTorchMode(mode) };
+        unsafe { device.unlockForConfiguration() };
+        true
+    }
+
     fn stop(&self) {
         if let Ok(mut slot) = session_slot().lock() {
             if let Some(holder) = slot.take() {
@@ -115,7 +153,13 @@ define_class!(
         ) {
             if let Some(frame) = frame_from_sample(sample_buffer) {
                 if let Ok(mut slot) = latest().lock() {
-                    *slot = Some(frame);
+                    if let Some(old) = slot.replace(frame) {
+                        if let Ok(mut pool) = buffer_pool().lock() {
+                            if pool.len() < 3 {
+                                pool.push(old.rgba);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -245,7 +289,15 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
     // in-app viewfinder is upright in portrait. Output is `height` x `width`.
     let out_w = height;
     let out_h = width;
-    let mut rgba = vec![0u8; out_w * out_h * 4];
+    // Recycle a parked buffer when one fits (clear keeps capacity, so after
+    // the first few frames this allocates nothing at all).
+    let mut rgba = buffer_pool()
+        .lock()
+        .ok()
+        .and_then(|mut pool| pool.pop())
+        .unwrap_or_default();
+    rgba.clear();
+    rgba.resize(out_w * out_h * 4, 0);
     if !base.is_null() && bytes_per_row >= width * 4 {
         for sy in 0..height {
             let src_row = unsafe { base.add(sy * bytes_per_row) };
@@ -396,6 +448,7 @@ fn start_session() -> Result<String, CameraError> {
         *slot = Some(SessionHolder {
             session,
             photo_output,
+            device,
             _delegate: delegate,
             _queue: queue,
         });

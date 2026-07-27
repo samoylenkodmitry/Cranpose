@@ -65,6 +65,13 @@ pub trait Camera: Send + Sync {
     fn capture_still(&self) -> Option<CameraStill> {
         None
     }
+    /// Toggle the capture device's torch (flashlight) while the session runs.
+    /// Scanner-style apps light dim scenes instead of trying to analyze
+    /// photon-starved frames. Returns `false` where the device has no torch
+    /// or the backend has none wired; the torch dies with the session.
+    fn set_torch(&self, _on: bool) -> bool {
+        false
+    }
     /// Stop the session and release the device.
     fn stop(&self);
 }
