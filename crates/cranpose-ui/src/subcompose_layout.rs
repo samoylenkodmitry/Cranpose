@@ -339,20 +339,31 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             expected_children.push(NodeId::try_from(node_id).ok()?);
         }
 
-        if let Some(virtual_node_ids) = self.activate_current_active_slot_roots(slot_id) {
-            for virtual_node_id in &virtual_node_ids {
-                self.composer.record_subcompose_child(*virtual_node_id);
+        let virtual_node_ids = match self.activate_current_active_slot_roots(slot_id) {
+            Some(virtual_node_ids) => {
+                for virtual_node_id in &virtual_node_ids {
+                    self.composer.record_subcompose_child(*virtual_node_id);
+                }
+                virtual_node_ids
             }
-            return Some((
-                expected_children
-                    .into_iter()
-                    .map(SubcomposeChild::new)
-                    .collect(),
-                true,
-            ));
+            None => self.activate_recycled_exact_retained_slot_roots(slot_id)?,
+        };
+
+        // Always read the LIVE roots out of the applier and compare them against
+        // the caller's cached list. Reporting `children_match = true` from the
+        // cached ids alone is a lie whenever the slot recomposed and emitted a
+        // different set of root children: the caller would reuse the cached
+        // measurement, and any newly composed root would never be measured or
+        // placed.
+        //
+        // Flush queued composer commands first so the read sees the tree the
+        // last recomposition actually produced. Every caller runs this on the
+        // very next statement (`children_need_relayout`), and it is a no-op once
+        // applied, so this only moves the flush one statement earlier.
+        if !self.ensure_pending_commands_applied() {
+            return None;
         }
 
-        let virtual_node_ids = self.activate_recycled_exact_retained_slot_roots(slot_id)?;
         let mut activated_children = Vec::with_capacity(expected_children.len());
         for virtual_node_id in virtual_node_ids {
             activated_children.extend(
@@ -569,14 +580,26 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
         (self.retained_measure_registrar)(measurements);
     }
 
-    pub(crate) fn children_need_measure(&mut self, children: &[SubcomposeChild]) -> bool {
+    /// Whether any slot root child still owes layout work — either a re-measure
+    /// (`needs_measure`) or a placement-only repass (`needs_layout`).
+    ///
+    /// Both must be checked. `schedule_layout_repass` (scroll offsets, text
+    /// field panning) bubbles `needs_layout` *without* `needs_measure` on
+    /// purpose, so that reaching the root does not bump the global layout cache
+    /// epoch and wipe every cached measurement in the app. A caller that only
+    /// asked "do you need measuring?" would call such a subtree clean and reuse
+    /// the cached measurement, freezing the scroll on screen.
+    ///
+    /// Stays O(number of slot roots): dirty bubbling already lifted any
+    /// descendant's dirtiness onto these roots, so no subtree walk is needed.
+    pub(crate) fn children_need_relayout(&mut self, children: &[SubcomposeChild]) -> bool {
         if !self.ensure_pending_commands_applied() {
             return true;
         }
 
         let mut root_ids = smallvec::SmallVec::<[NodeId; 8]>::new();
         root_ids.extend(children.iter().map(SubcomposeChild::node_id));
-        self.composer.nodes_need_measure(&root_ids)
+        self.composer.nodes_need_measure(&root_ids) || self.composer.nodes_need_layout(&root_ids)
     }
 
     pub(crate) fn ensure_cached_measurement_node_ids<I>(

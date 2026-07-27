@@ -14,6 +14,7 @@ use std::rc::Rc;
 thread_local! {
     static LAST_LAZY_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
     static GROWING_LAZY_LIST_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
+    static LAST_INNER_ROW_SCROLL_STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
 }
 
 struct CountingPreparedTextMeasurer {
@@ -429,6 +430,56 @@ fn TallCachedLazyTextList(body: Rc<String>) {
     );
 }
 
+/// A `LazyColumn` whose single item hosts a horizontally scrollable `Row`.
+///
+/// This mirrors the on-device shape that froze: the inner scroll container is a
+/// direct root child of the lazy item's slot, so a scroll-driven *layout-only*
+/// repass has to survive the item's measurement cache.
+#[composable]
+#[allow(non_snake_case)]
+fn LazyItemWithScrollableRow() {
+    let list_state = remember_lazy_list_state();
+    let row_scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
+    LAST_INNER_ROW_SCROLL_STATE.with(|cell| {
+        *cell.borrow_mut() = Some(row_scroll.clone());
+    });
+
+    LazyColumn(
+        Modifier::empty().fill_max_width().height(240.0),
+        list_state,
+        LazyColumnSpec::default(),
+        move |scope| {
+            let row_scroll = row_scroll.clone();
+            scope.item(Some(0), None, move || {
+                Row(
+                    Modifier::empty()
+                        .fill_max_width()
+                        .height(60.0)
+                        .horizontal_scroll(row_scroll.clone(), false),
+                    RowSpec::default(),
+                    || {
+                        Text(
+                            "Chip A".to_string(),
+                            Modifier::empty().width(300.0).height(40.0),
+                            TextStyle::default(),
+                        );
+                        Text(
+                            "Chip B".to_string(),
+                            Modifier::empty().width(300.0).height(40.0),
+                            TextStyle::default(),
+                        );
+                        Text(
+                            "Chip C".to_string(),
+                            Modifier::empty().width(300.0).height(40.0),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            });
+        },
+    );
+}
+
 fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> Vec<String> {
     render_text_records(composition, root)
         .into_iter()
@@ -439,6 +490,7 @@ fn render_texts(composition: &mut Composition<MemoryApplier>, root: NodeId) -> V
 #[derive(Debug)]
 struct RenderedText {
     value: String,
+    x: f32,
     y: f32,
 }
 
@@ -480,6 +532,7 @@ fn render_text_records_with_size(
         .filter_map(|op| match op {
             RenderOp::Text { rect, value, .. } => Some(RenderedText {
                 value: value.clone(),
+                x: rect.x,
                 y: rect.y,
             }),
             _ => None,
@@ -518,6 +571,14 @@ fn text_y(records: &[RenderedText], value: &str) -> f32 {
         .find(|record| record.value == value)
         .unwrap_or_else(|| panic!("expected rendered text {value:?}, got {records:?}"))
         .y
+}
+
+fn text_x(records: &[RenderedText], value: &str) -> f32 {
+    records
+        .iter()
+        .find(|record| record.value == value)
+        .unwrap_or_else(|| panic!("expected rendered text {value:?}, got {records:?}"))
+        .x
 }
 
 fn measure_root(composition: &mut Composition<MemoryApplier>, root: NodeId, size: Size) {
@@ -916,6 +977,57 @@ fn cached_lazy_item_keeps_unbounded_child_measurement_when_placed() {
     assert!(
         cached.height > 900.0,
         "cached lazy item placement must retain the unbounded child measurement instead of viewport-clamping it, got {cached_records:?}"
+    );
+}
+
+#[test]
+fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
+    // Regression: a scrollable Row nested in a LazyColumn item updated its
+    // ScrollState but never moved on screen. `dispatch_raw_delta` bubbles
+    // *layout* dirtiness only, and the lazy item's cache-reuse gate consulted
+    // `needs_measure` alone, so the cached measurement (with the stale offset)
+    // was replayed forever. Assert rendered geometry, not state: asserting
+    // `value_non_reactive()` is exactly what let this ship green.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    composition
+        .render(
+            location_key(file!(), line!(), column!()),
+            LazyItemWithScrollableRow,
+        )
+        .expect("initial render");
+    let root = composition.root().expect("lazy list root");
+
+    let viewport = Size {
+        width: 320.0,
+        height: 240.0,
+    };
+    let initial_records = render_text_records_with_size(&mut composition, root, viewport);
+    let initial_x = text_x(&initial_records, "Chip B");
+
+    let row_scroll = LAST_INNER_ROW_SCROLL_STATE
+        .with(|cell| cell.borrow().clone())
+        .expect("inner row scroll state captured");
+    assert!(
+        row_scroll.max_value() > 100.0,
+        "inner row must actually overflow its viewport, max_value={}",
+        row_scroll.max_value()
+    );
+
+    let applied = row_scroll.dispatch_raw_delta(120.0);
+    assert!(
+        (applied - 120.0).abs() < 0.001,
+        "scroll state should accept the full delta, applied={applied}"
+    );
+
+    let scrolled_records = render_text_records_with_size(&mut composition, root, viewport);
+    let scrolled_x = text_x(&scrolled_records, "Chip B");
+
+    assert!(
+        (initial_x - scrolled_x - 120.0).abs() < 0.5,
+        "scrolling the Row inside a lazy item must move its rendered children left by the \
+         scroll delta: initial x={initial_x:.1}, after 120px scroll x={scrolled_x:.1}, \
+         records={scrolled_records:?}"
     );
 }
 
@@ -1354,5 +1466,78 @@ fn scroll_to_item_updates_child_indicator_scope() {
     assert!(
         texts.iter().any(|text| text == "Child first visible 20"),
         "expected child indicator text to track scroll_to_item target; texts={texts:?}"
+    );
+}
+
+/// A lazy item that grows a second *root* child when `show_extra` flips.
+#[composable]
+#[allow(non_snake_case)]
+fn GrowingRootChildLazyItemList(show_extra: MutableState<bool>) {
+    let list_state = remember_lazy_list_state();
+    LazyColumn(
+        Modifier::empty().fill_max_width().height(240.0),
+        list_state,
+        LazyColumnSpec::default(),
+        move |scope| {
+            scope.item(Some(0), None, move || {
+                Text(
+                    "Grown base row".to_string(),
+                    Modifier::empty().height(30.0),
+                    TextStyle::default(),
+                );
+                if show_extra.value() {
+                    Text(
+                        "Grown extra root".to_string(),
+                        Modifier::empty().height(30.0),
+                        TextStyle::default(),
+                    );
+                }
+            });
+        },
+    );
+}
+
+#[test]
+fn recomposed_lazy_item_places_a_newly_emitted_root_child() {
+    // Regression: `activate_exact_retained_slot_with_known_children` reported
+    // `children_match = true` straight from the CACHED id list whenever the slot
+    // was still active, without ever asking the applier what the slot's live
+    // roots were. A root child added by recomposition was therefore invisible to
+    // the lazy item's reuse gate and never got measured or placed.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let show_extra = MutableState::with_runtime(false, runtime);
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            GrowingRootChildLazyItemList(show_extra);
+        })
+        .expect("initial render");
+    let root = composition.root().expect("lazy list root");
+    let viewport = Size {
+        width: 320.0,
+        height: 240.0,
+    };
+    let initial = render_text_records_with_size(&mut composition, root, viewport);
+    assert!(
+        !initial.iter().any(|r| r.value == "Grown extra root"),
+        "extra root must not render before the state flips, got {initial:?}"
+    );
+
+    show_extra.set(true);
+    while composition
+        .process_invalid_scopes()
+        .expect("grow lazy item root children")
+    {}
+
+    let grown = render_text_records_with_size(&mut composition, root, viewport);
+    assert!(
+        grown.iter().any(|r| r.value == "Grown extra root"),
+        "a root child newly emitted by a cached lazy item must be measured and placed, \
+         got {grown:?}"
+    );
+    assert!(
+        (text_y(&grown, "Grown extra root") - 30.0).abs() < 0.5,
+        "the new root child must be placed below its sibling, got {grown:?}"
     );
 }
