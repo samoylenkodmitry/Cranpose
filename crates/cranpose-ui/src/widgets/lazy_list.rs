@@ -200,7 +200,7 @@ fn measure_lazy_list_item(
         if let Some((root_children, children_match)) =
             scope.activate_exact_retained_slot_with_known_children(slot_id, &cached.item.node_ids)
         {
-            let children_are_clean = !scope.children_need_measure(&root_children);
+            let children_are_clean = !scope.children_need_relayout(&root_children);
             if children_match && children_are_clean {
                 retained_measurement_batch.extend(cached.retained_children.iter().cloned());
                 inputs.measured_item_cache.borrow_mut().record_exact_reuse();
@@ -257,7 +257,7 @@ fn measure_lazy_list_item(
         content_type,
         &root_node_ids,
     ) {
-        if !scope.children_need_measure(&root_children) {
+        if !scope.children_need_relayout(&root_children) {
             scope.register_retained_measurements(&cached.retained_children);
             return cached.item;
         }

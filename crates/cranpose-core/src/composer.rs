@@ -843,6 +843,22 @@ impl Composer {
         })
     }
 
+    /// Whether any of `node_ids` carries a pending *layout* (placement) repass.
+    ///
+    /// Layout-only dirtiness is not a subset of measure dirtiness: a scroll
+    /// offset change keeps every measured size intact and therefore bubbles
+    /// `needs_layout` alone. Callers that gate cache reuse on
+    /// [`Self::nodes_need_measure`] must also consult this, or a node whose
+    /// *position* changed will replay its stale cached placement forever.
+    pub fn nodes_need_layout(&self, node_ids: &[NodeId]) -> bool {
+        let mut applier = self.borrow_applier();
+        node_ids.iter().any(|node_id| {
+            applier
+                .get_mut(*node_id)
+                .is_ok_and(|node| node.needs_layout())
+        })
+    }
+
     /// Records a child node in the current parent frame's expected children list.
     ///
     /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes

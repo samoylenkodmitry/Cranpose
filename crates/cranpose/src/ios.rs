@@ -15,6 +15,7 @@ use crate::wgpu_surface::{current_surface_texture, surface_present_required, Sur
 use crate::winit_pointer::{
     is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
 };
+use crate::winit_touch::{TouchLeave, TouchPointerRouter, TouchRoute};
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -58,6 +59,9 @@ struct IosApp<F: FnMut() + 'static> {
     /// Wakes the event loop for runtime-driven frames (animations, async work).
     event_proxy: EventLoopProxy,
     launch_error: Rc<RefCell<Option<LaunchError>>>,
+    /// Maps winit's per-finger ids onto the shell's primary/secondary pointer
+    /// ids so multi-touch gestures (pinch-zoom) see more than one pointer.
+    touch_router: TouchPointerRouter,
 }
 
 impl<F: FnMut() + 'static> IosApp<F> {
@@ -79,6 +83,7 @@ impl<F: FnMut() + 'static> IosApp<F> {
             last_keyboard_bottom: 0.0,
             event_proxy,
             launch_error,
+            touch_router: TouchPointerRouter::default(),
         }
     }
 
@@ -411,9 +416,19 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 position, source, ..
             } => {
                 let logical = self.platform.pointer_position(position);
+                // Route by finger: a second finger's move belongs to its own
+                // pointer, not to the cursor.
+                let route = self.touch_router.moved(&source);
                 if let Some(shell) = self.shell.as_mut() {
                     shell.set_pointer_source(pointer_source_from_winit(&source));
-                    if shell.set_cursor(logical.x, logical.y) {
+                    let changed = match route {
+                        TouchRoute::Primary => shell.set_cursor(logical.x, logical.y),
+                        TouchRoute::Secondary(id) => {
+                            shell.secondary_pointer_moved(id, logical.x, logical.y, None)
+                        }
+                        TouchRoute::Untracked => false,
+                    };
+                    if changed {
                         window.request_redraw();
                     }
                 }
@@ -425,28 +440,70 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 ..
             } if is_primary_pointer_button(&button) => {
                 let logical = self.platform.pointer_position(position);
-                if let Some(shell) = self.shell.as_mut() {
-                    shell.set_pointer_source(pointer_source_from_button(&button));
-                    let changed = match state {
-                        ElementState::Pressed => {
-                            shell.set_cursor(logical.x, logical.y);
-                            shell.pointer_pressed()
+                match state {
+                    ElementState::Pressed => {
+                        let route = self.touch_router.press(&button);
+                        if let Some(shell) = self.shell.as_mut() {
+                            shell.set_pointer_source(pointer_source_from_button(&button));
+                            let changed = match route {
+                                TouchRoute::Primary => {
+                                    shell.set_cursor(logical.x, logical.y);
+                                    shell.pointer_pressed()
+                                }
+                                TouchRoute::Secondary(id) => {
+                                    shell.secondary_pointer_pressed(id, logical.x, logical.y, None)
+                                }
+                                TouchRoute::Untracked => false,
+                            };
+                            if changed {
+                                window.request_redraw();
+                            }
                         }
-                        // Touch lift-off positions must not become velocity
-                        // samples (see AppShell::pointer_released_at_position).
-                        ElementState::Released => {
-                            shell.pointer_released_at_position(logical.x, logical.y)
+                    }
+                    ElementState::Released => {
+                        let release = self.touch_router.release(&button);
+                        if let Some(shell) = self.shell.as_mut() {
+                            shell.set_pointer_source(pointer_source_from_button(&button));
+                            let mut changed = false;
+                            // Fingers left over from a primary lift close first,
+                            // so the gesture's Ended step lands on the primary.
+                            for id in release.secondaries {
+                                changed |= shell
+                                    .secondary_pointer_released(id, logical.x, logical.y, None);
+                            }
+                            // Touch lift-off positions must not become velocity
+                            // samples (see AppShell::pointer_released_at_position).
+                            if release.releases_primary {
+                                changed |= shell.pointer_released_at_position(logical.x, logical.y);
+                            }
+                            if changed {
+                                window.request_redraw();
+                            }
                         }
-                    };
-                    if changed {
-                        window.request_redraw();
                     }
                 }
             }
-            WindowEvent::PointerLeft { .. } => {
+            WindowEvent::PointerLeft { position, kind, .. } => {
+                // iOS emits one of these per finger, so cancelling the gesture
+                // unconditionally would tear down a pinch the moment either
+                // finger leaves.
+                let leave = self.touch_router.left(&kind);
+                let logical = position.map(|position| self.platform.pointer_position(position));
                 if let Some(shell) = self.shell.as_mut() {
-                    shell.cancel_gesture();
-                    window.request_redraw();
+                    match leave {
+                        TouchLeave::CancelGesture => {
+                            shell.cancel_gesture();
+                            window.request_redraw();
+                        }
+                        TouchLeave::ReleaseSecondary(id) => {
+                            shell.set_pointer_source(cranpose_app_shell::PointerSource::Touch);
+                            let (x, y) = logical.map_or((0.0, 0.0), |point| (point.x, point.y));
+                            if shell.secondary_pointer_released(id, x, y, None) {
+                                window.request_redraw();
+                            }
+                        }
+                        TouchLeave::Ignore => {}
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {

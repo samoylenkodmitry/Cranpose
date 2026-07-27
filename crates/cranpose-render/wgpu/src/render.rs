@@ -47,7 +47,8 @@ use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
-    layer_surface_requirements, layer_surface_target_scale, TranslatedContentAxes,
+    layer_surface_requirements, layer_surface_scale, layer_surface_target_scale,
+    TranslatedContentAxes,
 };
 use crate::surface_plan::{
     layer_surface_requirements_cached, layer_uses_external_backdrop_input,
@@ -179,6 +180,10 @@ const INITIAL_UPLOAD_BUFFER_BYTES: u64 = 4 * 1024;
 #[cfg(not(target_arch = "wasm32"))]
 const INITIAL_RETAINED_GLYPH_UNIFORM_SLOTS: usize = 128;
 const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
+/// Byte ceiling for `image_texture_cache` (see `CachedImageTexture::bytes`).
+/// Generous enough for a screenful of full-page images plus thumbnails;
+/// small enough that a camera preview stream can never pin gigabytes.
+const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
 const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
 const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
@@ -1399,6 +1404,13 @@ struct CachedImageTexture {
     _view: wgpu::TextureView,
     nearest_bind_group: wgpu::BindGroup,
     linear_bind_group: wgpu::BindGroup,
+    /// GPU bytes this entry pins (w×h×4): the cache is bounded by BYTES as
+    /// well as count. A live camera publishes a new multi-MB bitmap id every
+    /// frame; 256 count-slots of those is ~1.5GB of dead preview textures —
+    /// which on iOS unified memory counts straight against the process's
+    /// jetsam limit (measured: the app died mid-scan under an open camera
+    /// with exactly that ballast).
+    bytes: usize,
 }
 
 impl CachedImageTexture {
@@ -2097,6 +2109,8 @@ pub struct GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     wasm_image_batch_cursor: usize,
     image_texture_cache: BoundedLruCache<u64, CachedImageTexture>,
+    /// Total `CachedImageTexture::bytes` currently in the cache.
+    image_texture_cache_bytes: usize,
     text_image_cache: BoundedLruCache<TextImageCacheKey, CachedTextImage>,
     text_glyph_atlas: TextGlyphAtlas,
     text_glyph_run_cache: BoundedLruCache<TextGlyphRunCacheKey, CachedTextGlyphRun>,
@@ -2484,6 +2498,7 @@ impl GpuRenderer {
             image_texture_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXTURE_CACHE_ITEMS,
             ),
+            image_texture_cache_bytes: 0,
             text_image_cache: BoundedLruCache::with_capacity_at_least_one(
                 MAX_TEXT_IMAGE_CACHE_ITEMS,
             ),
@@ -2580,15 +2595,33 @@ impl GpuRenderer {
         let nearest_bind_group = self.image_bind_group(&view, &self.image_nearest_sampler);
         let linear_bind_group = self.image_bind_group(&view, &self.image_linear_sampler);
 
-        self.image_texture_cache.put(
+        let bytes = image.width() as usize * image.height() as usize * 4;
+        if let Some(replaced) = self.image_texture_cache.put(
             image.id(),
             CachedImageTexture {
                 _texture: texture,
                 _view: view,
                 nearest_bind_group,
                 linear_bind_group,
+                bytes,
             },
-        );
+        ) {
+            self.image_texture_cache_bytes = self
+                .image_texture_cache_bytes
+                .saturating_sub(replaced.bytes);
+        }
+        self.image_texture_cache_bytes += bytes;
+        // Byte-bounded eviction on top of the count bound: never evict the
+        // entry just inserted (this frame draws it).
+        while self.image_texture_cache_bytes > MAX_IMAGE_TEXTURE_CACHE_BYTES
+            && self.image_texture_cache.len() > 1
+        {
+            let Some((_, evicted)) = self.image_texture_cache.pop_lru() else {
+                break;
+            };
+            self.image_texture_cache_bytes =
+                self.image_texture_cache_bytes.saturating_sub(evicted.bytes);
+        }
         Ok(())
     }
 
@@ -13166,11 +13199,17 @@ mod tests {
             CompositeSampleMode::Box4
         );
         assert_eq!(
-            layer_surface_target_scale(true, false, requirements, 1.25),
+            layer_surface_target_scale(
+                true,
+                false,
+                requirements,
+                1.25,
+                layer_surface_scale(&layer)
+            ),
             SurfaceRequirementSet::default()
                 .with(SurfaceRequirement::TextMaterialMask)
                 .with(SurfaceRequirement::MotionStableCapture)
-                .target_scale(1.25)
+                .target_scale(1.25, 1.0)
         );
     }
 
@@ -13194,10 +13233,10 @@ mod tests {
             CompositeSampleMode::Linear
         );
         assert_eq!(
-            layer_surface_target_scale(true, true, requirements, 10.0),
+            layer_surface_target_scale(true, true, requirements, 10.0, layer_surface_scale(&layer)),
             SurfaceRequirementSet::default()
                 .with(SurfaceRequirement::TextMaterialMask)
-                .target_scale(10.0)
+                .target_scale(10.0, 1.0)
         );
     }
 

@@ -3,8 +3,8 @@ use super::backend::{
 };
 use super::geometry::{
     axis_aligned_quad_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
-    fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
-    quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
+    device_pixel_exact_surface_rect, fit_capture_rect_to_scale_budget_for_axes,
+    offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
     snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size, target_quad,
     visible_layer_rect,
 };
@@ -31,7 +31,7 @@ use crate::scene::{
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
-    layer_contains_descendant_backdrop, layer_surface_target_scale,
+    layer_contains_descendant_backdrop, layer_surface_scale, layer_surface_target_scale,
     layer_uses_external_backdrop_input, translated_content_axes_for_layer,
     LayerSurfaceRenderOptions, LayerSurfaceRequest, LayerSurfaceRequirements,
     TranslatedContentAxes, TranslationRenderContext,
@@ -2028,6 +2028,10 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         translation_context.surface_capture_active,
         surface_requirements,
         root_scale,
+        // A scaling layer is composited by mapping this surface through its own
+        // transform, so the texture has to carry that magnification's worth of
+        // detail or the composite just resamples a 1x raster upward.
+        layer_surface_scale(layer),
     );
     let translation_context = layer_surface_translation_context(
         translation_context,
@@ -4026,6 +4030,16 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             backend.max_texture_dim(),
         );
         let target_scale = quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
+        let (width, height) =
+            surface_target_size(surface_rect, target_scale, backend.max_texture_dim());
+        // The composite maps the whole texture onto the destination quad, so
+        // the rect the quad is built from has to be the area the texture
+        // actually covers. Without this the ceil padding is stretched across
+        // the quad and the content lands up to half a device pixel toward its
+        // origin — invisible while the scale is constant, per-frame jitter
+        // once the scale animates.
+        let surface_rect =
+            device_pixel_exact_surface_rect(surface_rect, target_scale, width, height);
         let shift = cranpose_ui_graphics::Point {
             x: -surface_rect.x,
             y: -surface_rect.y,
@@ -4046,8 +4060,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             }
             child.shadow_draws.translate_by(shift);
         }
-        let (width, height) =
-            surface_target_size(surface_rect, target_scale, backend.max_texture_dim());
         backend.record_isolated_layer_render(
             width,
             height,

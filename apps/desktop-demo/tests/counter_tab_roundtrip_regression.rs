@@ -131,21 +131,23 @@ fn max_layer_translation_y(layer: &LayerNode) -> f32 {
 #[composable]
 fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
     let press_target = cranpose_core::useState(|| 0.0_f32);
+    // The click raises the lift target and nothing lowers it again. An earlier
+    // revision released the lift from a `launch_background` worker that slept
+    // 120ms of WALL time, and that made the probe cancel itself whenever the
+    // frame loop was starved: `animateTo` seeds `start` from the animation's
+    // CURRENT value, so a retarget back to 0.0 that lands before any frame has
+    // moved the value off 0.0 gives start == target == 0.0, and the tween then
+    // interpolates 0.0 -> 0.0 for the rest of the test. That produced exactly
+    // the observed `last translation_y=0`, on a loaded machine, with the
+    // propagation path under test working perfectly.
     cranpose_core::LaunchedEffect!(press_tick.value(), {
         let target_state = press_target;
         let tick_state = press_tick;
-        move |scope| {
+        move |_scope| {
             if tick_state.value() == 0 {
                 return;
             }
             target_state.set(1.0);
-            let reset_target_state = target_state;
-            scope.launch_background(
-                move |_| async move {
-                    std::thread::sleep(Duration::from_millis(120));
-                },
-                move |_| reset_target_state.set(0.0),
-            );
         }
     });
 
@@ -200,8 +202,14 @@ fn animate_float_as_state_returned_value_updates_parent_graphics_layer_after_cli
     let mut saw_intermediate_layer = false;
     let mut last_translation = 0.0;
     for _ in 0..24 {
-        std::thread::sleep(Duration::from_millis(16));
-        shell.update();
+        // Advance the animation on a FRAME clock, not on wall time. `update()`
+        // anchors the tween to `Instant::now()`, so a starved thread that takes
+        // longer than the 240ms duration between two samples jumps the value
+        // straight from 0.0 to the settled 32.0 and never lands inside the band
+        // this test asserts on. `update_after_exact_interval` steps the tween by
+        // exactly one 16ms frame per iteration on any machine, which puts the
+        // first non-zero sample at a fixed 6.67% of the animation.
+        shell.update_after_exact_interval(Duration::from_millis(16));
         let translation = shell
             .scene()
             .graph

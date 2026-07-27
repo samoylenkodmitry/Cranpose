@@ -530,7 +530,7 @@ fn watch_collapse(controller: &Rc<SwipeToDismissController>) {
                     // only bubbles *layout* (placement) dirtiness up the tree,
                     // which does not set the row node's own `needs_measure` flag —
                     // and that flag is exactly what an enclosing `LazyColumn`
-                    // consults (`children_need_measure`) before reusing a cached
+                    // consults (`children_need_relayout`) before reusing a cached
                     // item slot. `schedule_measure_repass` bubbles *measure*
                     // dirtiness so the list actually re-measures the shrinking
                     // row; otherwise the pre-dismiss height and the still-composed

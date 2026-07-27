@@ -8,11 +8,54 @@ pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
 
+/// Slack absorbed before the ceil, so a rect that already covers a whole
+/// number of device pixels cannot gain one to float error: `51.0 / 1.4 * 1.4`
+/// is `51.000004`, and a bare ceil turns that into 52. Orders of magnitude
+/// below any real sub-pixel coverage.
+const SURFACE_SIZE_CEIL_EPSILON: f32 = 1e-3;
+
 pub(crate) fn surface_target_size(rect: Rect, root_scale: f32, max_dim: u32) -> (u32, u32) {
     (
-        (rect.width * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
-        (rect.height * root_scale).ceil().clamp(1.0, max_dim as f32) as u32,
+        (rect.width * root_scale - SURFACE_SIZE_CEIL_EPSILON)
+            .ceil()
+            .clamp(1.0, max_dim as f32) as u32,
+        (rect.height * root_scale - SURFACE_SIZE_CEIL_EPSILON)
+            .ceil()
+            .clamp(1.0, max_dim as f32) as u32,
     )
+}
+
+/// The surface rect that `width`x`height` device pixels cover exactly at
+/// `scale`.
+///
+/// `surface_target_size` CEILS each axis, but the composite maps the WHOLE
+/// texture onto the destination quad — `layer_surface_dest_quad` maps the
+/// surface's logical rect through the layer transform, so texture pixel
+/// `(width, height)` lands on the rect's far corner no matter where the
+/// content actually ended. A rect that is not a whole number of device pixels
+/// therefore has its ceil padding stretched across the quad, which compresses
+/// the content toward the quad's origin by up to half a device pixel.
+///
+/// Growing the rect to the pixels that were allocated anyway makes that
+/// mapping exact. The texture is unchanged — this only names the area it
+/// already covers — so nothing here spends memory. Only growth is allowed: a
+/// size clamped by the texture-dimension limit must not shrink the rect and
+/// clip the content off.
+pub(crate) fn device_pixel_exact_surface_rect(
+    rect: Rect,
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> Rect {
+    if !scale.is_finite() || scale <= 0.0 {
+        return rect;
+    }
+    Rect {
+        x: rect.x,
+        y: rect.y,
+        width: (width as f32 / scale).max(rect.width),
+        height: (height as f32 / scale).max(rect.height),
+    }
 }
 
 pub(crate) fn offscreen_byte_size(width: u32, height: u32) -> u64 {
@@ -356,9 +399,10 @@ pub(crate) fn quantize_motion_stable_target_scale(
 #[cfg(test)]
 mod tests {
     use super::{
-        axis_aligned_quad_rect, fit_capture_rect_to_scale_budget_for_axes,
+        axis_aligned_quad_rect, clamp_effect_surface_scale, device_pixel_exact_surface_rect,
+        fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
         quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
-        translation_stable_device_pixel_bounds,
+        translation_stable_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
@@ -627,11 +671,142 @@ mod tests {
         );
     }
 
+    /// Raising a zoomed layer's surface density must stay inside the existing
+    /// 8 MB budget: `clamp_effect_surface_scale` only clamps downward, so the
+    /// larger desired scale is bounded, not honoured.
+    #[test]
+    fn zoom_raised_surface_scale_stays_inside_the_byte_budget() {
+        // A full-screen zoomable at 3x device scale pinched to 4x.
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 390.0,
+            height: 844.0,
+        };
+        let desired_scale = 3.0 * 4.0;
+
+        let clamped = clamp_effect_surface_scale(rect, 1.0, desired_scale, 8192);
+        let (width, height) = surface_target_size(rect, clamped, 8192);
+
+        assert!(
+            clamped < desired_scale,
+            "a full-screen layer is already budget-bound, so the zoom scale must be clamped"
+        );
+        // `surface_target_size` ceils each axis, so allow that one row/column.
+        let ceil_slack = ((width as u64) + (height as u64) + 1) * 4;
+        assert!(
+            offscreen_byte_size(width, height) <= MAX_EFFECT_LAYER_SURFACE_BYTES + ceil_slack,
+            "{width}x{height} = {} bytes exceeds the surface budget",
+            offscreen_byte_size(width, height)
+        );
+    }
+
+    /// The other side of the budget: a widget-sized zoomable does get the full
+    /// effective density, which is the whole point of the fix.
+    #[test]
+    fn zoom_raised_surface_scale_is_honoured_when_it_fits_the_budget() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 80.0,
+        };
+        let desired_scale = 3.0 * 4.0;
+
+        assert_eq!(
+            clamp_effect_surface_scale(rect, 1.0, desired_scale, 8192),
+            desired_scale
+        );
+    }
+
     #[test]
     fn linear_target_scale_preserves_fractional_density() {
         assert_eq!(
             quantize_motion_stable_target_scale(4.72, CompositeSampleMode::Linear),
             4.72
+        );
+    }
+
+    /// The composite maps the WHOLE texture onto the quad built from the
+    /// surface rect, so a rect that stops short of the ceil'd texture has its
+    /// padding stretched across the quad and its content compressed toward the
+    /// quad's origin. The rect must name the pixels that were allocated.
+    #[test]
+    fn surface_rect_covers_exactly_the_pixels_that_were_allocated() {
+        let rect = Rect {
+            x: 12.0,
+            y: 9.0,
+            width: 36.0,
+            height: 37.0,
+        };
+        let scale = 1.15;
+        let (width, height) = surface_target_size(rect, scale, 8192);
+        assert_eq!((width, height), (42, 43));
+
+        let exact = device_pixel_exact_surface_rect(rect, scale, width, height);
+
+        assert_eq!(
+            exact.x, rect.x,
+            "only the extent is padded, never the origin"
+        );
+        assert_eq!(exact.y, rect.y);
+        assert!((exact.width * scale - width as f32).abs() < 1e-3);
+        assert!((exact.height * scale - height as f32).abs() < 1e-3);
+        assert!(exact.width >= rect.width && exact.height >= rect.height);
+    }
+
+    /// Padding the rect must not cost a byte: the texture it names is the one
+    /// `surface_target_size` already ceil'd to.
+    #[test]
+    fn padding_the_surface_rect_does_not_grow_the_texture() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 36.0,
+            height: 36.0,
+        };
+        for step in 0..32 {
+            let scale = 1.0 + step as f32 * 0.05;
+            let (width, height) = surface_target_size(rect, scale, 8192);
+            let exact = device_pixel_exact_surface_rect(rect, scale, width, height);
+            assert_eq!(
+                surface_target_size(exact, scale, 8192),
+                (width, height),
+                "scale={scale} re-sized the texture"
+            );
+        }
+    }
+
+    /// A size the texture-dimension limit clamped is SMALLER than the rect
+    /// asked for; shrinking the rect to match would clip the content off.
+    #[test]
+    fn a_clamped_surface_size_never_shrinks_the_rect() {
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 4000.0,
+            height: 4000.0,
+        };
+
+        let exact = device_pixel_exact_surface_rect(rect, 4.0, 8192, 8192);
+
+        assert_eq!(exact.width, 4000.0);
+        assert_eq!(exact.height, 4000.0);
+    }
+
+    #[test]
+    fn a_nonsense_scale_leaves_the_surface_rect_alone() {
+        let rect = Rect {
+            x: 3.0,
+            y: 4.0,
+            width: 10.0,
+            height: 20.0,
+        };
+
+        assert_eq!(device_pixel_exact_surface_rect(rect, 0.0, 10, 20), rect);
+        assert_eq!(
+            device_pixel_exact_surface_rect(rect, f32::NAN, 10, 20),
+            rect
         );
     }
 }
