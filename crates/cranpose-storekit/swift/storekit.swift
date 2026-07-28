@@ -274,8 +274,60 @@ private func runPurchase(id: String, sink: Sink) async {
             sink.send(.event, EventCode.failed.rawValue, 0, "The App Store returned an unexpected result")
         }
     } catch {
-        sink.send(.event, EventCode.failed.rawValue, 0, error.localizedDescription)
+        sink.send(.event, EventCode.failed.rawValue, 0, describe(error))
     }
+}
+
+/// Turn a StoreKit error into something that names the actual cause.
+///
+/// `localizedDescription` on these is close to useless while integrating —
+/// `Product.PurchaseError.productUnavailable` renders as "Item Not Available",
+/// which reads like a store outage when it almost always means the product is
+/// not in a purchasable *state* yet. The distinction costs hours if the
+/// message does not make it, so the typed cases are unwrapped here.
+@available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
+private func describe(_ error: Error) -> String {
+    if let purchaseError = error as? Product.PurchaseError {
+        switch purchaseError {
+        case .productUnavailable:
+            return "The App Store will not sell this product yet. In App Store "
+                + "Connect the in-app purchase has to reach “Ready to Submit”: "
+                + "availability, price, localization and a review screenshot "
+                + "must all be filled in. A product with missing metadata still "
+                + "returns a price, which is why this fails only at purchase."
+        case .purchaseNotAllowed:
+            return "Purchases are not allowed on this device — check Screen Time → Content & Privacy Restrictions."
+        case .ineligibleForOffer:
+            return "This account is not eligible for that offer."
+        case .invalidOfferIdentifier, .invalidOfferPrice, .invalidOfferSignature, .missingOfferParameters:
+            return "The promotional offer attached to this purchase is not valid."
+        case .invalidQuantity:
+            return "That quantity cannot be bought."
+        @unknown default:
+            return "The purchase could not be completed (\(purchaseError))."
+        }
+    }
+    if let storeError = error as? StoreKitError {
+        switch storeError {
+        case .userCancelled:
+            return "Purchase cancelled."
+        case .notAvailableInStorefront:
+            return "This product is not available in your App Store country. "
+                + "Check the in-app purchase's Availability, and which storefront "
+                + "the signed-in sandbox account belongs to."
+        case .notEntitled:
+            return "This app is not entitled to make purchases — the App ID needs the In-App Purchase capability."
+        case .networkError(let underlying):
+            return "The App Store is unreachable: \(underlying.localizedDescription)"
+        case .systemError(let underlying):
+            return "The App Store returned a system error: \(underlying.localizedDescription)"
+        case .unknown:
+            return "The App Store returned an unknown error. On a sandbox account this usually means the account has not finished signing in — Settings → Developer → Sandbox Apple Account."
+        @unknown default:
+            return "The App Store returned an error (\(storeError))."
+        }
+    }
+    return error.localizedDescription
 }
 
 /// Product ids this Apple ID currently owns, signature-verified.
