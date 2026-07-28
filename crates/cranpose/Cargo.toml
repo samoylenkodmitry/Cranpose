@@ -96,6 +96,11 @@ renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # ~0.7 MiB). On by default; drop via `default-features = false` if the app
 # uses only framework effects.
 robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cranpose-ui now always included)
+# In-app purchases through StoreKit 2 on iOS/macOS, registered into
+# `cranpose_services::purchases`. Off by default: it links the StoreKit
+# framework and compiles a Swift shim, which an app that sells nothing should
+# not pay for. Harmless to enable on non-Apple targets — it compiles away.
+storekit = ["dep:cranpose-storekit"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
@@ -153,6 +158,7 @@ js-sys = { version = "0.3", optional = true }
 log = "0.4"
 cranpose-liquid = { workspace = true }
 cranpose-services = { workspace = true, default-features = false }
+cranpose-storekit = { workspace = true, default-features = false, optional = true }
 thiserror = "2.0.18"
 web-time = { workspace = true }
 cranpose-render-common.workspace = true
