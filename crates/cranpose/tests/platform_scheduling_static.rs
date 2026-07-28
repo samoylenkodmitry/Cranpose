@@ -1229,6 +1229,10 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/ios_background.rs",
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose/src/desktop_accessibility.rs",
+        // The StoreKit 2 bridge: `extern "C"` declarations for the Swift shim
+        // plus the callback it invokes. The crate root denies unsafe code and
+        // opts this one module back in by name.
+        "crates/cranpose-storekit/src/apple.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

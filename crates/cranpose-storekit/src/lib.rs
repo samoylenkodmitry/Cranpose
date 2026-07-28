@@ -1,4 +1,5 @@
 #![deny(missing_docs)]
+#![deny(unsafe_code)]
 
 //! StoreKit 2 backend for [`cranpose_services::purchases`].
 //!
@@ -28,6 +29,11 @@
 //! [`std::sync::Mutex`] here, and [`cranpose_services::purchases::Purchases`]
 //! reads a clone of it from the UI thread.
 
+// The crate root denies unsafe code; `apple` is the one boundary module that
+// opts back in, and it is the only place FFI lives. Same shape as cranpose's
+// own platform modules, and
+// `crates/cranpose/tests/platform_scheduling_static.rs` holds the workspace
+// list of modules allowed to do this.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple;
 
