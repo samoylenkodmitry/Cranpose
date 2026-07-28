@@ -978,20 +978,53 @@ fn expand_text_bounds_for_baseline_shift(
     }
 }
 
-fn resolve_text_measure_width(
+/// The width the paint pass must lay this paragraph out at.
+///
+/// **It is the width LAYOUT wrapped at, not the width the node ended up.** A
+/// `Text` without `fill_max_width` is placed at its own `metrics.width` — the
+/// widest line it produced — which is by construction NARROWER than the
+/// constraint it wrapped under. Re-wrapping at that narrower width is not the
+/// no-op it looks like: the widest line is the one that exactly fills the
+/// limit, so measuring it against itself puts its last word over the edge and
+/// the paragraph gains a line. Measured against the real font backend
+/// (`SoftwareTextMeasurer`, the one the wgpu renderer installs), that fires on
+/// 46% of multi-line paragraphs — the block then paints a line taller than the
+/// box layout reserved for it, its last line is clipped away, and every
+/// following sibling has been placed as if that line did not exist.
+///
+/// So an unlimited soft-wrapping clip paragraph keeps the measurement width
+/// even when the node came out narrower — `may_expand_to_avoid_synthetic_wrap`.
+/// The modes that deliberately re-fit (no soft wrap, a finite `max_lines`, or
+/// an ellipsis budget) still take the node's own width, because for those the
+/// node width IS the fitting constraint.
+///
+/// This is the shared implementation. It exists because the wgpu and pixels
+/// pipelines each grew a private copy WITH this rule and its contract tests,
+/// while the scene builder — the copy that the retained render graph actually
+/// runs — kept a plain `available.min(content_width)`. The two private copies
+/// were reachable only from their own tests. One function now, so the tests
+/// guard the code that runs.
+pub fn resolve_text_measure_width(
     content_width: f32,
     padding: cranpose_ui::EdgeInsets,
     measured_max_width: Option<f32>,
     options: TextLayoutOptions,
 ) -> f32 {
-    let available = measured_max_width
-        .map(|max_width| (max_width - padding.left - padding.right).max(0.0))
-        .unwrap_or(content_width);
-    if options.soft_wrap || options.max_lines != 1 || options.overflow == TextOverflow::Clip {
-        available.min(content_width)
-    } else {
-        content_width
+    let width = content_width.max(0.0);
+    if let Some(max_width) = measured_max_width.filter(|w| w.is_finite() && *w > 0.0) {
+        let measured_content_width = (max_width - padding.left - padding.right).max(0.0);
+        if measured_content_width <= width {
+            return measured_content_width;
+        }
+
+        let may_expand_to_avoid_synthetic_wrap = options.soft_wrap
+            && options.max_lines == usize::MAX
+            && options.overflow == TextOverflow::Clip;
+        if may_expand_to_avoid_synthetic_wrap {
+            return measured_content_width;
+        }
     }
+    width
 }
 
 fn resolve_text_horizontal_offset(
@@ -3212,5 +3245,143 @@ mod tests {
             Some(TextMotion::Static),
             "explicit text motion must win over inherited scrolling motion context"
         );
+    }
+
+    /// A wrapping paragraph must PAINT the height it MEASURED, so the sibling
+    /// the column placed after it is not drawn over.
+    ///
+    /// Regression. A `Text` without `fill_max_width` is placed at its own
+    /// `metrics.width` — the widest line it wrapped into. The paint pass then
+    /// re-wrapped at that placed width, and because the widest line is exactly
+    /// the one that fills the limit, measuring it against itself pushed its
+    /// last word onto a new line: measured 6 lines, painted 7. The extra line
+    /// was clipped away (silent truncation) and it ran past the next sibling's
+    /// box, which the column had placed from the 6-line height.
+    ///
+    /// Asserts RENDERED GEOMETRY, not `resolve_text_measure_width`'s return
+    /// value: the two pipelines already had unit tests for the correct rule and
+    /// shipped this anyway, because those tests exercised a `#[cfg(test)]`
+    /// replica rather than the scene builder that paints.
+    ///
+    /// Driven by the REAL font backend (`SoftwareTextMeasurer`, the measurer
+    /// `WgpuRenderer::attach_app_context_services` installs). A stub measurer
+    /// cannot show this: the defect lives in the disagreement between two wrap
+    /// widths, and a stub that returns the same answer for both hides it by
+    /// construction. The string is mixed Latin/Cyrillic because that is what
+    /// the reporting app puts in these paragraphs.
+    #[test]
+    fn wrapped_paragraph_paints_the_height_it_measured() {
+        const BODY: &str = "fed back картица scored fp32 износ once paper fed Vision dropped \
+             fed widest the strip mask prompt mask threshold Vision on датум instance mask \
+             износ Apple";
+        const FOLLOWING: &str = "FOLLOWING SIBLING";
+
+        let app_context = cranpose_ui::AppContext::new();
+        app_context.enter(|| {
+            cranpose_ui::text::set_text_measurer(
+                crate::software_text_raster::SoftwareTextMeasurer::from_fonts_or_default(&[], 8192),
+            );
+            let mut composition = cranpose_ui::run_test_composition(move || {
+                Column(
+                    Modifier::empty().fill_max_width(),
+                    ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                    move || {
+                        Text(BODY.to_string(), Modifier::empty(), TextStyle::default());
+                        Text(
+                            FOLLOWING.to_string(),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            });
+
+            let root = composition.root().expect("composition root");
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            let layout = applier
+                .compute_layout(
+                    root,
+                    Size {
+                        width: 245.0,
+                        height: 900.0,
+                    },
+                )
+                .expect("layout");
+
+            fn find_box<'a>(node: &'a LayoutBox, value: &str) -> Option<&'a LayoutBox> {
+                if node
+                    .node_data
+                    .modifier_slices()
+                    .text_content()
+                    .is_some_and(|text| text == value)
+                {
+                    return Some(node);
+                }
+                node.children
+                    .iter()
+                    .find_map(|child| find_box(child, value))
+            }
+            let body_box = find_box(layout.root(), BODY).expect("measured paragraph box");
+            let following_box = find_box(layout.root(), FOLLOWING).expect("measured sibling box");
+            let measured_height = body_box.rect.height;
+            let following_top = following_box.rect.y;
+            assert!(
+                measured_height > 60.0,
+                "test setup expects a genuinely multi-line paragraph, got {measured_height}"
+            );
+            assert!(
+                body_box.rect.width < 245.0,
+                "test setup expects the node to be placed at its own measured width, \
+                 not the full constraint, got {}",
+                body_box.rect.width
+            );
+
+            let graph = build_graph_from_applier(&mut applier, root, 1.0).expect("render graph");
+            applier.clear_runtime_handle();
+
+            // The painted string carries the wrap points as newlines, so it is
+            // compared with whitespace stripped rather than verbatim.
+            fn squashed(value: &str) -> String {
+                value.chars().filter(|c| !c.is_whitespace()).collect()
+            }
+            fn find_text<'a>(layer: &'a LayerNode, value: &str) -> Option<&'a TextPrimitiveNode> {
+                for child in &layer.children {
+                    match child {
+                        RenderNode::Primitive(primitive) => {
+                            if let PrimitiveNode::Text(text) = &primitive.node {
+                                if squashed(&text.text.text) == squashed(value) {
+                                    return Some(text);
+                                }
+                            }
+                        }
+                        RenderNode::Layer(child_layer) => {
+                            if let Some(found) = find_text(child_layer, value) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            let painted = find_text(&graph.root, BODY).expect("painted paragraph");
+
+            assert!(
+                (painted.rect.height - measured_height).abs() < 0.5,
+                "paragraph painted {:.2} tall into a box layout measured at {:.2} \
+                 (painted rect {:?})",
+                painted.rect.height,
+                measured_height,
+                painted.rect
+            );
+            assert!(
+                painted.rect.y + painted.rect.height <= following_top + 0.5,
+                "painted paragraph bottom {:.2} runs past the following sibling placed at \
+                 {:.2}",
+                painted.rect.y + painted.rect.height,
+                following_top
+            );
+        });
     }
 }
