@@ -1,5 +1,9 @@
 //! The Apple half: FFI to `swift/storekit.swift` plus the
 //! [`cranpose_services::purchases::Purchases`] implementation.
+//!
+//! The reviewed FFI boundary for this crate — the crate root denies unsafe
+//! code and this is the only module that opts back in.
+#![allow(unsafe_code)]
 
 use cranpose_services::purchases::{
     set_platform_purchases, Product, PurchaseEvent, Purchases, StorePhase, StoreState,
