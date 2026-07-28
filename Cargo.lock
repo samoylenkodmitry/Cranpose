@@ -829,6 +829,7 @@ dependencies = [
  "cranpose-render-pixels",
  "cranpose-render-wgpu",
  "cranpose-services",
+ "cranpose-storekit",
  "cranpose-ui",
  "dispatch2",
  "jni",
@@ -1032,6 +1033,13 @@ dependencies = [
  "web-sys",
  "webbrowser",
  "webpki-root-certs",
+]
+
+[[package]]
+name = "cranpose-storekit"
+version = "0.1.77"
+dependencies = [
+ "cranpose-services",
 ]
 
 [[package]]

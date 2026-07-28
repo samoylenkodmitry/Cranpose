@@ -1,0 +1,16 @@
+[package]
+name = "cranpose-storekit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "StoreKit 2 in-app purchases for Cranpose (iOS/macOS)"
+build = "build.rs"
+
+[dependencies]
+cranpose-services = { workspace = true }

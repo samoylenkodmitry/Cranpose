@@ -17,6 +17,7 @@ pub mod network_status;
 pub mod notifier;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
+pub mod purchases;
 pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;
@@ -68,6 +69,10 @@ pub use notifier::{
 pub use peer::{
     content_length, fetch_range, fetch_to_writer, ByteSource, BytesSource, FetchResult, PeerError,
     PeerServer, SourceResolver,
+};
+pub use purchases::{
+    clear_platform_purchases, purchases, set_platform_purchases, store_available, store_state,
+    Product, PurchaseEvent, Purchases, PurchasesRef, StorePhase, StoreState,
 };
 pub use share_sheet::{
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
