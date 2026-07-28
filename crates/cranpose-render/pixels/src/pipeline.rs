@@ -678,29 +678,10 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
     }
 }
 
+// See the note in the wgpu pipeline: these tests used to run against a
+// `#[cfg(test)]` replica instead of the rule the scene builder paints with.
 #[cfg(test)]
-fn resolve_text_measure_width(
-    content_width: f32,
-    padding: EdgeInsets,
-    measured_max_width: Option<f32>,
-    options: TextLayoutOptions,
-) -> f32 {
-    let width = content_width.max(0.0);
-    if let Some(max_width) = measured_max_width.filter(|w| w.is_finite() && *w > 0.0) {
-        let measured_content_width = (max_width - padding.left - padding.right).max(0.0);
-        if measured_content_width <= width {
-            return measured_content_width;
-        }
-
-        let may_expand_to_avoid_synthetic_wrap = options.soft_wrap
-            && options.max_lines == usize::MAX
-            && options.overflow == TextOverflow::Clip;
-        if may_expand_to_avoid_synthetic_wrap {
-            return measured_content_width;
-        }
-    }
-    width
-}
+use cranpose_render_common::scene_builder::resolve_text_measure_width;
 
 #[cfg(test)]
 fn resolve_text_horizontal_offset(

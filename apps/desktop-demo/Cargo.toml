@@ -622,6 +622,11 @@ path = "robot-runners/robot_scroll_bug.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "text_wrap_repro"
+path = "examples/text_wrap_repro.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_shader_backdrop_drag"
 path = "robot-runners/robot_shader_backdrop_drag.rs"
 required-features = ["robot-app"]
