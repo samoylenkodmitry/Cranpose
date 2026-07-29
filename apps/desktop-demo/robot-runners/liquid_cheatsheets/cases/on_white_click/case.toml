@@ -1,0 +1,9 @@
+name = "on_white_click"
+frame_count = 25
+source_video = "example/iphone17_records/on_white/bottom_bar_click_to_change.mov"
+source_video_available = true
+reference = "example/target/on-white/bottom-bar-click/translate-to-conversation.png"
+crop = "native recording crop; target grid is precomposed"
+fps = 60
+timing = "tile labels are native frame numbers; one frame is approximately 16.7 ms"
+selected = ["translate-to-conversation.png@native-frame-labels"]

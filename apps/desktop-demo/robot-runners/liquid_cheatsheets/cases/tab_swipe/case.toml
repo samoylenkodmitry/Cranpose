@@ -1,0 +1,9 @@
+name = "tab_swipe"
+frame_count = 8
+source_video = "example/iphone17_records/ScreenRecording_07-10-2026 08-34-03_1.MP4"
+source_video_available = false
+reference = "example/target/tab-swipe"
+crop = "1320:400:0:2360"
+fps = 30
+timing = "source timestamps; frame 001 is 14400 ms"
+selected = ["f_001.png@14400ms", "f_009.png@14667ms", "f_017.png@14933ms", "f_025.png@15200ms", "f_033.png@15467ms", "f_041.png@15733ms", "f_049.png@16000ms", "f_057.png@16267ms"]

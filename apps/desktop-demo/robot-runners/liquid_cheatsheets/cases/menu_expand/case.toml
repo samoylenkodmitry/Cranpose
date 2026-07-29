@@ -1,0 +1,9 @@
+name = "menu_expand"
+frame_count = 12
+source_video = "example/iphone17_records/16-jul-2026/ScreenRecording_07-16-2026 19-32-24_1.mov"
+source_video_available = true
+reference = "example/target/menu-expand"
+crop = "700:800:70:50"
+fps = 60
+timing = "source timestamps; each named phase is independently extracted and synchronized, so source time may reset"
+selected = ["open/f_001.png@4850ms", "open/f_023.png@5217ms", "open/f_045.png@5583ms", "expand/f_001.png@5550ms", "expand/f_023.png@5917ms", "expand/f_045.png@6283ms", "collapse-row/f_001.png@6300ms", "collapse-row/f_024.png@6683ms", "collapse-row/f_048.png@7083ms", "close/f_001.png@19800ms", "close/f_024.png@20183ms", "close/f_048.png@20583ms"]

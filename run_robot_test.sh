@@ -464,11 +464,6 @@ run_test() {
             # segmented, sliders) needs headroom on CI's software vulkan.
             timeout_secs=180
             ;;
-        robot_liquid_cheatsheet_capture)
-            # Capture-only tool behind liquid_cheatsheets.sh: drives every
-            # reference stage with dense reference-timed keyframes (~5 min).
-            timeout_secs=540
-            ;;
         robot_leetcodedaily_full_layout_scroll_stability)
             timeout_secs=540
             ;;
@@ -661,7 +656,7 @@ robot_process_env() {
         case "$name" in
             BASH_FUNC_*|RESULTS_DIR|EXAMPLE_BIN_DIR|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TEST_ATTEMPTS)
                 ;;
-            PATH|HOME|USER|LOGNAME|SHELL|DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|LD_LIBRARY_PATH|LIBGL_ALWAYS_SOFTWARE|LIBGL_DRIVERS_PATH|VK_ICD_FILENAMES|VK_LAYER_PATH|MESA_LOADER_DRIVER_OVERRIDE|MESA_VK_DEVICE_SELECT|RUST_BACKTRACE|RUST_LOG|WINIT_*|WGPU_*|CRANPOSE_*|TMPDIR)
+            PATH|HOME|USER|LOGNAME|SHELL|DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|LD_LIBRARY_PATH|LIBGL_ALWAYS_SOFTWARE|LIBGL_DRIVERS_PATH|VK_ICD_FILENAMES|VK_LAYER_PATH|MESA_LOADER_DRIVER_OVERRIDE|MESA_VK_DEVICE_SELECT|RUST_BACKTRACE|RUST_LOG|ROBOT_SHOT_DIR|WINIT_*|WGPU_*|CRANPOSE_*|TMPDIR)
                 env_args+=("$name=$value")
                 ;;
         esac

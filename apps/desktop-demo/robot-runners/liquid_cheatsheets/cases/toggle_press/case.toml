@@ -1,0 +1,9 @@
+name = "toggle_press"
+frame_count = 7
+source_video = "example/iphone17_records/ScreenRecording_07-10-2026 08-34-03_1.MP4"
+source_video_available = false
+reference = "example/target/toggle-press"
+crop = "340:190:980:2325"
+fps = 60
+timing = "source timestamps; frame 001 is 500 ms"
+selected = ["f_001.png@500ms", "f_010.png@650ms", "f_019.png@800ms", "f_028.png@950ms", "f_037.png@1100ms", "f_046.png@1250ms", "f_054.png@1383ms"]

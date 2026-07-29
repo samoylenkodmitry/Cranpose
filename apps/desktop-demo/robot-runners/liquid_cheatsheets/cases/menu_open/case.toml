@@ -1,0 +1,9 @@
+name = "menu_open"
+frame_count = 8
+source_video = "example/iphone17_records/ScreenRecording_07-10-2026 08-34-03_1.MP4"
+source_video_available = false
+reference = "example/target/menu-open"
+crop = "920:700:400:100"
+fps = 60
+timing = "contact-relative; f_025 is 0 ms, source frame 001 is 9600 ms"
+selected = ["f_025.png@0ms", "f_031.png@100ms", "f_037.png@200ms", "f_043.png@300ms", "f_055.png@500ms", "f_073.png@800ms", "f_091.png@1100ms", "f_108.png@1383ms"]
