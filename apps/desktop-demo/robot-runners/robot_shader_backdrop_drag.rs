@@ -19,7 +19,11 @@ use std::time::Duration;
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;
 const NESTED_SECTION_SCAN_ATTEMPTS: usize = 72;
-const NESTED_SECTION_RESET_DRAGS: usize = 8;
+const NESTED_SECTION_SCROLL_X: f32 = 620.0;
+const NESTED_SECTION_SCROLL_Y: f32 = 500.0;
+const NESTED_SECTION_SCROLL_STEP: f32 = 80.0;
+const NESTED_SECTION_SEEK_STEP: f32 = 160.0;
+const NESTED_SECTION_SCROLL_SETTLE_MS: u64 = 120;
 const NESTED_BACKDROP_MIN_CHANGED_PIXELS: usize = 90;
 const NESTED_BACKDROP_VISUAL_WAIT_ATTEMPTS: usize = 8;
 const NESTED_BACKDROP_VISUAL_WAIT_MS: u64 = 80;
@@ -42,14 +46,6 @@ fn moved_enough(before: (f32, f32, f32, f32), after: (f32, f32, f32, f32), min_d
 
 fn scroll_up(robot: &cranpose::Robot) {
     cranpose_testing::scroll_up(robot, 620.0, 220.0, 720.0);
-}
-
-fn scroll_down_small(robot: &cranpose::Robot) {
-    cranpose_testing::scroll_down(robot, 620.0, 680.0, 560.0);
-}
-
-fn scroll_up_small(robot: &cranpose::Robot) {
-    cranpose_testing::scroll_up(robot, 620.0, 560.0, 680.0);
 }
 
 #[derive(Clone, Copy)]
@@ -134,38 +130,63 @@ fn visible_slider_prefix_in_snapshot(
 fn scroll_nested_effect_controls_into_view(
     robot: &cranpose::Robot,
 ) -> Option<NestedEffectControls> {
-    for _ in 0..NESTED_SECTION_RESET_DRAGS {
-        scroll_up(robot);
-    }
     for _ in 0..NESTED_SECTION_SCAN_ATTEMPTS {
         if let Some(controls) = visible_nested_effect_controls(robot) {
             return Some(controls);
         }
-        nudge_nested_effect_controls_toward_view(robot);
+        if let Err(error) = nudge_nested_effect_controls_toward_view(robot) {
+            println!("Nested controls scroll failed: {error}");
+            return None;
+        }
     }
     None
 }
 
-fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) {
-    let top = shader_content_top(robot);
-    let raw_bounds = [
-        find_text_in_semantics(robot, "Child backdrop"),
-        find_text_by_prefix_in_semantics(robot, "nested_parent_blur")
-            .map(|(x, y, w, h, _)| (x, y, w, h)),
-        find_text_by_prefix_in_semantics(robot, "nested_child_backdrop_blur")
-            .map(|(x, y, w, h, _)| (x, y, w, h)),
-    ];
+fn nested_effect_controls_vertical_span(robot: &cranpose::Robot) -> Option<(f32, f32)> {
+    let child_label = find_text_in_semantics(robot, "Child backdrop");
+    let parent_slider = find_text_by_prefix_in_semantics(robot, "nested_parent_blur")
+        .map(|(x, y, w, h, _)| (x, y, w, h));
+    let child_slider = find_text_by_prefix_in_semantics(robot, "nested_child_backdrop_blur")
+        .map(|(x, y, w, h, _)| (x, y, w, h));
 
-    let target_above = raw_bounds
-        .iter()
+    let top = [child_label, parent_slider, child_slider]
+        .into_iter()
         .flatten()
-        .any(|(_, y, _, h)| y + h * 0.5 < top);
+        .map(|(_, y, _, _)| y)
+        .reduce(f32::min)?;
+    let bottom = [
+        child_label.map(|(_, y, _, h)| y + h),
+        parent_slider.map(slider_touch_y),
+        child_slider.map(slider_touch_y),
+    ]
+    .into_iter()
+    .flatten()
+    .reduce(f32::max)?;
+    Some((top, bottom))
+}
 
-    if target_above {
-        scroll_up_small(robot);
-    } else {
-        scroll_down_small(robot);
-    }
+fn nudge_nested_effect_controls_toward_view(robot: &cranpose::Robot) -> Result<(), String> {
+    let top = shader_content_top(robot);
+    let bottom = shader_content_bottom(robot);
+    let delta_y = match nested_effect_controls_vertical_span(robot) {
+        Some((target_top, _)) if target_top < top => NESTED_SECTION_SCROLL_STEP,
+        Some((_, target_bottom)) if target_bottom > bottom => -NESTED_SECTION_SCROLL_STEP,
+        Some((target_top, target_bottom)) => {
+            let target_center = (target_top + target_bottom) * 0.5;
+            let viewport_center = (top + bottom) * 0.5;
+            if target_center < viewport_center {
+                NESTED_SECTION_SCROLL_STEP
+            } else {
+                -NESTED_SECTION_SCROLL_STEP
+            }
+        }
+        None => -NESTED_SECTION_SEEK_STEP,
+    };
+
+    robot.mouse_move(NESTED_SECTION_SCROLL_X, NESTED_SECTION_SCROLL_Y)?;
+    robot.mouse_scroll(0.0, delta_y)?;
+    std::thread::sleep(Duration::from_millis(NESTED_SECTION_SCROLL_SETTLE_MS));
+    robot.wait_for_idle()
 }
 
 fn log_nested_effect_probe(robot: &cranpose::Robot) {
