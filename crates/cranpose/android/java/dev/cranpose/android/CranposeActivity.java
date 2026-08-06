@@ -64,6 +64,12 @@ import java.util.List;
  * tracks appear and can be played while the rest keep streaming in.
  */
 public class CranposeActivity extends NativeActivity {
+    /** Manifest meta-data key {@link NativeActivity} uses to name the native library. */
+    private static final String NATIVE_LIB_NAME_META_DATA = "android.app.lib_name";
+
+    /** Library name {@link NativeActivity} falls back to when the meta-data is absent. */
+    private static final String DEFAULT_NATIVE_LIB_NAME = "main";
+
     private static final int REQUEST_BASE = 0x0C9A0000;
     private static final int FLAG_FOLDER = 1;
     private static final int FLAG_STREAMING = 2;
@@ -925,8 +931,47 @@ public class CranposeActivity extends NativeActivity {
     /** An ACTION_CREATE_DOCUMENT save finished. */
     private static native void nativeOnFileSaved(long token, boolean ok, String error);
 
+    /**
+     * Loads the app's native library into this class loader so that the {@code native}
+     * methods declared above can resolve.
+     *
+     * <p>{@link NativeActivity} loads the library itself, but through libnativeloader's
+     * {@code OpenNativeLibrary}, which never registers it with ART's JNI method resolver.
+     * The native entry point still runs, so the app appears to start, and then the first
+     * synchronous Java-to-native call dies with {@code UnsatisfiedLinkError} even though
+     * the symbol is present in the packaged {@code .so}. Loading it here, before
+     * {@code super.onCreate}, is what makes the symbols resolvable from Java.
+     *
+     * <p>The library name comes from the same {@code android.app.lib_name} manifest
+     * meta-data that {@link NativeActivity} reads, so subclasses need no extra wiring.
+     */
+    private void loadCranposeNativeLibrary() {
+        String libraryName = DEFAULT_NATIVE_LIB_NAME;
+        try {
+            android.content.pm.ActivityInfo info =
+                    getPackageManager()
+                            .getActivityInfo(
+                                    getComponentName(),
+                                    android.content.pm.PackageManager.GET_META_DATA);
+            if (info.metaData != null) {
+                String declared = info.metaData.getString(NATIVE_LIB_NAME_META_DATA);
+                if (declared != null && !declared.isEmpty()) {
+                    libraryName = declared;
+                }
+            }
+        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+            android.util.Log.w("cranpose", "activity info unavailable; using default lib name", error);
+        }
+        try {
+            System.loadLibrary(libraryName);
+        } catch (UnsatisfiedLinkError error) {
+            android.util.Log.w("cranpose", "could not load native library " + libraryName, error);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        loadCranposeNativeLibrary();
         super.onCreate(savedInstanceState);
         installInsetsListener();
         registerNetworkCallback();

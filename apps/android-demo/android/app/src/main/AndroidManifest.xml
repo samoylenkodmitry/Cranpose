@@ -15,6 +15,13 @@
         android:label="Compose Demo"
         android:supportsRtl="true">
         <!--
+            Diagnostics only: lets `adb shell simpleperf` sample this release
+            build without making it debuggable, so frame-pacing profiles are
+            taken on optimized code. Harmless to ship, but it exists here for
+            the on-device frame-pacing measurements.
+        -->
+        <profileable android:shell="true" />
+        <!--
             CranposeActivity extends NativeActivity and adds the
             Storage Access Framework bridge used by cranpose's file picker.
             The lib_name must match the cdylib name in Cargo.toml exactly.
