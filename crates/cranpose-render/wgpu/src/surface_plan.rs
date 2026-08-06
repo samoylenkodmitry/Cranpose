@@ -5,7 +5,7 @@ use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_render_common::graph::{
     LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderNode,
 };
-use cranpose_render_common::layer_composition::effective_layer_isolation;
+use cranpose_render_common::layer_composition::layer_requires_isolation;
 use cranpose_render_common::layer_transform::layer_uniform_scale;
 use cranpose_ui_graphics::{BlendMode, Brush, CompositingStrategy, Point, Rect};
 
@@ -245,7 +245,7 @@ pub(crate) fn translated_content_axes_for_layer(layer: &LayerNode) -> Translated
 
 pub(crate) fn root_can_render_directly_cached(
     layer: &LayerNode,
-    layer_surface_requirements_cache: &mut std::collections::HashMap<
+    layer_surface_requirements_cache: &mut cranpose_core::collections::map::HashMap<
         usize,
         LayerSurfaceRequirements,
     >,
@@ -363,13 +363,13 @@ pub(crate) fn effective_surface_requirements(
 
 #[cfg(test)]
 pub(crate) fn layer_surface_requirements(layer: &LayerNode) -> LayerSurfaceRequirements {
-    let mut layer_surface_requirements_cache = std::collections::HashMap::new();
+    let mut layer_surface_requirements_cache = cranpose_core::collections::map::HashMap::new();
     layer_surface_requirements_cached(layer, &mut layer_surface_requirements_cache)
 }
 
 pub(crate) fn layer_surface_requirements_cached(
     layer: &LayerNode,
-    layer_surface_requirements_cache: &mut std::collections::HashMap<
+    layer_surface_requirements_cache: &mut cranpose_core::collections::map::HashMap<
         usize,
         LayerSurfaceRequirements,
     >,
@@ -379,7 +379,7 @@ pub(crate) fn layer_surface_requirements_cached(
         return *cached;
     }
 
-    let effective_isolation = effective_layer_isolation(&layer.graphics_layer);
+    let requires_isolation = layer_requires_isolation(&layer.graphics_layer);
     let mut surface_requirements = SurfaceRequirementSet::default();
     if layer.isolation.explicit_offscreen
         || layer.graphics_layer.compositing_strategy == CompositingStrategy::Offscreen
@@ -396,7 +396,7 @@ pub(crate) fn layer_surface_requirements_cached(
         || matches!(
             layer.graphics_layer.compositing_strategy,
             CompositingStrategy::Auto | CompositingStrategy::Offscreen
-        ) && effective_isolation.is_some()
+        ) && requires_isolation
             && layer.opacity() < 1.0
     {
         surface_requirements.insert(SurfaceRequirement::GroupOpacity);

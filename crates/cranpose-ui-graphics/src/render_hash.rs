@@ -1,8 +1,7 @@
 use crate::{
-    Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, ImageBitmap, LayerShape, Point, Rect,
-    RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
+    Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, FxHasher, ImageBitmap, LayerShape,
+    Point, Rect, RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
 };
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 pub trait RenderHash {
@@ -87,8 +86,8 @@ impl RenderHash for ShadowPrimitive {
     }
 }
 
-fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
-    let mut hasher = DefaultHasher::new();
+fn finish_hash(write: impl FnOnce(&mut FxHasher)) -> u64 {
+    let mut hasher = FxHasher::default();
     write(&mut hasher);
     hasher.finish()
 }

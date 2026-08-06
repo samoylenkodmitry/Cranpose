@@ -38,15 +38,19 @@ use crate::surface_plan::{
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use crate::TextSystemState;
+use cranpose_core::collections::map::HashMap;
 use cranpose_core::NodeId;
 use cranpose_render_common::geometry::union_rect;
 use cranpose_render_common::graph::{CachePolicy, LayerNode, ProjectiveTransform};
-use cranpose_render_common::layer_composition::effective_layer_isolation;
+use cranpose_render_common::layer_composition::{
+    effective_layer_isolation, layer_composite_params,
+};
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkAnnotation;
-use cranpose_ui_graphics::{BlendMode, Brush, Rect, RenderEffect, RenderHash, RuntimeShader};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, FxHasher, Rect, RenderEffect, RenderHash, RuntimeShader,
+};
 use std::cell::RefCell;
-use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::rc::Weak;
 
@@ -2047,18 +2051,13 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     );
     if let Some((cache_key, logical_rect)) = cache_candidate {
         if let Some((target, logical_rect)) = backend.cached_layer_surface(&cache_key) {
-            let isolation = effective_layer_isolation(&layer.graphics_layer);
+            let (composite_alpha, blend_mode) =
+                layer_composite_params(&layer.graphics_layer).unwrap_or((1.0, BlendMode::SrcOver));
             return Ok(LayerSurface {
                 target: LayerSurfaceTexture::Cached(target),
                 logical_rect,
-                composite_alpha: isolation
-                    .as_ref()
-                    .map(|params| params.composite_alpha)
-                    .unwrap_or(1.0),
-                blend_mode: isolation
-                    .as_ref()
-                    .map(|params| params.blend_mode)
-                    .unwrap_or(BlendMode::SrcOver),
+                composite_alpha,
+                blend_mode,
                 rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
                 backdrop: layer.backdrop().cloned(),
                 deferred_effect: None,
@@ -2281,7 +2280,7 @@ fn backdrop_effect_cache_key(
 }
 
 fn retained_render_effect_hash(effect: &RenderEffect) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     hash_retained_render_effect(effect, &mut hasher);
     hasher.finish()
 }
@@ -2328,7 +2327,7 @@ fn backdrop_scene_prefix_hash(
     target_size: (u32, u32),
     root_scale: f32,
 ) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     0xBCAD_0F0Du64.hash(&mut hasher);
     target_size.hash(&mut hasher);
     hash_f32_bits(root_scale, &mut hasher);
@@ -2372,7 +2371,7 @@ fn scene_range_content_hash(
     target_size: (u32, u32),
     root_scale: f32,
 ) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     0xD1EC_7A6Eu64.hash(&mut hasher);
     target_size.hash(&mut hasher);
     hash_f32_bits(root_scale, &mut hasher);
@@ -2408,7 +2407,7 @@ fn scene_range_content_hash(
 }
 
 fn draw_op_content_hash(scene: &CompositorScene, draw_op: &DrawOp) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     hash_draw_op(scene, draw_op, &mut hasher);
     hasher.finish()
 }
@@ -2691,7 +2690,7 @@ fn annotated_string_render_hash(text: &std::rc::Rc<cranpose_ui::text::AnnotatedS
 }
 
 fn compute_annotated_string_hash(text: &cranpose_ui::text::AnnotatedString) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     hash_annotated_string_contents(text, &mut hasher);
     hasher.finish()
 }
@@ -5140,6 +5139,7 @@ mod tests {
     use crate::surface_plan::layer_surface_requirements_cached;
     use crate::surface_plan::TranslationRenderContext;
     use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
+    use cranpose_core::collections::map::HashMap;
     use cranpose_core::NodeId;
     use cranpose_render_common::graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
@@ -5153,7 +5153,6 @@ mod tests {
         BlendMode, Brush, Color, GraphicsLayer, ImageBitmap, ImageSampling, RenderEffect,
         RuntimeShader,
     };
-    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]
@@ -6451,7 +6450,7 @@ mod tests {
                     width: 160.0,
                     height: 24.0,
                 },
-                text: AnnotatedString::from("cached translated text"),
+                text: std::rc::Rc::new(AnnotatedString::from("cached translated text")),
                 text_style: TextStyle::default(),
                 font_size: 16.0,
                 layout_options: TextLayoutOptions::default(),

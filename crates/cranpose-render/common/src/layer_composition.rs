@@ -7,30 +7,37 @@ pub struct LayerIsolation {
     pub composite_alpha: f32,
 }
 
-pub fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
+pub fn layer_requires_isolation(layer: &GraphicsLayer) -> bool {
     let has_effect = layer.render_effect.is_some();
     let has_layer_blend = layer.blend_mode != BlendMode::SrcOver;
-    let requires_isolation = match layer.compositing_strategy {
+    match layer.compositing_strategy {
         CompositingStrategy::Offscreen => true,
         CompositingStrategy::Auto => has_effect || has_layer_blend || layer.alpha < 1.0,
         CompositingStrategy::ModulateAlpha => has_effect || has_layer_blend,
-    };
-
-    if !requires_isolation {
-        return None;
     }
+}
 
-    let composite_alpha = if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
+fn isolation_composite_alpha(layer: &GraphicsLayer) -> f32 {
+    if layer.compositing_strategy == CompositingStrategy::ModulateAlpha {
         1.0
     } else {
         layer.alpha.clamp(0.0, 1.0)
-    };
+    }
+}
 
-    Some(LayerIsolation {
+pub fn effective_layer_isolation(layer: &GraphicsLayer) -> Option<LayerIsolation> {
+    layer_requires_isolation(layer).then(|| LayerIsolation {
         effect: layer.render_effect.clone(),
         blend_mode: layer.blend_mode,
-        composite_alpha,
+        composite_alpha: isolation_composite_alpha(layer),
     })
+}
+
+/// The composite alpha and blend mode an isolated layer contributes at its
+/// parent, for callers that never read the isolation's render effect and would
+/// otherwise deep-clone it once per layer per frame.
+pub fn layer_composite_params(layer: &GraphicsLayer) -> Option<(f32, BlendMode)> {
+    layer_requires_isolation(layer).then(|| (isolation_composite_alpha(layer), layer.blend_mode))
 }
 
 pub fn layer_for_content(
@@ -47,6 +54,26 @@ pub fn layer_for_content(
 pub fn local_content_layer(layer: &GraphicsLayer) -> GraphicsLayer {
     GraphicsLayer {
         alpha: layer.alpha,
+        color_filter: layer.color_filter,
+        ..GraphicsLayer::default()
+    }
+}
+
+/// `local_content_layer(&layer_for_content(layer, isolation))` without building
+/// either intermediate. The content layer differs from `layer` only in the
+/// alpha the isolation moves to the composite step, and the local layer keeps
+/// just that alpha and the colour filter, so the two clones the composed form
+/// performs — one `GraphicsLayer`, one `RenderEffect` — are pure waste.
+pub fn local_content_layer_for(layer: &GraphicsLayer) -> GraphicsLayer {
+    let alpha = if layer.compositing_strategy != CompositingStrategy::ModulateAlpha
+        && layer_requires_isolation(layer)
+    {
+        1.0
+    } else {
+        layer.alpha
+    };
+    GraphicsLayer {
+        alpha,
         color_filter: layer.color_filter,
         ..GraphicsLayer::default()
     }
@@ -140,5 +167,75 @@ mod tests {
         assert_eq!(local.shadow_elevation, 0.0);
         assert_eq!(local.translation_x, 0.0);
         assert!(!local.clip);
+    }
+
+    #[test]
+    fn local_content_layer_for_matches_the_composed_form() {
+        let filter = Some(cranpose_ui_graphics::ColorFilter::Tint(
+            cranpose_ui_graphics::Color::RED,
+        ));
+        let cases = [
+            GraphicsLayer::default(),
+            GraphicsLayer {
+                alpha: 0.5,
+                color_filter: filter,
+                compositing_strategy: CompositingStrategy::Auto,
+                ..Default::default()
+            },
+            GraphicsLayer {
+                alpha: 0.5,
+                compositing_strategy: CompositingStrategy::ModulateAlpha,
+                render_effect: Some(RenderEffect::blur(4.0)),
+                ..Default::default()
+            },
+            GraphicsLayer {
+                alpha: 0.5,
+                compositing_strategy: CompositingStrategy::Offscreen,
+                ..Default::default()
+            },
+            GraphicsLayer {
+                blend_mode: BlendMode::DstOut,
+                compositing_strategy: CompositingStrategy::Auto,
+                ..Default::default()
+            },
+        ];
+
+        for layer in cases {
+            let isolation = effective_layer_isolation(&layer);
+            let composed = local_content_layer(&layer_for_content(&layer, isolation.as_ref()));
+            let direct = local_content_layer_for(&layer);
+            assert!((composed.alpha - direct.alpha).abs() < 1e-6);
+            assert_eq!(composed.color_filter, direct.color_filter);
+        }
+    }
+
+    #[test]
+    fn layer_composite_params_match_the_isolation_it_replaces() {
+        let cases = [
+            GraphicsLayer::default(),
+            GraphicsLayer {
+                alpha: 0.25,
+                compositing_strategy: CompositingStrategy::Auto,
+                ..Default::default()
+            },
+            GraphicsLayer {
+                alpha: 0.25,
+                compositing_strategy: CompositingStrategy::ModulateAlpha,
+                render_effect: Some(RenderEffect::blur(4.0)),
+                ..Default::default()
+            },
+            GraphicsLayer {
+                blend_mode: BlendMode::DstOut,
+                compositing_strategy: CompositingStrategy::Auto,
+                ..Default::default()
+            },
+        ];
+
+        for layer in cases {
+            let isolation = effective_layer_isolation(&layer);
+            let expected =
+                isolation.map(|isolation| (isolation.composite_alpha, isolation.blend_mode));
+            assert_eq!(expected, layer_composite_params(&layer));
+        }
     }
 }

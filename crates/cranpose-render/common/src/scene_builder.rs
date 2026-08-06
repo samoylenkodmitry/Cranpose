@@ -829,7 +829,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     Some(TextPrimitiveNode {
         node_id,
         rect,
-        text: prepared.text,
+        text: std::rc::Rc::new(prepared.text),
         text_style: visual_style,
         font_size,
         layout_options: options,

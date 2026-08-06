@@ -248,7 +248,9 @@ pub struct DrawPrimitiveNode {
 pub struct TextPrimitiveNode {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub text: AnnotatedString,
+    /// Shared so the renderer can hand the same allocation to every draw it
+    /// emits for this node instead of deep-copying the string once per emit.
+    pub text: Rc<AnnotatedString>,
     pub text_style: TextStyle,
     pub font_size: f32,
     pub layout_options: TextLayoutOptions,

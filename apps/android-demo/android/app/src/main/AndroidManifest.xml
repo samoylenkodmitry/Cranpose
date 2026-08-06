@@ -27,7 +27,7 @@
             The lib_name must match the cdylib name in Cargo.toml exactly.
         -->
         <activity
-            android:name="com.compose_rs.demo.DemoActivity"
+            android:name="dev.cranpose.android.CranposeActivity"
             android:exported="true"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">

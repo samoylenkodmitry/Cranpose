@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use cranpose_core::collections::map::HashMap;
 use std::hash::Hash;
 use std::num::NonZeroUsize;
 

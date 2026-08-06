@@ -1037,7 +1037,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
     text_style: &TextStyle,
     font_size: f32,
     options: TextLayoutOptions,
@@ -1097,7 +1097,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         sink.push_shadow_text(
             node_id,
             apply_layer_to_rect(shadow_rect, rect, content_layer),
-            Rc::new(text.clone()),
+            Rc::clone(text),
             apply_layer_to_color(shadow.color, content_layer),
             shadow_text_style,
             font_size,
@@ -1218,7 +1218,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         sink,
         node_id,
         transformed_shifted_text_rect,
-        Rc::new(text.clone()),
+        Rc::clone(text),
         transformed_text_color,
         transformed_text_style,
         font_size,
@@ -1274,7 +1274,7 @@ pub(crate) fn push_text_style_draws(
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
     text_style: &TextStyle,
     font_size: f32,
     options: TextLayoutOptions,
@@ -1399,6 +1399,7 @@ pub(crate) fn push_translated_text_style_draws(
     let counts = scene_emission_counts(scene);
     let z_start = scene.current_z();
     let mut text_layout = UiTextLayoutResolver;
+    let text = Rc::new(text.clone());
     emit_text_style_draws(
         scene,
         &mut text_layout,
@@ -1406,7 +1407,7 @@ pub(crate) fn push_translated_text_style_draws(
         rect,
         text_rect,
         content_layer,
-        text,
+        &text,
         text_style,
         font_size,
         options,
@@ -1444,6 +1445,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
 ) -> Option<Rect> {
     let mut collector = TextBoundsCollector::default();
     let mut text_layout = UiTextLayoutResolver;
+    let text = Rc::new(text.clone());
     emit_text_style_draws(
         &mut collector,
         &mut text_layout,
@@ -1451,7 +1453,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
         rect,
         text_rect,
         content_layer,
-        text,
+        &text,
         text_style,
         font_size,
         options,
@@ -2268,6 +2270,7 @@ mod tests {
     ) {
         with_test_app_context(|| {
             let mut text_layout = UiTextLayoutResolver;
+            let text = Rc::new(text.clone());
             push_text_style_draws(
                 scene,
                 &mut text_layout,
@@ -2275,7 +2278,7 @@ mod tests {
                 rect,
                 text_rect,
                 content_layer,
-                text,
+                &text,
                 text_style,
                 font_size,
                 options,

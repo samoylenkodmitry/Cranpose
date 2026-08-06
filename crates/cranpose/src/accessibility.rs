@@ -1,8 +1,9 @@
 //! Platform-neutral projection of Cranpose semantics into accessibility elements.
 
+use cranpose_core::collections::map::HashMap;
 use cranpose_core::NodeId;
 use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
-use std::collections::HashMap;
+use std::borrow::Cow;
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_common::Renderer;
@@ -68,15 +69,24 @@ where
     R: Renderer,
     R::Error: Debug,
 {
-    let Some(layout_tree) = shell.layout_tree().cloned() else {
-        return Vec::new();
-    };
-    let Some(semantics_root) = shell.semantics_tree().map(|tree| tree.root().clone()) else {
-        return Vec::new();
-    };
+    // Borrowed rather than cloned: this runs on every frame that updates, and
+    // deep-copying the layout and semantics trees to read them dominated the
+    // accessibility cost.
     let mut bounds = HashMap::new();
-    collect_bounds(layout_tree.root(), &mut bounds);
-    project_semantics(&semantics_root, &bounds)
+    let has_layout = shell.with_layout_tree(|layout_tree| match layout_tree {
+        Some(layout_tree) => {
+            collect_bounds(layout_tree.root(), &mut bounds);
+            true
+        }
+        None => false,
+    });
+    if !has_layout {
+        return Vec::new();
+    }
+    let Some(semantics_tree) = shell.semantics_tree() else {
+        return Vec::new();
+    };
+    project_semantics(semantics_tree.root(), &bounds)
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -110,9 +120,9 @@ fn project_node(
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let actionable = clickable || node.editable_text;
-    let own_label = node_label(node);
+    let own_label = node_label(node).map(Cow::Borrowed);
     let label = if actionable {
-        own_label.or_else(|| descendant_label(node))
+        own_label.or_else(|| descendant_label(node).map(Cow::Owned))
     } else {
         own_label
     };
@@ -127,6 +137,7 @@ fn project_node(
             } else {
                 AccessibilityRole::StaticText
             };
+            let label = label.into_owned();
             elements.push(AccessibilityElement {
                 node_id: node.node_id,
                 value: node.editable_text.then(|| label.clone()),
@@ -144,9 +155,12 @@ fn project_node(
     }
 }
 
-fn node_label(node: &SemanticsNode) -> Option<String> {
-    node.description.clone().or_else(|| match &node.role {
-        SemanticsRole::Text { value } => Some(value.clone()),
+/// Borrows rather than clones: this runs for every semantics node on every
+/// updating frame, and only the few nodes that become elements need an owned
+/// label.
+fn node_label(node: &SemanticsNode) -> Option<&str> {
+    node.description.as_deref().or(match &node.role {
+        SemanticsRole::Text { value } => Some(value.as_str()),
         _ => None,
     })
 }
@@ -157,10 +171,10 @@ fn descendant_label(node: &SemanticsNode) -> Option<String> {
     (!labels.is_empty()).then(|| labels.join(", "))
 }
 
-fn collect_descendant_labels(node: &SemanticsNode, labels: &mut Vec<String>) {
+fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a str>) {
     for child in &node.children {
         if let Some(label) = node_label(child) {
-            if !label.trim().is_empty() && !labels.iter().any(|existing| existing == &label) {
+            if !label.trim().is_empty() && !labels.contains(&label) {
                 labels.push(label);
             }
         } else {
@@ -174,7 +188,6 @@ mod tests {
     use super::*;
     use cranpose_core::NodeId;
     use cranpose_ui::{SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole};
-    use std::collections::HashMap;
 
     fn node(
         node_id: NodeId,
@@ -231,7 +244,7 @@ mod tests {
                 ),
             ],
         );
-        let bounds = HashMap::from([
+        let bounds = HashMap::from_iter([
             (button_id, AccessibilityRect::new(8.0, 700.0, 80.0, 64.0)),
             (3, AccessibilityRect::new(20.0, 712.0, 50.0, 20.0)),
             (4, AccessibilityRect::new(16.0, 80.0, 100.0, 28.0)),

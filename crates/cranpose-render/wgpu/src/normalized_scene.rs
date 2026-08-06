@@ -14,19 +14,17 @@ use crate::surface_plan::{
     TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
+use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::{
     quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
     RenderNode,
 };
-use cranpose_render_common::layer_composition::{
-    effective_layer_isolation, layer_for_content, local_content_layer,
-};
+use cranpose_render_common::layer_composition::local_content_layer_for;
 use cranpose_render_common::primitive_emit::{
     resolve_clip, resolve_primitive_clip, PrimitiveClipSpace,
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
-use std::collections::HashMap;
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -793,9 +791,7 @@ fn collect_layer_contents_into<'a>(
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) {
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     let layer_bounds = layer.local_bounds.translate(layer_offset.x, layer_offset.y);
     let layer_clip = layer
         .clip_rect()
@@ -906,13 +902,8 @@ fn collect_layer_contents_into<'a>(
                             .translate(child_offset.x, child_offset.y);
                         let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
                             if effective_translated_content_context {
-                                let child_isolation =
-                                    effective_layer_isolation(&child_layer.graphics_layer);
-                                let child_content_layer = layer_for_content(
-                                    &child_layer.graphics_layer,
-                                    child_isolation.as_ref(),
-                                );
-                                let child_local_layer = local_content_layer(&child_content_layer);
+                                let child_local_layer =
+                                    local_content_layer_for(&child_layer.graphics_layer);
                                 rigid_snap_anchor(child_bounds, &child_local_layer)
                             } else {
                                 None
@@ -986,13 +977,8 @@ fn collect_layer_contents_into<'a>(
                         translation_context.surface_capture_active,
                     );
                     if effective_translated_content_context || child_surface_needs_snap {
-                        let child_isolation =
-                            effective_layer_isolation(&child_layer.graphics_layer);
-                        let child_content_layer = layer_for_content(
-                            &child_layer.graphics_layer,
-                            child_isolation.as_ref(),
-                        );
-                        let child_local_layer = local_content_layer(&child_content_layer);
+                        let child_local_layer =
+                            local_content_layer_for(&child_layer.graphics_layer);
                         rigid_snap_anchor(child_bounds, &child_local_layer)
                     } else {
                         None

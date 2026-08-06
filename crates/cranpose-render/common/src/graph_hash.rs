@@ -1,12 +1,13 @@
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect, RenderEffect, RenderHash};
+use cranpose_ui_graphics::{
+    BlendMode, ColorFilter, FxHasher, Point, Rect, RenderEffect, RenderHash,
+};
 
 use crate::graph::{
     LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
 };
-use crate::layer_composition::{effective_layer_isolation, layer_for_content, local_content_layer};
+use crate::layer_composition::{layer_composite_params, local_content_layer_for};
 use crate::raster_cache::LayerRasterCacheHashes;
 
 pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
@@ -30,8 +31,8 @@ pub(crate) fn layer_motion_source_content_hash(layer: &LayerNode) -> u64 {
     finish_hash(|state| hash_layer_content(layer, state, false))
 }
 
-fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
-    let mut hasher = DefaultHasher::new();
+fn finish_hash(write: impl FnOnce(&mut FxHasher)) -> u64 {
+    let mut hasher = FxHasher::default();
     write(&mut hasher);
     hasher.finish()
 }
@@ -48,9 +49,7 @@ fn hash_layer_content<H: Hasher>(
     layer.local_bounds.render_hash().hash(state);
     layer.translated_content_context.hash(state);
     hash_optional_rect(layer.clip_rect(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     hash_f32_bits(local_layer.alpha, state);
     hash_optional_color_filter(local_layer.color_filter, state);
     layer.motion_context_animated.hash(state);
@@ -93,15 +92,8 @@ fn hash_child_layer_contribution<H: Hasher>(
     layer.graphics_layer.clip.hash(state);
     hash_optional_render_effect_to(layer.effect(), state);
     hash_optional_render_effect_to(layer.backdrop(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let composite_alpha = isolation
-        .as_ref()
-        .map(|params| params.composite_alpha)
-        .unwrap_or(1.0);
-    let blend_mode = isolation
-        .as_ref()
-        .map(|params| params.blend_mode)
-        .unwrap_or(BlendMode::SrcOver);
+    let (composite_alpha, blend_mode) =
+        layer_composite_params(&layer.graphics_layer).unwrap_or((1.0, BlendMode::SrcOver));
     hash_f32_bits(composite_alpha, state);
     blend_mode.hash(state);
     layer.target_content_hash().hash(state);

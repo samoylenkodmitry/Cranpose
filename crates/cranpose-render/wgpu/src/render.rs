@@ -61,6 +61,7 @@ use crate::surface_requirements::SurfaceRequirementSet;
 use crate::DebugCpuAllocationStats;
 use crate::TextSystemState;
 use bytemuck::{Pod, Zeroable};
+use cranpose_core::collections::map::HashMap;
 use cranpose_core::{hash::default as default_hash, NodeId};
 use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
 use cranpose_render_common::geometry::blur_extent_margin;
@@ -79,12 +80,11 @@ use cranpose_render_common::software_text_raster::{
 #[cfg(test)]
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
-    RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
+    BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
+    RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
 };
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::{Rc, Weak};
@@ -985,7 +985,7 @@ fn hash_shape_shadow_item<H: Hasher>(
 }
 
 fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
     // cancels out exactly. Anchoring to floored device-pixel bounds would leak
     // the device subpixel phase into the hash and defeat the cache at
@@ -11528,7 +11528,7 @@ mod tests {
                         width: 48.0,
                         height: 18.0,
                     },
-                    text,
+                    text: std::rc::Rc::new(text),
                     text_style,
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
@@ -11618,7 +11618,7 @@ mod tests {
                             width: 36.0,
                             height: 16.0,
                         },
-                        text: AnnotatedString::from("48 px"),
+                        text: std::rc::Rc::new(AnnotatedString::from("48 px")),
                         text_style: TextStyle::default(),
                         font_size: 14.0,
                         layout_options: TextLayoutOptions::default(),
@@ -11940,7 +11940,7 @@ mod tests {
                         height: 24.0,
                     },
                     clip: None,
-                    text: AnnotatedString::from("Pure text"),
+                    text: std::rc::Rc::new(AnnotatedString::from("Pure text")),
                     text_style: TextStyle::default(),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
@@ -13100,7 +13100,7 @@ mod tests {
                     width: 48.0,
                     height: 18.0,
                 },
-                text: AnnotatedString::from("runtime cache"),
+                text: std::rc::Rc::new(AnnotatedString::from("runtime cache")),
                 text_style: TextStyle::default(),
                 font_size: 14.0,
                 layout_options: TextLayoutOptions::default(),

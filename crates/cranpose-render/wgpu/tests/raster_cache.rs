@@ -150,7 +150,7 @@ fn text_layer(node_id: NodeId, x: f32, y: f32, text_value: &str) -> LayerNode {
         node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
             node_id,
             rect: local_bounds,
-            text: AnnotatedString::from(text_value),
+            text: std::rc::Rc::new(AnnotatedString::from(text_value)),
             text_style: TextStyle::from_span_style(SpanStyle {
                 color: Some(Color(0.88, 0.90, 0.96, 1.0)),
                 ..Default::default()

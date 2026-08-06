@@ -97,7 +97,7 @@ pub fn build_dev_overlay_graph(
                         width: text_width,
                         height: text_height,
                     },
-                    text: cranpose_ui::text::AnnotatedString::from(text),
+                    text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from(text)),
                     text_style: cranpose_ui::TextStyle::default(),
                     font_size,
                     layout_options: cranpose_ui::TextLayoutOptions::default(),

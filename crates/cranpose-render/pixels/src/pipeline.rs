@@ -1440,7 +1440,7 @@ mod tests {
                             width: 36.0,
                             height: 16.0,
                         },
-                        text: cranpose_ui::text::AnnotatedString::from("48 px"),
+                        text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("48 px")),
                         text_style: TextStyle::default(),
                         font_size: 14.0,
                         layout_options: TextLayoutOptions::default(),

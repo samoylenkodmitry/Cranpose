@@ -138,7 +138,7 @@ impl AnnotatedString {
     /// Computes a hash representing the contents of the span styles, suitable for cache invalidation.
     pub fn span_styles_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = cranpose_ui_graphics::FxHasher::default();
         hasher.write_usize(self.span_styles.len());
         for span in &self.span_styles {
             hasher.write_usize(span.range.start);
@@ -174,7 +174,7 @@ impl AnnotatedString {
     pub fn render_hash(&self) -> u64 {
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = cranpose_ui_graphics::FxHasher::default();
         self.text.hash(&mut hasher);
         self.span_styles.len().hash(&mut hasher);
         for span in &self.span_styles {

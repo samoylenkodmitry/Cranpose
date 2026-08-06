@@ -558,7 +558,7 @@ fn text_node_with_style(
         node: PrimitiveNode::Text(Box::new(TextPrimitiveNode {
             node_id,
             rect,
-            text: AnnotatedString::from(text),
+            text: std::rc::Rc::new(AnnotatedString::from(text)),
             text_style,
             font_size: 14.0,
             layout_options: TextLayoutOptions::default(),
