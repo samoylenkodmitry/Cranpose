@@ -190,7 +190,11 @@ impl PlaybackParams {
     /// A rising combo counter reads better as `pitch_semitones(combo as f32)`
     /// than as a hand-computed ratio.
     pub fn pitch_semitones(self, semitones: f32) -> PlaybackParams {
-        let semitones = if semitones.is_finite() { semitones } else { 0.0 };
+        let semitones = if semitones.is_finite() {
+            semitones
+        } else {
+            0.0
+        };
         self.rate(2.0f32.powf(semitones / 12.0))
     }
 
@@ -267,7 +271,7 @@ impl AudioClip {
         if samples.is_empty() {
             return Err(AudioError::Decode("clip holds no samples".to_string()));
         }
-        if samples.len() % usize::from(channels) != 0 {
+        if !samples.len().is_multiple_of(usize::from(channels)) {
             return Err(AudioError::Decode(format!(
                 "clip holds {} samples, which is not a whole number of {channels}-channel frames",
                 samples.len()
@@ -500,8 +504,11 @@ impl AudioPlayer for NoopAudioPlayer {
     fn stop_voice(&self, _voice: VoiceId) {}
 
     fn set_master_volume(&self, volume: f32) {
-        self.master
-            .set(if volume.is_finite() { volume.clamp(0.0, 1.0) } else { 1.0 });
+        self.master.set(if volume.is_finite() {
+            volume.clamp(0.0, 1.0)
+        } else {
+            1.0
+        });
     }
 
     fn master_volume(&self) -> f32 {
@@ -1011,7 +1018,10 @@ mod tests {
     #[test]
     fn noop_player_rejects_invalid_loop_handle() {
         let player = NoopAudioPlayer::new();
-        assert_eq!(player.play_loop(SoundId::NONE, PlaybackParams::new()), VoiceId::NONE);
+        assert_eq!(
+            player.play_loop(SoundId::NONE, PlaybackParams::new()),
+            VoiceId::NONE
+        );
     }
 
     #[test]
@@ -1186,8 +1196,7 @@ mod tests {
         };
 
         let key = cranpose_core::location_key(file!(), line!(), column!());
-        let mut composition =
-            cranpose_core::Composition::new(cranpose_core::MemoryApplier::new());
+        let mut composition = cranpose_core::Composition::new(cranpose_core::MemoryApplier::new());
         composition.render(key, &mut build).expect("first render");
         composition.render(key, &mut build).expect("second render");
 

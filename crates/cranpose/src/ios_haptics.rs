@@ -5,7 +5,9 @@
 //! generators are main-thread objects; haptics are triggered from UI event
 //! handlers, so they run on the main thread.
 
-use cranpose_services::{set_platform_haptics, HapticEffect, HapticFeedback, HapticPattern, Haptics};
+use cranpose_services::{
+    set_platform_haptics, HapticEffect, HapticFeedback, HapticPattern, Haptics,
+};
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_ui_kit::{
     UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,

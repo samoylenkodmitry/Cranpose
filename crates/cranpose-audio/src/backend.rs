@@ -35,6 +35,11 @@ pub fn is_compiled() -> bool {
 }
 
 /// Opens the platform output device and starts it.
+///
+/// Each arm is a separate `cfg` block, so the explicit returns are what keeps
+/// exactly one of them live per target instead of one expression with three
+/// conditional halves.
+#[allow(clippy::needless_return)]
 pub fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
     #[cfg(all(feature = "aaudio", target_os = "android"))]
     {

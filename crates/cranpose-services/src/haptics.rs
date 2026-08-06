@@ -209,7 +209,9 @@ impl HapticPattern {
 
     /// One pass through the waveform, in milliseconds.
     pub fn total_duration_ms(&self) -> u32 {
-        self.timings_ms.iter().fold(0u32, |sum, step| sum.saturating_add(*step))
+        self.timings_ms
+            .iter()
+            .fold(0u32, |sum, step| sum.saturating_add(*step))
     }
 
     /// The strongest amplitude in the waveform, which is what a backend

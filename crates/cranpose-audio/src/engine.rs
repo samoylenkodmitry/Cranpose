@@ -181,7 +181,9 @@ impl AudioEngine {
     }
 
     fn slot_of(id: SoundId) -> Option<u32> {
-        id.raw().checked_sub(1).filter(|slot| (*slot as usize) < MAX_CLIPS)
+        id.raw()
+            .checked_sub(1)
+            .filter(|slot| (*slot as usize) < MAX_CLIPS)
     }
 
     fn start_voice(&self, id: SoundId, params: PlaybackParams, looping: bool) -> VoiceId {
@@ -366,7 +368,6 @@ mod tests {
 
     /// A sink that keeps the mixer where the test can drive it by hand.
     struct TestSink {
-        mixer: Rc<RefCell<Option<Mixer>>>,
         suspended: Rc<Cell<bool>>,
     }
 
@@ -401,7 +402,6 @@ mod tests {
                 }
                 *mixer_for_opener.borrow_mut() = Some(Mixer::new(seed, 48_000.0, 2));
                 Ok(Box::new(TestSink {
-                    mixer: Rc::clone(&mixer_for_opener),
                     suspended: Rc::clone(&suspended_for_opener),
                 }))
             }));
@@ -566,7 +566,8 @@ mod tests {
         rig.engine.stop(SoundId::NONE);
         rig.engine.unload(SoundId::NONE);
         rig.engine.stop_voice(VoiceId::NONE);
-        rig.engine.set_voice_params(VoiceId::NONE, PlaybackParams::new());
+        rig.engine
+            .set_voice_params(VoiceId::NONE, PlaybackParams::new());
         rig.render(4);
         assert_eq!(rig.active_voices(), 0);
     }
@@ -605,7 +606,8 @@ mod tests {
         // Every later call is a no-op instead of a panic.
         rig.engine.play(SoundId::from_raw(1), PlaybackParams::new());
         assert_eq!(
-            rig.engine.play_loop(SoundId::from_raw(1), PlaybackParams::new()),
+            rig.engine
+                .play_loop(SoundId::from_raw(1), PlaybackParams::new()),
             VoiceId::NONE
         );
         rig.engine.stop_all();

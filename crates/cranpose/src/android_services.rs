@@ -193,12 +193,14 @@ impl Haptics for AndroidHaptics {
             let timing_array = env
                 .new_long_array(timings.len())
                 .map_err(|error| error.to_string())?;
-            env.set_long_array_region(&timing_array, 0, &timings)
+            timing_array
+                .set_region(env, 0, &timings)
                 .map_err(|error| error.to_string())?;
             let amplitude_array = env
                 .new_int_array(amplitudes.len())
                 .map_err(|error| error.to_string())?;
-            env.set_int_array_region(&amplitude_array, 0, &amplitudes)
+            amplitude_array
+                .set_region(env, 0, &amplitudes)
                 .map_err(|error| error.to_string())?;
             let timing_obj: &JObject = timing_array.as_ref();
             let amplitude_obj: &JObject = amplitude_array.as_ref();

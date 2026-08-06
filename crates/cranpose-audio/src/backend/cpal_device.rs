@@ -53,20 +53,22 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
                 None,
             )
         }
-        other => {
-            return Err(AudioError::Backend(format!(
-                "the default output device wants {other:?} samples, which this engine does not write"
-            )))
-        }
+        other => return Err(unwritable_sample_format(other)),
     }
     .map_err(|error| AudioError::Backend(format!("failed to build the output stream: {error}")))?;
 
-    stream
-        .play()
-        .map_err(|error| AudioError::Backend(format!("failed to start the output stream: {error}")))?;
+    stream.play().map_err(|error| {
+        AudioError::Backend(format!("failed to start the output stream: {error}"))
+    })?;
 
     log::debug!("cranpose audio: cpal stream at {sample_rate} Hz, {channels} channels");
     Ok(Box::new(CpalSink { stream }))
+}
+
+fn unwritable_sample_format(format: cpal::SampleFormat) -> AudioError {
+    AudioError::Backend(format!(
+        "the default output device wants {format:?} samples, which the engine does not write"
+    ))
 }
 
 /// Renders through the preallocated scratch buffer and converts, in whole

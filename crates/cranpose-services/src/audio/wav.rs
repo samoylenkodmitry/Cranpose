@@ -59,7 +59,11 @@ pub(super) fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
     let data = data.ok_or_else(|| AudioError::Decode("WAVE stream has no data chunk".into()))?;
 
     let samples = decode_samples(&format, data)?;
-    AudioClip::from_samples(samples, output_channels(format.channels), format.sample_rate)
+    AudioClip::from_samples(
+        samples,
+        output_channels(format.channels),
+        format.sample_rate,
+    )
 }
 
 /// Mono and stereo stay as recorded; three or more channels fold to mono.
@@ -98,7 +102,9 @@ fn parse_format(body: &[u8]) -> Result<WaveFormat, AudioError> {
     }
 
     if channels == 0 {
-        return Err(AudioError::Decode("WAVE stream declares no channels".into()));
+        return Err(AudioError::Decode(
+            "WAVE stream declares no channels".into(),
+        ));
     }
     if sample_rate == 0 {
         return Err(AudioError::Decode(
@@ -133,7 +139,9 @@ fn decode_samples(format: &WaveFormat, data: &[u8]) -> Result<Vec<f32>, AudioErr
             let value = i32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             value as f32 / 2_147_483_648.0
         },
-        (FORMAT_IEEE_FLOAT, 32) => |chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]),
+        (FORMAT_IEEE_FLOAT, 32) => {
+            |chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]])
+        }
         (FORMAT_IEEE_FLOAT, 64) => |chunk| {
             f64::from_le_bytes([
                 chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],

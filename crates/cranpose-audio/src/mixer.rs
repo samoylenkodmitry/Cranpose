@@ -10,6 +10,21 @@
 //! deallocation would run on the audio thread — so the mixer pushes it back to
 //! the UI thread through the `retired` ring instead.
 
+// The mixer is platform-independent and always compiled, so its tests run on
+// every host. A build with no output device compiled in has nothing that
+// constructs one, which is the single configuration where that is expected.
+#![cfg_attr(
+    not(any(
+        test,
+        all(feature = "aaudio", target_os = "android"),
+        all(
+            feature = "cpal-backend",
+            not(any(target_os = "android", target_arch = "wasm32"))
+        )
+    )),
+    allow(dead_code)
+)]
+
 use crate::ring::{Consumer, Producer};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -528,7 +543,11 @@ fn step_for(rate: f32, clip_sample_rate: u32, device_sample_rate: f32) -> f64 {
     if clip_sample_rate == 0 || device_sample_rate <= 0.0 {
         return 1.0;
     }
-    let rate = if rate.is_finite() { rate.clamp(0.05, 8.0) } else { 1.0 };
+    let rate = if rate.is_finite() {
+        rate.clamp(0.05, 8.0)
+    } else {
+        1.0
+    };
     f64::from(rate) * f64::from(clip_sample_rate) / f64::from(device_sample_rate)
 }
 
@@ -671,12 +690,11 @@ mod tests {
         h.mixer.render(&mut out);
         // Reading twice as fast means output frame n is clip frame 2n, and the
         // ramp makes that value exactly 2n/64.
-        for frame in 0..4 {
+        for (frame, sample) in out.iter().enumerate() {
             let expected = (2 * frame) as f32 / 64.0;
             assert!(
-                (out[frame] - expected).abs() < 1e-6,
-                "frame {frame}: expected {expected}, got {}",
-                out[frame]
+                (sample - expected).abs() < 1e-6,
+                "frame {frame}: expected {expected}, got {sample}"
             );
         }
     }
@@ -699,7 +717,11 @@ mod tests {
         for _ in 0..255 {
             h.mixer.render(&mut out);
         }
-        assert_eq!(h.mixer.active_voices(), 1, "still playing after 2048 frames");
+        assert_eq!(
+            h.mixer.active_voices(),
+            1,
+            "still playing after 2048 frames"
+        );
     }
 
     #[test]
@@ -934,11 +956,16 @@ mod tests {
                 slot: MAX_CLIPS as u32 + 5,
             })
             .expect("queued");
-        h.commands.push(play(1, MAX_CLIPS as u32 + 5)).expect("queued");
+        h.commands
+            .push(play(1, MAX_CLIPS as u32 + 5))
+            .expect("queued");
         let mut out = vec![0.0f32; 4];
         h.mixer.render(&mut out);
         assert_eq!(h.mixer.active_voices(), 0);
-        assert!(h.retired.pop().is_some(), "the rejected clip is handed back");
+        assert!(
+            h.retired.pop().is_some(),
+            "the rejected clip is handed back"
+        );
     }
 
     #[test]
@@ -1053,6 +1080,9 @@ mod tests {
         h.commands.push(play(1, 0)).expect("queued");
         let mut out = vec![0.0f32; 2];
         h.mixer.render(&mut out);
-        assert!(out[0].abs() < 1e-6, "opposite channels cancel in the downmix");
+        assert!(
+            out[0].abs() < 1e-6,
+            "opposite channels cancel in the downmix"
+        );
     }
 }

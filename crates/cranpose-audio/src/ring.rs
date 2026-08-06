@@ -245,6 +245,9 @@ mod tests {
                 std::hint::spin_loop();
             }
         }
-        assert_eq!(reader.join().expect("reader finishes"), total * (total - 1) / 2);
+        assert_eq!(
+            reader.join().expect("reader finishes"),
+            total * (total - 1) / 2
+        );
     }
 }
