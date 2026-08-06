@@ -2,6 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!--
+        Required by the amplitude, waveform and predefined paths of
+        cranpose_services::Haptics, which drive Vibrator/VibrationEffect
+        directly. View.performHapticFeedback works without it, so a build that
+        omits this line loses the designed feels and keeps only the semantic
+        HapticFeedback constants.
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:allowBackup="true"
         android:label="Compose Demo"
@@ -12,7 +20,7 @@
             The lib_name must match the cdylib name in Cargo.toml exactly.
         -->
         <activity
-            android:name="dev.cranpose.android.CranposeActivity"
+            android:name="com.compose_rs.demo.DemoActivity"
             android:exported="true"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
