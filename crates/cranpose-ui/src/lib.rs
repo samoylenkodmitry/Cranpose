@@ -93,7 +93,8 @@ pub use modifier::{
     FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
     PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
-    RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
+    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader, Shadow,
+    ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,

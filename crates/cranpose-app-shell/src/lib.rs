@@ -45,6 +45,11 @@ use std::collections::HashSet;
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 // Re-export the pointer device source so platform backends can stamp it.
 pub use cranpose_foundation::PointerSource;
+// Re-export the rotary (Wear OS crown / rotating bezel) event so platform
+// backends can build one and apps can type their window-level handler.
+pub use cranpose_foundation::{
+    rotary_scroll_pixels_from_detents, RotaryScrollEvent, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+};
 
 /// Bridges the in-tree selection menu's clipboard actions to the desktop OS
 /// clipboard (`arboard`). Holds a persistent clipboard handle (Linux X11 loses
@@ -139,6 +144,16 @@ where
     /// Tracks which nodes the pointer is currently hovering over.
     /// Used to synthesize Enter/Exit events when the hover set changes.
     hovered_nodes: Vec<NodeId>,
+    /// Window-level rotary (crown/bezel) fallback handler.
+    ///
+    /// Invoked only when no modifier in the routed chain consumed the event, so
+    /// an app that draws everything into one canvas can read raw rotary deltas
+    /// without participating in focus. See
+    /// [`AppShell::set_on_rotary_scroll`](AppShell::set_on_rotary_scroll).
+    on_rotary_scroll: Option<Rc<dyn Fn(RotaryScrollEvent) -> bool>>,
+    /// Pixels per rotary detent used when a platform reports the crown delta in
+    /// detents. Defaults to `DEFAULT_ROTARY_SCROLL_FACTOR_DP * density`.
+    rotary_scroll_factor: f32,
     /// Persistent clipboard for desktop (Linux X11 requires clipboard to stay alive)
     #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
     clipboard: Option<arboard::Clipboard>,
@@ -467,6 +482,8 @@ where
             pointer_source: PointerSource::Unknown,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
+            on_rotary_scroll: None,
+            rotary_scroll_factor: DEFAULT_ROTARY_SCROLL_FACTOR_DP,
             #[cfg(all(feature = "clipboard-native", target_os = "linux"))]
             clipboard: arboard::Clipboard::new().ok(),
             dev_options: DevOptions::default(),

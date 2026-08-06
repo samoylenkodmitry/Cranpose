@@ -594,6 +594,8 @@ impl WindowModifierExt for Modifier {
                                 }
                                 PointerEventKind::Scroll
                                 | PointerEventKind::Zoom
+                                | PointerEventKind::RotaryScrollPre
+                                | PointerEventKind::RotaryScroll
                                 | PointerEventKind::Enter
                                 | PointerEventKind::Exit => {}
                             }

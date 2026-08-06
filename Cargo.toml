@@ -21,6 +21,7 @@ members = [
     "crates/cranpose-render/wgpu",
     "apps/desktop-demo",
     "apps/desktop-demo-platform",
+    "crates/cranpose-audio",
     "crates/cranpose-services",
     "crates/cranpose-storekit",
     "xtask",
@@ -45,6 +46,7 @@ cranpose-animation = { path = "crates/cranpose-animation", version = "0.1.78" }
 cranpose-liquid = { path = "crates/cranpose-liquid", version = "0.1.78" }
 cranpose = { path = "crates/cranpose", version = "0.1.78", default-features = false }
 cranpose-app-shell = { path = "crates/cranpose-app-shell", version = "0.1.78" }
+cranpose-audio = { path = "crates/cranpose-audio", version = "0.1.78", default-features = false }
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.78" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.78" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.78" }

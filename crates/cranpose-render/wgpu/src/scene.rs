@@ -5,8 +5,8 @@ use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
-    RoundedCornerShape,
+    ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
+    RenderEffect, RoundedCornerShape, Stroke,
 };
 use std::rc::Rc;
 
@@ -33,10 +33,24 @@ pub(crate) struct DrawShape {
     pub snap_anchor: Option<SnapAnchor>,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
+    /// `Some` strokes the outline of `local_rect`/`shape` instead of filling
+    /// it. `local_rect` and `quad` are already inflated by half the width.
+    pub stroke: Option<Stroke>,
+    /// `Some` replaces the rect geometry with a circular band, in `local_rect`
+    /// units. Mutually exclusive with `stroke`/`shape`.
+    pub arc: Option<ArcGeometry>,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
     pub motion_context_animated: bool,
+}
+
+impl DrawShape {
+    /// A shape that needs the analytic stroke or arc path in the shader.
+    #[cfg(test)]
+    pub fn has_stroke_or_arc(&self) -> bool {
+        self.stroke.is_some() || self.arc.is_some()
+    }
 }
 
 #[derive(Clone)]
@@ -203,6 +217,34 @@ impl CompositorScene {
         blend_mode: BlendMode,
         motion_context_animated: bool,
     ) {
+        self.push_shape_with_stroke_and_arc(
+            rect,
+            local_rect,
+            quad,
+            brush,
+            shape,
+            None,
+            None,
+            clip,
+            blend_mode,
+            motion_context_animated,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_shape_with_stroke_and_arc(
+        &mut self,
+        rect: Rect,
+        local_rect: Rect,
+        quad: [[f32; 2]; 4],
+        brush: Brush,
+        shape: Option<RoundedCornerShape>,
+        stroke: Option<Stroke>,
+        arc: Option<ArcGeometry>,
+        clip: Option<Rect>,
+        blend_mode: BlendMode,
+        motion_context_animated: bool,
+    ) {
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.shapes.len();
@@ -213,6 +255,8 @@ impl CompositorScene {
             snap_anchor: None,
             brush,
             shape,
+            stroke,
+            arc,
             z_index,
             clip,
             blend_mode,

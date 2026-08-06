@@ -1218,6 +1218,7 @@ mod tests {
                     height: 8.0,
                 },
                 brush: Brush::solid(Color::WHITE),
+                stroke: None,
             }]
         }));
 
@@ -1390,6 +1391,7 @@ mod tests {
                         height: 8.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }]
             }));
 
@@ -2288,6 +2290,7 @@ mod tests {
                     height: 6.0,
                 },
                 brush: Brush::solid(Color::WHITE),
+                stroke: None,
             }]
         }));
         let overlay = DrawCommand::Overlay(Rc::new(|_size: Size| {
@@ -2299,6 +2302,7 @@ mod tests {
                     height: 4.0,
                 },
                 brush: Brush::solid(Color::BLACK),
+                stroke: None,
             }]
         }));
 

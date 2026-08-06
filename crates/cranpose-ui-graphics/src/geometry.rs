@@ -1,5 +1,6 @@
 //! Geometric primitives: Point, Size, Rect, Insets, Path
 
+use crate::stroke::{arc_band, ArcGeometry, Stroke};
 use crate::{Brush, Color, ColorFilter, ImageBitmap, ImageSampling};
 use std::ops::AddAssign;
 
@@ -391,11 +392,40 @@ pub enum DrawPrimitive {
     Rect {
         rect: Rect,
         brush: Brush,
+        /// `None` fills the rect; `Some` strokes its outline, centered on the
+        /// edge (so it bleeds `width / 2` outside `rect`).
+        stroke: Option<Stroke>,
     },
     RoundRect {
         rect: Rect,
         brush: Brush,
         radii: CornerRadii,
+        /// `None` fills the rounded rect; `Some` strokes its outline, centered
+        /// on the edge.
+        stroke: Option<Stroke>,
+    },
+    /// A circular band: a stroked arc, or a filled annular sector / pie wedge.
+    ///
+    /// Angles are radians, `0` = +X, increasing **clockwise** on screen (see
+    /// [`crate::stroke`] for the full convention).
+    ///
+    /// * `stroke = Some(_)` — the band is `radius ± width/2`, its ends shaped
+    ///   by the stroke cap. `inner_radius` is ignored.
+    /// * `stroke = None` — the band is `inner_radius ..= radius` with flat
+    ///   (butt) radial ends; `inner_radius = 0` is a filled pie wedge.
+    Arc {
+        /// Tight bounding box of the rendered band, caps included. Kept as the
+        /// first field (like every other variant) so bbox/culling/clip logic
+        /// treats an arc exactly like any other primitive.
+        rect: Rect,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Option<Stroke>,
+        /// `> 0` turns a filled wedge into an annular sector.
+        inner_radius: f32,
     },
     Image {
         rect: Rect,
@@ -456,6 +486,129 @@ pub trait DrawScope {
         radius: f32,
         blend_mode: BlendMode,
     );
+
+    // ── Stroked outlines ────────────────────────────────────────────────────
+    //
+    // Strokes are *centered* on the geometry: a `width`-wide stroke covers
+    // `width / 2` inside and `width / 2` outside the path, like Skia and
+    // Jetpack Compose. A non-positive or non-finite width draws nothing.
+
+    /// Strokes the outline of the whole scope rect.
+    fn draw_rect_stroked(&mut self, brush: Brush, stroke: Stroke);
+    fn draw_rect_stroked_blend(&mut self, brush: Brush, stroke: Stroke, blend_mode: BlendMode);
+    /// Strokes the outline of `rect`.
+    fn draw_rect_at_stroked(&mut self, rect: Rect, brush: Brush, stroke: Stroke);
+    fn draw_rect_at_stroked_blend(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+    /// Strokes the outline of the whole scope rect with rounded corners.
+    fn draw_round_rect_stroked(&mut self, brush: Brush, radii: CornerRadii, stroke: Stroke);
+    fn draw_round_rect_stroked_blend(
+        &mut self,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+    /// Strokes the outline of `rect` with rounded corners.
+    fn draw_round_rect_at_stroked(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+    );
+    #[allow(clippy::too_many_arguments)]
+    fn draw_round_rect_at_stroked_blend(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+    /// Strokes a circle outline. Lowers to a stroked rounded rect, so it shares
+    /// the fill pipeline and batches with every other shape.
+    fn draw_circle_stroked(&mut self, brush: Brush, center: Point, radius: f32, stroke: Stroke);
+    fn draw_circle_stroked_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+
+    // ── Arcs ────────────────────────────────────────────────────────────────
+
+    /// Strokes a circular arc.
+    ///
+    /// Angles are in **radians**, `0` points along **+X**, and increasing
+    /// angles sweep **clockwise on screen** (Cranpose uses y-down device
+    /// coordinates, so this matches `atan2(dy, dx)` and the sweep-gradient
+    /// brush). A negative `sweep_angle` sweeps counter-clockwise; `|sweep| >=
+    /// 2π` draws a closed ring.
+    ///
+    /// The stroke is centered on `radius`, so the band covers
+    /// `radius ± width/2`. [`StrokeCap`](crate::StrokeCap) shapes the two ends.
+    /// Nothing is drawn for a zero sweep, a non-positive width, or non-finite
+    /// input.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_arc(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Stroke,
+    );
+    #[allow(clippy::too_many_arguments)]
+    fn draw_arc_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    );
+
+    /// Fills an annular sector — the region between `inner_radius` and
+    /// `outer_radius`, limited to an angular sweep, with **flat radial ends**.
+    ///
+    /// This is the shape a stroked arc cannot express: its ends are straight
+    /// lines through the center, not caps. `inner_radius = 0` fills a pie
+    /// wedge. Angle convention is identical to [`draw_arc`](Self::draw_arc).
+    /// Nothing is drawn when `inner_radius >= outer_radius`, the sweep is zero,
+    /// or any input is non-finite.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_annular_sector(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        inner_radius: f32,
+        outer_radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+    );
+    #[allow(clippy::too_many_arguments)]
+    fn draw_annular_sector_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        inner_radius: f32,
+        outer_radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        blend_mode: BlendMode,
+    );
+
     fn draw_image(&mut self, image: ImageBitmap);
     fn draw_image_blend(&mut self, image: ImageBitmap, blend_mode: BlendMode);
     fn draw_image_at(
@@ -555,6 +708,51 @@ impl DrawScopeDefault {
             });
         }
     }
+
+    /// Shared lowering for [`DrawScope::draw_arc`] and
+    /// [`DrawScope::draw_annular_sector`].
+    ///
+    /// Resolves the band, computes the *tight* bounding box (caps included) and
+    /// drops degenerate geometry on the floor instead of emitting NaN-bearing
+    /// primitives the renderers would have to defend against.
+    #[allow(clippy::too_many_arguments)]
+    fn push_arc(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Option<Stroke>,
+        inner_radius: f32,
+        blend_mode: BlendMode,
+    ) {
+        let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
+        let geometry = ArcGeometry::new(
+            center,
+            band_inner,
+            band_outer,
+            start_angle,
+            sweep_angle,
+            cap,
+        );
+        if geometry.is_degenerate() {
+            return;
+        }
+        self.push_blended_primitive(
+            DrawPrimitive::Arc {
+                rect: geometry.bounds(),
+                brush,
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                stroke,
+                inner_radius,
+            },
+            blend_mode,
+        );
+    }
 }
 
 impl DrawScope for DrawScopeDefault {
@@ -575,6 +773,7 @@ impl DrawScope for DrawScopeDefault {
             DrawPrimitive::Rect {
                 rect: Rect::from_size(self.size),
                 brush,
+                stroke: None,
             },
             blend_mode,
         );
@@ -585,7 +784,14 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_rect_at_blend(&mut self, rect: Rect, brush: Brush, blend_mode: BlendMode) {
-        self.push_blended_primitive(DrawPrimitive::Rect { rect, brush }, blend_mode);
+        self.push_blended_primitive(
+            DrawPrimitive::Rect {
+                rect,
+                brush,
+                stroke: None,
+            },
+            blend_mode,
+        );
     }
 
     fn draw_round_rect(&mut self, brush: Brush, radii: CornerRadii) {
@@ -598,6 +804,7 @@ impl DrawScope for DrawScopeDefault {
                 rect: Rect::from_size(self.size),
                 brush,
                 radii,
+                stroke: None,
             },
             blend_mode,
         );
@@ -605,8 +812,215 @@ impl DrawScope for DrawScopeDefault {
 
     fn draw_round_rect_at(&mut self, rect: Rect, brush: Brush, radii: CornerRadii) {
         self.push_blended_primitive(
-            DrawPrimitive::RoundRect { rect, brush, radii },
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke: None,
+            },
             BlendMode::SrcOver,
+        );
+    }
+
+    fn draw_rect_stroked(&mut self, brush: Brush, stroke: Stroke) {
+        self.draw_rect_stroked_blend(brush, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_rect_stroked_blend(&mut self, brush: Brush, stroke: Stroke, blend_mode: BlendMode) {
+        self.draw_rect_at_stroked_blend(Rect::from_size(self.size), brush, stroke, blend_mode);
+    }
+
+    fn draw_rect_at_stroked(&mut self, rect: Rect, brush: Brush, stroke: Stroke) {
+        self.draw_rect_at_stroked_blend(rect, brush, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_rect_at_stroked_blend(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        if !stroke.is_visible() {
+            return;
+        }
+        self.push_blended_primitive(
+            DrawPrimitive::Rect {
+                rect,
+                brush,
+                stroke: Some(stroke),
+            },
+            blend_mode,
+        );
+    }
+
+    fn draw_round_rect_stroked(&mut self, brush: Brush, radii: CornerRadii, stroke: Stroke) {
+        self.draw_round_rect_stroked_blend(brush, radii, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_round_rect_stroked_blend(
+        &mut self,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        self.draw_round_rect_at_stroked_blend(
+            Rect::from_size(self.size),
+            brush,
+            radii,
+            stroke,
+            blend_mode,
+        );
+    }
+
+    fn draw_round_rect_at_stroked(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+    ) {
+        self.draw_round_rect_at_stroked_blend(rect, brush, radii, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_round_rect_at_stroked_blend(
+        &mut self,
+        rect: Rect,
+        brush: Brush,
+        radii: CornerRadii,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        if !stroke.is_visible() {
+            return;
+        }
+        self.push_blended_primitive(
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke: Some(stroke),
+            },
+            blend_mode,
+        );
+    }
+
+    fn draw_circle_stroked(&mut self, brush: Brush, center: Point, radius: f32, stroke: Stroke) {
+        self.draw_circle_stroked_blend(brush, center, radius, stroke, BlendMode::SrcOver);
+    }
+
+    fn draw_circle_stroked_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        if !stroke.is_visible() || !radius.is_finite() {
+            return;
+        }
+        let radius = radius.max(0.0);
+        let diameter = radius * 2.0;
+        self.draw_round_rect_at_stroked_blend(
+            Rect {
+                x: center.x - radius,
+                y: center.y - radius,
+                width: diameter,
+                height: diameter,
+            },
+            brush,
+            CornerRadii::uniform(radius),
+            stroke,
+            blend_mode,
+        );
+    }
+
+    fn draw_arc(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Stroke,
+    ) {
+        self.draw_arc_blend(
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            BlendMode::SrcOver,
+        );
+    }
+
+    fn draw_arc_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Stroke,
+        blend_mode: BlendMode,
+    ) {
+        if !stroke.is_visible() {
+            return;
+        }
+        self.push_arc(
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            Some(stroke),
+            0.0,
+            blend_mode,
+        );
+    }
+
+    fn draw_annular_sector(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        inner_radius: f32,
+        outer_radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+    ) {
+        self.draw_annular_sector_blend(
+            brush,
+            center,
+            inner_radius,
+            outer_radius,
+            start_angle,
+            sweep_angle,
+            BlendMode::SrcOver,
+        );
+    }
+
+    fn draw_annular_sector_blend(
+        &mut self,
+        brush: Brush,
+        center: Point,
+        inner_radius: f32,
+        outer_radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        blend_mode: BlendMode,
+    ) {
+        self.push_arc(
+            brush,
+            center,
+            outer_radius,
+            start_angle,
+            sweep_angle,
+            None,
+            inner_radius,
+            blend_mode,
         );
     }
 
@@ -633,6 +1047,7 @@ impl DrawScope for DrawScopeDefault {
                 },
                 brush,
                 radii: CornerRadii::uniform(radius),
+                stroke: None,
             },
             blend_mode,
         );
@@ -1252,5 +1667,439 @@ mod tests {
     #[test]
     fn layer_shape_default_is_rectangle() {
         assert_eq!(LayerShape::default(), LayerShape::Rectangle);
+    }
+
+    // ── Stroke / arc lowering ───────────────────────────────────────────────
+
+    use crate::{StrokeCap, StrokeJoin};
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    fn scope(size: f32) -> DrawScopeDefault {
+        DrawScopeDefault::new(Size::new(size, size))
+    }
+
+    #[test]
+    fn draw_rect_stroked_records_scope_rect_and_stroke() {
+        let mut scope = scope(20.0);
+        scope.draw_rect_stroked(
+            Brush::solid(Color::RED),
+            Stroke::new(3.0).with_join(StrokeJoin::Bevel),
+        );
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::Rect {
+                rect,
+                stroke: Some(stroke),
+                ..
+            } => {
+                // The stored rect stays the *geometric* rect; the renderer
+                // inflates it by half the stroke width when it builds the quad.
+                assert_eq!(*rect, Rect::from_size(Size::new(20.0, 20.0)));
+                assert_eq!(stroke.width, 3.0);
+                assert_eq!(stroke.join, StrokeJoin::Bevel);
+            }
+            other => panic!("expected stroked rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_rect_at_stroked_records_requested_rect() {
+        let mut scope = scope(50.0);
+        let rect = Rect {
+            x: 4.0,
+            y: 6.0,
+            width: 12.0,
+            height: 9.0,
+        };
+        scope.draw_rect_at_stroked(rect, Brush::solid(Color::BLUE), Stroke::new(2.0));
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::Rect {
+                rect: actual,
+                stroke: Some(stroke),
+                ..
+            } => {
+                assert_eq!(*actual, rect);
+                assert_eq!(stroke.width, 2.0);
+            }
+            other => panic!("expected stroked rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_round_rect_stroked_keeps_radii_and_stroke() {
+        let mut scope = scope(30.0);
+        scope.draw_round_rect_stroked(
+            Brush::solid(Color::GREEN),
+            CornerRadii::uniform(5.0),
+            Stroke::new(4.0).with_join(StrokeJoin::Round),
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::RoundRect {
+                rect,
+                radii,
+                stroke: Some(stroke),
+                ..
+            } => {
+                assert_eq!(*rect, Rect::from_size(Size::new(30.0, 30.0)));
+                assert_eq!(*radii, CornerRadii::uniform(5.0));
+                assert_eq!(stroke.width, 4.0);
+                assert_eq!(stroke.join, StrokeJoin::Round);
+            }
+            other => panic!("expected stroked round rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_round_rect_at_stroked_records_requested_rect() {
+        let mut scope = scope(60.0);
+        let rect = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        scope.draw_round_rect_at_stroked(
+            rect,
+            Brush::solid(Color::WHITE),
+            CornerRadii::uniform(3.0),
+            Stroke::new(1.5),
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::RoundRect {
+                rect: actual,
+                radii,
+                stroke: Some(stroke),
+                ..
+            } => {
+                assert_eq!(*actual, rect);
+                assert_eq!(*radii, CornerRadii::uniform(3.0));
+                assert_eq!(stroke.width, 1.5);
+            }
+            other => panic!("expected stroked round rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_circle_stroked_lowers_to_stroked_round_rect() {
+        // A stroked circle must reuse the round-rect path so it shares the
+        // shape pipeline (and therefore the batch) with every other shape.
+        let mut scope = scope(40.0);
+        scope.draw_circle_stroked(
+            Brush::solid(Color::BLUE),
+            Point::new(12.0, 16.0),
+            5.0,
+            Stroke::new(2.0),
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::RoundRect {
+                rect,
+                radii,
+                stroke: Some(stroke),
+                ..
+            } => {
+                assert_eq!(
+                    *rect,
+                    Rect {
+                        x: 7.0,
+                        y: 11.0,
+                        width: 10.0,
+                        height: 10.0,
+                    }
+                );
+                assert_eq!(*radii, CornerRadii::uniform(5.0));
+                assert_eq!(stroke.width, 2.0);
+            }
+            other => panic!("expected stroked circular round rect, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_arc_records_arc_primitive_with_tight_bounds() {
+        let mut scope = scope(200.0);
+        scope.draw_arc(
+            Brush::solid(Color::RED),
+            Point::new(100.0, 100.0),
+            50.0,
+            0.0,
+            FRAC_PI_2,
+            Stroke::new(10.0),
+        );
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        match &primitives[0] {
+            DrawPrimitive::Arc {
+                rect,
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                stroke: Some(stroke),
+                inner_radius,
+                ..
+            } => {
+                assert_eq!(*center, Point::new(100.0, 100.0));
+                assert_eq!(*radius, 50.0);
+                assert_eq!(*start_angle, 0.0);
+                assert!(approx(*sweep_angle, FRAC_PI_2));
+                assert_eq!(stroke.width, 10.0);
+                assert_eq!(*inner_radius, 0.0);
+                // Band is 45..55; a 0..90 degree sweep with butt caps spans
+                // x = 100..155 and y = 100..155.
+                assert!(approx(rect.x, 100.0), "{rect:?}");
+                assert!(approx(rect.y, 100.0), "{rect:?}");
+                assert!(approx(rect.width, 55.0), "{rect:?}");
+                assert!(approx(rect.height, 55.0), "{rect:?}");
+            }
+            other => panic!("expected arc primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_arc_bounds_cover_a_quadrant_spanning_sweep() {
+        let mut scope = scope(200.0);
+        // 0 -> 270 degrees: the bounds must be the full outer circle, not the
+        // chord between the two endpoints.
+        scope.draw_arc(
+            Brush::solid(Color::RED),
+            Point::new(100.0, 100.0),
+            50.0,
+            0.0,
+            3.0 * FRAC_PI_2,
+            Stroke::new(4.0),
+        );
+        let DrawPrimitive::Arc { rect, .. } = &scope.into_primitives()[0] else {
+            panic!("expected arc primitive");
+        };
+        assert!(approx(rect.x, 48.0), "{rect:?}");
+        assert!(approx(rect.y, 48.0), "{rect:?}");
+        assert!(approx(rect.width, 104.0), "{rect:?}");
+        assert!(approx(rect.height, 104.0), "{rect:?}");
+    }
+
+    #[test]
+    fn draw_annular_sector_records_inner_radius_and_no_stroke() {
+        let mut scope = scope(200.0);
+        scope.draw_annular_sector(
+            Brush::solid(Color::WHITE),
+            Point::new(100.0, 100.0),
+            30.0,
+            50.0,
+            0.0,
+            PI,
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::Arc {
+                rect,
+                center,
+                radius,
+                inner_radius,
+                stroke,
+                sweep_angle,
+                ..
+            } => {
+                assert!(stroke.is_none(), "annular sectors are filled, not stroked");
+                assert_eq!(*center, Point::new(100.0, 100.0));
+                assert_eq!(*radius, 50.0);
+                assert_eq!(*inner_radius, 30.0);
+                assert!(approx(*sweep_angle, PI));
+                // 0 -> 180 degrees: x spans -50..+50, y spans 0..+50.
+                assert!(approx(rect.x, 50.0), "{rect:?}");
+                assert!(approx(rect.y, 100.0), "{rect:?}");
+                assert!(approx(rect.width, 100.0), "{rect:?}");
+                assert!(approx(rect.height, 50.0), "{rect:?}");
+            }
+            other => panic!("expected arc primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_arc_blend_wraps_non_default_modes() {
+        let mut scope = scope(100.0);
+        scope.draw_arc_blend(
+            Brush::solid(Color::RED),
+            Point::new(50.0, 50.0),
+            20.0,
+            0.0,
+            1.0,
+            Stroke::new(2.0),
+            BlendMode::DstOut,
+        );
+        match &scope.into_primitives()[0] {
+            DrawPrimitive::Blend {
+                primitive,
+                blend_mode,
+            } => {
+                assert_eq!(*blend_mode, BlendMode::DstOut);
+                assert!(matches!(**primitive, DrawPrimitive::Arc { .. }));
+            }
+            other => panic!("expected blended arc, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn draw_annular_sector_blend_wraps_non_default_modes() {
+        let mut scope = scope(100.0);
+        scope.draw_annular_sector_blend(
+            Brush::solid(Color::RED),
+            Point::new(50.0, 50.0),
+            5.0,
+            20.0,
+            0.0,
+            1.0,
+            BlendMode::Plus,
+        );
+        assert!(matches!(
+            &scope.into_primitives()[0],
+            DrawPrimitive::Blend {
+                blend_mode: BlendMode::Plus,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn stroked_blend_variants_wrap_non_default_modes() {
+        let mut scope = scope(20.0);
+        scope.draw_rect_stroked_blend(
+            Brush::solid(Color::RED),
+            Stroke::new(2.0),
+            BlendMode::DstOut,
+        );
+        scope.draw_round_rect_stroked_blend(
+            Brush::solid(Color::RED),
+            CornerRadii::uniform(2.0),
+            Stroke::new(2.0),
+            BlendMode::DstOut,
+        );
+        scope.draw_circle_stroked_blend(
+            Brush::solid(Color::RED),
+            Point::new(10.0, 10.0),
+            5.0,
+            Stroke::new(2.0),
+            BlendMode::DstOut,
+        );
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 3);
+        for primitive in &primitives {
+            assert!(
+                matches!(
+                    primitive,
+                    DrawPrimitive::Blend {
+                        blend_mode: BlendMode::DstOut,
+                        ..
+                    }
+                ),
+                "expected blended primitive, got {primitive:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn negative_sweeps_and_overlong_sweeps_produce_finite_bounds() {
+        let mut scope = scope(200.0);
+        scope.draw_arc(
+            Brush::solid(Color::RED),
+            Point::new(100.0, 100.0),
+            40.0,
+            FRAC_PI_2,
+            -FRAC_PI_2,
+            Stroke::new(4.0),
+        );
+        scope.draw_arc(
+            Brush::solid(Color::RED),
+            Point::new(100.0, 100.0),
+            40.0,
+            0.3,
+            crate::stroke::TAU * 4.0,
+            Stroke::new(4.0),
+        );
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 2);
+
+        let DrawPrimitive::Arc { rect: negative, .. } = &primitives[0] else {
+            panic!("expected arc");
+        };
+        // 0 -> 90 degrees clockwise, band 38..42.
+        assert!(approx(negative.x, 100.0), "{negative:?}");
+        assert!(approx(negative.y, 100.0), "{negative:?}");
+        assert!(approx(negative.width, 42.0), "{negative:?}");
+
+        let DrawPrimitive::Arc { rect: full, .. } = &primitives[1] else {
+            panic!("expected arc");
+        };
+        // Anything past a full turn is a closed ring: the whole outer circle.
+        assert!(approx(full.x, 58.0), "{full:?}");
+        assert!(approx(full.width, 84.0), "{full:?}");
+        assert!(approx(full.height, 84.0), "{full:?}");
+    }
+
+    #[test]
+    fn degenerate_stroke_and_arc_inputs_emit_nothing_and_never_panic() {
+        let mut scope = scope(50.0);
+        let brush = Brush::solid(Color::RED);
+        let center = Point::new(25.0, 25.0);
+
+        // Zero / negative / non-finite stroke widths.
+        scope.draw_rect_stroked(brush.clone(), Stroke::new(0.0));
+        scope.draw_rect_stroked(brush.clone(), Stroke::new(-4.0));
+        scope.draw_rect_stroked(brush.clone(), Stroke::new(f32::NAN));
+        scope.draw_round_rect_stroked(brush.clone(), CornerRadii::uniform(2.0), Stroke::new(0.0));
+        scope.draw_circle_stroked(brush.clone(), center, 10.0, Stroke::new(0.0));
+        scope.draw_circle_stroked(brush.clone(), center, f32::NAN, Stroke::new(2.0));
+        // Zero and non-finite sweeps.
+        scope.draw_arc(brush.clone(), center, 10.0, 0.0, 0.0, Stroke::new(2.0));
+        scope.draw_arc(brush.clone(), center, 10.0, 0.0, f32::NAN, Stroke::new(2.0));
+        scope.draw_arc(
+            brush.clone(),
+            center,
+            f32::INFINITY,
+            0.0,
+            1.0,
+            Stroke::new(2.0),
+        );
+        // Zero-width arc stroke and zero radius with zero width.
+        scope.draw_arc(brush.clone(), center, 10.0, 0.0, 1.0, Stroke::new(0.0));
+        scope.draw_arc(brush.clone(), center, 0.0, 0.0, 1.0, Stroke::new(0.0));
+        // Annular sectors with an empty band.
+        scope.draw_annular_sector(brush.clone(), center, 10.0, 10.0, 0.0, 1.0);
+        scope.draw_annular_sector(brush.clone(), center, 20.0, 10.0, 0.0, 1.0);
+        scope.draw_annular_sector(brush.clone(), center, 0.0, 0.0, 0.0, 1.0);
+        scope.draw_annular_sector(brush.clone(), center, 0.0, 10.0, 0.0, 0.0);
+        scope.draw_annular_sector(brush, center, f32::NAN, 10.0, 0.0, 1.0);
+
+        assert!(
+            scope.into_primitives().is_empty(),
+            "degenerate stroke/arc requests must not reach the renderer"
+        );
+    }
+
+    #[test]
+    fn zero_radius_arc_with_positive_width_stays_finite() {
+        // radius 0 with a fat stroke is a filled wedge of radius width/2 —
+        // legal, and it must not produce NaN bounds.
+        let mut scope = scope(50.0);
+        scope.draw_arc(
+            Brush::solid(Color::RED),
+            Point::new(25.0, 25.0),
+            0.0,
+            0.0,
+            FRAC_PI_2,
+            Stroke::new(6.0).with_cap(StrokeCap::Round),
+        );
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        let DrawPrimitive::Arc { rect, .. } = &primitives[0] else {
+            panic!("expected arc");
+        };
+        for value in [rect.x, rect.y, rect.width, rect.height] {
+            assert!(value.is_finite(), "{rect:?}");
+        }
+        assert!(rect.width > 0.0 && rect.height > 0.0, "{rect:?}");
     }
 }

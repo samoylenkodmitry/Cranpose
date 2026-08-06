@@ -1287,6 +1287,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                             primitives.push(DrawPrimitive::Rect {
                                 rect: clipped,
                                 brush: underline_brush.clone(),
+                                stroke: None,
                             });
                         }
                     }
@@ -1339,6 +1340,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     primitives.push(DrawPrimitive::Rect {
                         rect: clipped,
                         brush: cursor_brush.clone(),
+                        stroke: None,
                     });
                 }
             }
@@ -1416,6 +1418,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     primitives.push(DrawPrimitive::Rect {
                         rect: clipped,
                         brush: selection_brush.clone(),
+                        stroke: None,
                     });
                 }
             }

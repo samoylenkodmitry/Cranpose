@@ -24,6 +24,7 @@ pub mod primitive_emit;
 pub mod raster_cache;
 pub mod render_contract;
 pub mod scene_builder;
+pub mod shape_sdf;
 pub mod software_text_raster;
 pub mod style_shared;
 pub mod text_hyphenation;

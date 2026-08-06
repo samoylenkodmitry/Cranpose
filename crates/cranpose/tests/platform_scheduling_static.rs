@@ -1233,6 +1233,12 @@ fn workspace_ffi_boundaries_are_explicit() {
         // plus the callback it invokes. The crate root denies unsafe code and
         // opts this one module back in by name.
         "crates/cranpose-storekit/src/apple.rs",
+        // The audio engine's two boundaries: the lock-free queue that carries
+        // commands to the real-time thread, and the AAudio callback that turns
+        // the device's raw output pointer into a slice. The crate root denies
+        // unsafe code and opts these back in by name.
+        "crates/cranpose-audio/src/ring.rs",
+        "crates/cranpose-audio/src/backend/aaudio.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
@@ -1276,6 +1282,8 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/ios_accessibility.rs",
+        "crates/cranpose-audio/src/ring.rs",
+        "crates/cranpose-audio/src/backend/aaudio.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

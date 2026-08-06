@@ -248,10 +248,19 @@ fn primitive_for_shape(shape: LayerShape, rect: Rect, brush: Brush) -> Option<Dr
     }
 
     Some(match shape {
-        LayerShape::Rectangle => DrawPrimitive::Rect { rect, brush },
+        LayerShape::Rectangle => DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke: None,
+        },
         LayerShape::Rounded(shape) => {
             let radii = shape.resolve(rect.width, rect.height);
-            DrawPrimitive::RoundRect { rect, brush, radii }
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke: None,
+            }
         }
     })
 }

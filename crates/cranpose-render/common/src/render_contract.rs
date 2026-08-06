@@ -1,7 +1,9 @@
 use cranpose_core::NodeId;
 use cranpose_ui::text::{AnnotatedString, Shadow, SpanStyle, TextDecoration};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
-use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{
+    Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke,
+};
 
 use crate::graph::{
     CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
@@ -66,9 +68,11 @@ pub enum SharedRenderCase {
     TranslatedTextDecorations,
     MultilineText,
     ClippedText,
+    StrokedRoundRect,
+    AnnularSector,
 }
 
-pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 7] = [
+pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 9] = [
     SharedRenderCase::RoundedRect,
     SharedRenderCase::PrimitiveClip,
     SharedRenderCase::TranslatedSubtree,
@@ -76,6 +80,8 @@ pub const ALL_SHARED_RENDER_CASES: [SharedRenderCase; 7] = [
     SharedRenderCase::TranslatedTextDecorations,
     SharedRenderCase::MultilineText,
     SharedRenderCase::ClippedText,
+    SharedRenderCase::StrokedRoundRect,
+    SharedRenderCase::AnnularSector,
 ];
 
 impl SharedRenderCase {
@@ -88,6 +94,8 @@ impl SharedRenderCase {
             SharedRenderCase::TranslatedTextDecorations => "translated_text_decorations",
             SharedRenderCase::MultilineText => "multiline_text",
             SharedRenderCase::ClippedText => "clipped_text",
+            SharedRenderCase::StrokedRoundRect => "stroked_round_rect",
+            SharedRenderCase::AnnularSector => "annular_sector",
         }
     }
 
@@ -109,6 +117,8 @@ impl SharedRenderCase {
             ],
             SharedRenderCase::MultilineText => vec![multiline_text_fixture()],
             SharedRenderCase::ClippedText => vec![clipped_text_fixture()],
+            SharedRenderCase::StrokedRoundRect => vec![stroked_round_rect_fixture()],
+            SharedRenderCase::AnnularSector => vec![annular_sector_fixture()],
         }
     }
 
@@ -141,6 +151,18 @@ impl SharedRenderCase {
                 };
                 assert_multiline_text_frame(&frame.pixels, frame.width, frame.height);
             }
+            SharedRenderCase::StrokedRoundRect => {
+                let [frame] = frames else {
+                    panic!("stroked_round_rect expects exactly one rendered frame");
+                };
+                assert_stroked_round_rect_frame(&frame.pixels, frame.width, frame.height);
+            }
+            SharedRenderCase::AnnularSector => {
+                let [frame] = frames else {
+                    panic!("annular_sector expects exactly one rendered frame");
+                };
+                assert_annular_sector_frame(&frame.pixels, frame.width, frame.height);
+            }
             SharedRenderCase::ClippedText => {
                 let [frame] = frames else {
                     panic!("clipped_text expects exactly one rendered frame");
@@ -165,6 +187,7 @@ fn rounded_rect_fixture() -> RenderFixture {
                 },
                 brush: Brush::solid(FOREGROUND_COLOR),
                 radii: CornerRadii::uniform(18.0),
+                stroke: None,
             },
             None,
         )],
@@ -184,6 +207,7 @@ fn primitive_clip_fixture() -> RenderFixture {
                     height: 18.0,
                 },
                 brush: Brush::solid(FOREGROUND_COLOR),
+                stroke: None,
             },
             Some(Rect {
                 x: 14.0,
@@ -219,6 +243,7 @@ fn translated_subtree_fixture(translation_x: f32, translation_y: f32) -> RenderF
                     },
                     brush: Brush::solid(FOREGROUND_COLOR),
                     radii: CornerRadii::uniform(10.0),
+                    stroke: None,
                 },
                 None,
             ),
@@ -231,6 +256,7 @@ fn translated_subtree_fixture(translation_x: f32, translation_y: f32) -> RenderF
                         height: 10.0,
                     },
                     brush: Brush::solid(Color(0.2, 0.8, 1.0, 1.0)),
+                    stroke: None,
                 },
                 Some(Rect {
                     x: 12.0,
@@ -268,6 +294,7 @@ fn translated_plain_text_fixture(translation_x: f32, translation_y: f32) -> Rend
                     },
                     brush: Brush::solid(Color(0.24, 0.26, 0.40, 0.92)),
                     radii: CornerRadii::uniform(8.0),
+                    stroke: None,
                 },
                 None,
             ),
@@ -491,6 +518,7 @@ fn with_background(bounds: Rect, mut children: Vec<RenderNode>) -> Vec<RenderNod
             DrawPrimitive::Rect {
                 rect: bounds,
                 brush: Brush::solid(BACKGROUND_COLOR),
+                stroke: None,
             },
             None,
         ),
@@ -537,6 +565,157 @@ fn text_node_with_style(
             clip,
         })),
     })
+}
+
+/// A stroked rounded rect must be *hollow*. Both backends evaluate the same
+/// stroke SDF, so a backend that quietly filled the shape instead would light
+/// up the center pixel and fail here.
+fn stroked_round_rect_fixture() -> RenderFixture {
+    build_fixture(
+        72,
+        72,
+        vec![draw_node(
+            DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: 16.0,
+                    y: 16.0,
+                    width: 40.0,
+                    height: 40.0,
+                },
+                brush: Brush::solid(FOREGROUND_COLOR),
+                radii: CornerRadii::uniform(10.0),
+                stroke: Some(Stroke::new(6.0)),
+            },
+            None,
+        )],
+    )
+}
+
+/// An annular sector: a ring band cut to a quarter turn with flat radial ends.
+/// This is the shape a chain of circles cannot produce, so both backends must
+/// render the hole, the band and the two straight edges.
+fn annular_sector_fixture() -> RenderFixture {
+    // Center (36, 36), inner radius 12, outer radius 24, 0 -> 90 degrees, so
+    // the band occupies the +X/+Y quadrant in screen space.
+    build_fixture(
+        72,
+        72,
+        vec![draw_node(
+            DrawPrimitive::Arc {
+                rect: Rect {
+                    x: 36.0,
+                    y: 36.0,
+                    width: 24.0,
+                    height: 24.0,
+                },
+                brush: Brush::solid(FOREGROUND_COLOR),
+                center: Point::new(36.0, 36.0),
+                radius: 24.0,
+                start_angle: 0.0,
+                sweep_angle: std::f32::consts::FRAC_PI_2,
+                stroke: None,
+                inner_radius: 12.0,
+            },
+            None,
+        )],
+    )
+}
+
+fn assert_stroked_round_rect_frame(pixels: &[u8], width: u32, height: u32) {
+    assert_eq!((width, height), (72, 72));
+    let background = sample_pixel(pixels, width, 2, 2);
+
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        36,
+        16,
+        false,
+        "stroked round rect top edge should contain stroke ink",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        16,
+        36,
+        false,
+        "stroked round rect left edge should contain stroke ink",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        36,
+        36,
+        true,
+        "stroked round rect interior must stay empty — a backend that filled \
+         the shape instead of stroking it would fail here",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        4,
+        36,
+        true,
+        "outside the stroked round rect should stay background-colored",
+    );
+}
+
+fn assert_annular_sector_frame(pixels: &[u8], width: u32, height: u32) {
+    assert_eq!((width, height), (72, 72));
+    let background = sample_pixel(pixels, width, 2, 2);
+
+    // Centerline radius 18, inside the 0..90 degree sweep.
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        54,
+        38,
+        false,
+        "annular sector band near 0 degrees should contain fill",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        38,
+        54,
+        false,
+        "annular sector band near 90 degrees should contain fill",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        36,
+        36,
+        true,
+        "the annulus hole must stay empty",
+    );
+    // Same radius, but the other side of the flat radial start edge.
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        54,
+        30,
+        true,
+        "past the flat radial edge must stay empty — a rounded cap here would \
+         mean the sector is being drawn as a stroked arc",
+    );
+    assert_pixel_matches_background(
+        pixels,
+        width,
+        background,
+        66,
+        38,
+        true,
+        "beyond the outer radius must stay empty",
+    );
 }
 
 fn assert_rounded_rect_frame(pixels: &[u8], width: u32, height: u32) {

@@ -14,6 +14,9 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.accessibility.AccessibilityEvent;
@@ -1067,6 +1070,135 @@ public class CranposeActivity extends NativeActivity {
             }
             decor.performHapticFeedback(constant);
         });
+    }
+
+    /** The system vibrator, or {@code null} where the device has none. */
+    private Vibrator cranposeVibrator() {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager =
+                        (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                return manager == null ? null : manager.getDefaultVibrator();
+            }
+            return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Vibrates once for {@code durationMs} at {@code amplitude} (-1 for the
+     * device default, otherwise 1..255). Called from Rust over JNI (any
+     * thread); {@code VibrationEffect.createOneShot} needs API 26. */
+    public void cranposeHapticOneShot(final long durationMs, final int amplitude) {
+        if (durationMs <= 0) {
+            return;
+        }
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                int level = amplitude < 0
+                        ? VibrationEffect.DEFAULT_AMPLITUDE
+                        : Math.max(1, Math.min(255, amplitude));
+                vibrator.vibrate(VibrationEffect.createOneShot(durationMs, level));
+            } else {
+                vibrator.vibrate(durationMs);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Plays a vibration waveform: alternating durations in {@code timingsMs}
+     * with a target amplitude each in {@code amplitudes} (0..255), looping back
+     * to {@code repeat} (or -1 for a single pass). Called from Rust over JNI
+     * (any thread); {@code VibrationEffect.createWaveform} needs API 26, and
+     * pre-26 devices fall back to the timings alone. */
+    public void cranposeHapticWaveform(final long[] timingsMs, final int[] amplitudes,
+            final int repeat) {
+        if (timingsMs == null || amplitudes == null || timingsMs.length != amplitudes.length
+                || timingsMs.length == 0) {
+            return;
+        }
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        final int index = repeat >= 0 && repeat < timingsMs.length ? repeat : -1;
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                int[] levels = new int[amplitudes.length];
+                for (int i = 0; i < amplitudes.length; i++) {
+                    levels[i] = Math.max(0, Math.min(255, amplitudes[i]));
+                }
+                vibrator.vibrate(VibrationEffect.createWaveform(timingsMs, levels, index));
+            } else {
+                vibrator.vibrate(timingsMs, index);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Plays a predefined effect: 0 click, 1 double click, 2 tick, 3 heavy
+     * click. Called from Rust over JNI (any thread);
+     * {@code VibrationEffect.createPredefined} needs API 29, and older devices
+     * fall back to a short one-shot of comparable weight. */
+    public void cranposeHapticPredefined(final int effect) {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                int constant;
+                switch (effect) {
+                    case 1: constant = VibrationEffect.EFFECT_DOUBLE_CLICK; break;
+                    case 2: constant = VibrationEffect.EFFECT_TICK; break;
+                    case 3: constant = VibrationEffect.EFFECT_HEAVY_CLICK; break;
+                    default: constant = VibrationEffect.EFFECT_CLICK; break;
+                }
+                vibrator.vibrate(VibrationEffect.createPredefined(constant));
+            } else {
+                long duration;
+                switch (effect) {
+                    case 1: duration = 40L; break;
+                    case 2: duration = 8L; break;
+                    case 3: duration = 50L; break;
+                    default: duration = 20L; break;
+                }
+                cranposeHapticOneShot(duration, -1);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Stops any vibration in progress, including a repeating waveform.
+     * Called from Rust over JNI (any thread). */
+    public void cranposeHapticCancel() {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null) {
+            return;
+        }
+        try {
+            vibrator.cancel();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Whether the vibrator reproduces amplitudes rather than treating every
+     * non-zero level as full strength. Called from Rust over JNI (any thread);
+     * blocks only for the duration of the query. */
+    public boolean cranposeHapticHasAmplitudeControl() {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return false;
+        }
+        try {
+            return Build.VERSION.SDK_INT >= 26 && vibrator.hasAmplitudeControl();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** Writes {@code text} to the system clipboard. Called from Rust over JNI. */

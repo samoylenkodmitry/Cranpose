@@ -1228,6 +1228,8 @@ impl ClickableNode {
                 }
                 PointerEventKind::Scroll
                 | PointerEventKind::Zoom
+                | PointerEventKind::RotaryScrollPre
+                | PointerEventKind::RotaryScroll
                 | PointerEventKind::Enter
                 | PointerEventKind::Exit => {
                     // These events don't affect click press state.

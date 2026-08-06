@@ -2580,6 +2580,93 @@ fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: b
     frame_interval.is_none() && needs_frame
 }
 
+/// Per-second counters for the desktop frame loop, enabled by
+/// `CRANPOSE_PACING_DIAG`.
+///
+/// Presents that trail redraw events mean the loop is doing composition work
+/// the screen never sees; a control-flow histogram skewed to `poll` with no
+/// matching presents is the signature of a spin.
+#[derive(Default)]
+struct PacingDiag {
+    presents: u32,
+    redraw_events: u32,
+    updates: u32,
+    direct_updates: u32,
+    skipped_no_present: u32,
+    control_flow_poll: u32,
+    control_flow_wait_until: u32,
+    control_flow_wait: u32,
+    window_started: Option<Instant>,
+}
+
+thread_local! {
+    static PACING_DIAG: RefCell<PacingDiag> = RefCell::new(PacingDiag::default());
+}
+
+fn pacing_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_PACING_DIAG").is_some())
+}
+
+fn record_pacing_event(counter: fn(&mut PacingDiag) -> &mut u32) {
+    if !pacing_diag_enabled() {
+        return;
+    }
+    PACING_DIAG.with(|cell| {
+        let Ok(mut diag) = cell.try_borrow_mut() else {
+            return;
+        };
+        *counter(&mut diag) += 1;
+        let now = Instant::now();
+        let started = *diag.window_started.get_or_insert(now);
+        if now.duration_since(started) < Duration::from_secs(1) {
+            return;
+        }
+        log::warn!(
+            "[pacing] present={} redraw_events={} update={} direct_update={} no_present={} control_flow(poll={} wait_until={} wait={})",
+            diag.presents,
+            diag.redraw_events,
+            diag.updates,
+            diag.direct_updates,
+            diag.skipped_no_present,
+            diag.control_flow_poll,
+            diag.control_flow_wait_until,
+            diag.control_flow_wait,
+        );
+        *diag = PacingDiag {
+            window_started: Some(now),
+            ..PacingDiag::default()
+        };
+    });
+}
+
+/// Advances the frame-cap anchor on a fixed cadence grid.
+///
+/// Re-basing the next deadline on each frame's *actual* start time bakes in the
+/// event loop's timer wake latency, so every frame drifts a little later than
+/// the last: a 16.667 ms interval settles around 17.4 ms, i.e. 57 fps instead of
+/// 60. Advancing from the previous anchor keeps the cadence phase-locked. If a
+/// frame runs a whole interval long the grid is abandoned and re-anchored to the
+/// real start, so recovery never bursts a backlog of catch-up frames.
+fn next_frame_anchor(
+    previous: Option<Instant>,
+    frame_started_at: Instant,
+    interval: Option<Duration>,
+) -> Instant {
+    let (Some(previous), Some(interval)) = (previous, interval) else {
+        return frame_started_at;
+    };
+    if interval.is_zero() {
+        return frame_started_at;
+    }
+    let anchor = previous + interval;
+    if frame_started_at.saturating_duration_since(anchor) >= interval {
+        frame_started_at
+    } else {
+        anchor
+    }
+}
+
 fn logical_monitor_rects(event_loop: &dyn ActiveEventLoop) -> Vec<DesktopRect> {
     event_loop
         .available_monitors()
@@ -3564,6 +3651,17 @@ fn dispatch_mouse_wheel(
         return cursor_dirty || zoom_dirty;
     }
 
+    // Rotary (Wear OS crown / bezel) emulation: offer the wheel to rotary
+    // handlers first so the rotary stack is developable on the desktop. Nothing
+    // consumes rotary unless the app opts in via
+    // `Modifier::on_rotary_scroll_event` or `AppShell::set_on_rotary_scroll`,
+    // so ordinary scrolling is unaffected.
+    let rotary =
+        crate::winit_rotary::rotary_event_from_wheel_delta(logical_delta, wheel_uptime_millis());
+    if app.rotary_scrolled(rotary) {
+        return true;
+    }
+
     let alt_pressed = current_modifiers.contains(winit::keyboard::ModifiersState::ALT);
     if alt_pressed {
         if logical_delta.x.abs() <= f32::EPSILON {
@@ -3582,6 +3680,19 @@ fn dispatch_mouse_wheel(
 
     let scroll_dirty = app.pointer_scrolled(logical_delta.x, logical_delta.y);
     cursor_dirty || scroll_dirty
+}
+
+/// Monotonic millisecond timestamp for synthesized rotary events.
+///
+/// Mirrors the Android uptime clock's contract (arbitrary zero point, only
+/// differences are meaningful) using the process start as the epoch.
+fn wheel_uptime_millis() -> u64 {
+    use std::sync::OnceLock;
+    static EPOCH: OnceLock<web_time::Instant> = OnceLock::new();
+    EPOCH
+        .get_or_init(web_time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
 }
 
 /// Converts a vertical wheel delta (logical px, positive = scroll up) into
@@ -4306,6 +4417,7 @@ impl ApplicationHandler for App {
                 app.cancel_gesture();
             }
             WindowEvent::RedrawRequested => {
+                record_pacing_event(|diag| &mut diag.redraw_events);
                 self.primary_redraw_pending = false;
                 if let Some(deadline) = frame_cap_deadline {
                     if deadline > Instant::now() {
@@ -4382,6 +4494,7 @@ impl ApplicationHandler for App {
 
                     output.present();
                     let after_present = Instant::now();
+                    record_pacing_event(|diag| &mut diag.presents);
                     self.primary_surface_dirty = false;
                     self.primary_initial_present_pending = false;
                     app.record_presented_frame(frame_started_at, after_render);
@@ -4393,7 +4506,11 @@ impl ApplicationHandler for App {
                         after_present,
                         "primary",
                     );
-                    self.last_frame_start_time = Some(frame_started_at);
+                    self.last_frame_start_time = Some(next_frame_anchor(
+                        self.last_frame_start_time,
+                        frame_started_at,
+                        frame_interval,
+                    ));
                     #[cfg(feature = "robot")]
                     {
                         self.presented_frame_generation =
@@ -4407,6 +4524,7 @@ impl ApplicationHandler for App {
                         request_redraw_once(window, &mut self.primary_redraw_pending);
                     }
                 } else {
+                    record_pacing_event(|diag| &mut diag.skipped_no_present);
                     #[cfg(feature = "robot")]
                     {
                         self.robot_visible_surface_dirty = app.needs_redraw();
@@ -5068,6 +5186,7 @@ impl ApplicationHandler for App {
             waiting_for_frame_cap,
         );
         if needs_update && !needs_redraw && !waiting_for_frame_cap {
+            record_pacing_event(|diag| &mut diag.updates);
             let update_result = update_app_with_native_window_registry(app, &registry);
             if update_result.visual_changed || app.needs_redraw() {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);
@@ -5078,6 +5197,7 @@ impl ApplicationHandler for App {
                     "primary declaration host direct update visible={} headless={}",
                     self.settings.primary_window_visible, self.settings.headless
                 ));
+                record_pacing_event(|diag| &mut diag.direct_updates);
                 let frame_started_at = Instant::now();
                 let update_result = update_app_with_native_window_registry(app, &registry);
                 if update_result.visual_changed {
@@ -5171,11 +5291,18 @@ impl ApplicationHandler for App {
         // Poll continuously when:
         // - Active animations are running
         // - Robot test is active
+        // Free-running (NoVsync) chains its own redraw after each present, but a
+        // bare `request_redraw` is serviced by the platform's display cycle, so
+        // parking the loop in `Wait` silently clamps the app to the refresh rate.
+        // Polling is what actually lets the frame rate exceed vsync.
+        let free_running_frame = frame_interval.is_none() && needs_redraw;
         if robot_needs_poll
+            || free_running_frame
             || primary_pointer_polled
             || native_drag_deadline.is_some()
             || native_position_poll_deadline.is_some_and(|deadline| deadline <= now)
         {
+            record_pacing_event(|diag| &mut diag.control_flow_poll);
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(deadline) = [
             next_frame_time.filter(|_| waiting_for_frame_cap),
@@ -5186,8 +5313,10 @@ impl ApplicationHandler for App {
         .flatten()
         .min()
         {
+            record_pacing_event(|diag| &mut diag.control_flow_wait_until);
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else if has_active_animations || native_has_active_animations {
+            record_pacing_event(|diag| &mut diag.control_flow_poll);
             event_loop.set_control_flow(ControlFlow::Poll);
         } else if let Some(next_time) = [primary_next_event_time, native_next_event_time]
             .into_iter()
@@ -5197,6 +5326,7 @@ impl ApplicationHandler for App {
             // Cursor blink uses timer-based scheduling (not continuous poll)
             event_loop.set_control_flow(ControlFlow::WaitUntil(next_time));
         } else {
+            record_pacing_event(|diag| &mut diag.control_flow_wait);
             event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
@@ -5362,7 +5492,7 @@ mod tests {
     use super::{
         clamp_rect_to_monitor_delta, frame_interval_for_mode, initial_present_redraw_needed,
         native_window_graph_position, native_window_options_change_is_position_only,
-        native_window_position_poll_needed, nearest_monitor_to_rect,
+        native_window_position_poll_needed, nearest_monitor_to_rect, next_frame_anchor,
         physical_surface_rect_contains_pointer, pointer_button_frame_request,
         primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
         primary_launch_requires_initial_redraw, primary_pointer_move_should_recover_press,
@@ -5517,6 +5647,45 @@ mod tests {
             frame_interval_for_mode(FramePacingMode::Vsync, vsync_interval),
             true
         ));
+    }
+
+    #[test]
+    fn frame_anchor_holds_cadence_despite_late_wakeups() {
+        let interval = std::time::Duration::from_nanos(16_666_667);
+        let start = Instant::now();
+        let mut anchor = start;
+
+        // Every wake-up lands 0.75 ms late, the drift that turned 60 fps into 57.
+        for step in 1..=240u32 {
+            let observed = anchor + interval + std::time::Duration::from_micros(750);
+            anchor = next_frame_anchor(Some(anchor), observed, Some(interval));
+            assert_eq!(anchor, start + interval * step);
+        }
+    }
+
+    #[test]
+    fn frame_anchor_reanchors_after_a_full_interval_overrun() {
+        let interval = std::time::Duration::from_nanos(16_666_667);
+        let previous = Instant::now();
+        let overrun = previous + interval * 4;
+
+        assert_eq!(
+            next_frame_anchor(Some(previous), overrun, Some(interval)),
+            overrun
+        );
+    }
+
+    #[test]
+    fn frame_anchor_falls_back_to_the_observed_start_without_a_cadence() {
+        let interval = std::time::Duration::from_nanos(16_666_667);
+        let now = Instant::now();
+
+        assert_eq!(next_frame_anchor(None, now, Some(interval)), now);
+        assert_eq!(next_frame_anchor(Some(now), now, None), now);
+        assert_eq!(
+            next_frame_anchor(Some(now), now, Some(std::time::Duration::ZERO)),
+            now
+        );
     }
 
     #[test]

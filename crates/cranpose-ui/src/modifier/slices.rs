@@ -563,9 +563,18 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
             if let Some(shape) = corner_shape {
                 let radii = shape.resolve(size.width, size.height);
-                vec![DrawPrimitive::RoundRect { rect, brush, radii }]
+                vec![DrawPrimitive::RoundRect {
+                    rect,
+                    brush,
+                    radii,
+                    stroke: None,
+                }]
             } else {
-                vec![DrawPrimitive::Rect { rect, brush }]
+                vec![DrawPrimitive::Rect {
+                    rect,
+                    brush,
+                    stroke: None,
+                }]
             }
         });
 

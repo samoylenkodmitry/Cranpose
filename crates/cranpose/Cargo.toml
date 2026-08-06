@@ -90,6 +90,14 @@ web = [
     "cranpose-services/file-picker-web",
     "cranpose-services/system-theme-web",
 ]
+# The real-time audio engine (`cranpose_audio`), registered into
+# `cranpose_services::audio`. Off by default: an app that plays no sound should
+# not carry a mixer or an output device. On Android this is the AAudio backend,
+# which needs no Java glue.
+audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
+# Adds the desktop output device (cpal) so sound works while developing on
+# macOS, Windows or Linux. Linux builds need the ALSA development headers.
+audio-desktop = ["audio", "cranpose-audio/cpal-backend"]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
@@ -104,6 +112,7 @@ storekit = ["dep:cranpose-storekit"]
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
+cranpose-audio = { workspace = true, optional = true }
 cranpose-core = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }

@@ -355,6 +355,8 @@ fn push_layer_shadow(
             snap_to_pixel_grid: false,
             brush: Brush::solid(color),
             shape,
+            stroke: None,
+            arc: None,
             z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
@@ -1081,7 +1083,7 @@ fn render_graph_text(
     );
 }
 
-fn push_draw_primitive(
+pub(crate) fn push_draw_primitive(
     primitive: DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
@@ -1096,12 +1098,12 @@ fn push_draw_primitive(
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
         fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_geometry(
+            self.scene.push_shape_with_stroke_and_arc(
                 params.rect,
-                params.local_rect,
-                params.quad,
                 params.brush,
                 params.shape,
+                params.stroke,
+                params.arc,
                 params.clip,
                 params.blend_mode,
             );
@@ -1166,6 +1168,9 @@ fn push_shadow_primitive(
                 snap_to_pixel_grid: false,
                 brush: params.brush,
                 shape: params.shape,
+                // A stroked or arc caster must cast a stroked or arc shadow.
+                stroke: params.stroke,
+                arc: params.arc,
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
@@ -1393,6 +1398,7 @@ mod tests {
                             },
                             brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
                             radii: CornerRadii::uniform(6.0),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -1632,6 +1638,7 @@ mod tests {
                                 height: 6.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -2213,6 +2220,7 @@ mod tests {
                         height: 8.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 cutout: None,
                 blur_radius: 6.0,
@@ -2250,6 +2258,7 @@ mod tests {
                         height: 16.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 cutout: Box::new(DrawPrimitive::Rect {
                     rect: Rect {
@@ -2259,6 +2268,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 blur_radius: 5.0,
                 blend_mode: BlendMode::SrcOver,

@@ -2362,6 +2362,8 @@ fn DraggableOverlay(
                                     }
                                     PointerEventKind::Scroll
                                     | PointerEventKind::Zoom
+                                    | PointerEventKind::RotaryScrollPre
+                                    | PointerEventKind::RotaryScroll
                                     | PointerEventKind::Enter
                                     | PointerEventKind::Exit => {}
                                 }

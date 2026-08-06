@@ -417,7 +417,10 @@ fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
 
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
     match primitive {
-        DrawPrimitive::Content | DrawPrimitive::Rect { .. } | DrawPrimitive::RoundRect { .. } => 0,
+        DrawPrimitive::Content
+        | DrawPrimitive::Rect { .. }
+        | DrawPrimitive::RoundRect { .. }
+        | DrawPrimitive::Arc { .. } => 0,
         DrawPrimitive::Blend { primitive, .. } => {
             size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(primitive)
         }
@@ -675,6 +678,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -713,6 +717,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),

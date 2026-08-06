@@ -17,6 +17,7 @@ pub mod liquid_glass;
 pub mod render_effect;
 mod render_hash;
 mod shadow;
+mod stroke;
 mod typography;
 mod unit;
 mod vector_path;
@@ -31,6 +32,7 @@ pub use liquid_glass::*;
 pub use render_effect::*;
 pub use render_hash::*;
 pub use shadow::*;
+pub use stroke::*;
 pub use typography::*;
 pub use unit::*;
 pub use vector_path::*;
@@ -40,6 +42,7 @@ pub mod prelude {
     pub use crate::color::Color;
     pub use crate::geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size};
     pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling};
+    pub use crate::stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin};
     pub use crate::unit::{Dp, Sp};
     pub use crate::vector_path::{PathFillRule, SvgPathError, VectorPath};
 }

@@ -8,8 +8,9 @@
 
 use cranpose_services::{
     set_platform_device_info, set_platform_haptics, set_platform_network_monitor,
-    set_platform_notifier, set_platform_share_sheet, DeviceInfo, HapticFeedback, Haptics,
-    NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
+    set_platform_notifier, set_platform_share_sheet, DeviceInfo, HapticEffect, HapticFeedback,
+    HapticPattern, Haptics, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent,
+    ShareError, ShareSheet,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -179,6 +180,44 @@ impl Haptics for WebHaptics {
             // No-ops on browsers/devices without a vibrator (desktop).
             let _ = navigator.vibrate_with_duration(duration_ms);
         }
+    }
+
+    fn vibrate(&self, duration_ms: u32, _amplitude: u8) {
+        if duration_ms == 0 {
+            return;
+        }
+        if let Some(navigator) = navigator() {
+            let _ = navigator.vibrate_with_duration(duration_ms);
+        }
+    }
+
+    /// The Vibration API takes exactly the alternating-duration array a
+    /// [`HapticPattern`] carries, so the timings survive the trip; amplitudes
+    /// do not, because the browser has no way to express them.
+    fn play_pattern(&self, pattern: &HapticPattern) {
+        let Some(navigator) = navigator() else {
+            return;
+        };
+        let timings = js_sys::Array::new();
+        for step in pattern.timings_ms() {
+            timings.push(&JsValue::from_f64(f64::from(*step)));
+        }
+        let _ = navigator.vibrate_with_pattern(timings.as_ref());
+    }
+
+    fn perform_effect(&self, effect: HapticEffect) {
+        self.perform(effect.closest_feedback());
+    }
+
+    /// An empty pattern is how the Vibration API cancels a running one.
+    fn cancel(&self) {
+        if let Some(navigator) = navigator() {
+            let _ = navigator.vibrate_with_duration(0);
+        }
+    }
+
+    fn has_amplitude_control(&self) -> bool {
+        false
     }
 }
 

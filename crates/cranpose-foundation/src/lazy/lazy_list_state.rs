@@ -361,7 +361,7 @@ pub fn remember_lazy_list_state_with_position(
     let scroll_position = LazyListScrollPosition {
         index: cranpose_core::useState(|| initial_first_visible_item_index),
         scroll_offset: cranpose_core::useState(|| initial_first_visible_item_scroll_offset),
-        inner: cranpose_core::useState(|| {
+        inner: cranpose_core::useStateRaw(|| {
             Rc::new(RefCell::new(ScrollPositionInner {
                 current_index: initial_first_visible_item_index,
                 current_scroll_offset: initial_first_visible_item_scroll_offset,
@@ -372,7 +372,7 @@ pub fn remember_lazy_list_state_with_position(
     };
 
     // Non-reactive internal state
-    let inner = cranpose_core::useState(|| {
+    let inner = cranpose_core::useStateRaw(|| {
         Rc::new(RefCell::new(LazyListStateInner {
             scroll_to_be_consumed: 0.0,
             pending_scroll_to_index: None,

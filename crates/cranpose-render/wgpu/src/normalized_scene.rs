@@ -1266,6 +1266,12 @@ impl TranslateBy for DrawShape {
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
         }
+        if let Some(arc) = self.arc.as_mut() {
+            // The arc center lives in the same space as `local_rect`; leaving
+            // it behind would slide the band out of its own bounding box.
+            arc.center.x += delta.x;
+            arc.center.y += delta.y;
+        }
     }
 }
 

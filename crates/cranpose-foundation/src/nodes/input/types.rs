@@ -1,3 +1,4 @@
+use super::rotary::RotaryScrollEvent;
 use cranpose_ui_graphics::Point;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -22,8 +23,28 @@ pub enum PointerEventKind {
     /// Discrete zoom step (desktop ctrl+wheel, browser pinch-trackpad).
     /// The multiplicative factor is carried in [`PointerEvent::zoom_delta`].
     Zoom,
+    /// Rotary scroll (Wear OS crown / rotating bezel) during the **capture**
+    /// pass, which runs root-to-focused so ancestors can intercept the event
+    /// before the focused node sees it.
+    ///
+    /// The scroll amounts are carried in [`PointerEvent::scroll_delta`] (`y` =
+    /// vertical pixels, `x` = horizontal pixels) and the rotary uptime in
+    /// [`PointerEvent::time_ms`]; use
+    /// [`PointerEvent::rotary_scroll_event`] to read them back as a
+    /// [`RotaryScrollEvent`]. Mirrors Compose's `onPreRotaryScrollEvent`.
+    RotaryScrollPre,
+    /// Rotary scroll during the **bubble** pass, which runs focused-to-root.
+    /// Mirrors Compose's `onRotaryScrollEvent`.
+    RotaryScroll,
     Enter,
     Exit,
+}
+
+impl PointerEventKind {
+    /// Returns true for the two rotary passes.
+    pub fn is_rotary(self) -> bool {
+        matches!(self, Self::RotaryScrollPre | Self::RotaryScroll)
+    }
 }
 
 /// The kind of physical device that produced a pointer event.
@@ -147,7 +168,10 @@ impl PointerEvent {
                 }
                 PointerEventKind::Up => PointerPhase::End,
                 PointerEventKind::Cancel => PointerPhase::Cancel,
-                PointerEventKind::Scroll | PointerEventKind::Zoom => PointerPhase::Move,
+                PointerEventKind::Scroll
+                | PointerEventKind::Zoom
+                | PointerEventKind::RotaryScrollPre
+                | PointerEventKind::RotaryScroll => PointerPhase::Move,
             },
             position,
             global_position,
@@ -194,6 +218,40 @@ impl PointerEvent {
     pub fn with_source(mut self, source: PointerSource) -> Self {
         self.source = source;
         self
+    }
+
+    /// Builds a rotary pointer event for one dispatch pass.
+    ///
+    /// `kind` must be [`PointerEventKind::RotaryScrollPre`] (capture) or
+    /// [`PointerEventKind::RotaryScroll`] (bubble). The rotary payload rides on
+    /// the existing `scroll_delta`/`time_ms` fields so rotary reuses the
+    /// pointer dispatch path without widening [`PointerEvent`].
+    pub fn rotary(kind: PointerEventKind, rotary: RotaryScrollEvent, position: Point) -> Self {
+        debug_assert!(
+            kind.is_rotary(),
+            "PointerEvent::rotary requires a rotary event kind"
+        );
+        Self::new(kind, position, position)
+            .with_scroll_delta(Point {
+                x: rotary.horizontal_scroll_pixels,
+                y: rotary.vertical_scroll_pixels,
+            })
+            .with_time_ms(Some(rotary.uptime_millis as i64))
+    }
+
+    /// Reads this event back as a [`RotaryScrollEvent`], or `None` when it is
+    /// not a rotary event.
+    ///
+    /// Copies three scalars out of the event; it never allocates.
+    pub fn rotary_scroll_event(&self) -> Option<RotaryScrollEvent> {
+        if !self.kind.is_rotary() {
+            return None;
+        }
+        Some(RotaryScrollEvent {
+            vertical_scroll_pixels: self.scroll_delta.y,
+            horizontal_scroll_pixels: self.scroll_delta.x,
+            uptime_millis: self.time_ms.unwrap_or(0).max(0) as u64,
+        })
     }
 
     /// Mark this event as consumed, preventing other handlers from processing it.
@@ -266,6 +324,41 @@ mod tests {
         // Local-position copies (used during hit-test dispatch) keep the source.
         let local = touch.copy_with_local_position(point(5.0, 5.0));
         assert_eq!(local.source, PointerSource::Touch);
+    }
+
+    #[test]
+    fn rotary_payload_round_trips_through_pointer_event() {
+        let rotary = RotaryScrollEvent::new(-64.0, 12.0, 1_234);
+        let event = PointerEvent::rotary(PointerEventKind::RotaryScroll, rotary, point(5.0, 6.0));
+
+        assert_eq!(event.phase, PointerPhase::Move);
+        assert_eq!(event.scroll_delta, point(12.0, -64.0));
+        assert_eq!(event.time_ms, Some(1_234));
+        assert_eq!(event.rotary_scroll_event(), Some(rotary));
+    }
+
+    #[test]
+    fn rotary_payload_survives_local_position_copies() {
+        // Dispatch localizes the event per node; the rotary payload must
+        // survive that copy or handlers deeper in the chain see zeros.
+        let rotary = RotaryScrollEvent::new(-8.0, 0.0, 7);
+        let event =
+            PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, point(0.0, 0.0));
+
+        let local = event.copy_with_local_position(point(3.0, 4.0));
+
+        assert_eq!(local.rotary_scroll_event(), Some(rotary));
+    }
+
+    #[test]
+    fn non_rotary_events_have_no_rotary_payload() {
+        let scroll = PointerEvent::new(PointerEventKind::Scroll, point(0.0, 0.0), point(0.0, 0.0))
+            .with_scroll_delta(point(1.0, 2.0));
+
+        assert_eq!(scroll.rotary_scroll_event(), None);
+        assert!(!PointerEventKind::Scroll.is_rotary());
+        assert!(PointerEventKind::RotaryScroll.is_rotary());
+        assert!(PointerEventKind::RotaryScrollPre.is_rotary());
     }
 
     #[test]

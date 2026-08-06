@@ -5,6 +5,7 @@
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 
+pub mod audio;
 pub mod background;
 pub mod camera;
 pub mod device_info;
@@ -23,6 +24,11 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use audio::{
+    clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
+    AudioBus, AudioClip, AudioError, AudioPlayer, AudioPlayerRef, NoopAudioPlayer, PlaybackParams,
+    ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
+};
 pub use background::{
     background_activity, clear_platform_background_activity, set_background_active,
     set_platform_background_activity, BackgroundActivity, BackgroundActivityRef,
@@ -41,8 +47,8 @@ pub use file_picker::{
     ResumedPick, SaveFileRequest,
 };
 pub use haptics::{
-    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticFeedback,
-    Haptics, HapticsRef, ProvideHaptics,
+    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticEffect,
+    HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
 };
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,

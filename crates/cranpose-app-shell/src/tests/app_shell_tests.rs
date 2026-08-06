@@ -2320,6 +2320,8 @@ fn pointer_driven_graphics_layer_point_app(position_state: cranpose_core::Mutabl
                                             | PointerEventKind::Cancel
                                             | PointerEventKind::Scroll
                                             | PointerEventKind::Zoom
+                                            | PointerEventKind::RotaryScrollPre
+                                            | PointerEventKind::RotaryScroll
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -5593,6 +5595,8 @@ fn app_shell_consumed_child_drag_scroll_probe() {
                                         | PointerEventKind::Cancel
                                         | PointerEventKind::Scroll
                                         | PointerEventKind::Zoom
+                                        | PointerEventKind::RotaryScrollPre
+                                        | PointerEventKind::RotaryScroll
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }
@@ -5722,6 +5726,8 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
                                             }
                                             PointerEventKind::Scroll
                                             | PointerEventKind::Zoom
+                                            | PointerEventKind::RotaryScrollPre
+                                            | PointerEventKind::RotaryScroll
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -6082,6 +6088,8 @@ fn app_shell_demo_like_counter_tab() {
                                                         }
                                                         PointerEventKind::Scroll
                                                         | PointerEventKind::Zoom
+                                                        | PointerEventKind::RotaryScrollPre
+                                                        | PointerEventKind::RotaryScroll
                                                         | PointerEventKind::Enter
                                                         | PointerEventKind::Exit => {}
                                                     }
@@ -6332,6 +6340,8 @@ fn app_shell_actual_like_counter_tab() {
                                             }
                                             PointerEventKind::Scroll
                                             | PointerEventKind::Zoom
+                                            | PointerEventKind::RotaryScrollPre
+                                            | PointerEventKind::RotaryScroll
                                             | PointerEventKind::Enter
                                             | PointerEventKind::Exit => {}
                                         }
@@ -7716,7 +7726,7 @@ fn node_id_at_path(layout: &cranpose_ui::LayoutBox, path: &[usize]) -> cranpose_
 fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Option<f32> {
     for op in scene.operations() {
         if let RenderOp::Primitive {
-            primitive: DrawPrimitive::Rect { rect, brush },
+            primitive: DrawPrimitive::Rect { rect, brush, .. },
             ..
         } = op
         {
@@ -7804,4 +7814,325 @@ fn shell_stamps_pointer_source_on_dispatched_events() {
         PointerSource::Mouse,
         "shell must stamp the mouse source onto the dispatched pointer event"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Rotary input (Wear OS crown / rotating bezel)
+// ---------------------------------------------------------------------------
+
+fn rotary_scene(targets: Vec<RecordingHitTarget>) -> RecordingScene {
+    RecordingScene::with_hits(targets)
+}
+
+fn rotary_target(
+    node_id: cranpose_core::NodeId,
+    consume: bool,
+    events: Rc<RefCell<Vec<PointerEvent>>>,
+    capture_path: Vec<cranpose_core::NodeId>,
+) -> RecordingHitTarget {
+    RecordingHitTarget {
+        node_id,
+        consume,
+        events,
+        capture_path,
+    }
+}
+
+#[test]
+fn rotary_scrolled_runs_capture_then_bubble_passes() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    let scene = RecordingScene::with_hit_node_ids(
+        vec![
+            rotary_target(1, false, child_events.clone(), vec![1, 99]),
+            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+        ],
+        vec![1],
+    );
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    child_events.borrow_mut().clear();
+    ancestor_events.borrow_mut().clear();
+
+    let consumed = shell.rotary_scrolled(RotaryScrollEvent::new(-64.0, 0.0, 11));
+    assert!(!consumed, "nothing consumed the event");
+
+    // Each node sees both passes: capture (pre) then bubble.
+    let child_kinds: Vec<_> = child_events.borrow().iter().map(|e| e.kind).collect();
+    let ancestor_kinds: Vec<_> = ancestor_events.borrow().iter().map(|e| e.kind).collect();
+    assert_eq!(
+        child_kinds,
+        vec![
+            PointerEventKind::RotaryScrollPre,
+            PointerEventKind::RotaryScroll
+        ]
+    );
+    assert_eq!(
+        ancestor_kinds,
+        vec![
+            PointerEventKind::RotaryScrollPre,
+            PointerEventKind::RotaryScroll
+        ]
+    );
+}
+
+#[test]
+fn rotary_capture_pass_runs_root_to_leaf() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    let scene = RecordingScene::with_hit_node_ids(
+        vec![
+            rotary_target(1, false, child_events.clone(), vec![1, 99]),
+            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+        ],
+        vec![1],
+    );
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    child_events.borrow_mut().clear();
+    ancestor_events.borrow_mut().clear();
+
+    shell.rotary_scrolled(RotaryScrollEvent::new(-8.0, 0.0, 1));
+
+    // Capture reached the ancestor; bubble reached the child.
+    assert!(child_events
+        .borrow()
+        .iter()
+        .any(|e| e.kind == PointerEventKind::RotaryScrollPre));
+    assert!(ancestor_events
+        .borrow()
+        .iter()
+        .any(|e| e.kind == PointerEventKind::RotaryScroll));
+}
+
+#[test]
+fn rotary_capture_consumption_stops_the_bubble_pass() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    // The ancestor consumes. During capture (root -> leaf) it runs first, so
+    // the child must never see the event at all.
+    let scene = RecordingScene::with_hit_node_ids(
+        vec![
+            rotary_target(1, false, child_events.clone(), vec![1, 99]),
+            rotary_target(99, true, ancestor_events.clone(), vec![99]),
+        ],
+        vec![1],
+    );
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    child_events.borrow_mut().clear();
+    ancestor_events.borrow_mut().clear();
+
+    let consumed = shell.rotary_scrolled(RotaryScrollEvent::new(-16.0, 0.0, 3));
+
+    assert!(consumed, "ancestor consumed during capture");
+    assert_eq!(ancestor_events.borrow().len(), 1);
+    assert_eq!(
+        child_events.borrow().len(),
+        0,
+        "capture consumption must stop propagation to descendants"
+    );
+}
+
+#[test]
+fn rotary_bubble_consumption_stops_at_the_consuming_node() {
+    let _guard = test_guard();
+    let child_events = Rc::new(RefCell::new(Vec::new()));
+    let ancestor_events = Rc::new(RefCell::new(Vec::new()));
+    // Child consumes. Capture pass runs both (nobody consumes there, because
+    // RecordingHitTarget consumes on every dispatch -- so make only the child
+    // consuming and assert the ancestor never sees a bubble event).
+    let scene = RecordingScene::with_hit_node_ids(
+        vec![
+            rotary_target(1, true, child_events.clone(), vec![1, 99]),
+            rotary_target(99, false, ancestor_events.clone(), vec![99]),
+        ],
+        vec![1],
+    );
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    child_events.borrow_mut().clear();
+    ancestor_events.borrow_mut().clear();
+
+    let consumed = shell.rotary_scrolled(RotaryScrollEvent::new(-16.0, 0.0, 5));
+
+    assert!(consumed);
+    // Capture: ancestor (no consume) then child (consumes) -> capture ends.
+    assert_eq!(ancestor_events.borrow().len(), 1);
+    assert_eq!(
+        ancestor_events.borrow()[0].kind,
+        PointerEventKind::RotaryScrollPre
+    );
+    assert_eq!(child_events.borrow().len(), 1);
+}
+
+#[test]
+fn rotary_event_carries_its_payload_to_targets() {
+    let _guard = test_guard();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    events.borrow_mut().clear();
+
+    let rotary = RotaryScrollEvent::new(-64.0, 12.0, 4_242);
+    assert!(shell.rotary_scrolled(rotary));
+
+    let recorded = events.borrow();
+    let event = recorded.first().expect("expected a rotary event");
+    assert_eq!(event.rotary_scroll_event(), Some(rotary));
+    assert_eq!(event.global_position, Point { x: 20.0, y: 30.0 });
+}
+
+#[test]
+fn empty_rotary_events_are_dropped_before_dispatch() {
+    let _guard = test_guard();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+    events.borrow_mut().clear();
+
+    assert!(!shell.rotary_scrolled(RotaryScrollEvent::new(0.0, 0.0, 1)));
+    assert!(!shell.rotary_scrolled(RotaryScrollEvent::new(f32::NAN, 0.0, 1)));
+    assert_eq!(events.borrow().len(), 0);
+}
+
+#[test]
+fn window_level_rotary_handler_receives_unconsumed_events() {
+    let _guard = test_guard();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let scene = rotary_scene(vec![rotary_target(1, false, events.clone(), vec![1])]);
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    shell.set_on_rotary_scroll(move |event| {
+        sink.borrow_mut().push(event);
+        true
+    });
+
+    let rotary = RotaryScrollEvent::new(-40.0, 0.0, 77);
+    assert!(shell.rotary_scrolled(rotary));
+    assert_eq!(*seen.borrow(), vec![rotary]);
+}
+
+#[test]
+fn window_level_rotary_handler_runs_with_no_hit_targets() {
+    let _guard = test_guard();
+    // The single-canvas game case: nothing in the tree handles rotary, and the
+    // scene may not even hit-test. The escape hatch must still fire.
+    let scene = rotary_scene(Vec::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+
+    let seen = Rc::new(Cell::new(0.0f32));
+    let sink = Rc::clone(&seen);
+    shell.set_on_rotary_scroll(move |event| {
+        sink.set(sink.get() + event.vertical_scroll_pixels);
+        true
+    });
+
+    assert!(shell.rotary_scrolled(RotaryScrollEvent::new(-10.0, 0.0, 1)));
+    assert!(shell.rotary_scrolled(RotaryScrollEvent::new(-5.0, 0.0, 2)));
+    assert_eq!(seen.get(), -15.0);
+}
+
+#[test]
+fn window_level_rotary_handler_is_skipped_when_a_modifier_consumed() {
+    let _guard = test_guard();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let scene = rotary_scene(vec![rotary_target(1, true, events.clone(), vec![1])]);
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+    shell.set_cursor(20.0, 30.0);
+
+    let calls = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&calls);
+    shell.set_on_rotary_scroll(move |_| {
+        counter.set(counter.get() + 1);
+        true
+    });
+
+    assert!(shell.rotary_scrolled(RotaryScrollEvent::new(-10.0, 0.0, 1)));
+    assert_eq!(
+        calls.get(),
+        0,
+        "modifier consumption must take precedence over the window handler"
+    );
+}
+
+#[test]
+fn window_level_rotary_handler_can_decline() {
+    let _guard = test_guard();
+    let scene = rotary_scene(Vec::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+
+    shell.set_on_rotary_scroll(|_| false);
+    assert!(!shell.rotary_scrolled(RotaryScrollEvent::new(-10.0, 0.0, 1)));
+
+    shell.clear_on_rotary_scroll();
+    assert!(!shell.rotary_scrolled(RotaryScrollEvent::new(-10.0, 0.0, 1)));
+}
+
+#[test]
+fn rotary_detents_are_converted_with_the_scroll_factor() {
+    let _guard = test_guard();
+    let scene = rotary_scene(Vec::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&seen);
+    shell.set_on_rotary_scroll(move |event| {
+        sink.borrow_mut().push(event);
+        true
+    });
+
+    shell.set_rotary_scroll_factor(10.0);
+    assert_eq!(shell.rotary_scroll_factor(), 10.0);
+
+    // Positive detents (crown up/away) -> negative pixels, per Compose.
+    assert!(shell.rotary_scrolled_by_detents(1.0, 5));
+    assert!(shell.rotary_scrolled_by_detents(-2.0, 6));
+
+    let events = seen.borrow();
+    assert_eq!(events[0].vertical_scroll_pixels, -10.0);
+    assert_eq!(events[0].uptime_millis, 5);
+    assert_eq!(events[1].vertical_scroll_pixels, 20.0);
+}
+
+#[test]
+fn rotary_scroll_factor_rejects_unusable_values() {
+    let _guard = test_guard();
+    let scene = rotary_scene(Vec::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(ScrollDispatchRenderer::new(scene), root_key, empty_content);
+
+    shell.set_rotary_scroll_factor(12.0);
+    shell.set_rotary_scroll_factor(0.0);
+    shell.set_rotary_scroll_factor(-3.0);
+    shell.set_rotary_scroll_factor(f32::NAN);
+
+    assert_eq!(shell.rotary_scroll_factor(), 12.0);
 }

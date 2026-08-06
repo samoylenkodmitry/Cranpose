@@ -1,6 +1,6 @@
 use crate::{
     Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, ImageBitmap, LayerShape, Point, Rect,
-    RenderEffect, RuntimeShader, ShadowPrimitive,
+    RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -36,6 +36,12 @@ impl RenderHash for CornerRadii {
 impl RenderHash for LayerShape {
     fn render_hash(&self) -> u64 {
         finish_hash(|state| hash_layer_shape(*self, state))
+    }
+}
+
+impl RenderHash for Stroke {
+    fn render_hash(&self) -> u64 {
+        finish_hash(|state| hash_stroke(*self, state))
     }
 }
 
@@ -115,6 +121,25 @@ fn hash_corner_radii<H: Hasher>(radii: CornerRadii, state: &mut H) {
     hash_f32_bits(radii.top_right, state);
     hash_f32_bits(radii.bottom_right, state);
     hash_f32_bits(radii.bottom_left, state);
+}
+
+/// Every stroke field feeds the hash: layer/scene-range surface caches key off
+/// content hashes, so a width/cap/join change that did not move the hash would
+/// replay a stale cached surface.
+fn hash_stroke<H: Hasher>(stroke: Stroke, state: &mut H) {
+    hash_f32_bits(stroke.width, state);
+    stroke.cap.hash(state);
+    stroke.join.hash(state);
+}
+
+fn hash_optional_stroke<H: Hasher>(stroke: Option<Stroke>, state: &mut H) {
+    match stroke {
+        Some(stroke) => {
+            1u8.hash(state);
+            hash_stroke(stroke, state);
+        }
+        None => 0u8.hash(state),
+    }
 }
 
 fn hash_layer_shape<H: Hasher>(shape: LayerShape, state: &mut H) {
@@ -265,16 +290,47 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
             blend_mode.hash(state);
             hash_draw_primitive(primitive, state);
         }
-        DrawPrimitive::Rect { rect, brush } => {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => {
             2u8.hash(state);
             hash_rect(*rect, state);
             hash_brush(brush, state);
+            hash_optional_stroke(*stroke, state);
         }
-        DrawPrimitive::RoundRect { rect, brush, radii } => {
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => {
             3u8.hash(state);
             hash_rect(*rect, state);
             hash_brush(brush, state);
             hash_corner_radii(*radii, state);
+            hash_optional_stroke(*stroke, state);
+        }
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => {
+            6u8.hash(state);
+            hash_rect(*rect, state);
+            hash_brush(brush, state);
+            hash_point(*center, state);
+            hash_f32_bits(*radius, state);
+            hash_f32_bits(*start_angle, state);
+            hash_f32_bits(*sweep_angle, state);
+            hash_optional_stroke(*stroke, state);
+            hash_f32_bits(*inner_radius, state);
         }
         DrawPrimitive::Image {
             rect,
@@ -476,6 +532,7 @@ mod tests {
                     height: 8.0,
                 },
                 brush: Brush::solid(Color::WHITE),
+                stroke: None,
             }),
             blend_mode: crate::BlendMode::SrcOver,
         };
@@ -488,9 +545,166 @@ mod tests {
                     height: 8.0,
                 },
                 brush: Brush::solid(Color::BLACK),
+                stroke: None,
             }),
             blend_mode: crate::BlendMode::SrcOver,
         };
         assert_ne!(base.render_hash(), changed.render_hash());
+    }
+
+    // ── Stroke / arc hashing ────────────────────────────────────────────────
+    //
+    // These are load-bearing: `LayerRasterCacheKey` and the scene-range surface
+    // cache key off content hashes. A stroke or arc parameter that does not
+    // reach the hash would silently replay a stale cached surface.
+
+    use crate::{Stroke, StrokeCap, StrokeJoin};
+
+    fn stroked_rect(stroke: Option<Stroke>) -> DrawPrimitive {
+        DrawPrimitive::Rect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 12.0,
+                height: 8.0,
+            },
+            brush: Brush::solid(Color::WHITE),
+            stroke,
+        }
+    }
+
+    fn arc(
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Option<Stroke>,
+        inner_radius: f32,
+    ) -> DrawPrimitive {
+        DrawPrimitive::Arc {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 40.0,
+            },
+            brush: Brush::solid(Color::WHITE),
+            center: Point::new(20.0, 20.0),
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        }
+    }
+
+    #[test]
+    fn stroke_render_hash_tracks_width_cap_and_join() {
+        let base = Stroke::new(2.0);
+        assert_ne!(base.render_hash(), Stroke::new(3.0).render_hash());
+        assert_ne!(
+            base.render_hash(),
+            base.with_cap(StrokeCap::Round).render_hash()
+        );
+        assert_ne!(
+            base.render_hash(),
+            base.with_join(StrokeJoin::Bevel).render_hash()
+        );
+        assert_eq!(base.render_hash(), Stroke::new(2.0).render_hash());
+    }
+
+    #[test]
+    fn rect_render_hash_separates_fill_from_stroke() {
+        let fill = stroked_rect(None);
+        let stroked = stroked_rect(Some(Stroke::new(2.0)));
+        assert_ne!(fill.render_hash(), stroked.render_hash());
+        assert_eq!(
+            stroked.render_hash(),
+            stroked_rect(Some(Stroke::new(2.0))).render_hash()
+        );
+    }
+
+    #[test]
+    fn rect_render_hash_tracks_every_stroke_field() {
+        let base = Stroke::new(2.0);
+        let base_hash = stroked_rect(Some(base)).render_hash();
+        assert_ne!(
+            base_hash,
+            stroked_rect(Some(base.with_width(2.5))).render_hash()
+        );
+        assert_ne!(
+            base_hash,
+            stroked_rect(Some(base.with_cap(StrokeCap::Square))).render_hash()
+        );
+        assert_ne!(
+            base_hash,
+            stroked_rect(Some(base.with_join(StrokeJoin::Round))).render_hash()
+        );
+    }
+
+    #[test]
+    fn round_rect_render_hash_tracks_stroke() {
+        let make = |stroke| DrawPrimitive::RoundRect {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 12.0,
+                height: 8.0,
+            },
+            brush: Brush::solid(Color::WHITE),
+            radii: CornerRadii::uniform(3.0),
+            stroke,
+        };
+        assert_ne!(
+            make(None).render_hash(),
+            make(Some(Stroke::new(2.0))).render_hash()
+        );
+        assert_ne!(
+            make(Some(Stroke::new(2.0))).render_hash(),
+            make(Some(Stroke::new(2.0).with_join(StrokeJoin::Bevel))).render_hash()
+        );
+    }
+
+    #[test]
+    fn arc_render_hash_tracks_angles_radii_and_stroke() {
+        let stroke = Some(Stroke::new(4.0));
+        let base = arc(10.0, 0.0, 1.0, stroke, 0.0);
+        let base_hash = base.render_hash();
+
+        assert_eq!(base_hash, arc(10.0, 0.0, 1.0, stroke, 0.0).render_hash());
+        assert_ne!(base_hash, arc(11.0, 0.0, 1.0, stroke, 0.0).render_hash());
+        assert_ne!(base_hash, arc(10.0, 0.5, 1.0, stroke, 0.0).render_hash());
+        assert_ne!(base_hash, arc(10.0, 0.0, 1.5, stroke, 0.0).render_hash());
+        assert_ne!(base_hash, arc(10.0, 0.0, -1.0, stroke, 0.0).render_hash());
+        assert_ne!(base_hash, arc(10.0, 0.0, 1.0, stroke, 4.0).render_hash());
+        assert_ne!(base_hash, arc(10.0, 0.0, 1.0, None, 0.0).render_hash());
+        assert_ne!(
+            base_hash,
+            arc(
+                10.0,
+                0.0,
+                1.0,
+                Some(Stroke::new(4.0).with_cap(StrokeCap::Round)),
+                0.0
+            )
+            .render_hash()
+        );
+    }
+
+    #[test]
+    fn arc_render_hash_differs_from_rect_with_same_bounds() {
+        assert_ne!(
+            arc(10.0, 0.0, 1.0, None, 4.0).render_hash(),
+            DrawPrimitive::Rect {
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 40.0,
+                    height: 40.0,
+                },
+                brush: Brush::solid(Color::WHITE),
+                stroke: None,
+            }
+            .render_hash()
+        );
     }
 }

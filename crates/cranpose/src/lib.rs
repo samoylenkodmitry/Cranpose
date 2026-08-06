@@ -92,8 +92,13 @@ pub use cranpose_ui::*;
 /// (`use cranpose::liquid::prelude::*;`).
 pub use cranpose_liquid as liquid;
 
+/// The real-time audio engine that backs `cranpose_services::audio`. Call
+/// [`install_audio`] once at startup; Android installs it automatically.
+#[cfg(feature = "audio")]
+pub use cranpose_audio::{install as install_audio, AudioEngine};
+
 /// Core runtime helpers commonly used by applications.
-pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState, useStateRaw};
 
 #[doc(hidden)]
 pub use cranpose_core::{
@@ -121,7 +126,9 @@ pub mod prelude {
         WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode,
         WindowNode, WindowResizeDirection, WindowState,
     };
-    pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+    pub use cranpose_core::{
+        mutableStateOf, remember, rememberUpdatedState, useState, useStateRaw,
+    };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 }
@@ -163,6 +170,11 @@ mod winit_pointer;
 #[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
 #[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
 mod winit_touch;
+
+/// Mouse-wheel to rotary-input translation, so Wear OS rotary handling is
+/// developable and testable on the desktop.
+#[cfg(feature = "desktop-shell")]
+mod winit_rotary;
 
 /// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(

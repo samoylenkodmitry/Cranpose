@@ -80,7 +80,7 @@ use cranpose_render_common::software_text_raster::{
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
-    RenderHash, RuntimeShader, TileMode,
+    RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
 };
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -98,8 +98,12 @@ use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
 use crate::pipeline::push_layer_shadow;
 
+/// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
+/// shader source is used verbatim, so a larger batch cap here would index past
+/// the declared array. 146 x 112-byte ShapeData = 16352 bytes, the most that
+/// fits WebGL's 16 KiB uniform-binding floor.
 #[cfg(target_arch = "wasm32")]
-const MAX_SHAPES_PER_BATCH: usize = 200;
+const MAX_SHAPES_PER_BATCH: usize = 146;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SHAPES_PER_BATCH: usize = 768;
 #[cfg(target_arch = "wasm32")]
@@ -1171,8 +1175,11 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
 fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Owned(
         shaders::SHADER
+            // These literals must stay in sync with `shape.wgsl`; a mismatch
+            // makes the substitution silently no-op and leaves the shader
+            // sized for the downlevel floor.
             .replace(
-                "array<ShapeData, 200>",
+                "array<ShapeData, 146>",
                 &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
             )
             .replace(
@@ -1379,6 +1386,9 @@ struct Uniforms {
     viewport_offset: [f32; 2],
 }
 
+/// Mirror of `struct ShapeData` in `shape.wgsl`. Field order and sizes must
+/// match exactly: 7 x 16 bytes = 112 bytes, every member 16-byte aligned as the
+/// uniform address space requires.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct ShapeData {
@@ -1386,10 +1396,45 @@ struct ShapeData {
     radii: [f32; 4],           // top_left, top_right, bottom_left, bottom_right
     gradient_params: [f32; 4], // linear: start.xy,end.xy; radial: center.xy,radius,unused
     clip_rect: [f32; 4],       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
-    brush_type: u32,           // 0=solid, 1=linear_gradient, 2=radial_gradient
-    gradient_start: u32,       // Starting index in gradient buffer
-    gradient_count: u32,       // Number of gradient stops
-    gradient_tile_mode: u32,   // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+    /// stroke width, packed flags (see [`pack_shape_flags`]), arc outer radius,
+    /// arc inner radius. All zero for a plain fill.
+    stroke_params: [f32; 4],
+    /// arc center.xy, start angle, sweep angle (radians, 0 = +X, clockwise).
+    arc_params: [f32; 4],
+    brush_type: u32,         // 0=solid, 1=linear_gradient, 2=radial_gradient
+    gradient_start: u32,     // Starting index in gradient buffer
+    gradient_count: u32,     // Number of gradient stops
+    gradient_tile_mode: u32, // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+}
+
+/// Shape kinds understood by `shape.wgsl`.
+const SHAPE_KIND_FILL: u32 = 0;
+const SHAPE_KIND_STROKE: u32 = 1;
+const SHAPE_KIND_ARC: u32 = 2;
+
+fn stroke_cap_code(cap: StrokeCap) -> u32 {
+    match cap {
+        StrokeCap::Butt => 0,
+        StrokeCap::Round => 1,
+        StrokeCap::Square => 2,
+    }
+}
+
+fn stroke_join_code(join: StrokeJoin) -> u32 {
+    match join {
+        StrokeJoin::Miter => 0,
+        StrokeJoin::Round => 1,
+        StrokeJoin::Bevel => 2,
+    }
+}
+
+/// Packs kind/cap/join into the single float `ShapeData::stroke_params[1]`.
+///
+/// Three 2-bit fields fit in one f32 exactly (integers below 2^24 are exact),
+/// which keeps `ShapeData` at 112 bytes instead of the 128 it would need if
+/// each field got its own slot — 585 shapes per 64 KiB batch instead of 512.
+fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
+    ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
 }
 
 #[repr(C)]
@@ -6902,8 +6947,19 @@ impl GpuRenderer {
                 }
             };
 
+            // A stroked rect/round-rect was emitted with `local_rect` already
+            // inflated by half the stroke width, so corner radii must resolve
+            // against the geometry that was actually asked for, not the
+            // inflated box. The shader shrinks `half_size` by the same amount.
+            let stroke_outset = shape
+                .stroke
+                .map(|stroke| stroke.half_width())
+                .unwrap_or(0.0);
+            let geometry_width = (local_rect.width - stroke_outset * 2.0).max(0.0);
+            let geometry_height = (local_rect.height - stroke_outset * 2.0).max(0.0);
+
             let radii = if let Some(rounded) = shape.shape {
-                let resolved = rounded.resolve(local_rect.width, local_rect.height);
+                let resolved = rounded.resolve(geometry_width, geometry_height);
                 [
                     resolved.top_left * root_scale,
                     resolved.top_right * root_scale,
@@ -6921,11 +6977,51 @@ impl GpuRenderer {
                 local_rect.height * root_scale,
             ];
 
+            // Stroke/arc parameters ride in the same ShapeData and the same
+            // pipeline as fills, so a stroked or arc shape never splits a
+            // batch.
+            let (stroke_params, arc_params) = match (shape.arc, shape.stroke) {
+                (Some(arc), _) => (
+                    [
+                        0.0,
+                        pack_shape_flags(SHAPE_KIND_ARC, arc.cap, StrokeJoin::Miter),
+                        arc.outer_radius * root_scale,
+                        arc.inner_radius * root_scale,
+                    ],
+                    [
+                        (arc.center.x + snap_delta.x) * root_scale,
+                        (arc.center.y + snap_delta.y) * root_scale,
+                        arc.start_angle,
+                        arc.sweep_angle,
+                    ],
+                ),
+                (None, Some(stroke)) => (
+                    [
+                        stroke.width.max(0.0) * root_scale,
+                        pack_shape_flags(SHAPE_KIND_STROKE, stroke.cap, stroke.join),
+                        0.0,
+                        0.0,
+                    ],
+                    [0.0; 4],
+                ),
+                (None, None) => (
+                    [
+                        0.0,
+                        pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter),
+                        0.0,
+                        0.0,
+                    ],
+                    [0.0; 4],
+                ),
+            };
+
             self.scratch_shape_data.push(ShapeData {
                 rect: device_rect,
                 radii,
                 gradient_params,
                 clip_rect,
+                stroke_params,
+                arc_params,
                 brush_type,
                 gradient_start,
                 gradient_count,
@@ -10913,6 +11009,8 @@ mod tests {
             snap_anchor: None,
             brush: Brush::solid(Color::BLACK),
             shape: None,
+            stroke: None,
+            arc: None,
             z_index,
             clip: None,
             blend_mode,
@@ -11478,6 +11576,7 @@ mod tests {
                             },
                             brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
                             radii: CornerRadii::uniform(6.0),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -12313,6 +12412,7 @@ mod tests {
                             height: 6.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12361,6 +12461,7 @@ mod tests {
                             height: 480.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12401,6 +12502,7 @@ mod tests {
                             height: 480.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12441,6 +12543,7 @@ mod tests {
                             height: 200.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12482,6 +12585,7 @@ mod tests {
                                 height: 200.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -12520,6 +12624,7 @@ mod tests {
                             height: 240.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12560,6 +12665,7 @@ mod tests {
                             height: 1400.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12601,6 +12707,7 @@ mod tests {
                                 height: 1400.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -12812,6 +12919,7 @@ mod tests {
                             height: 10.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12843,6 +12951,7 @@ mod tests {
                         height: 4.0,
                     },
                     brush: Brush::solid(Color::BLACK),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -12879,6 +12988,7 @@ mod tests {
                         height: 4.0,
                     },
                     brush: Brush::solid(Color::BLACK),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -13039,6 +13149,7 @@ mod tests {
                             height: 32.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -13815,6 +13926,7 @@ mod tests {
                             height: 20.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -13841,6 +13953,7 @@ mod tests {
                                 height: 32.0,
                             },
                             brush: Brush::solid(Color::BLACK),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -14086,6 +14199,7 @@ mod tests {
                             height: 18.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -14113,6 +14227,7 @@ mod tests {
                                 height: 32.0,
                             },
                             brush: Brush::solid(Color::BLACK),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -14571,22 +14686,82 @@ mod tests {
         assert_eq!(ordered_items, vec![(1, SegmentDrawItem::Shadow(0))]);
     }
 
+    #[test]
+    fn shape_data_layout_matches_the_wgsl_mirror() {
+        // 7 x vec4-sized slots. The uniform address space requires a 16-byte
+        // multiple, and `shape.wgsl`'s array length literal is derived from
+        // this size — if it drifts, batches silently overrun the binding.
+        assert_eq!(std::mem::size_of::<ShapeData>(), 112);
+        assert_eq!(std::mem::size_of::<ShapeData>() % 16, 0);
+        assert_eq!(std::mem::size_of::<GradientStop>(), 32);
+    }
+
+    #[test]
+    fn shape_flags_pack_kind_cap_and_join_without_collision() {
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter),
+            0.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Miter),
+            1.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter),
+            2.0
+        );
+        // cap in bits 2-3, join in bits 4-5
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Round, StrokeJoin::Miter),
+            2.0 + 4.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Square, StrokeJoin::Miter),
+            2.0 + 8.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Round),
+            1.0 + 16.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Bevel),
+            1.0 + 32.0
+        );
+        // Every combination must round-trip through f32 exactly.
+        for kind in [SHAPE_KIND_FILL, SHAPE_KIND_STROKE, SHAPE_KIND_ARC] {
+            for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+                for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
+                    let packed = pack_shape_flags(kind, cap, join);
+                    let bits = packed as u32;
+                    assert_eq!(bits & 3, kind);
+                    assert_eq!((bits >> 2) & 3, stroke_cap_code(cap));
+                    assert_eq!((bits >> 4) & 3, stroke_join_code(join));
+                    assert_eq!(packed, bits as f32, "flags must be exact in f32");
+                }
+            }
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shape_batch_limits_follow_uniform_binding_size() {
-        // Desktop-class 64 KiB bindings keep the full compile-time capacities.
+        // With a 112-byte ShapeData, even a desktop-class 64 KiB binding can no
+        // longer hold the full compile-time cap: 65536 / 112 = 585 < 768.
+        let desktop_shapes = 65536 / std::mem::size_of::<ShapeData>();
+        assert_eq!(desktop_shapes, 585);
         assert_eq!(
             ShapeBatchLimits::desktop(),
             ShapeBatchLimits {
-                max_shapes_per_batch: MAX_SHAPES_PER_BATCH,
+                max_shapes_per_batch: desktop_shapes.min(MAX_SHAPES_PER_BATCH),
                 max_gradient_stops: MAX_GRADIENT_STOPS,
             }
         );
 
         // The 16 KiB downlevel/GLES minimum must shrink batches to fit:
-        // 16384 / 80-byte ShapeData = 204 shapes, 16384 / 32-byte stop = 512.
+        // 16384 / 112-byte ShapeData = 146 shapes, 16384 / 32-byte stop = 512.
         let downlevel = ShapeBatchLimits::for_uniform_binding_size(16384);
-        assert_eq!(downlevel.max_shapes_per_batch, 16384 / 80);
+        assert_eq!(downlevel.max_shapes_per_batch, 16384 / 112);
+        assert_eq!(downlevel.max_shapes_per_batch, 146);
         assert_eq!(downlevel.max_gradient_stops, 512.min(MAX_GRADIENT_STOPS));
         assert!(downlevel.max_shapes_per_batch * std::mem::size_of::<ShapeData>() <= 16384);
         assert!(downlevel.max_gradient_stops * std::mem::size_of::<GradientStop>() <= 16384);
@@ -14598,11 +14773,92 @@ mod tests {
     }
 
     #[test]
-    fn native_shape_shader_source_uses_native_batch_limits() {
-        let source = shape_shader_source(ShapeBatchLimits::desktop());
+    fn shipped_shape_shader_array_length_fits_the_downlevel_uniform_floor() {
+        // The wasm build uses `shaders::SHADER` verbatim, so its declared array
+        // length is simultaneously the wasm batch cap and the WebGL binding
+        // size. It must fit the 16 KiB floor exactly.
+        assert!(
+            shaders::SHADER.contains("array<ShapeData, 146>"),
+            "shape.wgsl array length must stay in sync with \
+             `shape_shader_source`'s replace string and MAX_SHAPES_PER_BATCH"
+        );
+        assert!(146 * std::mem::size_of::<ShapeData>() <= 16384);
+        assert!(147 * std::mem::size_of::<ShapeData>() > 16384);
+    }
 
-        assert!(source.contains(&format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>")));
-        assert!(source.contains(&format!("array<GradientStop, {MAX_GRADIENT_STOPS}>")));
+    #[test]
+    fn native_shape_shader_source_uses_native_batch_limits() {
+        let limits = ShapeBatchLimits::desktop();
+        let source = shape_shader_source(limits);
+
+        assert!(source.contains(&format!(
+            "array<ShapeData, {}>",
+            limits.max_shapes_per_batch
+        )));
+        assert!(source.contains(&format!(
+            "array<GradientStop, {}>",
+            limits.max_gradient_stops
+        )));
+        // Sanity: the substitution actually fired rather than silently leaving
+        // the downlevel literal in place.
+        assert!(!source.contains("array<ShapeData, 146>"));
+    }
+
+    #[test]
+    fn stroked_and_arc_shapes_batch_together_with_fills() {
+        // Strokes and arcs ride the same pipeline, the same ShapeData array and
+        // the same blend state as fills, so a run of mixed shapes must stay a
+        // single batch. If they ever split the batch, a polar UI built from
+        // hundreds of arcs would pay a draw call per arc — precisely the cost
+        // this primitive exists to remove.
+        let fill = test_shape(0, BlendMode::SrcOver);
+        let mut stroked = test_shape(1, BlendMode::SrcOver);
+        stroked.stroke = Some(
+            cranpose_ui_graphics::Stroke::new(3.0)
+                .with_cap(StrokeCap::Round)
+                .with_join(StrokeJoin::Bevel),
+        );
+        let mut arc = test_shape(2, BlendMode::SrcOver);
+        arc.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+            Point::new(4.0, 4.0),
+            2.0,
+            4.0,
+            0.0,
+            1.0,
+            StrokeCap::Round,
+        ));
+        let trailing_fill = test_shape(3, BlendMode::SrcOver);
+
+        assert!(!fill.has_stroke_or_arc());
+        assert!(stroked.has_stroke_or_arc());
+        assert!(arc.has_stroke_or_arc());
+        assert!(!trailing_fill.has_stroke_or_arc());
+
+        let shapes = vec![fill, stroked, arc, trailing_fill];
+        let ordered_items: Vec<_> = (0..shapes.len())
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .collect();
+        let images = Vec::new();
+
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
+
+        assert_eq!(
+            commands,
+            vec![SegmentRenderCommand::DrawChunk(chunk(&[
+                SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: 4,
+                    blend_mode: BlendMode::SrcOver,
+                }
+            ]))],
+            "mixed fill/stroke/arc runs must stay one batch"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -14715,21 +14971,24 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_shape_uniform_overflow() {
-        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let segment = chunk(&[
             SegmentBatchPlan::Shape {
                 start: 0,
-                end: MAX_SHAPES_PER_BATCH,
+                end: desktop_batch_cap,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH,
-                end: MAX_SHAPES_PER_BATCH + 1,
+                start: desktop_batch_cap,
+                end: desktop_batch_cap + 1,
                 blend_mode: BlendMode::SrcOver,
             },
         ]);
@@ -14749,11 +15008,11 @@ mod tests {
             NativeSegmentFusionPartition {
                 chunk: chunk(&[SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 }]),
                 budget: NativeSegmentFusionBudget {
-                    shape_count: MAX_SHAPES_PER_BATCH,
+                    shape_count: desktop_batch_cap,
                     gradient_stop_count: 0,
                 },
             }
@@ -14762,8 +15021,8 @@ mod tests {
             partitions[1],
             NativeSegmentFusionPartition {
                 chunk: chunk(&[SegmentBatchPlan::Shape {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 }]),
                 budget: NativeSegmentFusionBudget {
@@ -14888,33 +15147,36 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_preserve_non_shape_order_at_budget_boundary() {
-        let ordered_items: Vec<_> = (0..MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .chain([
-                (MAX_SHAPES_PER_BATCH, SegmentDrawItem::Image(0)),
+                (desktop_batch_cap, SegmentDrawItem::Image(0)),
                 (
-                    MAX_SHAPES_PER_BATCH + 1,
-                    SegmentDrawItem::Shape(MAX_SHAPES_PER_BATCH),
+                    desktop_batch_cap + 1,
+                    SegmentDrawItem::Shape(desktop_batch_cap),
                 ),
             ])
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let segment = chunk(&[
             SegmentBatchPlan::Shape {
                 start: 0,
-                end: MAX_SHAPES_PER_BATCH,
+                end: desktop_batch_cap,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Image {
-                start: MAX_SHAPES_PER_BATCH,
-                end: MAX_SHAPES_PER_BATCH + 1,
+                start: desktop_batch_cap,
+                end: desktop_batch_cap + 1,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH + 1,
-                end: MAX_SHAPES_PER_BATCH + 2,
+                start: desktop_batch_cap + 1,
+                end: desktop_batch_cap + 2,
                 blend_mode: BlendMode::SrcOver,
             },
         ]);
@@ -14934,12 +15196,12 @@ mod tests {
             chunk(&[
                 SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 },
                 SegmentBatchPlan::Image {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 },
             ])
@@ -14947,8 +15209,8 @@ mod tests {
         assert_eq!(
             partitions[1].chunk,
             chunk(&[SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH + 1,
-                end: MAX_SHAPES_PER_BATCH + 2,
+                start: desktop_batch_cap + 1,
+                end: desktop_batch_cap + 2,
                 blend_mode: BlendMode::SrcOver,
             }])
         );
@@ -14999,10 +15261,13 @@ mod tests {
 
     #[test]
     fn segment_command_iter_splits_contiguous_shape_runs_at_uniform_batch_limit() {
-        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let images = Vec::new();
@@ -15020,12 +15285,12 @@ mod tests {
             vec![SegmentRenderCommand::DrawChunk(chunk(&[
                 SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 },
                 SegmentBatchPlan::Shape {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 },
             ]))]
@@ -15230,6 +15495,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15247,6 +15513,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15264,6 +15531,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15355,6 +15623,7 @@ mod tests {
                         height: 80.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15461,6 +15730,7 @@ mod tests {
                         height: 100.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),

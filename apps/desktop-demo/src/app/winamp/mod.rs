@@ -1327,6 +1327,8 @@ fn PressableSprite(
                                         }
                                         PointerEventKind::Scroll
                                         | PointerEventKind::Zoom
+                                        | PointerEventKind::RotaryScrollPre
+                                        | PointerEventKind::RotaryScroll
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }
@@ -1508,6 +1510,8 @@ fn WindowDragHandle(drag_target: WinampDragTarget, area: SpriteRect, scale: f32)
                                         }
                                         PointerEventKind::Scroll
                                         | PointerEventKind::Zoom
+                                        | PointerEventKind::RotaryScrollPre
+                                        | PointerEventKind::RotaryScroll
                                         | PointerEventKind::Enter
                                         | PointerEventKind::Exit => {}
                                     }

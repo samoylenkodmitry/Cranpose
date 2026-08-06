@@ -82,6 +82,7 @@ pub fn build_dev_overlay_graph(
                         },
                         brush: Brush::Solid(Color(0.0, 0.0, 0.0, 0.7)),
                         radii: CornerRadii::uniform(4.0),
+                        stroke: None,
                     },
                     clip: None,
                 }),

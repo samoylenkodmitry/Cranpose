@@ -93,6 +93,8 @@ fn shadow_shape(
             snap_anchor: None,
             brush: Brush::solid(color),
             shape,
+            stroke: None,
+            arc: None,
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
             clip: None,
             blend_mode: BlendMode::SrcOver,
@@ -2029,12 +2031,14 @@ pub(crate) fn push_draw_primitive(
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
         fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_geometry(
+            self.scene.push_shape_with_stroke_and_arc(
                 params.rect,
                 params.local_rect,
                 params.quad,
                 params.brush,
                 params.shape,
+                params.stroke,
+                params.arc,
                 params.clip,
                 params.blend_mode,
                 params.motion_context_animated,
@@ -2102,6 +2106,10 @@ fn push_shadow_primitive(
                 snap_anchor: None,
                 brush: params.brush,
                 shape: params.shape,
+                // Shadows silhouette the *rendered* shape, so a stroked or arc
+                // caster must cast a stroked or arc shadow, not a filled box.
+                stroke: params.stroke,
+                arc: params.arc,
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,

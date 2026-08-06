@@ -551,6 +551,176 @@ where
         event.is_consumed()
     }
 
+    /// Installs the window-level rotary (Wear OS crown / rotating bezel)
+    /// handler — the low-level escape hatch.
+    ///
+    /// The handler runs only after the routed modifier chain has declined the
+    /// event (see [`rotary_scrolled`](Self::rotary_scrolled)), so an app that
+    /// draws everything into a single canvas receives every rotary delta
+    /// without registering a focus target or a modifier. Returning `true`
+    /// reports the event as consumed to the platform.
+    ///
+    /// Passing a new handler replaces the previous one.
+    pub fn set_on_rotary_scroll<F>(&mut self, handler: F)
+    where
+        F: Fn(RotaryScrollEvent) -> bool + 'static,
+    {
+        self.on_rotary_scroll = Some(Rc::new(handler));
+    }
+
+    /// Removes the window-level rotary handler, if one is installed.
+    pub fn clear_on_rotary_scroll(&mut self) {
+        self.on_rotary_scroll = None;
+    }
+
+    /// Pixels per rotary detent used by
+    /// [`rotary_scrolled_by_detents`](Self::rotary_scrolled_by_detents).
+    pub fn rotary_scroll_factor(&self) -> f32 {
+        self.rotary_scroll_factor
+    }
+
+    /// Sets the pixels-per-detent factor for rotary input.
+    ///
+    /// On Wear OS this must be `ViewConfiguration.getScaledVerticalScrollFactor()`
+    /// for pixel-exact parity with Compose. The host activity can read it over
+    /// JNI once at startup and push it here; when it does not, the shell falls
+    /// back to [`DEFAULT_ROTARY_SCROLL_FACTOR_DP`] scaled by display density.
+    ///
+    /// Non-finite or non-positive values are ignored.
+    pub fn set_rotary_scroll_factor(&mut self, factor: f32) {
+        if factor.is_finite() && factor > 0.0 {
+            self.rotary_scroll_factor = factor;
+        }
+    }
+
+    /// Dispatches a rotary scroll expressed in raw detents (Android
+    /// `AXIS_SCROLL`), converting to pixels with the configured scroll factor.
+    ///
+    /// Applies Compose's sign convention: a positive detent value (crown turned
+    /// up/away) produces a negative `vertical_scroll_pixels`.
+    pub fn rotary_scrolled_by_detents(&mut self, detents: f32, uptime_millis: u64) -> bool {
+        let factor = self.rotary_scroll_factor;
+        self.rotary_scrolled(RotaryScrollEvent::from_detents(
+            detents,
+            factor,
+            factor,
+            uptime_millis,
+        ))
+    }
+
+    /// Dispatches a rotary scroll event (Wear OS crown, Galaxy Watch bezel, or
+    /// a desktop mouse wheel standing in for one during development).
+    ///
+    /// Routing mirrors Compose's `RotaryInputModifierNode` contract:
+    ///
+    /// 1. Resolve the target chain. When a focus target is registered
+    ///    ([`cranpose_ui::focus_dispatch::active_focus_target`]) and still
+    ///    exists in the current scene, its capture path is used, so rotary goes
+    ///    to the focused node exactly as on Wear OS. Cranpose does not yet wire
+    ///    focus automatically, so in practice this falls back to the chain
+    ///    under the current cursor position.
+    /// 2. **Capture pass**, root to leaf, invoking `on_pre_rotary_scroll_event`
+    ///    handlers.
+    /// 3. **Bubble pass**, leaf to root, invoking `on_rotary_scroll_event`
+    ///    handlers.
+    /// 4. If still unconsumed, the window-level handler installed by
+    ///    [`set_on_rotary_scroll`](Self::set_on_rotary_scroll).
+    ///
+    /// The first handler returning `true` consumes the event and stops every
+    /// remaining step. Returns `true` when the event was consumed.
+    pub fn rotary_scrolled(&mut self, event: RotaryScrollEvent) -> bool {
+        let _event_handler = enter_event_handler_scope();
+        let app_context = Rc::clone(&self.app_context);
+        let result = app_context.enter(|| {
+            run_in_mutable_snapshot(|| self.rotary_scrolled_inner(event)).unwrap_or(false)
+        });
+        if result {
+            self.mark_dirty();
+        }
+        log::trace!(
+            target: "cranpose::input",
+            "rotary_scrolled v={:.2} h={:.2} uptime={} -> {result}",
+            event.vertical_scroll_pixels,
+            event.horizontal_scroll_pixels,
+            event.uptime_millis,
+        );
+        result
+    }
+
+    fn rotary_scrolled_inner(&mut self, rotary: RotaryScrollEvent) -> bool {
+        if rotary.is_empty() {
+            return false;
+        }
+
+        // Leaf-first dispatch order (children before their ancestors), the
+        // same ordering pointer events use.
+        let bubble_order = self.rotary_dispatch_order();
+        let position = Point {
+            x: self.cursor.0,
+            y: self.cursor.1,
+        };
+
+        if !bubble_order.is_empty() {
+            // Capture pass: root -> leaf, so ancestors can intercept first.
+            let capture_targets = bubble_order
+                .iter()
+                .rev()
+                .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
+                .collect::<Vec<_>>();
+            let capture_event =
+                PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, position);
+            self.dispatch_targets(capture_targets, capture_event.clone(), true);
+            if capture_event.is_consumed() {
+                return true;
+            }
+
+            // Bubble pass: leaf -> root.
+            let bubble_targets = bubble_order
+                .iter()
+                .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
+                .collect::<Vec<_>>();
+            let bubble_event =
+                PointerEvent::rotary(PointerEventKind::RotaryScroll, rotary, position);
+            self.dispatch_targets(bubble_targets, bubble_event.clone(), true);
+            if bubble_event.is_consumed() {
+                return true;
+            }
+        }
+
+        // Window-level escape hatch for single-canvas apps.
+        if let Some(handler) = self.on_rotary_scroll.clone() {
+            return handler(rotary);
+        }
+
+        false
+    }
+
+    /// Resolves the leaf-to-root node order rotary events are dispatched over.
+    ///
+    /// Prefers the focused node's capture path; falls back to the chain under
+    /// the current cursor so rotary remains usable on a build where nothing has
+    /// claimed focus (the common case today).
+    fn rotary_dispatch_order(&self) -> Vec<NodeId> {
+        if let Some(focused) = cranpose_ui::active_focus_target() {
+            if let Some(target) = self.renderer.scene().find_target(focused) {
+                let path = target.capture_path();
+                if !path.is_empty() {
+                    return crate::hit_path_tracker::dispatch_order_for_paths(&[path]);
+                }
+            }
+        }
+
+        let hits = self.renderer.scene().hit_test(self.cursor.0, self.cursor.1);
+        if hits.is_empty() {
+            return Vec::new();
+        }
+        let capture_paths = hits
+            .iter()
+            .map(|hit| hit.capture_path())
+            .collect::<Vec<_>>();
+        crate::hit_path_tracker::dispatch_order_for_paths(&capture_paths)
+    }
+
     /// Cancels any active gesture, dispatching Cancel events to cached targets.
     /// Call this when:
     /// - Window loses focus

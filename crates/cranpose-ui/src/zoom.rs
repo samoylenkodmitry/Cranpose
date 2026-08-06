@@ -457,6 +457,8 @@ impl Modifier {
                                     }
                                 }
                                 PointerEventKind::Scroll
+                                | PointerEventKind::RotaryScrollPre
+                                | PointerEventKind::RotaryScroll
                                 | PointerEventKind::Enter
                                 | PointerEventKind::Exit => {}
                             }

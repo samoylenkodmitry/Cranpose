@@ -64,9 +64,87 @@ pub(crate) fn resolve_pointer_source(
     }
 }
 
+/// Android's `AINPUT_SOURCE_ROTARY_ENCODER`.
+///
+/// Wear OS reports the Pixel Watch crown and the Galaxy Watch rotating bezel
+/// through this source class. It is a *bit flag* on the event's source value,
+/// not an equality test — the NDK's own idiom is
+/// `AInputEvent_getSource(event) & AINPUT_SOURCE_ROTARY_ENCODER`.
+pub(crate) const ANDROID_SOURCE_ROTARY_ENCODER: u32 = 0x0040_0000;
+
+/// Returns whether an Android input source value identifies a rotary encoder.
+///
+/// Takes the raw source bits so it works for source classes newer than the
+/// `android_activity` `Source` enum knows about (the enum is runtime-extensible
+/// and falls back to an opaque unknown variant).
+#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+pub(crate) fn is_rotary_encoder_source(source_bits: u32) -> bool {
+    source_bits & ANDROID_SOURCE_ROTARY_ENCODER == ANDROID_SOURCE_ROTARY_ENCODER
+}
+
+/// Fallback pixels-per-detent factor for rotary input at a given display
+/// density.
+///
+/// Android's real factor is
+/// `ViewConfiguration.getScaledVerticalScrollFactor()`, which resolves the
+/// theme's `listPreferredItemHeight` and therefore needs a JVM `Context`.
+/// Cranpose's Android input path holds no JNI handle, so it approximates the
+/// platform default (`DEFAULT_ROTARY_SCROLL_FACTOR_DP` dp) and lets the host
+/// override it with the exact value via
+/// `AppShell::set_rotary_scroll_factor`.
+///
+/// A non-finite or non-positive density falls back to 1.0 so the factor stays
+/// usable rather than poisoning every subsequent scroll offset with NaN.
+#[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
+pub(crate) fn android_rotary_scroll_factor(density: f32) -> f32 {
+    let density = if density.is_finite() && density > 0.0 {
+        density
+    } else {
+        1.0
+    };
+    cranpose_app_shell::DEFAULT_ROTARY_SCROLL_FACTOR_DP * density
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotary_encoder_source_is_detected_as_a_bit_flag() {
+        assert!(is_rotary_encoder_source(ANDROID_SOURCE_ROTARY_ENCODER));
+        // Wear devices routinely OR the rotary class with other bits; an
+        // equality test would miss those and deliver nothing at all.
+        assert!(is_rotary_encoder_source(
+            ANDROID_SOURCE_ROTARY_ENCODER | 0x0000_0101
+        ));
+    }
+
+    #[test]
+    fn non_rotary_sources_are_rejected() {
+        // Touchscreen, mouse, and "no source" must not be treated as rotary or
+        // ordinary scrolls would be duplicated as crown turns.
+        assert!(!is_rotary_encoder_source(0x0000_1002));
+        assert!(!is_rotary_encoder_source(0x0000_2002));
+        assert!(!is_rotary_encoder_source(0));
+    }
+
+    #[test]
+    fn rotary_scroll_factor_scales_with_density() {
+        let base = cranpose_app_shell::DEFAULT_ROTARY_SCROLL_FACTOR_DP;
+
+        assert_eq!(android_rotary_scroll_factor(1.0), base);
+        assert_eq!(android_rotary_scroll_factor(2.0), base * 2.0);
+    }
+
+    #[test]
+    fn rotary_scroll_factor_rejects_unusable_densities() {
+        let base = cranpose_app_shell::DEFAULT_ROTARY_SCROLL_FACTOR_DP;
+
+        assert_eq!(android_rotary_scroll_factor(0.0), base);
+        assert_eq!(android_rotary_scroll_factor(-2.0), base);
+        assert_eq!(android_rotary_scroll_factor(f32::NAN), base);
+        assert!(android_rotary_scroll_factor(f32::INFINITY).is_finite());
+    }
 
     #[test]
     fn tool_type_wins_when_it_identifies_the_device() {

@@ -26,6 +26,22 @@ pub fn apply_layer_affine_to_rect(rect: Rect, layer_bounds: Rect, layer: &Graphi
     }
 }
 
+/// Point counterpart of [`apply_layer_affine_to_rect`]: scale about the layer
+/// pivot, then translate. Rotation/perspective are deliberately excluded — the
+/// affine space is the one SDF shapes are evaluated in, with rotation carried
+/// by the deformed quad instead.
+pub fn apply_layer_affine_to_point(
+    point: Point,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+) -> Point {
+    let (pivot_x, pivot_y) = layer_rotation_pivot(layer_bounds, layer);
+    Point::new(
+        pivot_x + (point.x - pivot_x) * layer_scale_x(layer) + layer.translation_x,
+        pivot_y + (point.y - pivot_y) * layer_scale_y(layer) + layer.translation_y,
+    )
+}
+
 fn layer_rotation_pivot(layer_bounds: Rect, layer: &GraphicsLayer) -> (f32, f32) {
     (
         layer_bounds.x + layer_bounds.width * layer.transform_origin.pivot_fraction_x,

@@ -58,7 +58,7 @@ fn marker_rects(scene: &crate::renderer::RecordedRenderScene) -> Vec<Rect> {
         .iter()
         .filter_map(|op| match op {
             RenderOp::Primitive {
-                primitive: DrawPrimitive::Rect { rect, brush },
+                primitive: DrawPrimitive::Rect { rect, brush, .. },
                 ..
             }
             | RenderOp::Primitive {

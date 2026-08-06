@@ -1544,3 +1544,46 @@ fn wgpu_renderer_matches_shared_render_contracts() {
         case.assert_frames(&frames);
     }
 }
+
+/// The stroke/arc contract, isolated from the font-dependent text cases so a
+/// missing system font can never mask a geometry regression. These assertions
+/// are shared verbatim with the pixels backend, which is what proves the CPU
+/// rasterizer is not silently falling back to filled shapes.
+#[test]
+fn wgpu_renderer_matches_shared_stroke_and_arc_contracts() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping shared stroke/arc contract assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    for case in [
+        cranpose_render_common::render_contract::SharedRenderCase::StrokedRoundRect,
+        cranpose_render_common::render_contract::SharedRenderCase::AnnularSector,
+    ] {
+        let mut frames = Vec::new();
+        for fixture in case.fixtures() {
+            renderer.scene_mut().graph = Some(fixture.graph);
+            let frame = renderer
+                .capture_frame(fixture.width, fixture.height)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to capture shared render case {}: {err:?}",
+                        case.name()
+                    )
+                });
+            frames.push(RenderedFrame {
+                width: frame.width,
+                height: frame.height,
+                pixels: frame.pixels,
+                normalized_rect: fixture.normalized_rect,
+            });
+        }
+        case.assert_frames(&frames);
+    }
+}

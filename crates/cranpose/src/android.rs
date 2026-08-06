@@ -71,6 +71,11 @@ enum PendingInput {
     SecondaryPointerDown(u64, f32, f32, Option<i64>),
     SecondaryPointerUp(u64, f32, f32, Option<i64>),
     SecondaryPointerMove(u64, f32, f32, Option<i64>),
+    /// Rotary encoder step (Wear OS crown / rotating bezel). The first field is
+    /// the raw `AXIS_SCROLL` value in detents (converted to pixels by the shell
+    /// using its rotary scroll factor); the second is the event's uptime in
+    /// milliseconds.
+    RotaryScroll(f32, u64),
 }
 
 /// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
@@ -457,8 +462,62 @@ fn push_pending_inputs_from_android_event(
             *primary_pointer_id = None;
             true
         }
+        // Rotary input (Pixel Watch crown, Galaxy Watch rotating bezel) arrives
+        // as a *generic* motion event with ACTION_SCROLL from the
+        // SOURCE_ROTARY_ENCODER class, carrying its delta on AXIS_SCROLL in
+        // detents. NativeActivity's AInputQueue delivers generic motion events
+        // through the same queue as touch, so no extra plumbing is needed --
+        // but the activity's view must be focusable and focused or the platform
+        // never dispatches them at all (see the module docs on
+        // `push_rotary_pending_input`).
+        android_activity::input::MotionAction::Scroll => {
+            push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
+        }
         _ => false,
     }
+}
+
+/// Translates an Android rotary `ACTION_SCROLL` motion event into a pending
+/// rotary input.
+///
+/// Returns `true` only when the event really came from a rotary encoder, so a
+/// mouse-wheel `ACTION_SCROLL` stays unhandled and keeps its default platform
+/// behavior.
+///
+/// # Host requirements
+///
+/// Wear OS delivers rotary events **only to a focused, focusable view**. The
+/// host activity must, on its `NativeActivity` content view:
+/// `setFocusable(true)`, `setFocusableInTouchMode(true)`, and `requestFocus()`.
+/// Without focus, `AInputQueue` receives nothing and this function is never
+/// reached.
+fn push_rotary_pending_input(
+    motion_event: &android_activity::input::MotionEvent<'_>,
+    event_source: android_activity::input::Source,
+    time_ms: Option<i64>,
+    pending_inputs: &mut Vec<PendingInput>,
+) -> bool {
+    use crate::android_input::is_rotary_encoder_source;
+
+    if !is_rotary_encoder_source(u32::from(event_source)) {
+        // A non-rotary scroll (mouse wheel); leave it to the platform.
+        return false;
+    }
+
+    // The rotary delta lives on AXIS_SCROLL of pointer 0, in detents.
+    let Some(pointer) = motion_event.pointers().next() else {
+        return true;
+    };
+    let detents = pointer.axis_value(android_activity::input::Axis::Scroll);
+    if !detents.is_finite() || detents == 0.0 {
+        return true;
+    }
+
+    pending_inputs.push(PendingInput::RotaryScroll(
+        detents,
+        time_ms.unwrap_or(0).max(0) as u64,
+    ));
+    true
 }
 
 fn drain_android_input_events(
@@ -645,6 +704,11 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
+    // Rotary detents are reported in device-independent units; the shell needs
+    // a pixels-per-detent factor to match Compose. Approximates
+    // `ViewConfiguration.getScaledVerticalScrollFactor()`; a host that reads
+    // the exact platform value over JNI can overwrite this afterwards.
+    shell.set_rotary_scroll_factor(crate::android_input::android_rotary_scroll_factor(density));
 
     let (width, height) = shell.buffer_size();
     if width > 0 && height > 0 {
@@ -1894,6 +1958,11 @@ pub fn run(
                         PendingInput::SecondaryPointerMove(id, x, y, time_ms) => {
                             shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_moved(id, x, y, time_ms);
+                        }
+                        PendingInput::RotaryScroll(detents, uptime_ms) => {
+                            // Detents -> pixels happens in the shell so the
+                            // scroll factor can be refined at runtime.
+                            shell.rotary_scrolled_by_detents(detents, uptime_ms);
                         }
                     }
                 }

@@ -206,14 +206,47 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             primitive: Box::new(translate_primitive(*primitive, dx, dy)),
             blend_mode,
         },
-        DrawPrimitive::Rect { rect, brush } => DrawPrimitive::Rect {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => DrawPrimitive::Rect {
             rect: rect.translate(dx, dy),
             brush,
+            stroke,
         },
-        DrawPrimitive::RoundRect { rect, brush, radii } => DrawPrimitive::RoundRect {
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => DrawPrimitive::RoundRect {
             rect: rect.translate(dx, dy),
             brush,
             radii,
+            stroke,
+        },
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => DrawPrimitive::Arc {
+            rect: rect.translate(dx, dy),
+            brush,
+            // The arc center lives in the same local space as `rect`, so it
+            // must move with it — translating only the bounding box would
+            // silently shear the arc out of its box.
+            center: Point::new(center.x + dx, center.y + dy),
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
         },
         DrawPrimitive::Image {
             rect,
