@@ -655,6 +655,243 @@ fn pointer_input_restarts_on_key_change() {
     assert_eq!(starts.get(), 2);
 }
 
+/// `PointerInputScope::size()` must report the node's real layout size.
+///
+/// Regression: the scope's size cell had no writer anywhere in the workspace,
+/// so `size()` was permanently `0x0` on every platform. Anything deriving
+/// geometry from it (a full-screen canvas taking its centre as `size / 2`) read
+/// the node's top-left corner instead.
+///
+/// The size must be readable without any pointer event having arrived — Compose
+/// handlers read `size` before they await — and must track resizes.
+#[test]
+fn pointer_input_scope_reports_published_layout_size() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
+    let event_sizes: Rc<RefCell<Vec<Size>>> = Rc::new(RefCell::new(Vec::new()));
+    let modifier = Modifier::empty().pointer_input((), {
+        let captured = captured.clone();
+        let event_sizes = event_sizes.clone();
+        move |scope: PointerInputScope| {
+            let captured = captured.clone();
+            let event_sizes = event_sizes.clone();
+            async move {
+                *captured.borrow_mut() = Some(scope.clone());
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        loop {
+                            let _event = await_scope.await_pointer_event().await;
+                            event_sizes.borrow_mut().push(await_scope.size());
+                        }
+                    })
+                    .await;
+            }
+        }
+    });
+
+    let elements = modifier.elements();
+    chain.update_from_slice(&elements, &mut context);
+    let slices = collect_modifier_slices(&chain);
+
+    assert_eq!(
+        slices.pointer_input_size_sinks().len(),
+        1,
+        "the pointer input node must expose a size sink for the layout pass"
+    );
+
+    let scope = captured
+        .borrow()
+        .clone()
+        .expect("pointer input handler should have started");
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 0.0,
+            height: 0.0
+        },
+        "an unmeasured node has no size yet"
+    );
+
+    // The layout pass publishes the node's resolved size; no pointer event has
+    // been dispatched at this point.
+    slices.publish_pointer_input_size(Size {
+        width: 240.0,
+        height: 160.0,
+    });
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 240.0,
+            height: 160.0
+        },
+        "scope.size() must report the laid-out size before any pointer event"
+    );
+
+    // A resize must be observed by the same scope.
+    slices.publish_pointer_input_size(Size {
+        width: 100.0,
+        height: 50.0,
+    });
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 100.0,
+            height: 50.0
+        },
+        "scope.size() must track resizes"
+    );
+
+    // The awaiting scope reports the same size as the outer scope.
+    slices.pointer_inputs()[0](PointerEvent::new(
+        PointerEventKind::Down,
+        Point { x: 10.0, y: 20.0 },
+        Point { x: 10.0, y: 20.0 },
+    ));
+    assert_eq!(
+        *event_sizes.borrow(),
+        vec![Size {
+            width: 100.0,
+            height: 50.0
+        }],
+        "AwaitPointerEventScope::size() must report the same laid-out size"
+    );
+}
+
+/// The published size lives on the node, not on the per-run scope, so a handler
+/// restart (a key change) hands the fresh scope the size the node already has —
+/// the node was not re-measured, so its size must not fall back to `0x0`.
+#[test]
+fn pointer_input_scope_size_survives_handler_restart() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+
+    let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
+    let handler = {
+        let captured = captured.clone();
+        move |scope: PointerInputScope| {
+            let captured = captured.clone();
+            async move {
+                *captured.borrow_mut() = Some(scope.clone());
+                pending::<()>().await;
+            }
+        }
+    };
+
+    let elements = Modifier::empty()
+        .pointer_input(0u32, handler.clone())
+        .elements();
+    chain.update_from_slice(&elements, &mut context);
+    let slices = collect_modifier_slices(&chain);
+    slices.publish_pointer_input_size(Size {
+        width: 320.0,
+        height: 180.0,
+    });
+
+    let elements = Modifier::empty().pointer_input(1u32, handler).elements();
+    chain.update_from_slice(&elements, &mut context);
+
+    let restarted_scope = captured
+        .borrow()
+        .clone()
+        .expect("restarted handler should have started");
+    assert_eq!(
+        restarted_scope.size(),
+        Size {
+            width: 320.0,
+            height: 180.0
+        },
+        "a scope created by a handler restart must keep the node's known size"
+    );
+}
+
+/// End-to-end through the real layout pipeline: measuring and placing the tree
+/// is what fills `PointerInputScope::size()`, and re-laying out at a new
+/// viewport updates it.
+#[test]
+fn pointer_input_scope_size_is_filled_by_the_layout_pass() {
+    let captured: Rc<RefCell<Option<PointerInputScope>>> = Rc::new(RefCell::new(None));
+    let mut composition = crate::run_test_composition({
+        let captured = captured.clone();
+        move || {
+            crate::Box(
+                Modifier::empty().fill_max_size().pointer_input((), {
+                    let captured = captured.clone();
+                    move |scope: PointerInputScope| {
+                        let captured = captured.clone();
+                        async move {
+                            *captured.borrow_mut() = Some(scope.clone());
+                            pending::<()>().await;
+                        }
+                    }
+                }),
+                crate::BoxSpec::new(),
+                || {},
+            );
+        }
+    });
+    let root = composition.root().expect("composition root");
+
+    let scope = captured
+        .borrow()
+        .clone()
+        .expect("pointer input handler should have started during composition");
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 0.0,
+            height: 0.0
+        },
+        "no layout pass has run yet"
+    );
+
+    let layout_at = |composition: &mut crate::TestComposition, size: Size| {
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        crate::measure_layout(&mut applier, root, size).expect("layout measurement");
+        crate::build_layout_tree_from_applier(&mut applier, root)
+            .expect("layout tree build")
+            .expect("layout tree present");
+        applier.clear_runtime_handle();
+    };
+
+    layout_at(
+        &mut composition,
+        Size {
+            width: 400.0,
+            height: 320.0,
+        },
+    );
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 400.0,
+            height: 320.0
+        },
+        "the layout pass must publish the node's measured size into the scope"
+    );
+
+    layout_at(
+        &mut composition,
+        Size {
+            width: 240.0,
+            height: 240.0,
+        },
+    );
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 240.0,
+            height: 240.0
+        },
+        "a re-layout at a new viewport must update the scope size"
+    );
+}
+
 /// Pointer input handlers extracted from a modifier slice keep their task alive
 /// until explicit cancellation, even after the temporary collection chain drops.
 #[test]

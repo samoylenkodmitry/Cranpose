@@ -167,6 +167,14 @@ impl PointerInputScope {
         Self { state }
     }
 
+    /// The size of the layout node this handler is attached to, in the same
+    /// local coordinate space as the [`PointerEvent`] positions the scope
+    /// delivers (origin at the node's top-left).
+    ///
+    /// The layout pass publishes the node's resolved size every pass, so this
+    /// is current from the first laid-out frame onwards — including before any
+    /// pointer event has arrived. It is `0x0` only while the node has never
+    /// been laid out.
     pub fn size(&self) -> Size {
         self.state.size.get()
     }
@@ -189,6 +197,8 @@ pub struct AwaitPointerEventScope {
 }
 
 impl AwaitPointerEventScope {
+    /// The size of the layout node this handler is attached to. See
+    /// [`PointerInputScope::size`].
     pub fn size(&self) -> Size {
         self.state.size.get()
     }
@@ -232,18 +242,19 @@ impl Future for NextPointerEvent {
 struct PointerInputScopeState {
     events: RefCell<VecDeque<PointerEvent>>,
     waiting: RefCell<Option<Waker>>,
-    size: Cell<Size>,
+    /// Shared with the owning [`SuspendingPointerInputNode`] (and therefore
+    /// with every scope the node ever hands out): the layout pass publishes the
+    /// node's resolved size into this cell, so `scope.size()` reports live
+    /// dimensions rather than the `0x0` a per-scope cell would be stuck at.
+    size: Rc<Cell<Size>>,
 }
 
 impl PointerInputScopeState {
-    fn new() -> Self {
+    fn new(size: Rc<Cell<Size>>) -> Self {
         Self {
             events: RefCell::new(VecDeque::new()),
             waiting: RefCell::new(None),
-            size: Cell::new(Size {
-                width: 0.0,
-                height: 0.0,
-            }),
+            size,
         }
     }
 
@@ -392,6 +403,11 @@ pub struct SuspendingPointerInputNode {
     handler: PointerInputHandler,
     dispatcher: PointerEventDispatcher,
     task: Option<PointerInputTask>,
+    /// The node's resolved layout size, published by the layout pass through
+    /// [`PointerInputNode::layout_size_sink`]. Lives on the node rather than on
+    /// the scope state so it survives handler restarts (a key change recreates
+    /// the scope but not the node, and the size has not changed).
+    layout_size: Rc<Cell<Size>>,
     state: NodeState,
 }
 
@@ -402,6 +418,10 @@ impl SuspendingPointerInputNode {
             handler,
             dispatcher: PointerEventDispatcher::new(),
             task: None,
+            layout_size: Rc::new(Cell::new(Size {
+                width: 0.0,
+                height: 0.0,
+            })),
             state: NodeState::new(),
         }
     }
@@ -425,7 +445,7 @@ impl SuspendingPointerInputNode {
     }
 
     fn start(&mut self) {
-        let state = Rc::new(PointerInputScopeState::new());
+        let state = Rc::new(PointerInputScopeState::new(self.layout_size.clone()));
         self.dispatcher.set_state(Some(state.clone()));
         let scope = PointerInputScope::new(state);
         let future = (self.handler)(scope);
@@ -476,6 +496,10 @@ impl DelegatableNode for SuspendingPointerInputNode {
 impl PointerInputNode for SuspendingPointerInputNode {
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
         Some(self.dispatcher.handler())
+    }
+
+    fn layout_size_sink(&self) -> Option<Rc<Cell<Size>>> {
+        Some(self.layout_size.clone())
     }
 }
 

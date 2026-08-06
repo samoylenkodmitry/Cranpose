@@ -969,13 +969,50 @@ public class CranposeActivity extends NativeActivity {
         }
     }
 
+    /**
+     * Makes the native content view focusable and gives it focus.
+     *
+     * <p>Wear OS delivers rotary encoder events — the Pixel Watch crown, the Galaxy
+     * Watch bezel — only to a focused view. {@link NativeActivity} never marks its
+     * content view focusable, so without this the crown produces nothing at all, with
+     * no error to explain the silence. Touch is unaffected, which makes it look like
+     * the app simply ignores the crown.
+     *
+     * <p>Re-applied from {@code onWindowFocusChanged} because the window can hand
+     * focus elsewhere (dialogs, IME) and not give it back to the content view.
+     */
+    private void focusNativeContentView() {
+        View content = findViewById(android.R.id.content);
+        if (content instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) content;
+            if (group.getChildCount() > 0) {
+                content = group.getChildAt(0);
+            }
+        }
+        if (content == null) {
+            return;
+        }
+        content.setFocusable(true);
+        content.setFocusableInTouchMode(true);
+        content.requestFocus();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         loadCranposeNativeLibrary();
         super.onCreate(savedInstanceState);
+        focusNativeContentView();
         installInsetsListener();
         registerNetworkCallback();
         dispatchDeeplink(getIntent());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            focusNativeContentView();
+        }
     }
 
     @Override

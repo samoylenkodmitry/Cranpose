@@ -555,6 +555,14 @@ fn build_layer_node_from_data(
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
 
+    // Publish this node's resolved size to its `pointer_input` handlers, so
+    // `PointerInputScope::size()` reports the node's real dimensions — the same
+    // box the events dispatched to those handlers are made local to. This is the
+    // only pass that runs in the app runtime, and it runs before the frame's
+    // pointer dispatch, so handlers see the current size (and track resizes)
+    // whether or not an event has arrived yet.
+    modifier_slices.publish_pointer_input_size(layout_state.size);
+
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
     let local_translated_content_context = modifier_slices.translated_content_context();

@@ -577,6 +577,22 @@ pub trait PointerInputNode: ModifierNode {
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
         None
     }
+
+    /// Returns the cell this node reads its owning layout node's resolved size
+    /// from, if it exposes a size to its handler (Compose's
+    /// `PointerInputScope.size`).
+    ///
+    /// The cell is shared with the node, so the layout pass publishes the size
+    /// into it once per pass and every read — including reads that happen
+    /// before any pointer event arrives — observes the current size. The size
+    /// is the node's layout box in the same local coordinate space the
+    /// dispatched [`PointerEvent`] positions use, so
+    /// `event.local_position / size` is a well-defined fraction of the node.
+    ///
+    /// Returns `None` for pointer nodes with no size-bearing scope.
+    fn layout_size_sink(&self) -> Option<Rc<Cell<Size>>> {
+        None
+    }
 }
 
 /// Marker trait for semantics modifier nodes.

@@ -793,6 +793,11 @@ pub fn build_layout_tree_from_applier(
             });
         }
 
+        // Publish this node's resolved size to its `pointer_input` handlers so
+        // `PointerInputScope::size()` reports the node's real dimensions (the
+        // box the dispatched event positions are local to), not `0x0`.
+        modifier_slices.publish_pointer_input_size(state.size);
+
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let child_origin = Point {
             x: top_left.x + state.content_offset.x,
@@ -3358,6 +3363,10 @@ fn build_layout_tree(
                 height: node.size.height,
             });
         }
+
+        // Publish this node's resolved size to its `pointer_input` handlers so
+        // `PointerInputScope::size()` reports the node's real dimensions.
+        modifier_slices.publish_pointer_input_size(node.size);
 
         let data = LayoutNodeData::new(modifier, resolved_modifiers, modifier_slices, kind);
         let mut children = Vec::with_capacity(node.children.len());

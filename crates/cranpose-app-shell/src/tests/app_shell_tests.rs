@@ -7277,6 +7277,125 @@ fn canvas_pressed_state_draws_on_pointer_down_before_release() {
     );
 }
 
+thread_local! {
+    static APP_SHELL_POINTER_SCOPE: RefCell<Option<PointerInputScope>> = const { RefCell::new(None) };
+    static APP_SHELL_POINTER_SCOPE_EVENTS: RefCell<Vec<(Size, Point)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// A full-screen pointer surface — the shape of a round-watch game that draws
+/// its whole UI into one canvas and derives its geometry from the scope size.
+#[composable]
+fn app_shell_pointer_scope_size_probe() {
+    Box(
+        Modifier::empty()
+            .fill_max_size()
+            .pointer_input((), move |scope: PointerInputScope| async move {
+                APP_SHELL_POINTER_SCOPE.with(|slot| {
+                    *slot.borrow_mut() = Some(scope.clone());
+                });
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            if event.kind == PointerEventKind::Down {
+                                APP_SHELL_POINTER_SCOPE_EVENTS.with(|slot| {
+                                    slot.borrow_mut().push((await_scope.size(), event.position));
+                                });
+                            }
+                        }
+                    })
+                    .await;
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// `PointerInputScope::size()` must report the node's real size in the running
+/// shell — the per-frame scene build is the only pass that publishes it there
+/// (`build_layout_tree` is off in the app runtime).
+///
+/// Regression: the size was permanently `0x0`, so a handler that treats
+/// `size / 2` as its centre took its geometry from the node's top-left corner
+/// instead (a centre tap on a round watch face read as a full-radius offset).
+#[test]
+fn pointer_input_scope_reports_node_size_in_running_shell() {
+    let _guard = test_guard();
+    APP_SHELL_POINTER_SCOPE.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    APP_SHELL_POINTER_SCOPE_EVENTS.with(|slot| slot.borrow_mut().clear());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_pointer_scope_size_probe,
+    );
+    shell.set_viewport(408.0, 408.0);
+    shell.update();
+
+    let scope = APP_SHELL_POINTER_SCOPE
+        .with(|slot| slot.borrow().clone())
+        .expect("pointer input handler should have started");
+
+    // Read before any pointer event: Compose handlers read `size` before they
+    // await, so a laid-out node must already report its size.
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 408.0,
+            height: 408.0
+        },
+        "scope.size() must report the node's size after the first frame, with no pointer event"
+    );
+
+    // A tap at the true centre must land at `size / 2` in the handler's own
+    // coordinates — the invariant the broken `0x0` size destroyed.
+    assert!(
+        shell.set_cursor(204.0, 204.0),
+        "cursor should hover the full-screen pointer surface"
+    );
+    shell.update();
+    assert!(shell.pointer_pressed(), "pointer down should hit the surface");
+    shell.update();
+
+    let (event_size, event_position) = APP_SHELL_POINTER_SCOPE_EVENTS
+        .with(|slot| slot.borrow().first().copied())
+        .expect("handler should have received the pointer down");
+    assert_eq!(
+        event_size,
+        Size {
+            width: 408.0,
+            height: 408.0
+        },
+        "AwaitPointerEventScope::size() must report the node's size"
+    );
+    assert!(
+        (event_position.x - event_size.width * 0.5).abs() < 0.5
+            && (event_position.y - event_size.height * 0.5).abs() < 0.5,
+        "a centre tap must land at size/2 in scope coordinates, got {event_position:?} for {event_size:?}"
+    );
+
+    // The same scope must follow a resize.
+    shell.set_viewport(300.0, 200.0);
+    shell.update();
+    assert_eq!(
+        scope.size(),
+        Size {
+            width: 300.0,
+            height: 200.0
+        },
+        "scope.size() must track viewport-driven resizes"
+    );
+
+    APP_SHELL_POINTER_SCOPE.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    APP_SHELL_POINTER_SCOPE_EVENTS.with(|slot| slot.borrow_mut().clear());
+}
+
 #[test]
 fn headless_shell_render_graph_survives_restored_draw_state() {
     let _guard = test_guard();
