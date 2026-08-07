@@ -4001,9 +4001,9 @@ impl ApplicationHandler for App {
 
         surface.configure(&device, &surface_config);
 
-        // Create renderer with fonts from settings
-        let fonts: &[&[u8]] = self.settings.fonts.unwrap_or(&[]);
-        let text_system = WgpuTextSystem::from_fonts(fonts);
+        // Create renderer with the app's fonts: registered families first,
+        // then the static `with_fonts()` slices, then the embedded fallback.
+        let text_system = WgpuTextSystem::from_font_set(self.settings.resolve_font_set());
         let initial_scale = window.scale_factor();
         let renderer = wgpu_renderer_for_surface(
             text_system.clone(),

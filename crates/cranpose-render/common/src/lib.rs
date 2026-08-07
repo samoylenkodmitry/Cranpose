@@ -11,6 +11,7 @@ pub mod dev_overlay;
 pub const FRAME_CLEAR_COLOR: [f32; 4] = [18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0];
 pub mod brush_sampling;
 pub mod font_layout;
+pub mod font_source;
 pub mod geometry;
 pub mod graph;
 mod graph_hash;

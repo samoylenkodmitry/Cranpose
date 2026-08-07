@@ -147,6 +147,13 @@ impl WgpuTextSystem {
         }
     }
 
+    /// Adopt a font set an app already built — the path app-supplied families
+    /// take, where faces were parsed once at startup rather than from static
+    /// byte slices here.
+    pub fn from_font_set(software_fonts: SoftwareTextFontSet) -> Self {
+        Self { software_fonts }
+    }
+
     fn render_state(&self) -> TextSystemState {
         TextSystemState::from_font_set(self.software_fonts.clone())
     }
@@ -201,6 +208,14 @@ impl WgpuRenderer {
     /// Call [`init_gpu`][Self::init_gpu] before rendering.
     pub fn new(fonts: &[&[u8]]) -> Self {
         Self::with_text_system(WgpuTextSystem::from_fonts(fonts))
+    }
+
+    /// Create a renderer over an already-parsed font set.
+    ///
+    /// Measurement and rasterization both take clones of this one set, so an
+    /// app-supplied family resolves identically on both sides.
+    pub fn with_font_set(fonts: SoftwareTextFontSet) -> Self {
+        Self::with_text_system(WgpuTextSystem::from_font_set(fonts))
     }
 
     pub fn with_text_system(text_system: WgpuTextSystem) -> Self {
