@@ -9,6 +9,13 @@
 //! Nothing here runs per frame or per string. A registry is built at startup,
 //! consumed into a font set, and the font set is cloned (it is `Arc`-backed)
 //! into every measurer and rasterizer that needs it.
+//!
+//! Fonts that are not files on disk come in through
+//! [`SoftwareTextFontRegistry::register_face_reader`] or
+//! [`SoftwareTextFontRegistry::register_face_bytes`]: an APK asset opened with
+//! `AndroidApp::asset_manager()`, or anything `cranpose-assets` resolved out of
+//! a desktop bundle. `cranpose-assets` is a filesystem path resolver, so it
+//! covers bundles but not APK entries, which are not filesystem paths.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -242,6 +249,10 @@ impl SoftwareTextFontRegistry {
     /// Finish, folding in the static byte slices from `AppLauncher::with_fonts`
     /// as unregistered fallbacks and the embedded default face when nothing
     /// else loaded.
+    ///
+    /// Registered faces come first, so when a request names no family and the
+    /// scores tie, a face the app declared wins over one it merely handed over
+    /// as bytes.
     pub fn into_font_set_or_default(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
         for bytes in fonts {
             // Unparseable app bytes have always been skipped rather than fatal.
@@ -466,6 +477,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "embedded-default-font")]
     fn a_family_that_failed_to_load_falls_back_to_the_default_face() {
         let dir = ScratchDir::new("fallback");
         let family = FontFamily::file_backed(vec![FontFile::new(
@@ -536,6 +548,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "embedded-default-font")]
     fn an_empty_registry_falls_back_to_the_embedded_default_face() {
         let fonts = SoftwareTextFontRegistry::new().into_font_set_or_default(&[]);
         assert!(

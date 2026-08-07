@@ -238,6 +238,11 @@ impl SoftwareTextFontSet {
         self.default_index.and_then(|index| self.fonts.get(index))
     }
 
+    /// Every face in the set, in registration order.
+    pub fn faces(&self) -> &[SoftwareTextFont] {
+        &self.fonts
+    }
+
     /// Whether any face in the set was registered under `family`.
     pub fn has_registered_family(&self, family: &FontFamily) -> bool {
         self.registered_families
@@ -5444,13 +5449,18 @@ mod tests {
         }
     }
 
+    fn unregistered_face() -> SoftwareTextFont {
+        SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansBold.ttf").to_vec())
+            .expect("unregistered test face")
+    }
+
     #[test]
     fn a_named_family_resolves_the_face_registered_under_it() {
         // The file's own `name` table says Noto Sans; the app filed it as
         // "Game UI", and asking for that has to find it.
         let family = FontFamily::named("Game UI");
         let fonts = SoftwareTextFontSet::from_faces(vec![
-            default_software_text_font().expect("bundled default test font"),
+            unregistered_face(),
             registered_face(&family, FontWeight::NORMAL),
         ]);
 
@@ -5467,17 +5477,33 @@ mod tests {
     fn a_file_backed_family_never_resolves_a_face_filed_under_another_one() {
         let mine = FontFamily::loaded_typeface_path("/fonts/Mine.ttf");
         let theirs = FontFamily::loaded_typeface_path("/fonts/Theirs.ttf");
-        let default_font = default_software_text_font().expect("bundled default test font");
-        let fonts = SoftwareTextFontSet::from_faces(vec![
-            default_font.clone(),
-            registered_face(&theirs, FontWeight::NORMAL),
-        ]);
+        let fallback =
+            SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansMerged.ttf").to_vec())
+                .expect("fallback test face");
+        let theirs_face = SoftwareTextFont::from_registered_bytes(
+            &theirs,
+            FontWeight::BOLD,
+            FontStyle::Normal,
+            include_bytes!("../assets/NotoSansBold.ttf").to_vec(),
+        )
+        .expect("registered test face");
+        let fonts = SoftwareTextFontSet::from_faces(vec![fallback.clone(), theirs_face]);
 
-        let resolved = fonts.resolve(&style_naming(&mine)).expect("fallback face");
         assert_eq!(
-            resolved.content_hash(),
-            default_font.content_hash(),
+            fonts
+                .resolve(&style_naming(&mine))
+                .expect("fallback face")
+                .content_hash(),
+            fallback.content_hash(),
             "an unregistered family must fall back rather than borrow someone else's face"
+        );
+        assert_eq!(
+            fonts
+                .resolve(&style_naming(&theirs))
+                .expect("registered face")
+                .registered_family(),
+            Some(FontFamilyKey::of(&theirs)),
+            "the family that was registered still resolves to its own face"
         );
     }
 
