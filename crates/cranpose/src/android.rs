@@ -1334,6 +1334,11 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
+    // Mirror the `debug.cranpose.*` diagnostic properties into the environment
+    // before anything reads it, so the renderer's and app shell's existing
+    // environment-gated telemetry is reachable on device.
+    crate::android_frame_telemetry::seed_env_from_system_properties();
+
     // Register the SAF document picker as the platform file picker. Requires the
     // app's activity to be `dev.cranpose.android.CranposeActivity`.
     crate::android_file_picker::register(app.clone());

@@ -15,6 +15,11 @@
 //! * `debug.cranpose.present_mode` / `debug.cranpose.frame_latency` — swapchain
 //!   A/B knobs, read by [`crate::present_mode`] and [`crate::android`].
 //!
+//! The rest of the workspace gates its diagnostics on environment variables,
+//! which a `NativeActivity` cannot be handed either. [`PROPERTY_BACKED_ENV_VARS`]
+//! lists the ones that are reachable through a system property instead;
+//! [`seed_env_from_system_properties`] copies them across at startup.
+//!
 //! Set them with `adb shell setprop` before launching the activity.
 #![allow(unsafe_code)]
 
@@ -48,6 +53,61 @@ fn property_flag(name: &str) -> bool {
     match system_property(name) {
         Some(value) => !matches!(value.as_str(), "0" | "false" | "off" | "no"),
         None => false,
+    }
+}
+
+/// Diagnostics that the rest of the workspace reads from the environment, and
+/// the system property that stands in for each one on Android.
+///
+/// The renderer and the app shell gate their stage telemetry on environment
+/// variables, which is the natural switch for the desktop and web hosts. A
+/// `NativeActivity` is launched by `zygote` and inherits nothing an operator can
+/// set, so on Android those switches were unreachable and the only per-stage
+/// numbers available on device were this module's own. Mirroring a short
+/// allowlist of properties into the environment closes that gap without giving
+/// either side a new configuration format to learn.
+///
+/// Property names are capped at 32 bytes by `PROP_NAME_MAX`, which is why they
+/// are abbreviations rather than the full variable name.
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 6] = [
+    ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
+    (
+        "debug.cranpose.render_stage_ms",
+        "CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS",
+    ),
+    (
+        "debug.cranpose.frame_stage_ms",
+        "CRANPOSE_FRAME_STAGE_TELEMETRY_MS",
+    ),
+    ("debug.cranpose.layer_diag", "CRANPOSE_LAYER_RENDER_DIAG"),
+    ("debug.cranpose.segment_diag", "CRANPOSE_SEGMENT_DIAG"),
+    (
+        "debug.cranpose.text_prewarm_diag",
+        "CRANPOSE_TEXT_PREWARM_DIAG",
+    ),
+];
+
+/// Copies the [`PROPERTY_BACKED_ENV_VARS`] properties that are set into the
+/// process environment, so the workspace's existing environment-gated
+/// diagnostics can be switched on with `adb shell setprop`.
+///
+/// Must be called before the render loop starts. An explicit environment entry
+/// always wins, so a host that already exports one of these keeps it.
+pub(crate) fn seed_env_from_system_properties() {
+    for (property, variable) in PROPERTY_BACKED_ENV_VARS {
+        if std::env::var_os(variable).is_some() {
+            continue;
+        }
+        let Some(value) = system_property(property) else {
+            continue;
+        };
+        // SAFETY: called from `android_main` before the frame loop, the render
+        // thread or any worker pool exists, so no other thread can be reading
+        // the environment concurrently.
+        unsafe {
+            std::env::set_var(variable, &value);
+        }
+        log::info!("[android-frame] {property} -> {variable}={value}");
     }
 }
 

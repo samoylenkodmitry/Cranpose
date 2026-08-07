@@ -7183,6 +7183,7 @@ impl GpuRenderer {
         height: u32,
     ) {
         self.frame_stats.bump_shapes();
+        self.frame_stats.add_draw_calls(1);
         render_pass.set_scissor_rect(0, 0, width, height);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.pipeline_dst_out,
@@ -7274,6 +7275,7 @@ impl GpuRenderer {
             return Ok(());
         }
         self.frame_stats.bump_images();
+        self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
@@ -7327,6 +7329,7 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         {
             self.frame_stats.bump_text();
+            self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
             render_pass.set_pipeline(&self.glyph_atlas_pipeline);
             let (uniform_bind_group, vertex_buffer, index_buffer) = (
                 &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
@@ -7367,6 +7370,7 @@ impl GpuRenderer {
         }
 
         self.frame_stats.bump_images();
+        self.frame_stats.add_draw_calls(cmds.len() as u32);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
@@ -7404,6 +7408,7 @@ impl GpuRenderer {
         }
 
         self.frame_stats.bump_text();
+        self.frame_stats.add_draw_calls(cmds.len() as u32);
 
         let mut shared_buffers_bound = false;
         let mut retained_pipeline_bound = false;
@@ -7597,11 +7602,15 @@ impl GpuRenderer {
         }
 
         self.stage_viewport_uniforms(staged_uploads, viewport);
+        // Grow to a power of two, as the shape batch and frame upload buffers
+        // do. Sizing these to the exact byte count instead means one more glyph
+        // quad than the last frame destroys and recreates both buffers, and a
+        // caption that grows a character at a time does it on every frame.
         let needed_bytes = std::mem::size_of_val(image_vertices) as u64;
         if needed_bytes > self.image_vertex_buffer.size() {
             self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Image Vertex Buffer"),
-                size: needed_bytes,
+                size: needed_bytes.next_power_of_two(),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -7610,7 +7619,7 @@ impl GpuRenderer {
         if needed_index_bytes > self.image_index_buffer.size() {
             self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Image Index Buffer"),
-                size: needed_index_bytes,
+                size: needed_index_bytes.next_power_of_two(),
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });

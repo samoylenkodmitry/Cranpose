@@ -526,7 +526,7 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
-        let submission = Self::submit(queue, encoder);
+        let submission = Self::submit_with_timing(queue, encoder);
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         Ok(FrameGraphExecution {
@@ -579,6 +579,36 @@ impl WgpuFrameGraphExecutor {
 
     fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
         queue.submit(std::iter::once(encoder.finish()))
+    }
+
+    /// [`Self::submit`] with the `finish`/`submit` split reported separately.
+    ///
+    /// These are the two calls at the end of a frame that hand the recorded
+    /// commands to the driver, and on a translated backend they are where the
+    /// command stream is marshalled and the round trip is paid. Timing them
+    /// apart from the recording that produced them is what separates "the
+    /// renderer built too much work" from "the driver is expensive per frame".
+    fn submit_with_timing(
+        queue: &wgpu::Queue,
+        encoder: wgpu::CommandEncoder,
+    ) -> wgpu::SubmissionIndex {
+        let Some(threshold_ms) = frame_graph_pass_telemetry_threshold_ms() else {
+            return Self::submit(queue, encoder);
+        };
+        let finish_start = Instant::now();
+        let command_buffer = encoder.finish();
+        let submit_start = Instant::now();
+        let submission = queue.submit(std::iter::once(command_buffer));
+        let submit_end = Instant::now();
+
+        let finish_ms = submit_start.duration_since(finish_start).as_secs_f64() * 1000.0;
+        let submit_ms = submit_end.duration_since(submit_start).as_secs_f64() * 1000.0;
+        if finish_ms + submit_ms >= threshold_ms {
+            log::warn!(
+                "[wgpu-render-stage:submit] finish_ms={finish_ms:.3} submit_ms={submit_ms:.3}"
+            );
+        }
+        submission
     }
 }
 
@@ -1105,7 +1135,20 @@ pub(crate) struct UploadAllocator {
     usage: wgpu::BufferUsages,
     cursor: usize,
     slots: Vec<UploadSlot>,
+    /// Largest slot size any upload has asked for since the last
+    /// [`UploadAllocator::reset`].
+    frame_peak_size: u64,
+    /// Slot size the allocator is willing to carry between frames. Tracks the
+    /// high-water mark upwards immediately and downwards only after a
+    /// [`OVERSIZED_SLOT_COLLAPSE_FACTOR`] collapse.
+    retained_size: u64,
 }
+
+/// How far a frame's demand has to fall before an oversized upload slot is
+/// released. Matches the hysteresis the text scratch buffers use: a scene that
+/// needs a large slot needs it every frame, so releasing it at the end of each
+/// one just recreates the same buffer on the next.
+const OVERSIZED_SLOT_COLLAPSE_FACTOR: u64 = 4;
 
 impl UploadAllocator {
     fn new(spec: UploadAllocatorSpec) -> Self {
@@ -1131,6 +1174,8 @@ impl UploadAllocator {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             cursor: 0,
             slots: Vec::new(),
+            frame_peak_size: 0,
+            retained_size: 0,
         }
     }
 
@@ -1142,14 +1187,35 @@ impl UploadAllocator {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             cursor: 0,
             slots: Vec::new(),
+            frame_peak_size: 0,
+            retained_size: 0,
         }
     }
 
     pub(crate) fn reset(&mut self) {
         self.cursor = 0;
-        let nominal_size = self.size;
+        // A scene that needs an oversized slot needs it on every frame, so
+        // releasing it at the end of each one only recreates the same buffer
+        // (and its bind group) on the next — a `vkCreateBuffer` /
+        // `vkDestroyBuffer` pair per slot per frame, which is dear on a
+        // translated driver. Follow the high-water mark up immediately and
+        // back down only once frames have collapsed to a quarter of it, so a
+        // one-off spike is still released without charging the steady state.
+        if self.frame_peak_size > 0 {
+            self.retained_size = if self
+                .frame_peak_size
+                .saturating_mul(OVERSIZED_SLOT_COLLAPSE_FACTOR)
+                <= self.retained_size
+            {
+                self.frame_peak_size
+            } else {
+                self.retained_size.max(self.frame_peak_size)
+            };
+            self.frame_peak_size = 0;
+        }
+        let retain_limit = self.size.max(self.retained_size);
         self.slots
-            .retain(|slot| Self::should_retain_slot_size(nominal_size, slot.size));
+            .retain(|slot| Self::should_retain_slot_size(retain_limit, slot.size));
     }
 
     fn matches(&self, spec: UploadAllocatorSpec) -> bool {
@@ -1211,6 +1277,7 @@ impl UploadAllocator {
         uploaded_bytes: &Cell<u64>,
     ) -> usize {
         let required_size = self.required_slot_size(bytes.len());
+        self.frame_peak_size = self.frame_peak_size.max(required_size);
         if self.cursor == self.slots.len() {
             self.slots.push(self.create_slot(device, required_size));
         }
@@ -1244,8 +1311,12 @@ impl UploadAllocator {
         ))
     }
 
-    fn should_retain_slot_size(nominal_size: u64, slot_size: u64) -> bool {
-        slot_size <= nominal_size
+    /// Whether a slot survives [`UploadAllocator::reset`]. `retain_limit` is the
+    /// allocator's nominal size raised to its recent high-water mark, so slots
+    /// the current scene keeps asking for are kept and slots left over from a
+    /// larger past frame are released.
+    fn should_retain_slot_size(retain_limit: u64, slot_size: u64) -> bool {
+        slot_size <= retain_limit
     }
 
     #[cfg(test)]
@@ -1282,6 +1353,37 @@ mod tests {
     fn upload_allocator_does_not_retain_oversized_slots_after_reset() {
         assert!(UploadAllocator::should_retain_slot_size(64, 64));
         assert!(!UploadAllocator::should_retain_slot_size(64, 256));
+    }
+
+    #[test]
+    fn upload_allocator_keeps_slots_a_steady_scene_asks_for_every_frame() {
+        let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
+        // Two frames that both need a 256-byte slot must not recreate it.
+        allocator.frame_peak_size = 256;
+        allocator.reset();
+        assert!(UploadAllocator::should_retain_slot_size(
+            allocator.size.max(allocator.retained_size),
+            256
+        ));
+        allocator.frame_peak_size = 256;
+        allocator.reset();
+        assert_eq!(allocator.retained_size, 256);
+    }
+
+    #[test]
+    fn upload_allocator_releases_a_slot_once_demand_collapses() {
+        let mut allocator = UploadAllocator::uniform("test buffer", "test bind group", 64);
+        allocator.frame_peak_size = 1024;
+        allocator.reset();
+        assert_eq!(allocator.retained_size, 1024);
+        // A quarter of the high-water mark is the point where it is given back.
+        allocator.frame_peak_size = 256;
+        allocator.reset();
+        assert_eq!(allocator.retained_size, 256);
+        assert!(!UploadAllocator::should_retain_slot_size(
+            allocator.size.max(allocator.retained_size),
+            1024
+        ));
     }
 
     #[test]

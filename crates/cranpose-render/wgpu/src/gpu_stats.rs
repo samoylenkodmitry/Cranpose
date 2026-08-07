@@ -202,6 +202,13 @@ pub struct FrameStatsSnapshot {
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
+    /// Shape, image and glyph `draw_indexed` calls recorded this frame. The
+    /// `*_passes` counters above count *batches*, so a single image batch
+    /// reports `image_passes=1` however many images it draws; this counts what
+    /// the driver actually sees. Composite and effect quads are not included —
+    /// they are one draw each and already counted by `composite_passes`,
+    /// `blur_passes` and `effect_applies`.
+    pub draw_calls: u32,
     pub text_image_cache_hits: u32,
     pub text_image_cache_misses: u32,
     pub text_image_cache_hit_pixels: u64,
@@ -270,7 +277,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} | shape={} image={} text={} | \
+             blur={} composite={} effect={} | shape={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -306,6 +313,7 @@ impl FrameStatsSnapshot {
             self.shape_passes,
             self.image_passes,
             self.text_passes,
+            self.draw_calls,
             self.text_image_cache_hits,
             self.text_image_cache_misses,
             self.text_image_cache_hit_pixels as f64 / 1_000_000.0,
@@ -367,6 +375,7 @@ pub(crate) struct FrameStats {
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
+    pub draw_calls: Cell<u32>,
     pub text_image_cache_hits: Cell<u32>,
     pub text_image_cache_misses: Cell<u32>,
     pub text_image_cache_hit_pixels: Cell<u64>,
@@ -562,6 +571,14 @@ impl FrameStats {
         self.image_passes.set(self.image_passes.get() + 1);
     }
 
+    /// Records `count` `draw`/`draw_indexed` calls. Call sites bump this once
+    /// per batch with the batch's draw count rather than once per draw, so the
+    /// counter costs one `Cell` update per batch rather than one per primitive.
+    pub fn add_draw_calls(&self, count: u32) {
+        self.draw_calls
+            .set(self.draw_calls.get().saturating_add(count));
+    }
+
     pub fn bump_text(&self) {
         self.text_passes.set(self.text_passes.get() + 1);
     }
@@ -648,6 +665,7 @@ impl FrameStats {
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
+            draw_calls: self.draw_calls.get(),
             text_image_cache_hits: self.text_image_cache_hits.get(),
             text_image_cache_misses: self.text_image_cache_misses.get(),
             text_image_cache_hit_pixels: self.text_image_cache_hit_pixels.get(),
@@ -698,6 +716,7 @@ impl FrameStats {
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
+        self.draw_calls.set(0);
         self.text_image_cache_hits.set(0);
         self.text_image_cache_misses.set(0);
         self.text_image_cache_hit_pixels.set(0);
