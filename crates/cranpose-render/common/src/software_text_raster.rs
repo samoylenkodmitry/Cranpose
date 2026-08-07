@@ -735,6 +735,22 @@ impl TextMeasurer for SoftwareTextMeasurer {
         Some((((line_height - height) * 0.5).max(0.0), height))
     }
 
+    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
+        let font = self.fonts.resolve(style)?;
+        let font_size = resolve_font_size(style);
+        // Metrics must be read at the font's own px size, not the logical one:
+        // this is the very expression `collect_text_segment_solid_atlas_glyphs`
+        // places glyph origins with, so a baseline-anchored draw lands on the
+        // row the rasterizer will use. (`glyph_line_box` deliberately keeps its
+        // own, coarser box for selection chrome.)
+        let metrics =
+            crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
+        Some(baseline_y_for_line_box(
+            metrics,
+            line_height_for_render_style(style, font_size),
+        ))
+    }
+
     fn get_offset_for_position(
         &self,
         text: &cranpose_ui::text::AnnotatedString,

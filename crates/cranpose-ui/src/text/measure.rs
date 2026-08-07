@@ -190,6 +190,16 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// Distance from the top of a line slot down to that line's baseline, in
+    /// logical units — the number the rasterizer places glyph origins at.
+    ///
+    /// Callers that position text by baseline (rather than by its box) need
+    /// this; `None` means the measurer has no font metrics to answer with.
+    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
+        let _ = style;
+        None
+    }
+
     fn line_height_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -673,6 +683,15 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
     })
     .map(|(off, h)| (off.min(line_height), h.min(line_height)))
     .unwrap_or((0.0, line_height))
+}
+
+/// Distance from the top of a `style` line slot down to its baseline (see
+/// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
+/// no font metrics.
+pub fn first_baseline(style: &TextStyle) -> Option<f32> {
+    crate::render_state::with_text_service(|service| {
+        service.with_measurer(|m| m.first_baseline(style))
+    })
 }
 
 pub fn measure_text_for_node(

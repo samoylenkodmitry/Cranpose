@@ -500,10 +500,13 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                         slices.draw_commands.push(DrawCommand::Overlay(closure));
                     } else {
                         use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-                        let mut scope = DrawScopeDefault::new(crate::modifier::Size {
-                            width: 0.0,
-                            height: 0.0,
-                        });
+                        let mut scope = DrawScopeDefault::with_text_measurer(
+                            crate::modifier::Size {
+                                width: 0.0,
+                                height: 0.0,
+                            },
+                            crate::text::AppContextTextMeasurer::shared(),
+                        );
                         draw_node.draw(&mut scope);
                         let primitives = scope.into_primitives();
                         if !primitives.is_empty() {

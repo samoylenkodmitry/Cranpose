@@ -16,7 +16,7 @@ use cranpose_render_common::layer_transform::{
 };
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
-    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams,
+    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
 };
 use cranpose_render_common::Brush;
 #[cfg(test)]
@@ -1083,6 +1083,10 @@ fn render_graph_text(
     );
 }
 
+/// Node id recorded for text that came from a draw primitive rather than a
+/// `Text` node — a draw primitive belongs to its layer, not to a text node.
+const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
+
 pub(crate) fn push_draw_primitive(
     primitive: DrawPrimitive,
     layer_bounds: Rect,
@@ -1132,6 +1136,22 @@ pub(crate) fn push_draw_primitive(
             clip: Option<Rect>,
         ) {
             push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+        }
+
+        fn push_text(&mut self, params: TextDrawParams) {
+            // Same list `Text` nodes land in, so the run goes through the
+            // backend's own glyph raster cache rather than a second path.
+            self.scene.push_text(
+                DRAW_PRIMITIVE_TEXT_NODE_ID,
+                params.rect,
+                params.text,
+                params.color,
+                params.text_style,
+                params.font_size,
+                params.scale,
+                params.layout_options,
+                params.clip,
+            );
         }
     }
 

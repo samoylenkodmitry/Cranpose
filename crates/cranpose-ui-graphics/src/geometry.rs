@@ -1,8 +1,13 @@
 //! Geometric primitives: Point, Size, Rect, Insets, Path
 
 use crate::stroke::{arc_band, ArcGeometry, Stroke};
+use crate::typography::{
+    estimate_text_measurement, DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle,
+    TextVerticalAlign,
+};
 use crate::{Brush, Color, ColorFilter, ImageBitmap, ImageSampling};
 use std::ops::AddAssign;
+use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Point {
@@ -438,9 +443,34 @@ pub enum DrawPrimitive {
         /// specified sub-region of the source image is sampled.
         src_rect: Option<Rect>,
     },
+    /// A laid-out run of text. See [`TextPrimitive`].
+    Text(Box<TextPrimitive>),
     /// Shadow that requires blur processing. The renderer decides technique
     /// (GPU blur, CPU approximation, etc.).
     Shadow(ShadowPrimitive),
+}
+
+/// A run of text, positioned and ready to rasterize.
+///
+/// `rect` is *already resolved*: [`DrawScope::draw_text_at`] measures the
+/// string, applies [`TextStyle::align`] / [`TextStyle::vertical_align`] inside
+/// the requested box, and stores the result here. Renderers therefore lay the
+/// glyphs out from `rect`'s top-left and never re-align — which is what keeps
+/// what [`DrawScope::measure_text`] reported and what lands on screen the same
+/// geometry.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextPrimitive {
+    /// Tight block box: origin is the top-left of the first line's slot, size
+    /// is the measured size.
+    pub rect: Rect,
+    /// Shared so redrawing an unchanged string each frame clones a pointer
+    /// rather than the characters.
+    pub text: std::rc::Rc<str>,
+    pub style: TextStyle,
+    /// Text is filled with a single color: the glyph atlas path modulates one
+    /// vertex color per glyph. Gradient brushes are resolved to their first
+    /// stop by the draw scope, exactly like [`DrawScope::draw_vector_path`].
+    pub color: Color,
 }
 
 /// Describes a shadow to be rendered. Each renderer chooses how to blur.
@@ -681,13 +711,95 @@ pub trait DrawScope {
             self.draw_vector_path(&path, brush);
         }
     }
+
+    // ── Text ────────────────────────────────────────────────────────────────
+    //
+    // Text is the one primitive a draw scope cannot resolve on its own: it
+    // needs fonts, which live above this crate. Measurement is therefore
+    // delegated to whatever the UI layer installed on the scope, and the same
+    // measurement decides where `draw_text*` puts the glyphs — so a caller that
+    // centers text from `measure_text` and the renderer that rasterizes it are
+    // reading the same numbers.
+    //
+    // There is deliberately no `_blend` variant: the text draw path has no
+    // blend-mode channel (glyphs are composited `SrcOver` against the atlas
+    // coverage mask), so a blended overload could only lie about what it does.
+
+    /// The block size, line height and first baseline `text` would occupy in
+    /// `style`.
+    ///
+    /// Free to call repeatedly: the underlying text stack caches metrics on
+    /// `(text, style)`, so a game can measure every label every frame to center
+    /// it without touching a font file more than once.
+    fn measure_text(&self, text: &str, style: &TextStyle) -> TextMeasurement;
+
+    /// Draws `text` inside the whole scope rect, positioned by
+    /// [`TextStyle::align`] and [`TextStyle::vertical_align`].
+    fn draw_text(&mut self, brush: Brush, text: &str, style: &TextStyle) {
+        self.draw_text_at(Rect::from_size(self.size()), brush, text, style);
+    }
+
+    /// Draws `text` inside `rect`, positioned by [`TextStyle::align`] and
+    /// [`TextStyle::vertical_align`].
+    ///
+    /// The glyphs are *not* clipped to `rect` — it is an alignment box, not a
+    /// viewport. A `rect` narrower than the measured text overflows in the
+    /// direction the alignment implies; clip the layer if that matters.
+    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &TextStyle);
+
+    /// Draws `text` with the top-left corner of its block at `top_left`.
+    ///
+    /// Alignment is a no-op here because the box is the measurement — this is
+    /// the "I already know where it goes" form, and the one to pair with
+    /// [`measure_text`](Self::measure_text) for hand-rolled centering.
+    fn draw_text_from(&mut self, top_left: Point, brush: Brush, text: &str, style: &TextStyle) {
+        if text.is_empty() {
+            return;
+        }
+        let measurement = self.measure_text(text, style);
+        self.draw_text_at(
+            Rect::from_origin_size(top_left, measurement.size),
+            brush,
+            text,
+            &TextStyle {
+                align: TextAlign::Left,
+                vertical_align: TextVerticalAlign::Top,
+                ..style.clone()
+            },
+        );
+    }
+
     fn into_primitives(self) -> Vec<DrawPrimitive>;
+}
+
+/// Resolves the top-left corner a text block of `measurement` gets when it is
+/// aligned inside `rect`.
+///
+/// Split out so the placement rule is stated once and can be unit-tested
+/// against the measurement it is derived from.
+pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &TextStyle) -> Point {
+    let x = match style.align {
+        TextAlign::Left => rect.x,
+        TextAlign::Center => rect.x + (rect.width - measurement.size.width) * 0.5,
+        TextAlign::Right => rect.x + rect.width - measurement.size.width,
+    };
+    let y = match style.vertical_align {
+        TextVerticalAlign::Top => rect.y,
+        TextVerticalAlign::Center => rect.y + (rect.height - measurement.size.height) * 0.5,
+        TextVerticalAlign::Bottom => rect.y + rect.height - measurement.size.height,
+        TextVerticalAlign::Baseline => rect.y - measurement.first_baseline,
+    };
+    Point::new(x, y)
 }
 
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
     primitives: Vec<DrawPrimitive>,
+    /// `None` falls back to [`estimate_text_measurement`]. Every scope the
+    /// framework builds carries the app's real measurer; a hand-built one
+    /// (tests, tooling) does not have to.
+    text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
 impl DrawScopeDefault {
@@ -695,6 +807,19 @@ impl DrawScopeDefault {
         Self {
             size,
             primitives: Vec::new(),
+            text_measurer: None,
+        }
+    }
+
+    /// A scope that measures text with the app's fonts.
+    ///
+    /// The framework calls this for every draw closure it runs; `new` exists
+    /// for callers that never draw text.
+    pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
+        Self {
+            size,
+            primitives: Vec::new(),
+            text_measurer: Some(text_measurer),
         }
     }
 
@@ -1259,15 +1384,64 @@ impl DrawScope for DrawScopeDefault {
         });
     }
 
+    fn measure_text(&self, text: &str, style: &TextStyle) -> TextMeasurement {
+        match &self.text_measurer {
+            Some(measurer) => measurer.measure_text(text, style),
+            None => estimate_text_measurement(text, style),
+        }
+    }
+
+    fn draw_text_at(&mut self, rect: Rect, brush: Brush, text: &str, style: &TextStyle) {
+        // An empty run has no glyphs and a zero-area box, which every renderer
+        // would drop anyway — stop here so it never reaches the scene.
+        if text.is_empty() {
+            return;
+        }
+        let Some(color) = solid_fill_color(&brush) else {
+            return;
+        };
+        if color.3 <= 0.0 {
+            return;
+        }
+        let measurement = self.measure_text(text, style);
+        if !(measurement.size.width > 0.0 && measurement.size.height > 0.0) {
+            return;
+        }
+        let origin = align_text_block(rect, measurement, style);
+        if !origin.x.is_finite() || !origin.y.is_finite() {
+            return;
+        }
+        self.primitives
+            .push(DrawPrimitive::Text(Box::new(TextPrimitive {
+                rect: Rect::from_origin_size(origin, measurement.size),
+                text: Rc::from(text),
+                style: style.clone(),
+                color,
+            })));
+    }
+
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         self.primitives
+    }
+}
+
+/// The single color a brush paints with, or its first stop for a gradient.
+///
+/// Text is filled per glyph from one vertex color, so a gradient cannot be
+/// honored; this mirrors the fallback [`DrawScope::draw_vector_path`] documents.
+fn solid_fill_color(brush: &Brush) -> Option<Color> {
+    match brush {
+        Brush::Solid(color) => Some(*color),
+        Brush::LinearGradient { colors, .. }
+        | Brush::RadialGradient { colors, .. }
+        | Brush::SweepGradient { colors, .. } => colors.first().copied(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Color, ImageBitmap, RenderEffect};
+    use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
 
     fn assert_image_alpha(primitive: &DrawPrimitive, expected: f32) {
         match primitive {
@@ -2101,5 +2275,312 @@ mod tests {
             assert!(value.is_finite(), "{rect:?}");
         }
         assert!(rect.width > 0.0 && rect.height > 0.0, "{rect:?}");
+    }
+
+    // ── Text ────────────────────────────────────────────────────────────────
+
+    /// Measures every character as a fixed box, so a test can predict the block
+    /// a draw is supposed to occupy without depending on a font.
+    struct FixedAdvanceTextMeasurer {
+        advance: f32,
+        line_height: f32,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl FixedAdvanceTextMeasurer {
+        fn shared(advance: f32, line_height: f32) -> Rc<Self> {
+            Rc::new(Self {
+                advance,
+                line_height,
+                calls: std::cell::Cell::new(0),
+            })
+        }
+    }
+
+    impl DrawTextMeasurer for FixedAdvanceTextMeasurer {
+        fn measure_text(&self, text: &str, _style: &TextStyle) -> TextMeasurement {
+            self.calls.set(self.calls.get() + 1);
+            let lines: Vec<&str> = text.split('\n').collect();
+            let width = lines
+                .iter()
+                .map(|line| line.chars().count() as f32 * self.advance)
+                .fold(0.0_f32, f32::max);
+            TextMeasurement {
+                size: Size::new(width, lines.len() as f32 * self.line_height),
+                line_height: self.line_height,
+                first_baseline: self.line_height * 0.75,
+                line_count: lines.len(),
+            }
+        }
+    }
+
+    fn text_scope(size: Size) -> (DrawScopeDefault, Rc<FixedAdvanceTextMeasurer>) {
+        let measurer = FixedAdvanceTextMeasurer::shared(10.0, 20.0);
+        (
+            DrawScopeDefault::with_text_measurer(size, measurer.clone()),
+            measurer,
+        )
+    }
+
+    fn unwrap_text(primitive: &DrawPrimitive) -> &TextPrimitive {
+        match primitive {
+            DrawPrimitive::Text(text) => text,
+            other => panic!("expected text primitive, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drawn_text_occupies_exactly_the_box_measure_text_reported() {
+        let (mut scope, _) = text_scope(Size::new(200.0, 100.0));
+        let style = TextStyle::new(16.0);
+        let measured = scope.measure_text("ABCD", &style);
+
+        scope.draw_text_from(
+            Point::new(7.0, 11.0),
+            Brush::solid(Color::WHITE),
+            "ABCD",
+            &style,
+        );
+
+        let primitives = scope.into_primitives();
+        assert_eq!(primitives.len(), 1);
+        let text = unwrap_text(&primitives[0]);
+        assert_eq!(
+            text.rect,
+            Rect {
+                x: 7.0,
+                y: 11.0,
+                width: measured.size.width,
+                height: measured.size.height,
+            },
+            "the drawn block must be the measured block, or callers cannot center text"
+        );
+        assert_eq!(&*text.text, "ABCD");
+        assert_eq!(text.color, Color::WHITE);
+    }
+
+    #[test]
+    fn text_alignment_positions_the_measured_block_inside_the_box() {
+        let box_rect = Rect {
+            x: 100.0,
+            y: 50.0,
+            width: 200.0,
+            height: 80.0,
+        };
+        // "AB" measures 20x20 with the fixed-advance measurer.
+        let cases = [
+            (TextAlign::Left, TextVerticalAlign::Top, 100.0, 50.0),
+            (TextAlign::Center, TextVerticalAlign::Center, 190.0, 80.0),
+            (TextAlign::Right, TextVerticalAlign::Bottom, 280.0, 110.0),
+        ];
+        for (align, vertical_align, expected_x, expected_y) in cases {
+            let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+            let style = TextStyle::new(16.0)
+                .with_align(align)
+                .with_vertical_align(vertical_align);
+            scope.draw_text_at(box_rect, Brush::solid(Color::WHITE), "AB", &style);
+            let primitives = scope.into_primitives();
+            let text = unwrap_text(&primitives[0]);
+            assert!(
+                approx(text.rect.x, expected_x) && approx(text.rect.y, expected_y),
+                "{align:?}/{vertical_align:?} placed the block at {:?}",
+                text.rect
+            );
+            assert!(approx(text.rect.width, 20.0) && approx(text.rect.height, 20.0));
+        }
+    }
+
+    #[test]
+    fn baseline_aligned_text_hangs_above_the_box_edge() {
+        let (mut scope, _) = text_scope(Size::new(200.0, 200.0));
+        let style = TextStyle::new(16.0).with_vertical_align(TextVerticalAlign::Baseline);
+        let measured = scope.measure_text("Ag", &style);
+        scope.draw_text_at(
+            Rect {
+                x: 0.0,
+                y: 100.0,
+                width: 200.0,
+                height: 0.0,
+            },
+            Brush::solid(Color::WHITE),
+            "Ag",
+            &style,
+        );
+        let primitives = scope.into_primitives();
+        let text = unwrap_text(&primitives[0]);
+        // The box edge is the baseline, so the block starts one ascent above it.
+        assert!(
+            approx(text.rect.y, 100.0 - measured.first_baseline),
+            "{:?}",
+            text.rect
+        );
+    }
+
+    #[test]
+    fn draw_text_fills_the_whole_scope_rect() {
+        let (mut scope, _) = text_scope(Size::new(120.0, 60.0));
+        let style = TextStyle::new(16.0)
+            .with_align(TextAlign::Right)
+            .with_vertical_align(TextVerticalAlign::Bottom);
+        scope.draw_text(Brush::solid(Color::WHITE), "AB", &style);
+        let primitives = scope.into_primitives();
+        let text = unwrap_text(&primitives[0]);
+        assert!(
+            approx(text.rect.x, 100.0) && approx(text.rect.y, 40.0),
+            "{:?}",
+            text.rect
+        );
+    }
+
+    #[test]
+    fn draw_text_from_ignores_alignment_and_anchors_the_top_left() {
+        let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+        // Alignment would move the block if the anchor form honored it.
+        let style = TextStyle::new(16.0)
+            .with_align(TextAlign::Center)
+            .with_vertical_align(TextVerticalAlign::Bottom);
+        scope.draw_text_from(
+            Point::new(30.0, 40.0),
+            Brush::solid(Color::WHITE),
+            "AB",
+            &style,
+        );
+        let primitives = scope.into_primitives();
+        let text = unwrap_text(&primitives[0]);
+        assert!(
+            approx(text.rect.x, 30.0) && approx(text.rect.y, 40.0),
+            "{:?}",
+            text.rect
+        );
+    }
+
+    #[test]
+    fn multiline_text_measures_the_widest_line_and_stacks_the_lines() {
+        let (mut scope, _) = text_scope(Size::new(400.0, 400.0));
+        let style = TextStyle::new(16.0);
+        scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "AB\nABCDE", &style);
+        let primitives = scope.into_primitives();
+        let text = unwrap_text(&primitives[0]);
+        assert!(approx(text.rect.width, 50.0), "{:?}", text.rect);
+        assert!(approx(text.rect.height, 40.0), "{:?}", text.rect);
+    }
+
+    #[test]
+    fn empty_text_draws_nothing_and_never_measures() {
+        let (mut scope, measurer) = text_scope(Size::new(100.0, 100.0));
+        scope.draw_text(Brush::solid(Color::WHITE), "", &TextStyle::new(16.0));
+        scope.draw_text_at(
+            Rect::from_size(Size::new(10.0, 10.0)),
+            Brush::solid(Color::WHITE),
+            "",
+            &TextStyle::new(16.0),
+        );
+        scope.draw_text_from(
+            Point::ZERO,
+            Brush::solid(Color::WHITE),
+            "",
+            &TextStyle::new(16.0),
+        );
+        assert!(scope.into_primitives().is_empty());
+        assert_eq!(
+            measurer.calls.get(),
+            0,
+            "an empty string must not cost a measurement"
+        );
+    }
+
+    #[test]
+    fn invisible_text_draws_nothing() {
+        let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+        let style = TextStyle::new(16.0);
+        scope.draw_text(Brush::solid(Color(1.0, 1.0, 1.0, 0.0)), "AB", &style);
+        scope.draw_text(
+            Brush::LinearGradient {
+                colors: Vec::new(),
+                stops: None,
+                start: Point::ZERO,
+                end: Point::new(1.0, 1.0),
+                tile_mode: crate::render_effect::TileMode::Clamp,
+            },
+            "AB",
+            &style,
+        );
+        assert!(scope.into_primitives().is_empty());
+    }
+
+    #[test]
+    fn gradient_text_brushes_fall_back_to_their_first_stop() {
+        let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+        scope.draw_text(
+            Brush::linear_gradient(vec![Color::RED, Color::BLUE]),
+            "AB",
+            &TextStyle::new(16.0),
+        );
+        let primitives = scope.into_primitives();
+        assert_eq!(unwrap_text(&primitives[0]).color, Color::RED);
+    }
+
+    #[test]
+    fn a_scope_without_a_measurer_falls_back_to_the_font_free_estimate() {
+        let mut scope = DrawScopeDefault::new(Size::new(100.0, 100.0));
+        let style = TextStyle::new(16.0);
+        assert_eq!(
+            scope.measure_text("ABC", &style),
+            crate::estimate_text_measurement("ABC", &style)
+        );
+        scope.draw_text_from(Point::ZERO, Brush::solid(Color::WHITE), "ABC", &style);
+        let primitives = scope.into_primitives();
+        let text = unwrap_text(&primitives[0]);
+        assert!(text.rect.width > 0.0 && text.rect.height > 0.0);
+    }
+
+    #[test]
+    fn degenerate_text_geometry_emits_nothing_and_never_panics() {
+        struct DegenerateTextMeasurer;
+        impl DrawTextMeasurer for DegenerateTextMeasurer {
+            fn measure_text(&self, _text: &str, _style: &TextStyle) -> TextMeasurement {
+                TextMeasurement {
+                    size: Size::new(f32::NAN, 0.0),
+                    line_height: f32::NAN,
+                    first_baseline: f32::NAN,
+                    line_count: 1,
+                }
+            }
+        }
+
+        let mut scope = DrawScopeDefault::with_text_measurer(
+            Size::new(50.0, 50.0),
+            Rc::new(DegenerateTextMeasurer),
+        );
+        scope.draw_text(Brush::solid(Color::WHITE), "AB", &TextStyle::new(16.0));
+        scope.draw_text_at(
+            Rect {
+                x: f32::NAN,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            Brush::solid(Color::WHITE),
+            "AB",
+            &TextStyle::new(16.0),
+        );
+        assert!(
+            scope.into_primitives().is_empty(),
+            "unmeasurable text must not reach the renderer"
+        );
+    }
+
+    #[test]
+    fn text_style_survives_lowering_into_the_primitive() {
+        let (mut scope, _) = text_scope(Size::new(100.0, 100.0));
+        let style = TextStyle::new(21.0)
+            .with_font_family("Fira Sans")
+            .with_weight(FontWeight::BOLD)
+            .with_style(FontStyle::Italic)
+            .with_letter_spacing(2.0)
+            .with_line_height(26.0);
+        scope.draw_text(Brush::solid(Color::WHITE), "AB", &style);
+        let primitives = scope.into_primitives();
+        assert_eq!(unwrap_text(&primitives[0]).style, style);
     }
 }

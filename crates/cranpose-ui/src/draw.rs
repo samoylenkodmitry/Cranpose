@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use crate::modifier::Size;
+use crate::text::AppContextTextMeasurer;
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope, DrawScopeDefault};
 
 pub type DrawCommandFn = Rc<dyn Fn(Size) -> Vec<DrawPrimitive>>;
@@ -22,7 +23,8 @@ pub struct DrawCacheBuilder {
 impl DrawCacheBuilder {
     pub fn on_draw_behind(&mut self, f: impl Fn(&mut dyn DrawScope) + 'static) {
         let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
+            let mut scope =
+                DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared());
             f(&mut scope);
             scope.into_primitives()
         });
@@ -31,7 +33,8 @@ impl DrawCacheBuilder {
 
     pub fn on_draw_with_content(&mut self, f: impl Fn(&mut dyn DrawScope) + 'static) {
         let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
+            let mut scope =
+                DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared());
             f(&mut scope);
             scope.into_primitives()
         });
