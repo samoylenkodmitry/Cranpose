@@ -270,18 +270,15 @@ fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bo
 }
 
 fn text_atlas_fallback_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG")
 }
 
 fn text_glyph_run_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_GLYPH_RUN_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_TEXT_GLYPH_RUN_DIAG")
 }
 
 fn root_direct_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_ROOT_DIRECT_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_ROOT_DIRECT_DIAG")
 }
 
 fn scene_layer_events_precede_z(scene: &CompositorScene, z_index: usize) -> bool {
@@ -8372,7 +8369,7 @@ impl GpuRenderer {
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
     ) -> Result<(), String> {
         let prewarm_start = Instant::now();
-        let diag_enabled = std::env::var_os("CRANPOSE_TEXT_PREWARM_DIAG").is_some();
+        let diag_enabled = cranpose_core::env_flag!("CRANPOSE_TEXT_PREWARM_DIAG");
         let mut text_items = 0usize;
         let mut candidates = 0usize;
         let mut missing_geometry = 0usize;
@@ -9857,7 +9854,7 @@ fn maybe_print_segment_diag(
     counts: SegmentDiagCounts,
     batch_limits: ShapeBatchLimits,
 ) {
-    if std::env::var_os("CRANPOSE_SEGMENT_DIAG").is_none() {
+    if !cranpose_core::env_flag!("CRANPOSE_SEGMENT_DIAG") {
         return;
     }
     let line = SEGMENT_DIAG_LINES.fetch_add(1, Ordering::Relaxed);

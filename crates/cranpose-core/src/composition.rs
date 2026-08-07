@@ -95,7 +95,7 @@ impl<A: Applier + 'static> Composition<A> {
     }
 
     fn maybe_dump_slot_table(&self, label: &str) {
-        if std::env::var_os("COMPOSE_DEBUG_SLOT_TABLE").is_none() {
+        if !crate::env_flag!("COMPOSE_DEBUG_SLOT_TABLE") {
             return;
         }
         eprintln!(

@@ -996,7 +996,7 @@ fn collect_layer_contents_into<'a>(
                         .inverse()
                         .map(|parent_to_child| parent_to_child.bounds_for_rect(clip))
                 });
-                if std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some()
+                if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG")
                     && child_layer.backdrop().is_some()
                 {
                     eprintln!(

@@ -2,7 +2,7 @@ use super::*;
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
 fn debug_scope_label_env_enabled() -> bool {
-    std::env::var_os("CRANPOSE_DEBUG_SCOPE_LABELS").is_some()
+    crate::env_flag!("CRANPOSE_DEBUG_SCOPE_LABELS")
 }
 
 #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]

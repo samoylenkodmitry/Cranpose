@@ -99,7 +99,7 @@ pub fn update_graph_from_applier_report(
         };
     }
 
-    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] dirty={dirty_nodes:?}");
     }
 
@@ -521,7 +521,7 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
-    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
             layout_state.size.width,

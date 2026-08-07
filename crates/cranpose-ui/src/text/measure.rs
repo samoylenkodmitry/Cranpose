@@ -23,7 +23,7 @@ const TEXT_SERVICE_CACHE_CAPACITY: usize = 8192;
 const TEXT_LAYOUT_TELEMETRY_ENV: &str = "CRANPOSE_TEXT_LAYOUT_TELEMETRY";
 
 fn text_layout_telemetry_enabled() -> bool {
-    std::env::var_os(TEXT_LAYOUT_TELEMETRY_ENV).is_some()
+    cranpose_core::env_flag!(TEXT_LAYOUT_TELEMETRY_ENV)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

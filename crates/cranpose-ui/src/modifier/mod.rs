@@ -190,7 +190,7 @@ where
 pub(crate) fn modifier_debug_enabled() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some()
+        cranpose_core::env_flag!("COMPOSE_DEBUG_MODIFIERS")
     }
     #[cfg(target_arch = "wasm32")]
     {

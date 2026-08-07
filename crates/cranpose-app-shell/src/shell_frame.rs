@@ -60,8 +60,7 @@ fn log_frame_stage_telemetry(
 }
 
 fn render_phase_dirty_diagnostics_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RENDER_PHASE_DIRTY_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_RENDER_PHASE_DIRTY_DIAG")
 }
 
 struct RenderPhaseDirtyDiagnostics<'a> {
@@ -456,7 +455,7 @@ where
         // scene update patches only the dirty subtrees, so every structural
         // parent must be in scope or a removed subtree's layers stay in the
         // persistent render graph and keep compositing (the cross-tab ghost).
-        let structural_parents = if std::env::var_os("CRANPOSE_DISABLE_STRUCTURAL_DIRT").is_some() {
+        let structural_parents = if cranpose_core::env_flag!("CRANPOSE_DISABLE_STRUCTURAL_DIRT") {
             Vec::new()
         } else if let Some(root) = self.composition.root() {
             self.composition

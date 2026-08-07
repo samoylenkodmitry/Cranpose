@@ -652,7 +652,7 @@ fn should_check_chain_integrity() -> bool {
 
     #[cfg(not(debug_assertions))]
     {
-        std::env::var_os("CRANPOSE_ASSERT_STATE_CHAIN").is_some()
+        crate::env_flag!("CRANPOSE_ASSERT_STATE_CHAIN")
     }
 }
 

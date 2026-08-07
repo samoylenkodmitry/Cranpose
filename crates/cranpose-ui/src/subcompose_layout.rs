@@ -22,7 +22,7 @@ use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabiliti
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
 
 fn subcompose_telemetry_enabled() -> bool {
-    std::env::var_os("CRANPOSE_SUBCOMPOSE_TELEMETRY").is_some()
+    cranpose_core::env_flag!("CRANPOSE_SUBCOMPOSE_TELEMETRY")
 }
 
 /// Representation of a subcomposed child that can later be measured by the policy.
