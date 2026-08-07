@@ -2265,6 +2265,7 @@ fn rasterize_text_to_image_impl(
 
     let font = font_ref.font;
     let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);
@@ -2284,6 +2285,7 @@ fn rasterize_text_to_image_impl(
                 first_baseline_y,
                 origin_x,
                 origin_y,
+                letter_spacing,
                 static_text_motion,
                 raster_style,
                 weight_synthesis,
@@ -2315,6 +2317,7 @@ fn rasterize_text_to_image_impl(
         first_baseline_y,
         origin_x,
         origin_y,
+        letter_spacing,
         static_text_motion,
         raster_style,
         weight_synthesis,
@@ -2434,6 +2437,7 @@ fn draw_text_segment_solid_to_rgba(
         .unwrap_or(TextMotion::Static)
         == TextMotion::Static;
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2455,6 +2459,7 @@ fn draw_text_segment_solid_to_rgba(
         first_baseline_y,
         origin_x,
         0.0,
+        letter_spacing,
         text_motion_static,
         raster_style,
         weight_synthesis,
@@ -2500,6 +2505,7 @@ fn collect_text_segment_solid_atlas_glyphs(
     }
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2517,6 +2523,7 @@ fn collect_text_segment_solid_atlas_glyphs(
         first_baseline_y,
         origin_x,
         0.0,
+        letter_spacing,
         true,
         GlyphRasterStyle::Fill,
         weight_synthesis,
@@ -2584,6 +2591,7 @@ fn collect_text_segment_cached_solid_atlas_placements(
     }
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2601,6 +2609,7 @@ fn collect_text_segment_cached_solid_atlas_placements(
         first_baseline_y,
         origin_x,
         0.0,
+        letter_spacing,
         GlyphRasterStyle::Fill,
         weight_synthesis,
         style_synthesis,
@@ -2657,6 +2666,7 @@ fn collect_text_segment_solid_atlas_run(
     }
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
+    let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2674,6 +2684,7 @@ fn collect_text_segment_solid_atlas_run(
         first_baseline_y,
         origin_x,
         0.0,
+        letter_spacing,
         GlyphRasterStyle::Fill,
         weight_synthesis,
         style_synthesis,
@@ -3489,6 +3500,7 @@ fn visit_text_glyph_masks(
     first_baseline_y: f32,
     origin_x: f32,
     origin_y: f32,
+    letter_spacing: f32,
     static_text_motion: bool,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
@@ -3506,7 +3518,7 @@ fn visit_text_glyph_masks(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id);
+                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3555,6 +3567,7 @@ fn visit_text_glyph_masks_with_key(
     first_baseline_y: f32,
     origin_x: f32,
     origin_y: f32,
+    letter_spacing: f32,
     static_text_motion: bool,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
@@ -3576,7 +3589,7 @@ fn visit_text_glyph_masks_with_key(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id);
+                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3615,6 +3628,7 @@ fn visit_cached_text_glyph_atlas_placements(
     first_baseline_y: f32,
     origin_x: f32,
     origin_y: f32,
+    letter_spacing: f32,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
     style_synthesis: TextStyleSynthesis,
@@ -3631,7 +3645,7 @@ fn visit_cached_text_glyph_atlas_placements(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id);
+                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);
@@ -3676,6 +3690,7 @@ fn visit_text_glyph_atlas_run(
     first_baseline_y: f32,
     origin_x: f32,
     origin_y: f32,
+    letter_spacing: f32,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
     style_synthesis: TextStyleSynthesis,
@@ -3693,7 +3708,7 @@ fn visit_text_glyph_atlas_run(
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
             if let Some(previous_id) = previous {
-                caret_x += scaled_font.kern(previous_id, glyph_id);
+                caret_x += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
             }
             let glyph = glyph_id.with_scale_and_position(scale, point(caret_x, baseline_y));
             caret_x += scaled_font.h_advance(glyph_id);

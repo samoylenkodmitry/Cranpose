@@ -254,3 +254,36 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
         "cap-height ink ends at {ink_bottom}, reported baseline is {baseline}"
     );
 }
+
+#[test]
+fn letter_spacing_moves_the_glyphs_it_widened_the_block_for() {
+    // A style that measures wide and draws narrow leaves centred text visibly
+    // off-centre, because the caller centres the box measurement reported.
+    let plain = TextStyle::new(20.0);
+    let tracked = TextStyle::new(20.0).with_letter_spacing(5.0);
+    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let mut spans = |style: &TextStyle| {
+        let (rect, ui_style) = measured_block((0.0, 0.0), "ORBIT", style);
+        let run = collect(rect, "ORBIT", &ui_style, style, &mut cache);
+        let ink = run
+            .iter()
+            .map(|glyph| {
+                let placement = glyph.placement();
+                placement.x as f32 + placement.width as f32
+            })
+            .fold(0.0_f32, f32::max);
+        (rect.width, ink)
+    };
+
+    let (plain_width, plain_ink) = spans(&plain);
+    let (tracked_width, tracked_ink) = spans(&tracked);
+
+    let gaps = "ORBIT".chars().count() as f32 - 1.0;
+    assert!((tracked_width - plain_width - gaps * 5.0).abs() < 0.5);
+    assert!(
+        (tracked_ink - plain_ink - gaps * 5.0).abs() < 2.0,
+        "ink grew by {} where the block grew by {}",
+        tracked_ink - plain_ink,
+        tracked_width - plain_width
+    );
+}
