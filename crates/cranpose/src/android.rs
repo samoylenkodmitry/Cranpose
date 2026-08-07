@@ -839,8 +839,8 @@ where
     )?;
 
     if app_shell.is_none() {
-        let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
-        let mut renderer = WgpuRenderer::new(fonts);
+        let fonts = settings.resolve_font_set();
+        let mut renderer = WgpuRenderer::with_font_set(fonts);
         renderer.init_gpu(
             setup.resources.device.clone(),
             setup.resources.queue.clone(),
