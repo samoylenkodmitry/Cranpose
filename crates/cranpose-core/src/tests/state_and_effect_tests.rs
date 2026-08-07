@@ -1582,6 +1582,85 @@ fn draining_callbacks_clears_needs_frame() {
     assert!(!runtime.needs_frame());
 }
 
+/// A future that parks on the first poll and is only ever resumed by waking
+/// the `Waker` it hands back, standing in for an effect waiting on a back
+/// gesture, a network reply, or any other off-frame event.
+struct ParkOnce {
+    waker: Rc<RefCell<Option<std::task::Waker>>>,
+    parked: bool,
+}
+
+impl std::future::Future for ParkOnce {
+    type Output = ();
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        if self.parked {
+            return std::task::Poll::Ready(());
+        }
+        self.parked = true;
+        *self.waker.borrow_mut() = Some(cx.waker().clone());
+        std::task::Poll::Pending
+    }
+}
+
+#[test]
+fn a_parked_task_stops_asking_for_frames() {
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let handle = runtime.handle();
+    let waker: Rc<RefCell<Option<std::task::Waker>>> = Rc::new(RefCell::new(None));
+
+    handle.spawn_ui(ParkOnce {
+        waker: waker.clone(),
+        parked: false,
+    });
+    assert!(
+        runtime.needs_frame(),
+        "a freshly spawned task has not been polled yet, so it is runnable"
+    );
+
+    handle.drain_ui();
+    assert!(
+        !runtime.needs_frame(),
+        "a task parked on something other than the frame clock must not keep \
+         the display running; this is what let one long-lived effect pin an \
+         idle app at 60 frames a second"
+    );
+
+    let parked = waker.borrow_mut().take().expect("the task parked");
+    parked.wake();
+    assert!(
+        runtime.needs_frame(),
+        "waking the task makes it runnable again"
+    );
+
+    handle.drain_ui();
+    assert!(
+        !runtime.needs_frame(),
+        "and once it has run to completion nothing is pending"
+    );
+}
+
+#[test]
+fn a_task_awaiting_a_frame_still_asks_for_frames() {
+    let runtime = Runtime::new(Arc::new(TestScheduler));
+    let handle = runtime.handle();
+    let clock = runtime.frame_clock();
+
+    handle.spawn_ui(async move {
+        clock.next_frame().await;
+    });
+    handle.drain_ui();
+
+    assert!(
+        runtime.needs_frame(),
+        "awaiting the frame clock registers a frame callback, which is an \
+         honest reason to keep the display running"
+    );
+}
+
 #[composable]
 fn frame_callback_node(events: Rc<RefCell<Vec<&'static str>>>) -> NodeId {
     let runtime = cranpose_core::with_current_composer(|composer| composer.runtime_handle());
