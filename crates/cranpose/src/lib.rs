@@ -50,6 +50,8 @@ mod android_surface;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_text_input;
 #[cfg(all(feature = "android", target_os = "android"))]
+mod android_vsync;
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod launcher;
 mod native_window;

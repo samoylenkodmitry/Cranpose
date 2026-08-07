@@ -563,6 +563,9 @@ struct PendingHostWindowSizeRequest {
 struct AndroidFrameDriver {
     need_frame: Arc<AtomicBool>,
     app_waker: android_activity::AndroidAppWaker,
+    /// The thread running the frame loop, so a request raised *by* the loop can
+    /// be told apart from one raised by a worker. Only the latter needs a wake.
+    loop_thread: std::thread::ThreadId,
     next_deadline: Cell<Option<web_time::Instant>>,
 }
 
@@ -571,11 +574,46 @@ impl AndroidFrameDriver {
         Self {
             need_frame: Arc::new(AtomicBool::new(false)),
             app_waker,
+            loop_thread: std::thread::current().id(),
             next_deadline: Cell::new(None),
         }
     }
 
+    /// Raises a frame request, waking the looper only when the request came
+    /// from somewhere other than the frame loop itself.
+    ///
+    /// A request raised on the loop's own thread - the shell re-arming its
+    /// frame callback, an input handler, an effect resuming inside `update` -
+    /// is picked up by the very iteration that raised it. Waking the looper for
+    /// it leaves a byte in `android-activity`'s wake pipe that makes the next
+    /// poll return instantly, which cancels the vsync wait the loop was about
+    /// to enter and turns an idle app into a busy loop.
+    fn raise_frame_request(
+        need_frame: &AtomicBool,
+        app_waker: &android_activity::AndroidAppWaker,
+        loop_thread: std::thread::ThreadId,
+    ) {
+        need_frame.store(true, Ordering::Relaxed);
+        if std::thread::current().id() != loop_thread {
+            app_waker.wake();
+        }
+    }
+
     fn frame_waker(&self) -> impl Fn() + Send + Sync + 'static {
+        let need_frame = self.need_frame.clone();
+        let app_waker = self.app_waker.clone();
+        let loop_thread = self.loop_thread;
+        move || Self::raise_frame_request(&need_frame, &app_waker, loop_thread)
+    }
+
+    /// The waker for the display's own frame callback, which always wakes.
+    ///
+    /// The choreographer delivers on the looper of the thread that posted, so
+    /// this fires on the frame loop's thread - and it is the one same-thread
+    /// request that must *not* be folded into the current iteration, because
+    /// the loop is asleep waiting for exactly this and has no iteration left to
+    /// fold it into.
+    fn vsync_waker(&self) -> impl Fn() + Send + Sync + 'static {
         let need_frame = self.need_frame.clone();
         let app_waker = self.app_waker.clone();
         move || {
@@ -599,8 +637,7 @@ impl AndroidFrameDriver {
 
 impl PlatformFrameDriver for AndroidFrameDriver {
     fn request_frame(&self) {
-        self.need_frame.store(true, Ordering::Relaxed);
-        self.app_waker.wake();
+        Self::raise_frame_request(&self.need_frame, &self.app_waker, self.loop_thread);
     }
 
     fn request_wake_at(&self, deadline: web_time::Instant) {
@@ -1029,7 +1066,7 @@ fn create_android_gpu_resources(
         required_features: wgpu::Features::empty(),
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
+        memory_hints: crate::gpu_limits::mobile_memory_hints(),
         trace: wgpu::Trace::Off,
     }))?;
 
@@ -1399,6 +1436,7 @@ pub fn run(
     log::info!("Starting Compose Android Application");
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
+    crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
@@ -1477,7 +1515,18 @@ pub fn run(
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
         } else if android_frame_driver.frame_requested() {
-            Some(Duration::ZERO)
+            // A frame request is satisfied at the next vsync, not immediately.
+            // Spinning here is only invisible while every iteration ends in a
+            // blocking `Fifo` present; the moment the loop starts skipping
+            // presents for frames identical to the one on screen, a zero poll
+            // turns an idle app into a busy loop. Fall back to the zero poll
+            // when the display cannot wake us, so a device without a
+            // choreographer keeps the behaviour it had.
+            if crate::android_vsync::request_wake_at_next_vsync() {
+                idle_timeout
+            } else {
+                Some(Duration::ZERO)
+            }
         } else {
             idle_timeout
         };

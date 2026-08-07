@@ -1133,6 +1133,10 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         // android_purchase_wire.rs.
         "android_purchases.rs",
         "android_text_input.rs",
+        // One `AChoreographer_postFrameCallback64` and the callback it posts,
+        // which is how the frame loop learns when the display is ready for the
+        // next frame.
+        "android_vsync.rs",
         "android_writable_folder.rs",
         "ios_file_picker.rs",
         "ios_uri_handler.rs",
@@ -1318,6 +1322,10 @@ fn workspace_ffi_boundaries_are_explicit() {
         // android_purchase_wire.rs, which is built and tested on the host.
         "crates/cranpose/src/android_purchases.rs",
         "crates/cranpose/src/android_text_input.rs",
+        // One `AChoreographer_postFrameCallback64` and the callback it posts,
+        // which is how the frame loop learns when the display is ready for the
+        // next frame.
+        "crates/cranpose/src/android_vsync.rs",
         "crates/cranpose/src/android_writable_folder.rs",
         "crates/cranpose/src/ios_file_picker.rs",
         "crates/cranpose/src/ios_uri_handler.rs",
