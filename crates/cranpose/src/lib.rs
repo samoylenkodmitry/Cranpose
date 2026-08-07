@@ -28,6 +28,17 @@ mod android_jni;
 /// Built on the host as well so its decoding tests run everywhere.
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_launch_args;
+/// The Play Billing wire format behind `cranpose_services::purchases`. Built on
+/// the host as well so its decoding tests run everywhere.
+#[cfg(any(test, all(feature = "android", feature = "playbilling", target_os = "android")))]
+mod android_purchase_wire;
+#[cfg(all(
+    feature = "android",
+    feature = "playbilling",
+    feature = "renderer-wgpu",
+    target_os = "android"
+))]
+mod android_purchases;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_keyboard;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]

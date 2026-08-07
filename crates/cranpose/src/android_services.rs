@@ -45,7 +45,7 @@ static PENDING_LAUNCH_ARGS: Mutex<Option<String>> = Mutex::new(None);
 /// Wakes the native event loop so parked signals are applied promptly.
 static LOOP_WAKER: OnceLock<Mutex<Option<android_activity::AndroidAppWaker>>> = OnceLock::new();
 
-fn wake_native_loop() {
+pub(crate) fn wake_native_loop() {
     if let Some(waker) = LOOP_WAKER.get() {
         if let Ok(waker) = waker.lock() {
             if let Some(waker) = waker.as_ref() {
@@ -70,6 +70,13 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
     // before the native thread starts, so reading it here is deterministic,
     // whereas a push would race the thread that consumes it.
     set_platform_launch_args(Rc::new(read_launch_arguments(&app)));
+    #[cfg(feature = "playbilling")]
+    {
+        // Unlike audio, Play Billing needs the activity: the payment sheet is
+        // an activity result, so the backend keeps the handle and passes it to
+        // the Java bridge on every call.
+        crate::android_purchases::register(app.clone());
+    }
     #[cfg(feature = "audio")]
     {
         // AAudio is a pure-NDK API, so the engine needs nothing from the

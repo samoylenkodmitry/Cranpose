@@ -109,6 +109,13 @@ robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cran
 # framework and compiles a Swift shim, which an app that sells nothing should
 # not pay for. Harmless to enable on non-Apple targets — it compiles away.
 storekit = ["dep:cranpose-storekit"]
+# In-app purchases through Google Play Billing on Android and Wear OS,
+# registered into `cranpose_services::purchases`. Off by default: the bridge
+# expects the app's Gradle build to add the Play Billing dependency and the
+# `crates/cranpose/android/java-billing` source directory, which an app that
+# sells nothing should not carry. Harmless to enable on other targets — the
+# whole backend is Android-only and compiles away.
+playbilling = []
 
 [dependencies]
 cranpose-app-shell = { workspace = true }

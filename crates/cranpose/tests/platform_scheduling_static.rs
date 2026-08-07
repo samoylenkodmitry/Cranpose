@@ -507,6 +507,54 @@ fn android_launch_arguments_reach_the_service_registry() {
 }
 
 #[test]
+fn android_play_billing_reaches_the_purchase_registry() {
+    let services_source = crate_source("src/android_services.rs");
+    let backend_source = crate_source("src/android_purchases.rs");
+    let wire_source = crate_source("src/android_purchase_wire.rs");
+    let java_source = workspace_source(
+        "crates/cranpose/android/java-billing/dev/cranpose/android/CranposeBilling.java",
+    );
+
+    assert!(
+        services_source.contains("crate::android_purchases::register(app.clone())"),
+        "the Android backend should install the Play Billing purchase backend alongside the other platform services"
+    );
+    assert!(
+        backend_source.contains("set_platform_purchases(Rc::new(AndroidPurchases { app }))")
+            && backend_source.contains("load_cranpose_java_class(env, &activity, BILLING_CLASS)"),
+        "the Play Billing backend should reach its Java bridge through the activity class loader and register itself into cranpose_services::purchases"
+    );
+    assert!(
+        backend_source.contains("jni_str!(\"cranposeBillingConfigure\")")
+            && backend_source.contains("jni_str!(\"cranposeBillingPurchase\")")
+            && backend_source.contains("jni_str!(\"cranposeBillingRestore\")"),
+        "querying products, buying and restoring should each be one non-blocking JNI call into the Java bridge"
+    );
+    assert!(
+        backend_source
+            .contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot")
+            && backend_source.contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent")
+            && backend_source.contains("wake_native_loop()"),
+        "store answers arrive on Play Billing worker threads and must be parked for the native loop, which is woken so the frame that reads them happens"
+    );
+    assert!(
+        wire_source.contains("pub(crate) fn decode_store_snapshot")
+            && wire_source.contains("pub(crate) fn decode_purchase_event"),
+        "the Play Billing wire format should be decoded in safe Rust, outside the JNI boundary"
+    );
+    assert!(
+        java_source.contains("private static native void nativeBillingSnapshot(String payload);")
+            && java_source.contains("activity.runOnUiThread")
+            && java_source.contains("client.launchBillingFlow(activity, flow)"),
+        "the Java bridge should flatten the whole store snapshot into one JNI call and launch the payment sheet on the Java UI thread"
+    );
+    assert!(
+        java_source.contains("acknowledgePurchase"),
+        "Play refunds an unacknowledged purchase, so the bridge must acknowledge every entitlement it sees"
+    );
+}
+
+#[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");
 
@@ -1079,6 +1127,11 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
+        // The Play Billing bridge: the exported symbols
+        // `dev.cranpose.android.CranposeBilling` calls back through. Decoding
+        // what they carry lives in safe Rust next door, in
+        // android_purchase_wire.rs.
+        "android_purchases.rs",
         "android_text_input.rs",
         "android_writable_folder.rs",
         "ios_file_picker.rs",
@@ -1259,6 +1312,11 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
+        // The Play Billing bridge: the exported symbols
+        // `dev.cranpose.android.CranposeBilling` calls back through, and
+        // nothing else. Decoding the payloads they carry lives in safe Rust in
+        // android_purchase_wire.rs, which is built and tested on the host.
+        "crates/cranpose/src/android_purchases.rs",
         "crates/cranpose/src/android_text_input.rs",
         "crates/cranpose/src/android_writable_folder.rs",
         "crates/cranpose/src/ios_file_picker.rs",
