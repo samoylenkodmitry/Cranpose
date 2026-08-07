@@ -1802,6 +1802,26 @@ fn one_shot_frame_request_content() {
     );
 }
 
+/// A game loop with nothing to say: it holds a frame await open forever and
+/// never writes state. Ticking it is mandatory; presenting it is waste.
+#[composable]
+fn silent_frame_loop_content() {
+    launched_effect_async_impl(
+        location_key(file!(), line!(), column!()),
+        (),
+        move |scope| {
+            Box::pin(async move {
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    let _ = clock.next_frame().await;
+                }
+            })
+        },
+    );
+
+    Text("Still", Modifier::empty(), TextStyle::default());
+}
+
 #[composable]
 fn continuous_frame_request_tab() {
     let tick = useState(|| 0u32);
@@ -4835,6 +4855,50 @@ fn first_update_after_construction_reports_no_visual_work() {
         rebuilds.get(),
         1,
         "the first update must not rebuild the already-built scene"
+    );
+}
+
+#[test]
+fn an_open_frame_await_asks_for_ticks_but_not_for_pixels() {
+    // `needs_update` and `needs_redraw` used to be the same predicate, because
+    // both ended in `Composition::should_render`. An app holding a frame await
+    // open - every game loop, every polling effect - therefore reported
+    // "redraw needed" on every frame forever, and a platform present gate built
+    // from it presented a byte-identical frame 60 times a second on a screen
+    // that was standing perfectly still.
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let mut shell = AppShell::new(
+        CountingRenderer::new(Rc::clone(&rebuilds)),
+        root_key,
+        silent_frame_loop_content,
+    );
+
+    // Let the effect start and park on its first await.
+    for _ in 0..3 {
+        shell.update();
+    }
+    rebuilds.set(0);
+
+    let result = shell.update();
+
+    assert!(
+        shell.needs_update(),
+        "an armed frame callback still owes the app a tick"
+    );
+    assert!(
+        !result.visual_changed,
+        "a frame loop that writes no state changes no pixels"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "and so must not ask the platform to present a frame identical to the last"
+    );
+    assert_eq!(
+        rebuilds.get(),
+        0,
+        "a silent tick must not rebuild the scene"
     );
 }
 

@@ -648,8 +648,16 @@ where
         })
     }
 
-    fn needs_ui_update_in_context(&self) -> bool {
-        if self.is_dirty
+    /// The invalidations that mean the pixels on screen are stale.
+    ///
+    /// Every one of these ends in a scene rebuild, so every one of them is a
+    /// reason to put a new frame on the display. Deliberately *excludes*
+    /// [`Composition::should_render`]: an armed frame callback means the
+    /// composition owes the app a tick, which is not the same as owing the
+    /// display a frame, and conflating the two is what made
+    /// [`Self::needs_redraw`] indistinguishable from [`Self::needs_update`].
+    fn has_stale_pixels_in_context(&self) -> bool {
+        self.is_dirty
             || self.layout_requested
             || self.scene_dirty
             || peek_render_invalidation()
@@ -661,11 +669,10 @@ where
             || cranpose_ui::has_pending_draw_repasses()
             || has_pending_pointer_repasses()
             || has_pending_focus_invalidations()
-        {
-            return true;
-        }
+    }
 
-        self.composition.should_render()
+    fn needs_ui_update_in_context(&self) -> bool {
+        self.has_stale_pixels_in_context() || self.composition.should_render()
     }
 
     pub fn needs_update(&self) -> bool {
@@ -673,12 +680,22 @@ where
         app_context.enter(|| self.needs_ui_update_in_context())
     }
 
-    /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
+    /// Returns true if the shell owes the display a frame: stale pixels, or a
+    /// renderer that has not warmed its swapchain yet.
+    ///
+    /// An app that merely holds an open `next_frame()` await - a game loop, a
+    /// polling effect - keeps [`Self::needs_update`] true forever without
+    /// changing a single pixel. Such an app must still be *ticked* every frame,
+    /// but the frame it produces is byte-identical to the last one, and
+    /// presenting it costs a full swapchain rotation and pins the panel at its
+    /// maximum refresh rate. Callers pair this with
+    /// [`FrameUpdateResult::visual_changed`] from the update they just ran,
+    /// which reports the work that update actually did.
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {
         let app_context = Rc::clone(&self.app_context);
         app_context
-            .enter(|| self.needs_ui_update_in_context() || self.renderer.needs_frame_warmup())
+            .enter(|| self.has_stale_pixels_in_context() || self.renderer.needs_frame_warmup())
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
