@@ -202,6 +202,10 @@ fn layer_contains_gpu_effect_text_primitives(layer: &LayerNode) -> bool {
 fn draw_primitive_is_pixel_sensitive(draw: &cranpose_ui_graphics::DrawPrimitive) -> bool {
     match draw {
         cranpose_ui_graphics::DrawPrimitive::Image { .. } => true,
+        // Glyph coverage masks resample as badly as an image does — a text
+        // node without a local surface marks its layer pixel-stable for the
+        // same reason.
+        cranpose_ui_graphics::DrawPrimitive::Text(_) => true,
         cranpose_ui_graphics::DrawPrimitive::Blend { primitive, .. } => {
             draw_primitive_is_pixel_sensitive(primitive)
         }
@@ -1130,19 +1134,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_layer_drawing_scope_text_snaps_as_rigidly_as_one_holding_a_text_node() {
-        // Glyph masks are rasterized on the pixel grid either way; a canvas that
-        // draws its own text has exactly the same crispness requirement as a
-        // `Text` composable.
+    fn scope_text_layer() -> LayerNode {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
             width: 120.0,
             height: 40.0,
         });
-        assert!(!layer_needs_rigid_snap(&layer, false));
-
         layer.children.push(RenderNode::Primitive(PrimitiveEntry {
             phase: PrimitivePhase::BeforeChildren,
             node: PrimitiveNode::Draw(DrawPrimitiveNode {
@@ -1160,6 +1158,32 @@ mod tests {
                 clip: None,
             }),
         }));
-        assert!(layer_needs_rigid_snap(&layer, false));
+        layer
+    }
+
+    #[test]
+    fn scope_text_marks_its_layer_pixel_stable_like_a_text_node_does() {
+        let requirements = layer_surface_requirements(&scope_text_layer());
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(!requirements.has_isolating_requirement());
+    }
+
+    #[test]
+    fn a_layer_drawing_scope_text_snaps_as_rigidly_as_one_holding_a_text_node() {
+        // Glyph masks are rasterized on the pixel grid either way; a canvas that
+        // draws its own text has exactly the same crispness requirement as a
+        // `Text` composable.
+        assert!(!layer_needs_rigid_snap(
+            &test_layer(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 40.0,
+            }),
+            false
+        ));
+        assert!(layer_needs_rigid_snap(&scope_text_layer(), false));
     }
 }
