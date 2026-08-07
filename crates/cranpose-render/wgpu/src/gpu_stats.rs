@@ -788,6 +788,48 @@ pub(crate) fn gpu_stats_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// Prints the backend allocator's block/allocation report on the same cadence
+/// as the per-frame counters.
+///
+/// The other counters measure what the renderer *asked for*; this one measures
+/// what the driver is actually holding. Vulkan and D3D12 sub-allocate every
+/// buffer and texture out of large device-memory blocks whose size comes from
+/// `wgpu::MemoryHints`, so a renderer that has asked for a couple of megabytes
+/// can still be sitting on a block tens of megabytes wide. That reserved-but-
+/// unused remainder is invisible to every other counter here and to
+/// `wgpu::Device`'s own `Counters`, but it is exactly what Android's
+/// `gpu_mem`/`dumpsys meminfo` attribute to the process — so when the two
+/// disagree, this line is the one that explains the gap.
+///
+/// `generate_allocator_report()` returns `None` on backends that do not
+/// sub-allocate through `gpu-allocator` (GL, Metal, WebGPU), where the blocks
+/// this line exists to expose do not exist either.
+pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
+    let Some(report) = device.generate_allocator_report() else {
+        return;
+    };
+
+    const MB: f64 = 1024.0 * 1024.0;
+    let mut blocks = String::new();
+    for block in &report.blocks {
+        if !blocks.is_empty() {
+            blocks.push('+');
+        }
+        blocks.push_str(&format!("{:.1}", block.size as f64 / MB));
+    }
+
+    eprintln!(
+        "[GPU-MEM f#{}] reserved={:.1}MB allocated={:.1}MB blocks={}[{}MB] allocations={} | largest={:.6?}",
+        frame_count,
+        report.total_reserved_bytes as f64 / MB,
+        report.total_allocated_bytes as f64 / MB,
+        report.blocks.len(),
+        blocks,
+        report.allocations.len(),
+        report,
+    );
+}
+
 fn shadow_cache_diagnostics_enabled() -> bool {
     std::env::var("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))

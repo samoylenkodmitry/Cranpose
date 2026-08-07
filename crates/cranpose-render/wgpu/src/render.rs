@@ -166,8 +166,19 @@ const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES: usize = 2;
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS: usize = 160;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS: usize = 160;
-const TEXT_GLYPH_ATLAS_WIDTH: u32 = 4096;
-const TEXT_GLYPH_ATLAS_HEIGHT: u32 = 4096;
+/// Side length the glyph atlas starts at, and the one it doubles towards.
+///
+/// The atlas is square and `R8Unorm`, so the maximum is a 16 MiB texture. That
+/// was also the starting size until it became the single largest resource the
+/// renderer allocated: a 454x454 watch face draws a couple of hundred distinct
+/// glyphs and needs well under a megabyte of them, but paid the full 16 MiB at
+/// renderer construction, before a single glyph had been rastered. Starting at
+/// `MIN` and doubling on overflow (see `TextGlyphAtlas::reset`) costs at most
+/// three extra resets for a workload that genuinely needs the large atlas —
+/// which then behaves exactly as the fixed 4096 atlas did — and costs a
+/// text-light screen 256 KiB instead of 16 MiB, permanently.
+const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
+const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
 const TEXT_GLYPH_ATLAS_PADDING: u32 = 1;
 const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
 const MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER: usize = 2;
@@ -746,6 +757,7 @@ fn shape_draw_is_visible_in_viewport(
 fn cached_text_glyph_quad(
     glyph: &SoftwareGlyphAtlasPlacement,
     entry: GlyphAtlasEntry,
+    atlas_size: u32,
 ) -> CachedTextGlyphQuad {
     CachedTextGlyphQuad {
         x: glyph.x,
@@ -758,7 +770,7 @@ fn cached_text_glyph_quad(
             glyph.color.2.clamp(0.0, 1.0),
             glyph.color.3.clamp(0.0, 1.0),
         ),
-        uv: glyph_atlas_uv_rect(entry),
+        uv: glyph_atlas_uv_rect(entry, atlas_size),
     }
 }
 
@@ -1475,12 +1487,32 @@ struct GlyphAtlasEntry {
     height: u32,
 }
 
+/// Side length the glyph atlas should be rebuilt at after it overflowed at
+/// `current`: one doubling, never past `max`.
+///
+/// Doubling (rather than jumping straight to `max`) is what makes the atlas
+/// cost track the workload: an app that overflows once needs a little more
+/// room, not sixteen times more.
+fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
+    current.saturating_mul(2).clamp(1, max.max(1))
+}
+
 struct TextGlyphAtlas {
     texture: wgpu::Texture,
     _view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
     generation: u64,
+    /// Side length of `texture`, between `TEXT_GLYPH_ATLAS_MIN_SIZE` and the
+    /// device's ceiling. Every UV is normalised against it, so it has to travel
+    /// with the atlas rather than be read back off a constant.
+    size: u32,
+    /// Largest side length this atlas may grow to: the smaller of
+    /// `TEXT_GLYPH_ATLAS_MAX_SIZE` and what the device grants. Mobile devices
+    /// are requested `downlevel_defaults()` limits raised by `using_resolution`,
+    /// so a device that only offers 2048 would otherwise fail to create the
+    /// texture outright.
+    max_size: u32,
     cursor_x: u32,
     cursor_y: u32,
     row_height: u32,
@@ -1492,8 +1524,11 @@ impl TextGlyphAtlas {
         device: &wgpu::Device,
         image_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
+        size: u32,
     ) -> Self {
-        let texture = Self::create_texture(device);
+        let max_size = TEXT_GLYPH_ATLAS_MAX_SIZE.min(device.limits().max_texture_dimension_2d);
+        let size = size.clamp(TEXT_GLYPH_ATLAS_MIN_SIZE.min(max_size), max_size);
+        let texture = Self::create_texture(device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Text Glyph Atlas Bind Group"),
@@ -1515,6 +1550,8 @@ impl TextGlyphAtlas {
             bind_group,
             entries: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_GLYPH_ATLAS_ITEMS),
             generation: 0,
+            size,
+            max_size,
             cursor_x: TEXT_GLYPH_ATLAS_PADDING,
             cursor_y: TEXT_GLYPH_ATLAS_PADDING,
             row_height: 0,
@@ -1522,12 +1559,12 @@ impl TextGlyphAtlas {
         }
     }
 
-    fn create_texture(device: &wgpu::Device) -> wgpu::Texture {
+    fn create_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Text Glyph Atlas Texture"),
             size: wgpu::Extent3d {
-                width: TEXT_GLYPH_ATLAS_WIDTH,
-                height: TEXT_GLYPH_ATLAS_HEIGHT,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1539,6 +1576,21 @@ impl TextGlyphAtlas {
         })
     }
 
+    /// Throws every cached glyph away and starts over on a texture one doubling
+    /// larger, up to [`TextGlyphAtlas::max_size`].
+    ///
+    /// `allocate` is a one-way shelf cursor with no compaction, so the only
+    /// recovery from a full atlas is to start again — and starting again at the
+    /// same size makes a workload whose live glyph set genuinely does not fit
+    /// re-raster every glyph every frame. Treating each overflow as the signal
+    /// to double means the atlas converges on the size the workload actually
+    /// needs: a text-heavy screen reaches the old fixed 4096 after at most three
+    /// resets and behaves identically from then on, while a watch face that
+    /// never overflows never pays for space it will not use.
+    ///
+    /// Bumping the generation is what invalidates the cached glyph runs, whose
+    /// UVs are normalised against the previous size and would otherwise sample
+    /// the wrong part of the new texture.
     fn reset(
         &mut self,
         device: &wgpu::Device,
@@ -1546,13 +1598,18 @@ impl TextGlyphAtlas {
         sampler: &wgpu::Sampler,
     ) {
         let generation = self.generation.wrapping_add(1);
-        let mut next = Self::new(device, image_layout, sampler);
+        let grown = next_glyph_atlas_size(self.size, self.max_size);
+        let mut next = Self::new(device, image_layout, sampler, grown);
         next.generation = generation;
         *self = next;
     }
 
     fn generation(&self) -> u64 {
         self.generation
+    }
+
+    fn size(&self) -> u32 {
+        self.size
     }
 
     fn entry(&mut self, key: &SoftwareGlyphAtlasKey) -> Option<GlyphAtlasEntry> {
@@ -1562,13 +1619,13 @@ impl TextGlyphAtlas {
     fn allocate(&mut self, width: u32, height: u32) -> Option<GlyphAtlasEntry> {
         if width == 0
             || height == 0
-            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_WIDTH
-            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_HEIGHT
+            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
+            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
         {
             return None;
         }
 
-        if self.cursor_x + width + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_WIDTH {
+        if self.cursor_x + width + TEXT_GLYPH_ATLAS_PADDING > self.size {
             self.cursor_x = TEXT_GLYPH_ATLAS_PADDING;
             self.cursor_y = self
                 .cursor_y
@@ -1576,7 +1633,7 @@ impl TextGlyphAtlas {
                 .saturating_add(TEXT_GLYPH_ATLAS_PADDING);
             self.row_height = 0;
         }
-        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_HEIGHT {
+        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > self.size {
             return None;
         }
 
@@ -2435,8 +2492,12 @@ impl GpuRenderer {
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
         let image_linear_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Linear));
-        let text_glyph_atlas =
-            TextGlyphAtlas::new(&device, &image_bind_group_layout, &image_nearest_sampler);
+        let text_glyph_atlas = TextGlyphAtlas::new(
+            &device,
+            &image_bind_group_layout,
+            &image_nearest_sampler,
+            TEXT_GLYPH_ATLAS_MIN_SIZE,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -4434,6 +4495,9 @@ impl GpuRenderer {
             &mut self.frame_count,
             self.gpu_stats_enabled,
         );
+        if self.gpu_stats_enabled && self.frame_count.is_multiple_of(60) {
+            gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
+        }
         self.frame_stats.reset();
         let after_stats = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
@@ -7774,7 +7838,15 @@ impl GpuRenderer {
                     continue;
                 }
                 let entry = self.glyph_atlas_entry_for_placement(glyph)?;
-                generated_quads.push(cached_text_glyph_quad(glyph, entry));
+                // Read the size after the entry is in hand: the only path that
+                // resizes the atlas is the overflow reset, which returns `Err`
+                // above, so `entry` is always normalised against the atlas it
+                // was placed in.
+                generated_quads.push(cached_text_glyph_quad(
+                    glyph,
+                    entry,
+                    self.text_glyph_atlas.size(),
+                ));
             }
         } else {
             for run_glyph in collected_run {
@@ -7788,7 +7860,11 @@ impl GpuRenderer {
                     }
                     SoftwareGlyphAtlasRunGlyph::New(glyph) => self.glyph_atlas_entry_for(glyph)?,
                 };
-                generated_quads.push(cached_text_glyph_quad(&placement, entry));
+                generated_quads.push(cached_text_glyph_quad(
+                    &placement,
+                    entry,
+                    self.text_glyph_atlas.size(),
+                ));
             }
         }
 
@@ -9932,9 +10008,13 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
     })
 }
 
-fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry) -> ImageUvRect {
-    let atlas_width = TEXT_GLYPH_ATLAS_WIDTH as f32;
-    let atlas_height = TEXT_GLYPH_ATLAS_HEIGHT as f32;
+/// Normalises an atlas entry against `atlas_size`, the side length of the
+/// texture the entry was placed in. The atlas grows on overflow, so the size
+/// has to be read from the live atlas rather than a constant — a UV computed
+/// against the wrong size samples the wrong glyph.
+fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, atlas_size: u32) -> ImageUvRect {
+    let atlas_width = atlas_size as f32;
+    let atlas_height = atlas_size as f32;
     let min = [entry.x as f32 / atlas_width, entry.y as f32 / atlas_height];
     let max = [
         (entry.x + entry.width) as f32 / atlas_width,
@@ -14793,6 +14873,54 @@ mod tests {
         );
         assert!(146 * std::mem::size_of::<ShapeData>() <= 16384);
         assert!(147 * std::mem::size_of::<ShapeData>() > 16384);
+    }
+
+    #[test]
+    fn glyph_atlas_doubles_on_overflow_and_stops_at_the_device_ceiling() {
+        // Every overflow buys one doubling, so an app that needs the old fixed
+        // 4096 atlas reaches it in three resets and then stays there.
+        assert_eq!(
+            next_glyph_atlas_size(TEXT_GLYPH_ATLAS_MIN_SIZE, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            1024
+        );
+        assert_eq!(
+            next_glyph_atlas_size(2048, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            TEXT_GLYPH_ATLAS_MAX_SIZE
+        );
+        assert_eq!(
+            next_glyph_atlas_size(TEXT_GLYPH_ATLAS_MAX_SIZE, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            TEXT_GLYPH_ATLAS_MAX_SIZE
+        );
+
+        // A device that only grants `downlevel_defaults()`'s 2048 caps the
+        // growth there rather than failing to create the texture.
+        assert_eq!(next_glyph_atlas_size(1024, 2048), 2048);
+        assert_eq!(next_glyph_atlas_size(2048, 2048), 2048);
+
+        // Never zero and never wrapping, whatever the ceiling turns out to be.
+        assert_eq!(next_glyph_atlas_size(u32::MAX, 4096), 4096);
+        assert_eq!(next_glyph_atlas_size(0, 0), 1);
+    }
+
+    #[test]
+    fn glyph_atlas_uv_rect_normalizes_against_the_atlas_it_was_placed_in() {
+        // The atlas grows, so a UV is only meaningful together with the size of
+        // the texture the entry came from. Reading the size off a constant is
+        // what would make a grown atlas sample the wrong glyph.
+        let entry = GlyphAtlasEntry {
+            x: 128,
+            y: 256,
+            width: 16,
+            height: 32,
+        };
+
+        let small = glyph_atlas_uv_rect(entry, 512);
+        let large = glyph_atlas_uv_rect(entry, 4096);
+
+        assert_eq!(small.min, [128.0 / 512.0, 256.0 / 512.0]);
+        assert_eq!(large.min, [128.0 / 4096.0, 256.0 / 4096.0]);
+        assert_eq!(small.max, [144.0 / 512.0, 288.0 / 512.0]);
+        assert_eq!(large.max, [144.0 / 4096.0, 288.0 / 4096.0]);
     }
 
     #[test]
