@@ -57,11 +57,16 @@ impl PlatformEnvironment {
     /// drivers call this inside the shell's root closure.
     pub(crate) fn compose_root(&self, content: impl FnOnce()) {
         let theme = cranpose_services::default_system_theme();
+        // Cloning a shared snapshot handle, not re-reading the launch payload:
+        // the Android backend swaps the whole snapshot when a new intent
+        // arrives, so this picks the replacement up on the next root render.
+        let launch_args = cranpose_services::launch_args();
         cranpose_core::CompositionLocalProvider(
             vec![
                 local_safe_area_insets().provides(self.safe_area.get()),
                 local_ime_insets().provides(self.ime_insets.get()),
                 cranpose_services::local_system_theme().provides(theme),
+                cranpose_services::local_launch_args().provides(launch_args),
             ],
             content,
         );

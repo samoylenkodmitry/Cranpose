@@ -928,6 +928,9 @@ public class CranposeActivity extends NativeActivity {
     /** The user tapped a notification carrying a deep-link. */
     private static native void nativeNotificationAction(String deeplink);
 
+    /** A new launching intent replaced the old one; carries re-encoded extras. */
+    private static native void nativeOnLaunchArguments(String payload);
+
     /** An ACTION_CREATE_DOCUMENT save finished. */
     private static native void nativeOnFileSaved(long token, boolean ok, String error);
 
@@ -1020,6 +1023,9 @@ public class CranposeActivity extends NativeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         dispatchDeeplink(intent);
+        // setIntent above is what makes getIntent() — and therefore the encoder —
+        // report the new extras, mirroring what a Compose activity sees.
+        nativeOnLaunchArguments(cranposeEncodeLaunchArguments());
     }
 
     @Override
@@ -1047,6 +1053,93 @@ public class CranposeActivity extends NativeActivity {
             intent.removeExtra(EXTRA_DEEPLINK);
             nativeNotificationAction(deeplink);
         }
+    }
+
+    /**
+     * Flattens the launching intent's extras for {@code cranpose_services::launch_args}.
+     *
+     * <p>A Cranpose app is a {@link NativeActivity}: it sees neither the environment of
+     * the shell that ran {@code am start} nor the {@link Intent} itself, so debug and
+     * instrumentation flags read from {@code std::env::var} silently return nothing on
+     * device. This is the equivalent of {@code intent.extras.getBoolean(...)} in a
+     * Compose activity — Rust calls it once at startup and it is pushed again from
+     * {@link #onNewIntent}.
+     *
+     * <p>The whole {@link android.os.Bundle} crosses JNI as one string rather than one
+     * call per extra. The first line is {@code 1} or {@code 0} for
+     * {@code ApplicationInfo.FLAG_DEBUGGABLE}; each following line is
+     * {@code <type>\t<name>\t<value>} with {@code type} one of {@code b i l f s}.
+     * Extras Cranpose has no typed API for (arrays, {@code Parcelable}s, nested
+     * bundles) are omitted rather than guessed at.
+     */
+    public String cranposeEncodeLaunchArguments() {
+        StringBuilder payload = new StringBuilder();
+        payload.append(isCranposeDebuggableBuild() ? '1' : '0');
+        Intent intent = getIntent();
+        if (intent == null) {
+            return payload.toString();
+        }
+        Bundle extras;
+        try {
+            extras = intent.getExtras();
+        } catch (RuntimeException error) {
+            // An extra whose class this process cannot unmarshal throws from
+            // getExtras(); losing the launch arguments must not lose the launch.
+            android.util.Log.w("cranpose", "launch intent extras are unreadable", error);
+            return payload.toString();
+        }
+        if (extras == null) {
+            return payload.toString();
+        }
+        for (String name : extras.keySet()) {
+            Object value;
+            try {
+                value = extras.get(name);
+            } catch (RuntimeException error) {
+                continue;
+            }
+            appendLaunchArgument(payload, name, value);
+        }
+        return payload.toString();
+    }
+
+    /** {@code ApplicationInfo.FLAG_DEBUGGABLE} — the gate for app debug options. */
+    private boolean isCranposeDebuggableBuild() {
+        android.content.pm.ApplicationInfo info = getApplicationInfo();
+        return info != null
+                && (info.flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    private static void appendLaunchArgument(StringBuilder payload, String name, Object value) {
+        char kind;
+        String encoded;
+        if (value instanceof Boolean) {
+            kind = 'b';
+            encoded = ((Boolean) value) ? "1" : "0";
+        } else if (value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            kind = 'i';
+            encoded = Integer.toString(((Number) value).intValue());
+        } else if (value instanceof Long) {
+            kind = 'l';
+            encoded = Long.toString((Long) value);
+        } else if (value instanceof Float || value instanceof Double) {
+            // `am start --ed` produces a Double; Cranpose types floats as f32.
+            kind = 'f';
+            encoded = Float.toString(((Number) value).floatValue());
+        } else if (value instanceof CharSequence) {
+            kind = 's';
+            encoded = escapeLaunchArgument(value.toString());
+        } else {
+            return;
+        }
+        payload.append('\n').append(kind).append('\t')
+                .append(escapeLaunchArgument(name)).append('\t').append(encoded);
+    }
+
+    /** Keeps the record separators out of names and values; {@code %} goes first. */
+    private static String escapeLaunchArgument(String value) {
+        return value.replace("%", "%25").replace("\t", "%09")
+                .replace("\n", "%0A").replace("\r", "%0D");
     }
 
     private void installInsetsListener() {

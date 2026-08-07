@@ -464,6 +464,49 @@ fn android_activity_jni_attaches_the_caller_without_recreating_the_vm() {
 }
 
 #[test]
+fn android_launch_arguments_reach_the_service_registry() {
+    let services_source = crate_source("src/android_services.rs");
+    let decoder_source = crate_source("src/android_launch_args.rs");
+    let environment_source = crate_source("src/platform_env.rs");
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+
+    assert!(
+        java_source.contains("public String cranposeEncodeLaunchArguments()")
+            && java_source.contains("ApplicationInfo.FLAG_DEBUGGABLE")
+            && java_source.contains("private static native void nativeOnLaunchArguments(String payload);")
+            && java_source.contains("nativeOnLaunchArguments(cranposeEncodeLaunchArguments());"),
+        "CranposeActivity should encode the launching intent's extras with the debuggable flag and re-push them from onNewIntent; a NativeActivity has no other way to see them"
+    );
+    assert!(
+        java_source.contains("private void loadCranposeNativeLibrary()")
+            && java_source.contains("System.loadLibrary(libraryName)"),
+        "the Java-declared launch-argument callback only resolves because CranposeActivity loads the library itself; libnativeloader does not register it with ART's JNI resolver"
+    );
+    assert!(
+        services_source.contains("jni_str!(\"cranposeEncodeLaunchArguments\")")
+            && services_source
+                .contains("set_platform_launch_args(Rc::new(read_launch_arguments(&app)))"),
+        "the Android backend should pull the launching intent's extras at startup, where getIntent() is already populated, instead of racing a push from onCreate"
+    );
+    assert!(
+        services_source
+            .contains("Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments")
+            && services_source.contains("PENDING_LAUNCH_ARGS")
+            && services_source.contains("shell.request_root_render()"),
+        "onNewIntent extras should be parked for the native loop, which owns the snapshot, and force a root render once applied"
+    );
+    assert!(
+        decoder_source.contains("pub(crate) fn decode_launch_arguments"),
+        "the intent-extra wire format should be decoded in safe Rust, outside the JNI boundary"
+    );
+    assert!(
+        environment_source.contains("local_launch_args().provides(launch_args)"),
+        "the platform environment should publish the launch arguments so composition observes a replacement intent"
+    );
+}
+
+#[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");
 

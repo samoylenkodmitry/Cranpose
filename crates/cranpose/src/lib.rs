@@ -24,6 +24,10 @@ mod android_host_window;
 mod android_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_jni;
+/// The Android intent-extra wire format behind `cranpose_services::launch_args`.
+/// Built on the host as well so its decoding tests run everywhere.
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod android_launch_args;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_keyboard;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
