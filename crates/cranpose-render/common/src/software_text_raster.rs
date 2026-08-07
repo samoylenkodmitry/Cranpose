@@ -1,4 +1,6 @@
-use ab_glyph::{point, Font, FontArc, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont};
+use ab_glyph::{
+    point, Font, FontArc, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont, VariableFont,
+};
 use cranpose_core::hash::default as default_hash;
 use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, Shadow, TextDrawStyle,
@@ -55,9 +57,28 @@ pub struct SoftwareTextFont {
 #[derive(Clone)]
 struct SoftwareTextFontMetadata {
     families: Arc<[String]>,
+    registered_family: Option<FontFamilyKey>,
     weight: FontWeight,
     style: FontStyle,
     ab_glyph_scale_factor: f32,
+}
+
+/// Identity an app-supplied face was registered under.
+///
+/// `FontFamily::FileBacked` and `FontFamily::LoadedTypeface` name a face by its
+/// files rather than by a name inside the font, so resolution cannot compare
+/// strings from the `name` table. Hashing the `FontFamily` value once at
+/// registration and once per resolve keeps the two sides in step without
+/// walking path lists on every frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FontFamilyKey(u64);
+
+impl FontFamilyKey {
+    pub fn of(family: &FontFamily) -> Self {
+        let mut state = default_hash::new();
+        family.hash(&mut state);
+        Self(state.finish())
+    }
 }
 
 impl SoftwareTextFont {
@@ -78,8 +99,56 @@ impl SoftwareTextFont {
         })
     }
 
+    /// Parse `bytes` as a face an app registered under `family`, declaring
+    /// `weight` and `style` for it.
+    ///
+    /// The declaration wins over the face's own `OS/2` values, the way a
+    /// Compose `Font(resId, FontWeight.Medium)` entry does, and a variable face
+    /// is instanced on its `wght`/`ital` axes so one file can back a whole
+    /// family. That last part is what makes Android's `sans-serif` reachable:
+    /// the platform ships a single variable `Roboto-Regular.ttf` and describes
+    /// every weight of the family as an axis position on it.
+    pub fn from_registered_bytes(
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Result<Self, SoftwareTextFontError> {
+        let bytes = bytes.into();
+        let mut hasher = default_hash::new();
+        bytes.hash(&mut hasher);
+        let mut metadata = software_text_font_metadata(bytes.as_slice());
+        metadata.registered_family = Some(FontFamilyKey::of(family));
+        metadata.weight = weight;
+        metadata.style = style;
+
+        let mut font =
+            FontVec::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
+        // Two instances of one variable file draw different outlines, so the
+        // axis values have to reach `content_hash` — it is the glyph atlas key.
+        for (tag, value) in apply_declared_variations(&mut font, weight, style) {
+            tag.hash(&mut hasher);
+            value.to_bits().hash(&mut hasher);
+        }
+        let content_hash = hasher.finish();
+
+        let font = FontArc::from(font);
+        let score = text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, weight);
+        Ok(Self {
+            font,
+            metadata,
+            score,
+            content_hash,
+        })
+    }
+
     pub fn family_names(&self) -> &[String] {
         &self.metadata.families
+    }
+
+    /// The family an app registered this face under, if any.
+    pub fn registered_family(&self) -> Option<FontFamilyKey> {
+        self.metadata.registered_family
     }
 
     pub fn weight(&self) -> FontWeight {
@@ -119,21 +188,33 @@ pub fn default_software_text_font() -> Option<SoftwareTextFont> {
 #[derive(Clone)]
 pub struct SoftwareTextFontSet {
     fonts: Arc<[SoftwareTextFont]>,
+    registered_families: Arc<[FontFamilyKey]>,
     default_index: Option<usize>,
 }
 
 impl SoftwareTextFontSet {
     pub fn empty() -> Self {
-        Self {
-            fonts: Arc::from(Vec::new()),
-            default_index: None,
-        }
+        Self::from_faces(Vec::new())
     }
 
     pub fn from_font(font: SoftwareTextFont) -> Self {
+        Self::from_faces(vec![font])
+    }
+
+    /// Build a set from already-parsed faces, keeping the default-face choice
+    /// and the registered-family index in one place.
+    pub fn from_faces(fonts: Vec<SoftwareTextFont>) -> Self {
+        let mut registered_families: Vec<FontFamilyKey> = Vec::new();
+        for family in fonts.iter().filter_map(SoftwareTextFont::registered_family) {
+            if !registered_families.contains(&family) {
+                registered_families.push(family);
+            }
+        }
+        let default_index = (!fonts.is_empty()).then(|| default_font_index(&fonts));
         Self {
-            fonts: Arc::from(vec![font]),
-            default_index: Some(0),
+            fonts: Arc::from(fonts),
+            registered_families: Arc::from(registered_families),
+            default_index,
         }
     }
 
@@ -150,26 +231,30 @@ impl SoftwareTextFontSet {
             }
         }
 
-        let default_index = (!parsed.is_empty()).then(|| default_font_index(&parsed));
-        Self {
-            fonts: Arc::from(parsed),
-            default_index,
-        }
+        Self::from_faces(parsed)
     }
 
     pub fn default_font(&self) -> Option<&SoftwareTextFont> {
         self.default_index.and_then(|index| self.fonts.get(index))
     }
 
+    /// Whether any face in the set was registered under `family`.
+    pub fn has_registered_family(&self, family: &FontFamily) -> bool {
+        self.registered_families
+            .contains(&FontFamilyKey::of(family))
+    }
+
     pub fn resolve(&self, style: &TextStyle) -> Option<&SoftwareTextFont> {
         let target_weight = style.span_style.font_weight.unwrap_or_default();
         let target_style = style.span_style.font_style.unwrap_or_default();
-        let family_name = requested_family_name(style.span_style.font_family.as_ref());
+        let request = FontFamilyRequest::resolve(
+            style.span_style.font_family.as_ref(),
+            &self.registered_families,
+        );
 
         let mut best: Option<(usize, u32)> = None;
         for (index, font) in self.fonts.iter().enumerate() {
-            let Some(score) = font_match_score(font, target_weight, target_style, family_name)
-            else {
+            let Some(score) = font_match_score(font, target_weight, target_style, request) else {
                 continue;
             };
             if best.is_none_or(|(_, best_score)| score < best_score) {
@@ -264,10 +349,56 @@ fn default_font_index(fonts: &[SoftwareTextFont]) -> usize {
     best.map(|(index, _)| index).unwrap_or(0)
 }
 
-fn requested_family_name(font_family: Option<&FontFamily>) -> Option<&str> {
-    match font_family {
-        Some(FontFamily::Named(name)) => Some(name.as_str()),
-        _ => None,
+/// How a `TextStyle`'s font family narrows the faces a resolve may pick from.
+///
+/// Both measurement and rasterization go through `SoftwareTextFontSet::resolve`,
+/// so deriving the constraint here is what keeps the two from disagreeing.
+#[derive(Clone, Copy)]
+enum FontFamilyRequest<'a> {
+    /// No family was named, or a generic family nothing was registered under.
+    /// Every face is eligible and weight/style alone decide, which is the
+    /// behaviour generic families had before app-supplied fonts existed.
+    Any,
+    /// A face qualifies by carrying `name` in its `name` table, or by having
+    /// been registered under `FontFamily::Named(name)`.
+    Named { name: &'a str, key: FontFamilyKey },
+    /// Only faces registered under exactly this family value qualify.
+    Registered(FontFamilyKey),
+}
+
+impl<'a> FontFamilyRequest<'a> {
+    fn resolve(font_family: Option<&'a FontFamily>, registered: &[FontFamilyKey]) -> Self {
+        match font_family {
+            None | Some(FontFamily::Default) => Self::Any,
+            Some(FontFamily::Named(name)) => Self::Named {
+                name: name.as_str(),
+                key: FontFamilyKey::of(&FontFamily::Named(name.clone())),
+            },
+            Some(family @ (FontFamily::FileBacked(_) | FontFamily::LoadedTypeface(_))) => {
+                Self::Registered(FontFamilyKey::of(family))
+            }
+            Some(family) => {
+                // Generic families (`SansSerif`, `Serif`, …) only constrain the
+                // set once an app has registered a face for one; otherwise they
+                // would strip the weight matching they used to allow.
+                let key = FontFamilyKey::of(family);
+                if registered.contains(&key) {
+                    Self::Registered(key)
+                } else {
+                    Self::Any
+                }
+            }
+        }
+    }
+
+    fn matches(self, font: &SoftwareTextFont) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Named { name, key } => {
+                font_family_matches(font, name) || font.registered_family() == Some(key)
+            }
+            Self::Registered(key) => font.registered_family() == Some(key),
+        }
     }
 }
 
@@ -275,13 +406,11 @@ fn font_match_score(
     font: &SoftwareTextFont,
     target_weight: FontWeight,
     target_style: FontStyle,
-    family_name: Option<&str>,
+    request: FontFamilyRequest<'_>,
 ) -> Option<u32> {
-    let family_penalty = match family_name {
-        Some(name) if font_family_matches(font, name) => 0,
-        Some(_) => return None,
-        None => 0,
-    };
+    if !request.matches(font) {
+        return None;
+    }
     let style_penalty = if font.style() == target_style {
         0
     } else {
@@ -291,7 +420,7 @@ fn font_match_score(
     let coverage_penalty =
         (21usize.saturating_sub(text_font_score(font).supported_latin_chars) as u32) * 1_000;
 
-    Some(family_penalty + style_penalty + weight_penalty + coverage_penalty)
+    Some(style_penalty + weight_penalty + coverage_penalty)
 }
 
 fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
@@ -300,10 +429,36 @@ fn font_family_matches(font: &SoftwareTextFont, requested: &str) -> bool {
         .any(|family| family.eq_ignore_ascii_case(requested))
 }
 
+/// Instance a variable face at the weight and slant the app declared for it.
+///
+/// Returns the axis values actually applied so they can join the face's content
+/// hash: two instances of one file share bytes but not outlines, and
+/// `content_hash` is what keys the glyph mask cache and the glyph atlas.
+fn apply_declared_variations(
+    font: &mut FontVec,
+    weight: FontWeight,
+    style: FontStyle,
+) -> Vec<([u8; 4], f32)> {
+    let mut applied = Vec::new();
+    for axis in font.variations() {
+        let requested = match &axis.tag {
+            b"wght" => f32::from(weight.value()),
+            b"ital" if style == FontStyle::Italic => 1.0,
+            _ => continue,
+        };
+        let value = requested.clamp(axis.min_value, axis.max_value);
+        if font.set_variation(&axis.tag, value) {
+            applied.push((axis.tag, value));
+        }
+    }
+    applied
+}
+
 fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
     let Some(face) = ttf_parser::Face::parse(bytes, 0).ok() else {
         return SoftwareTextFontMetadata {
             families: Arc::from(Vec::<String>::new()),
+            registered_family: None,
             weight: FontWeight::NORMAL,
             style: FontStyle::Normal,
             ab_glyph_scale_factor: 1.0,
@@ -343,6 +498,7 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
 
     SoftwareTextFontMetadata {
         families: Arc::from(families),
+        registered_family: None,
         weight,
         style,
         ab_glyph_scale_factor,
