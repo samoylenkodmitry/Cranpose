@@ -263,6 +263,10 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             sampling,
             src_rect,
         },
+        DrawPrimitive::Text(mut text) => {
+            text.rect = text.rect.translate(dx, dy);
+            DrawPrimitive::Text(text)
+        }
         DrawPrimitive::Shadow(shadow) => {
             use cranpose_ui_graphics::ShadowPrimitive;
             DrawPrimitive::Shadow(match shadow {

@@ -1,5 +1,6 @@
 use super::{DrawCacheBuilder, DrawCommand, Modifier, Size};
 use crate::modifier_nodes::DrawCommandElement;
+use crate::text::AppContextTextMeasurer;
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault};
 use std::rc::Rc;
 
@@ -13,7 +14,8 @@ impl Modifier {
     /// Example: `Modifier::empty().draw_with_content(|scope| { ... })`
     pub fn draw_with_content(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
         let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
+            let mut scope =
+                DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared());
             f(&mut scope);
             scope.into_primitives()
         });
@@ -28,7 +30,8 @@ impl Modifier {
     /// Example: `Modifier::empty().draw_behind(|scope| { ... })`
     pub fn draw_behind(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
         let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
+            let mut scope =
+                DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared());
             f(&mut scope);
             scope.into_primitives()
         });

@@ -152,6 +152,11 @@ fn renderer_translates_draw_commands() {
                     saw_translated = true;
                 }
             }
+            DrawPrimitive::Text(text) => {
+                if text.rect.x >= 10.0 && text.rect.y >= 10.0 {
+                    saw_translated = true;
+                }
+            }
             DrawPrimitive::Blend { primitive, .. } => match primitive.as_ref() {
                 DrawPrimitive::Rect { rect, .. }
                 | DrawPrimitive::RoundRect { rect, .. }
@@ -162,7 +167,7 @@ fn renderer_translates_draw_commands() {
                     }
                 }
                 DrawPrimitive::Content | DrawPrimitive::Blend { .. } => {}
-                DrawPrimitive::Shadow(_) => {}
+                DrawPrimitive::Text(_) | DrawPrimitive::Shadow(_) => {}
             },
             DrawPrimitive::Content => {}
             DrawPrimitive::Shadow(_) => {}
@@ -196,6 +201,10 @@ fn renderer_translates_draw_commands() {
                 assert!(rect.x >= 10.0);
                 assert!(rect.y >= 10.0);
             }
+            DrawPrimitive::Text(text) => {
+                assert!(text.rect.x >= 10.0);
+                assert!(text.rect.y >= 10.0);
+            }
             DrawPrimitive::Blend { primitive, .. } => match primitive.as_ref() {
                 DrawPrimitive::Rect { rect, .. }
                 | DrawPrimitive::RoundRect { rect, .. }
@@ -205,7 +214,7 @@ fn renderer_translates_draw_commands() {
                     assert!(rect.y >= 10.0);
                 }
                 DrawPrimitive::Content | DrawPrimitive::Blend { .. } => {}
-                DrawPrimitive::Shadow(_) => {}
+                DrawPrimitive::Text(_) | DrawPrimitive::Shadow(_) => {}
             },
             DrawPrimitive::Content => {}
             DrawPrimitive::Shadow(_) => {}
