@@ -1,0 +1,381 @@
+//! Per-stage frame telemetry for the Android event loop.
+//!
+//! Desktop has `CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS`, which splits a frame into
+//! update / acquire / render / present and is what settles "are we compute bound
+//! or present bound?". Android had no equivalent, and a `NativeActivity` cannot
+//! be handed an environment variable, so the switches here are system properties
+//! read once per process:
+//!
+//! * `debug.cranpose.frame_telemetry` — frames per reported window (`1` means
+//!   the default of 120). Unset or `0` disables everything in this module.
+//! * `debug.cranpose.vsync_probe` — when set, an `AChoreographer` callback keeps
+//!   a running vsync anchor so every frame can report its phase offset from the
+//!   most recent vsync. This is the measurement that distinguishes "the loop is
+//!   out of phase with the display" from "the work does not fit".
+//! * `debug.cranpose.present_mode` / `debug.cranpose.frame_latency` — swapchain
+//!   A/B knobs, read by [`crate::present_mode`] and [`crate::android`].
+//!
+//! Set them with `adb shell setprop` before launching the activity.
+#![allow(unsafe_code)]
+
+use std::ffi::{CString, c_void};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+/// Frames aggregated into one report when `debug.cranpose.frame_telemetry=1`.
+const DEFAULT_WINDOW_FRAMES: usize = 120;
+/// `PROP_VALUE_MAX` from `<sys/system_properties.h>`.
+const PROP_VALUE_MAX: usize = 92;
+
+/// Reads an Android system property, returning `None` when unset or empty.
+pub(crate) fn system_property(name: &str) -> Option<String> {
+    let name = CString::new(name).ok()?;
+    let mut buffer = [0u8; PROP_VALUE_MAX];
+    // SAFETY: `name` is a valid NUL-terminated C string and `buffer` has room
+    // for `PROP_VALUE_MAX` bytes, which is the documented maximum written.
+    let length = unsafe {
+        libc::__system_property_get(name.as_ptr(), buffer.as_mut_ptr().cast::<libc::c_char>())
+    };
+    if length <= 0 {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&buffer[..length as usize])
+        .trim()
+        .to_owned();
+    (!value.is_empty()).then_some(value)
+}
+
+fn property_flag(name: &str) -> bool {
+    match system_property(name) {
+        Some(value) => !matches!(value.as_str(), "0" | "false" | "off" | "no"),
+        None => false,
+    }
+}
+
+/// `CLOCK_MONOTONIC` in nanoseconds — the same clock `AChoreographer` frame
+/// times use, so the two can be subtracted directly.
+pub(crate) fn monotonic_nanos() -> i64 {
+    let mut now = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `now` is a live, correctly sized `timespec`.
+    unsafe {
+        libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now);
+    }
+    now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64
+}
+
+static VSYNC_LAST_NS: AtomicI64 = AtomicI64::new(0);
+static VSYNC_PERIOD_NS: AtomicI64 = AtomicI64::new(0);
+static VSYNC_PROBE_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Set once the display itself reported its period, which outranks any estimate
+/// derived from callback deltas.
+static DISPLAY_PERIOD_KNOWN: AtomicBool = AtomicBool::new(false);
+
+/// Plausible range for a single display period (250 Hz … 25 Hz). Longer gaps
+/// mean the callback was starved and must not pollute the period estimate.
+const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
+const MAX_VSYNC_PERIOD_NS: i64 = 40_000_000;
+
+/// Starts the `AChoreographer` vsync anchor if `debug.cranpose.vsync_probe` is
+/// set. Must be called from the thread that owns the `ALooper` (android_main).
+pub(crate) fn start_vsync_probe_if_enabled() {
+    if !property_flag("debug.cranpose.vsync_probe") {
+        return;
+    }
+    if VSYNC_PROBE_RUNNING.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    // The period must come from the display, not from the gap between two
+    // callbacks: the callback is serviced from the app's looper, so when a frame
+    // overruns, consecutive callbacks land two or three vsyncs apart and any
+    // averaging of those deltas converges on the *frame* period rather than the
+    // *display* period — which would then make every phase-modulo meaningless.
+    // SAFETY: called on the looper-owning thread with a `'static` callback.
+    unsafe {
+        let choreographer = ndk_sys::AChoreographer_getInstance();
+        if !choreographer.is_null() {
+            ndk_sys::AChoreographer_registerRefreshRateCallback(
+                choreographer,
+                Some(on_refresh_rate),
+                std::ptr::null_mut(),
+            );
+        }
+    }
+    post_vsync_callback();
+    log::info!("[android-frame] vsync probe started");
+}
+
+unsafe extern "C" fn on_refresh_rate(vsync_period_ns: i64, _data: *mut c_void) {
+    if (MIN_VSYNC_PERIOD_NS..=MAX_VSYNC_PERIOD_NS).contains(&vsync_period_ns) {
+        VSYNC_PERIOD_NS.store(vsync_period_ns, Ordering::Relaxed);
+        DISPLAY_PERIOD_KNOWN.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Measured display period, in nanoseconds.
+pub(crate) fn vsync_period_ns() -> i64 {
+    VSYNC_PERIOD_NS.load(Ordering::Relaxed)
+}
+
+/// Phase of `now_ns` inside the display period: `0` means "exactly on a vsync",
+/// `period - 1` means "one nanosecond before the next one".
+fn vsync_offset_ns(now_ns: i64) -> Option<i64> {
+    let last = VSYNC_LAST_NS.load(Ordering::Relaxed);
+    let period = VSYNC_PERIOD_NS.load(Ordering::Relaxed);
+    if last <= 0 || period <= 0 {
+        return None;
+    }
+    let elapsed = now_ns - last;
+    if elapsed < 0 {
+        return None;
+    }
+    Some(elapsed % period)
+}
+
+unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
+    let previous = VSYNC_LAST_NS.swap(frame_time_ns, Ordering::Relaxed);
+    if previous > 0 && !DISPLAY_PERIOD_KNOWN.load(Ordering::Relaxed) {
+        // Fallback when the refresh-rate callback never fires. Every callback
+        // delta is an integer multiple of the true period, so the running
+        // minimum converges on it; an average does not.
+        let delta = frame_time_ns - previous;
+        if (MIN_VSYNC_PERIOD_NS..=MAX_VSYNC_PERIOD_NS).contains(&delta) {
+            let previous_period = VSYNC_PERIOD_NS.load(Ordering::Relaxed);
+            if previous_period == 0 || delta < previous_period {
+                VSYNC_PERIOD_NS.store(delta, Ordering::Relaxed);
+            }
+        }
+    }
+    post_vsync_callback();
+}
+
+fn post_vsync_callback() {
+    // SAFETY: called on the looper-owning thread; the callback pointer is a
+    // `'static` function and the user data is null.
+    unsafe {
+        let choreographer = ndk_sys::AChoreographer_getInstance();
+        if choreographer.is_null() {
+            VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
+            log::warn!("[android-frame] AChoreographer_getInstance returned null");
+            return;
+        }
+        ndk_sys::AChoreographer_postFrameCallback64(
+            choreographer,
+            Some(on_vsync),
+            std::ptr::null_mut(),
+        );
+    }
+}
+
+/// Timestamps collected across one presented frame. `0` marks a stage that did
+/// not run (a frame that never reached the swapchain, say).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct FrameTimings {
+    pub(crate) iteration_start_ns: i64,
+    pub(crate) after_poll_ns: i64,
+    pub(crate) after_update_ns: i64,
+    /// After accessibility/host-window syncing, which sits between the update
+    /// and the swapchain acquire. Kept separate so `acquire` measures only
+    /// `get_current_texture` and cannot be mistaken for a vsync wait.
+    pub(crate) after_sync_ns: i64,
+    pub(crate) after_acquire_ns: i64,
+    pub(crate) after_render_ns: i64,
+    pub(crate) after_present_ns: i64,
+}
+
+#[derive(Clone, Copy)]
+struct Sample {
+    period_us: i32,
+    poll_us: i32,
+    update_us: i32,
+    sync_us: i32,
+    acquire_us: i32,
+    render_us: i32,
+    present_us: i32,
+    /// Phase of the frame's first instruction relative to the previous vsync,
+    /// or `-1` when the probe is off.
+    vsync_offset_us: i32,
+}
+
+/// Rolling per-stage frame recorder. Disabled (and free) unless
+/// `debug.cranpose.frame_telemetry` is set.
+pub(crate) struct AndroidFrameTelemetry {
+    enabled: bool,
+    window_frames: usize,
+    samples: Vec<Sample>,
+    last_present_ns: i64,
+    idle_iterations: u32,
+    window_start_ns: i64,
+}
+
+impl AndroidFrameTelemetry {
+    pub(crate) fn from_system_properties() -> Self {
+        let window_frames = system_property("debug.cranpose.frame_telemetry")
+            .map(|value| match value.parse::<usize>() {
+                Ok(0) => 0,
+                Ok(1) => DEFAULT_WINDOW_FRAMES,
+                Ok(frames) => frames,
+                Err(_) => DEFAULT_WINDOW_FRAMES,
+            })
+            .unwrap_or(0);
+        let enabled = window_frames > 0;
+        if enabled {
+            log::info!("[android-frame] telemetry enabled, window={window_frames} frames");
+        }
+        Self {
+            enabled,
+            window_frames,
+            samples: Vec::with_capacity(window_frames),
+            last_present_ns: 0,
+            idle_iterations: 0,
+            window_start_ns: 0,
+        }
+    }
+
+    /// Timestamp helper that compiles to nothing when telemetry is off.
+    pub(crate) fn now(&self) -> i64 {
+        if self.enabled { monotonic_nanos() } else { 0 }
+    }
+
+    /// A loop iteration that woke up but presented nothing.
+    pub(crate) fn note_idle_iteration(&mut self) {
+        if self.enabled {
+            self.idle_iterations = self.idle_iterations.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn record_frame(&mut self, timings: &FrameTimings) {
+        if !self.enabled {
+            return;
+        }
+        let period_us = if self.last_present_ns > 0 {
+            us(timings.after_present_ns - self.last_present_ns)
+        } else {
+            0
+        };
+        if self.window_start_ns == 0 {
+            self.window_start_ns = timings.iteration_start_ns;
+        }
+        self.last_present_ns = timings.after_present_ns;
+        self.samples.push(Sample {
+            period_us,
+            poll_us: us(timings.after_poll_ns - timings.iteration_start_ns),
+            update_us: us(timings.after_update_ns - timings.after_poll_ns),
+            sync_us: us(timings.after_sync_ns - timings.after_update_ns),
+            acquire_us: us(timings.after_acquire_ns - timings.after_sync_ns),
+            render_us: us(timings.after_render_ns - timings.after_acquire_ns),
+            present_us: us(timings.after_present_ns - timings.after_render_ns),
+            vsync_offset_us: vsync_offset_ns(timings.iteration_start_ns)
+                .map(us)
+                .unwrap_or(-1),
+        });
+        if self.samples.len() >= self.window_frames {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        // The first sample has no previous present to measure a period against.
+        let window_ns = self.last_present_ns - self.window_start_ns;
+        let frames = self.samples.len();
+        if frames < 2 || window_ns <= 0 {
+            self.reset();
+            return;
+        }
+        let fps = (frames - 1) as f64 * 1_000_000_000.0 / window_ns as f64;
+        log::warn!(
+            "[android-frame] n={frames} fps={fps:.2} idle_iters={} vsync_period_ms={:.3}",
+            self.idle_iterations,
+            vsync_period_ns() as f64 / 1e6,
+        );
+        self.report("period ", |sample| sample.period_us);
+        self.report("poll   ", |sample| sample.poll_us);
+        self.report("update ", |sample| sample.update_us);
+        self.report("sync   ", |sample| sample.sync_us);
+        self.report("acquire", |sample| sample.acquire_us);
+        self.report("render ", |sample| sample.render_us);
+        self.report("present", |sample| sample.present_us);
+        // Everything that is not the blocking swapchain acquire.
+        self.report("cpu    ", |sample| {
+            sample.update_us + sample.sync_us + sample.render_us + sample.present_us
+        });
+        self.report_vsync_phase();
+        self.reset();
+    }
+
+    /// Splits the frame-start phase by whether the frame that followed took more
+    /// than one display period. Hypothesis "the loop is simply out of phase with
+    /// vsync" predicts that the late frames concentrate at large offsets; a loop
+    /// whose work does not fit predicts the two distributions look alike.
+    fn report_vsync_phase(&self) {
+        let period_us = us(vsync_period_ns());
+        if period_us <= 0 || !self.samples.iter().any(|sample| sample.vsync_offset_us >= 0) {
+            return;
+        }
+        // One display period of slack before a frame counts as late.
+        let late_threshold_us = period_us + period_us / 2;
+        let (mut on_time, mut late) = (Vec::new(), Vec::new());
+        for sample in &self.samples {
+            if sample.vsync_offset_us < 0 || sample.period_us <= 0 {
+                continue;
+            }
+            if sample.period_us > late_threshold_us {
+                late.push(sample.vsync_offset_us);
+            } else {
+                on_time.push(sample.vsync_offset_us);
+            }
+        }
+        on_time.sort_unstable();
+        late.sort_unstable();
+        log::warn!(
+            "[android-frame]   vsync_phase on_time n={} p10={:.2} p50={:.2} p90={:.2} | late n={} p10={:.2} p50={:.2} p90={:.2} | period={:.2}ms",
+            on_time.len(),
+            ms(percentile(&on_time, 0.10)),
+            ms(percentile(&on_time, 0.50)),
+            ms(percentile(&on_time, 0.90)),
+            late.len(),
+            ms(percentile(&late, 0.10)),
+            ms(percentile(&late, 0.50)),
+            ms(percentile(&late, 0.90)),
+            ms(period_us),
+        );
+    }
+
+    fn report(&self, label: &str, value: impl Fn(&Sample) -> i32) {
+        let mut values: Vec<i32> = self.samples.iter().map(&value).collect();
+        values.sort_unstable();
+        log::warn!(
+            "[android-frame]   {label} p10={:.2} p50={:.2} p90={:.2} p99={:.2} max={:.2} mean={:.2}",
+            ms(percentile(&values, 0.10)),
+            ms(percentile(&values, 0.50)),
+            ms(percentile(&values, 0.90)),
+            ms(percentile(&values, 0.99)),
+            ms(*values.last().unwrap_or(&0)),
+            values.iter().map(|value| *value as f64).sum::<f64>() / values.len().max(1) as f64
+                / 1000.0,
+        );
+    }
+
+    fn reset(&mut self) {
+        self.samples.clear();
+        self.idle_iterations = 0;
+        self.window_start_ns = 0;
+    }
+}
+
+fn percentile(sorted: &[i32], fraction: f64) -> i32 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let index = ((sorted.len() - 1) as f64 * fraction).round() as usize;
+    sorted[index.min(sorted.len() - 1)]
+}
+
+fn us(nanos: i64) -> i32 {
+    (nanos / 1000).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+}
+
+fn ms(micros: i32) -> f64 {
+    micros as f64 / 1000.0
+}

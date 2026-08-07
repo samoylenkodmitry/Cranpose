@@ -17,6 +17,8 @@ pub use android_file_picker::open_content_uri;
 mod accessibility;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_frame_telemetry;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 mod android_input;

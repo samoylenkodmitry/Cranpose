@@ -724,9 +724,15 @@ fn update_android_shell_geometry(
 }
 
 /// Renders a single frame. Returns true if out of memory (should exit).
-fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
+fn render_once(
+    resources: &mut GpuResources,
+    shell: &mut AppShell<WgpuRenderer>,
+    telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
+    timings: &mut crate::android_frame_telemetry::FrameTimings,
+) -> bool {
     match current_surface_texture(&resources.surface, "android") {
         SurfaceFrame::Ready(frame) => {
+            timings.after_acquire_ns = telemetry.now();
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -736,11 +742,15 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
                 log::error!("Render error: {:?}", e);
             }
 
+            timings.after_render_ns = telemetry.now();
             frame.present();
+            timings.after_present_ns = telemetry.now();
+            telemetry.record_frame(timings);
             resources.surface_dirty = false;
             false
         }
         SurfaceFrame::Reconfigure => {
+            telemetry.note_idle_iteration();
             let (width, height) = shell.buffer_size();
             resources.config.width = width;
             resources.config.height = height;
@@ -757,6 +767,7 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
         }
         // Surface unavailable this tick; retry the present on the next frame.
         SurfaceFrame::Skip => {
+            telemetry.note_idle_iteration();
             resources.surface_dirty = true;
             false
         }
@@ -1089,7 +1100,19 @@ fn create_android_surface_config(
         .first()
         .copied()
         .ok_or(AndroidSurfaceError::NoAlphaMode)?;
-    let present_mode = crate::present_mode::select_present_mode(&surface_caps);
+    let present_mode = crate::present_mode::select_android_present_mode(&surface_caps);
+    // `debug.cranpose.frame_latency` lets the swapchain depth be A/B'd on device.
+    let desired_maximum_frame_latency =
+        crate::android_frame_telemetry::system_property("debug.cranpose.frame_latency")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|latency| (1..=3).contains(latency))
+            .unwrap_or(2);
+    log::info!(
+        "Android surface: supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
+        surface_caps.present_modes,
+        present_mode,
+        desired_maximum_frame_latency,
+    );
     Ok(wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
@@ -1098,7 +1121,7 @@ fn create_android_surface_config(
         present_mode,
         alpha_mode,
         view_formats: vec![],
-        desired_maximum_frame_latency: 2,
+        desired_maximum_frame_latency,
     })
 }
 
@@ -1420,8 +1443,17 @@ pub fn run(
     // The soft-keyboard handler is installed once the app shell exists
     let mut soft_keyboard_installed = false;
 
+    // Per-stage frame telemetry (system-property gated; free when off).
+    let mut frame_telemetry =
+        crate::android_frame_telemetry::AndroidFrameTelemetry::from_system_properties();
+    crate::android_frame_telemetry::start_vsync_probe_if_enabled();
+
     // Main event loop
     loop {
+        let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
+            iteration_start_ns: frame_telemetry.now(),
+            ..Default::default()
+        };
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
                 .checked_sub(pending.requested_at.elapsed())
@@ -1729,6 +1761,7 @@ pub fn run(
                 }
             }
         });
+        frame_timings.after_poll_ns = frame_telemetry.now();
 
         for event in
             android_overlay_window::drain_android_overlay_window_events(&overlay_event_queue)
@@ -2004,6 +2037,7 @@ pub fn run(
                     &host_window_registry,
                     || shell.update(),
                 );
+                frame_timings.after_update_ns = frame_telemetry.now();
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,
                     shell,
@@ -2020,15 +2054,23 @@ pub fn run(
                     &mut last_dispatched_host_window_request,
                     &mut pending_host_window_confirmation,
                 );
+                frame_timings.after_sync_ns = frame_telemetry.now();
                 if surface_present_required(
                     resources.surface_dirty,
                     update_result.visual_changed,
                     shell.needs_redraw(),
-                ) && render_once(resources, shell)
-                {
-                    break; // Out of memory, exit
+                ) {
+                    if render_once(resources, shell, &mut frame_telemetry, &mut frame_timings) {
+                        break; // Out of memory, exit
+                    }
+                } else {
+                    frame_telemetry.note_idle_iteration();
                 }
+            } else {
+                frame_telemetry.note_idle_iteration();
             }
+        } else {
+            frame_telemetry.note_idle_iteration();
         }
     }
 }
