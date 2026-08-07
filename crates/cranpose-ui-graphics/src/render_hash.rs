@@ -359,11 +359,35 @@ fn hash_draw_primitive<H: Hasher>(primitive: &DrawPrimitive, state: &mut H) {
                 None => 0u8.hash(state),
             }
         }
+        DrawPrimitive::Text(text) => {
+            7u8.hash(state);
+            hash_rect(text.rect, state);
+            text.text.hash(state);
+            hash_text_style(&text.style, state);
+            hash_color(text.color, state);
+        }
         DrawPrimitive::Shadow(shadow) => {
             5u8.hash(state);
             hash_shadow_primitive(shadow, state);
         }
     }
+}
+
+fn hash_text_style<H: Hasher>(style: &crate::TextStyle, state: &mut H) {
+    style.font_family.hash(state);
+    hash_f32_bits(style.font_size, state);
+    style.font_weight.hash(state);
+    style.font_style.hash(state);
+    hash_f32_bits(style.letter_spacing, state);
+    match style.line_height {
+        Some(line_height) => {
+            1u8.hash(state);
+            hash_f32_bits(line_height, state);
+        }
+        None => 0u8.hash(state),
+    }
+    style.align.hash(state);
+    style.vertical_align.hash(state);
 }
 
 fn hash_shadow_primitive<H: Hasher>(shadow: &ShadowPrimitive, state: &mut H) {
