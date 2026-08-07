@@ -53,6 +53,14 @@ pub use android_host_window::{
 ))]
 pub use launcher::LaunchError;
 pub use launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
+/// Font registration vocabulary named by [`AppLauncher`]'s font methods:
+/// the platform font directory [`AppLauncher::with_system_font_family`] wants,
+/// the weight set it registers, and the registry and error
+/// [`AppLauncher::with_fonts_from`] hands out.
+pub use cranpose_render_common::font_source::{
+    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR,
+    DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+};
 pub use native_window::{
     current_native_window_surface_origin, rememberWindowState, Window, WindowAttachPolicy,
     WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
