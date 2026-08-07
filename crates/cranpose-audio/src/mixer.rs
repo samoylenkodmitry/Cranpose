@@ -26,7 +26,7 @@
 )]
 
 use crate::ring::{Consumer, Producer};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 /// How many clips the engine holds at once. One byte of index, and far more
@@ -39,6 +39,36 @@ pub const MAX_VOICES: usize = 32;
 
 /// How many mix buses exist. Mirrors `cranpose_services::AudioBus`.
 pub const BUS_COUNT: usize = 2;
+
+/// How long the output keeps running with nothing to play before the mixer
+/// stops it.
+///
+/// A running output stream is not free even when every sample it carries is
+/// zero: on Android it holds an MMAP route open and keeps the always-on audio
+/// DSP awake, which measures in tens of milliwatts on a phone and is a large
+/// share of a watch's budget. Stopping is therefore worth doing — but every
+/// restart is a device round trip (route setup, then the first callback), so
+/// stopping too eagerly turns a burst of UI cues into a burst of route changes
+/// and risks clipping the front of a sound.
+///
+/// Two seconds sits above both of the intervals that matter. A player working
+/// through a menu taps every few hundred milliseconds and a one-shot cue lasts
+/// well under a second, so an active screen never stops the stream; a screen
+/// the player has settled on goes quiet two seconds after its last sound and
+/// stays that way for as long as they look at it, which is where all of the
+/// battery is. Anything shorter buys nothing measurable and starts to thrash.
+pub const IDLE_GRACE_SECONDS: f32 = 2.0;
+
+/// What the output device should do once [`Mixer::render`] returns.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderStatus {
+    /// Keep the stream running: something is sounding, or work is queued.
+    Continue,
+    /// Nothing has sounded for [`IDLE_GRACE_SECONDS`] and the command queue is
+    /// empty, so the stream should stop. The engine starts it again on the
+    /// next play.
+    Idle,
+}
 
 /// Decoded PCM as the audio thread sees it.
 #[derive(Clone)]
@@ -150,6 +180,14 @@ pub struct MixerSeed {
     pub leaked_clips: Arc<AtomicU32>,
     /// Incremented when the output ran with no room to grow, for diagnostics.
     pub underruns: Arc<AtomicU32>,
+    /// Whether the output stream is producing audio.
+    ///
+    /// The mixer clears it when it gives the stream up for want of anything to
+    /// play; the engine sets it again when it starts the stream back up. It is
+    /// the only piece of mixer state the UI thread reads, which is why it is
+    /// an atomic rather than a call into [`Mixer`] — walking the voice table
+    /// from the UI thread would race the render that owns it.
+    pub streaming: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Copy)]
@@ -190,6 +228,7 @@ pub struct Mixer {
     retired: Producer<ClipData>,
     leaked_clips: Arc<AtomicU32>,
     underruns: Arc<AtomicU32>,
+    streaming: Arc<AtomicBool>,
     clips: Vec<Option<ClipData>>,
     voices: Vec<Voice>,
     master: f32,
@@ -197,6 +236,11 @@ pub struct Mixer {
     bus_enabled: [bool; BUS_COUNT],
     device_sample_rate: f32,
     device_channels: usize,
+    /// Output frames rendered since the last one that had a voice in it.
+    idle_frames: u64,
+    /// [`IDLE_GRACE_SECONDS`] at the device's rate, so the check below is an
+    /// integer compare rather than a multiply per callback.
+    idle_grace_frames: u64,
 }
 
 impl Mixer {
@@ -210,6 +254,7 @@ impl Mixer {
             retired: seed.retired,
             leaked_clips: seed.leaked_clips,
             underruns: seed.underruns,
+            streaming: seed.streaming,
             clips,
             voices: vec![Voice::IDLE; MAX_VOICES],
             master: 1.0,
@@ -217,6 +262,8 @@ impl Mixer {
             bus_enabled: [true; BUS_COUNT],
             device_sample_rate: sample_rate.max(1.0),
             device_channels: channels.max(1),
+            idle_frames: 0,
+            idle_grace_frames: grace_frames(sample_rate),
         }
     }
 
@@ -235,6 +282,7 @@ impl Mixer {
         }
         self.device_sample_rate = sample_rate;
         self.device_channels = channels;
+        self.idle_grace_frames = grace_frames(sample_rate);
         for index in 0..self.voices.len() {
             if self.voices[index].id == 0 {
                 continue;
@@ -262,11 +310,12 @@ impl Mixer {
         self.voices.iter().filter(|voice| voice.id != 0).count()
     }
 
-    /// Fills `out` with `out.len() / channels` interleaved output frames.
+    /// Fills `out` with `out.len() / channels` interleaved output frames, and
+    /// reports whether the device still has a reason to run.
     ///
     /// This is the real-time entry point: it allocates nothing, locks nothing
     /// and logs nothing.
-    pub fn render(&mut self, out: &mut [f32]) {
+    pub fn render(&mut self, out: &mut [f32]) -> RenderStatus {
         self.drain_commands();
 
         for sample in out.iter_mut() {
@@ -275,12 +324,12 @@ impl Mixer {
 
         let channels = self.device_channels;
         if channels == 0 || out.is_empty() {
-            return;
+            return RenderStatus::Continue;
         }
         let out_frames = out.len() / channels;
         if out_frames == 0 {
             self.underruns.fetch_add(1, Ordering::Relaxed);
-            return;
+            return RenderStatus::Continue;
         }
 
         let master = self.master;
@@ -297,6 +346,11 @@ impl Mixer {
             },
         ];
 
+        // How many voices put samples into this buffer. Counted here rather
+        // than by `active_voices`, which walks the whole voice table and is
+        // documented as diagnostics only: the loop below already visits every
+        // voice, so the idle test costs one increment.
+        let mut sounding = 0usize;
         let clips = &self.clips;
         for voice in self.voices.iter_mut() {
             if voice.id == 0 {
@@ -318,6 +372,13 @@ impl Mixer {
             let mut position = voice.position;
             let step = voice.step;
             let length = frames as f64;
+            // Whether this voice puts anything into this buffer. A one-shot
+            // that had already run out contributes nothing; every other voice
+            // renders at least the first frame. Judging by whether the voice
+            // is still alive afterwards would miss a cue that starts and ends
+            // inside one callback — a tap in a menu, exactly the thing the
+            // grace period exists to sit through.
+            let audible = voice.looping || position < length;
 
             for frame in 0..out_frames {
                 if position >= length {
@@ -373,11 +434,46 @@ impl Mixer {
             }
 
             voice.position = position;
+            if audible {
+                sounding += 1;
+            }
         }
 
         for sample in out.iter_mut() {
             *sample = sample.clamp(-1.0, 1.0);
         }
+
+        self.settle(sounding, out_frames)
+    }
+
+    /// Decides whether the device is still earning its keep.
+    ///
+    /// The handshake with the UI thread is the delicate part. A `play` there
+    /// pushes its command and *then* reads `streaming`; this publishes the
+    /// stop and *then* re-reads the queue. A fence on each side puts both
+    /// pairs into one order, so every interleaving leaves one side responsible:
+    /// either the push is visible below and the stream keeps running, or the
+    /// cleared flag is visible to the engine and it starts the stream again.
+    /// Neither side can decide the other will handle it, which is the failure
+    /// that would strand a queued sound behind a stopped stream.
+    fn settle(&mut self, sounding: usize, frames: usize) -> RenderStatus {
+        if sounding > 0 {
+            self.idle_frames = 0;
+            return RenderStatus::Continue;
+        }
+        self.idle_frames = self.idle_frames.saturating_add(frames as u64);
+        if self.idle_frames < self.idle_grace_frames {
+            return RenderStatus::Continue;
+        }
+
+        self.streaming.store(false, Ordering::SeqCst);
+        std::sync::atomic::fence(Ordering::SeqCst);
+        if !self.commands.is_empty() {
+            self.streaming.store(true, Ordering::SeqCst);
+            self.idle_frames = 0;
+            return RenderStatus::Continue;
+        }
+        RenderStatus::Idle
     }
 
     fn drain_commands(&mut self) {
@@ -531,6 +627,11 @@ impl Mixer {
     }
 }
 
+/// [`IDLE_GRACE_SECONDS`] measured in output frames at `sample_rate`.
+fn grace_frames(sample_rate: f32) -> u64 {
+    (f64::from(sample_rate.max(1.0)) * f64::from(IDLE_GRACE_SECONDS)) as u64
+}
+
 fn sane_gain(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(0.0, 4.0)
@@ -561,23 +662,45 @@ mod tests {
         retired: Consumer<ClipData>,
         mixer: Mixer,
         leaked: Arc<AtomicU32>,
+        streaming: Arc<AtomicBool>,
+    }
+
+    impl Harness {
+        /// Renders `frames` of output in device-sized bursts, the way a real
+        /// callback arrives, and reports the last burst's verdict.
+        fn run(&mut self, frames: usize) -> RenderStatus {
+            let burst = 128;
+            let channels = self.mixer.device_channels;
+            let mut out = vec![0.0f32; burst * channels];
+            let mut status = RenderStatus::Continue;
+            let mut remaining = frames;
+            while remaining > 0 {
+                let take = remaining.min(burst);
+                status = self.mixer.render(&mut out[..take * channels]);
+                remaining -= take;
+            }
+            status
+        }
     }
 
     fn harness(sample_rate: f32, channels: usize) -> Harness {
         let (command_tx, command_rx) = ring::channel::<Command>(64);
         let (retired_tx, retired_rx) = ring::channel::<ClipData>(64);
         let leaked = Arc::new(AtomicU32::new(0));
+        let streaming = Arc::new(AtomicBool::new(true));
         let seed = MixerSeed {
             commands: command_rx,
             retired: retired_tx,
             leaked_clips: Arc::clone(&leaked),
             underruns: Arc::new(AtomicU32::new(0)),
+            streaming: Arc::clone(&streaming),
         };
         Harness {
             commands: command_tx,
             retired: retired_rx,
             mixer: Mixer::new(seed, sample_rate, channels),
             leaked,
+            streaming,
         }
     }
 
@@ -1066,6 +1189,124 @@ mod tests {
         let mut out = vec![0.0f32; 16];
         h.mixer.render(&mut out);
         assert!(out.iter().all(|sample| sample.is_finite()));
+    }
+
+    #[test]
+    fn silence_gives_the_device_up_after_the_grace_period() {
+        let mut h = harness(48_000.0, 2);
+        let grace = grace_frames(48_000.0) as usize;
+        assert_eq!(h.run(grace - 128), RenderStatus::Continue);
+        assert!(h.streaming.load(Ordering::SeqCst), "still inside the grace");
+        assert_eq!(h.run(128), RenderStatus::Idle);
+        assert!(!h.streaming.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_grace_period_starts_when_the_last_voice_ends() {
+        let mut h = harness(48_000.0, 2);
+        h.commands
+            .push(Command::LoadClip {
+                slot: 0,
+                clip: clip(vec![0.5; 48_000], 1, 48_000),
+            })
+            .expect("queued");
+        h.commands.push(play(1, 0)).expect("queued");
+
+        // One second of clip, then all but the last burst of the grace period.
+        let grace = grace_frames(48_000.0) as usize;
+        assert_eq!(h.run(48_000 + grace - 128), RenderStatus::Continue);
+        assert_eq!(h.run(128), RenderStatus::Idle);
+    }
+
+    #[test]
+    fn a_looping_voice_holds_the_device_open_indefinitely() {
+        let mut h = harness(48_000.0, 2);
+        h.commands
+            .push(Command::LoadClip {
+                slot: 0,
+                clip: clip(vec![0.5; 64], 1, 48_000),
+            })
+            .expect("queued");
+        h.commands
+            .push(Command::Play {
+                voice: 1,
+                slot: 0,
+                gain_left: 1.0,
+                gain_right: 1.0,
+                rate: 1.0,
+                bus: 0,
+                looping: true,
+            })
+            .expect("queued");
+
+        let grace = grace_frames(48_000.0) as usize;
+        assert_eq!(h.run(grace * 2), RenderStatus::Continue);
+        assert!(h.streaming.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_muted_voice_still_counts_as_a_reason_to_run() {
+        let mut h = harness(48_000.0, 2);
+        h.commands
+            .push(Command::LoadClip {
+                slot: 0,
+                clip: clip(vec![0.5; 64], 1, 48_000),
+            })
+            .expect("queued");
+        h.commands
+            .push(Command::Play {
+                voice: 1,
+                slot: 0,
+                gain_left: 1.0,
+                gain_right: 1.0,
+                rate: 1.0,
+                bus: 1,
+                looping: true,
+            })
+            .expect("queued");
+        h.commands
+            .push(Command::SetBusEnabled {
+                bus: 1,
+                enabled: false,
+            })
+            .expect("queued");
+
+        // Muting is the "music off" toggle, not a stop: the voice keeps its
+        // position so unmuting resumes mid-track, which it could not do if the
+        // device had been given up underneath it.
+        let grace = grace_frames(48_000.0) as usize;
+        assert_eq!(h.run(grace + 128), RenderStatus::Continue);
+    }
+
+    #[test]
+    fn a_command_landing_while_the_stream_stops_keeps_it_alive() {
+        let mut h = harness(48_000.0, 2);
+        assert_eq!(h.run(grace_frames(48_000.0) as usize), RenderStatus::Idle);
+        assert!(!h.streaming.load(Ordering::SeqCst));
+
+        // The second half of the handover with the UI thread: a command pushed
+        // after this callback drained the queue, in the window before the
+        // engine reads the flag, has to be caught by the re-check rather than
+        // stranded behind a stopped stream.
+        h.commands.push(Command::StopAll).expect("queued");
+        assert_eq!(h.mixer.settle(0, 128), RenderStatus::Continue);
+        assert!(h.streaming.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_grace_period_is_a_duration_not_a_callback_count() {
+        let mut h = harness(24_000.0, 2);
+        let grace = grace_frames(24_000.0) as usize;
+        assert_eq!(grace * 2, grace_frames(48_000.0) as usize);
+        assert_eq!(h.run(grace - 128), RenderStatus::Continue);
+        assert_eq!(h.run(128), RenderStatus::Idle);
+    }
+
+    #[test]
+    fn a_device_rate_change_rescales_the_grace_period() {
+        let mut h = harness(48_000.0, 2);
+        h.mixer.set_device_format(24_000.0, 2);
+        assert_eq!(h.run(grace_frames(24_000.0) as usize), RenderStatus::Idle);
     }
 
     #[test]

@@ -19,10 +19,23 @@ mod cpal_device;
 /// A running output device. Dropping it stops the stream and drops the mixer
 /// (and with it every clip the mixer still held) on the thread that opened it.
 pub trait AudioSink {
-    /// Pauses the stream without discarding it.
+    /// Pauses the stream without discarding it, for an app going away.
     fn suspend(&self) {}
-    /// Restarts a suspended stream.
+    /// Starts the stream again: after [`suspend`](AudioSink::suspend), and
+    /// after the mixer gave the device up for want of anything to play.
     fn resume(&self) {}
+    /// Releases the device after the mixer reported itself idle.
+    ///
+    /// This is the half of stopping that a real-time callback cannot do for
+    /// itself. AAudio's callback returns `Stop`, which on current Android
+    /// tears the stream down from the inside; this then makes it explicit, and
+    /// is what releases the route on the older releases where returning `Stop`
+    /// only ends the callback. cpal has no such return at all, so for that
+    /// backend this is the only thing that stops the stream.
+    ///
+    /// Called from the UI thread, at most once per idle stretch, and only
+    /// after the mixer has published that it is no longer streaming.
+    fn park(&self) {}
 }
 
 /// Whether this build has a real output device compiled in.
@@ -86,6 +99,7 @@ mod tests {
             retired: retired_tx,
             leaked_clips: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             underruns: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            streaming: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         assert!(matches!(open(seed), Err(AudioError::Unsupported)));
     }

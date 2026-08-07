@@ -10,16 +10,23 @@
 //! exactly two things — read the negotiated format off the stream handle and
 //! run the mixer — so the real-time budget holds.
 //!
+//! The stream is not kept running for its own sake. A `LowLatency` output on
+//! Android is an MMAP route with the always-on audio DSP behind it, and it
+//! costs power whether or not the samples crossing it are zero, so when the
+//! mixer reports that nothing has sounded for a while the callback returns
+//! [`AudioCallbackResult::Stop`] and the engine starts the stream again on the
+//! next sound. That is AAudio's own idiom for a stream with nothing to do.
+//!
 //! The crate root denies unsafe code; this module opts back in for the one
 //! place it is unavoidable: turning AAudio's raw output pointer into a slice.
 #![allow(unsafe_code)]
 
 use crate::backend::AudioSink;
-use crate::mixer::{Mixer, MixerSeed};
+use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 use cranpose_services::AudioError;
 use ndk::audio::{
     AudioCallbackResult, AudioDirection, AudioError as AAudioError, AudioFormat,
-    AudioPerformanceMode, AudioSharingMode, AudioStream, AudioStreamBuilder,
+    AudioPerformanceMode, AudioSharingMode, AudioStream, AudioStreamBuilder, AudioStreamState,
 };
 use std::ffi::c_void;
 
@@ -57,8 +64,14 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
                 // channelCount` writable float samples for this call only, and
                 // the stream is verified as 32-bit float before it is started.
                 let out = unsafe { std::slice::from_raw_parts_mut(data, samples) };
-                mixer.render(out);
-                AudioCallbackResult::Continue
+                match mixer.render(out) {
+                    RenderStatus::Continue => AudioCallbackResult::Continue,
+                    // Returning `Stop` is what ends this real-time thread; the
+                    // engine also calls `request_stop` from the UI thread (see
+                    // `AAudioSink::park`) because AAudio only guarantees that
+                    // `Stop` ends the callback, not that it releases the route.
+                    RenderStatus::Idle => AudioCallbackResult::Stop,
+                }
             },
         ))
         .error_callback(Box::new(|_stream, error| {
@@ -107,8 +120,31 @@ impl AudioSink for AAudioSink {
     }
 
     fn resume(&self) {
+        // A stream the data callback gave up by returning `Stop` may still be
+        // in `Started`: on Android 8 that return only ended the callback, and
+        // the internal stop that later releases added does not exist there.
+        // `request_start` is rejected in that state, which would leave the app
+        // permanently silent, so the stop is made explicit first. This is a
+        // no-op on a stream that really did stop, and it does not fire on the
+        // lifecycle path, where `suspend` left the stream paused.
+        if self.stream.state() == AudioStreamState::Started {
+            if let Err(error) = self.stream.request_stop() {
+                log::debug!("failed to settle the AAudio stream before starting it: {error}");
+            }
+        }
         if let Err(error) = self.stream.request_start() {
             log::debug!("failed to restart the AAudio stream: {error}");
+        }
+    }
+
+    fn park(&self) {
+        // `request_stop` rather than `request_pause`: a paused stream keeps its
+        // route, which is exactly the thing costing power. Stopping an already
+        // stopped stream is a no-op in AAudio, so this stays correct on the
+        // releases where returning `Stop` from the callback already tore the
+        // stream down.
+        if let Err(error) = self.stream.request_stop() {
+            log::debug!("failed to release the idle AAudio stream: {error}");
         }
     }
 }

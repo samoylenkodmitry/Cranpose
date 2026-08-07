@@ -7,9 +7,18 @@
 //! Linux builds link ALSA, which needs `libasound2-dev` (or the distribution's
 //! equivalent) present at build time. That is why the feature is off by
 //! default.
+//!
+//! One thing does differ, and it is worth stating rather than hiding: a cpal
+//! data callback returns nothing, so unlike AAudio it cannot give the device
+//! up from the inside. The mixer still publishes that it has gone idle, and
+//! the engine pauses the stream from the UI thread on its next call — which
+//! means a desktop app that plays a sound and then never touches the engine
+//! again keeps its stream open a while longer than an Android one would. That
+//! is a deliberate trade: desktop has no always-on audio DSP to keep awake,
+//! and a timer thread to close the gap would cost more than it saves.
 
 use crate::backend::AudioSink;
-use crate::mixer::{Mixer, MixerSeed};
+use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_services::AudioError;
 
@@ -36,7 +45,12 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
     let stream = match sample_format {
         cpal::SampleFormat::F32 => device.build_output_stream(
             config,
-            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mixer.render(data),
+            // The idle verdict is dropped here on purpose: `render` has already
+            // published it for the engine, and this callback has no way to stop
+            // its own stream. See the module comment.
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let _ = mixer.render(data);
+            },
             error_callback,
             None,
         ),
@@ -45,9 +59,13 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
             device.build_output_stream(
                 config,
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    render_into_integer(&mut mixer, &mut scratch, data, channels, |sample| {
-                        (sample * f32::from(i16::MAX)) as i16
-                    });
+                    let _ = render_into_integer(
+                        &mut mixer,
+                        &mut scratch,
+                        data,
+                        channels,
+                        |sample| (sample * f32::from(i16::MAX)) as i16,
+                    );
                 },
                 error_callback,
                 None,
@@ -73,26 +91,31 @@ fn unwritable_sample_format(format: cpal::SampleFormat) -> AudioError {
 
 /// Renders through the preallocated scratch buffer and converts, in whole
 /// frames, so no allocation happens inside the callback.
+///
+/// The verdict of the last chunk is the one that counts: an earlier chunk that
+/// still had a voice in it is precisely what stops the mixer going idle.
 fn render_into_integer<T>(
     mixer: &mut Mixer,
     scratch: &mut [f32],
     data: &mut [T],
     channels: usize,
     convert: impl Fn(f32) -> T,
-) {
+) -> RenderStatus {
     let chunk = (scratch.len() / channels) * channels;
     if chunk == 0 {
-        return;
+        return RenderStatus::Continue;
     }
+    let mut status = RenderStatus::Continue;
     let mut offset = 0;
     while offset < data.len() {
         let take = (data.len() - offset).min(chunk);
-        mixer.render(&mut scratch[..take]);
+        status = mixer.render(&mut scratch[..take]);
         for index in 0..take {
             data[offset + index] = convert(scratch[index]);
         }
         offset += take;
     }
+    status
 }
 
 struct CpalSink {
@@ -109,6 +132,14 @@ impl AudioSink for CpalSink {
     fn resume(&self) {
         if let Err(error) = self.stream.play() {
             log::debug!("failed to restart the output stream: {error}");
+        }
+    }
+
+    fn park(&self) {
+        // cpal has no stop, only pause; it releases the callback thread, which
+        // is the part that costs anything on a desktop.
+        if let Err(error) = self.stream.pause() {
+            log::debug!("failed to release the idle output stream: {error}");
         }
     }
 }

@@ -25,6 +25,17 @@
 //! reach it as `Arc<[f32]>` inside a command; clips it drops travel back over a
 //! second queue so the deallocation happens on the UI thread.
 //!
+//! # When the device is open
+//!
+//! Only while there is sound to make. The output device opens on the first
+//! [`play`](cranpose_services::AudioPlayer::play), not on
+//! [`install`](install) and not on
+//! [`load_clip`](cranpose_services::AudioPlayer::load_clip) — a clip load is a
+//! queue push, and the queue exists before any mixer does — and the mixer gives
+//! the stream up again once nothing has sounded for a couple of seconds. A
+//! silent screen therefore costs no audio thread and no output route, whether
+//! it is the first screen or one reached after an hour of play.
+//!
 //! # Devices
 //!
 //! * Android and Wear OS: AAudio through the `ndk` crate (`aaudio` feature, on
@@ -54,8 +65,8 @@ pub fn create() -> Rc<AudioEngine> {
 /// Creates an engine and installs it as the platform audio player.
 ///
 /// Call once at startup, on the thread that runs the composition. The output
-/// device opens on the first sound, not here, so installing the engine in an
-/// app that never plays anything costs nothing.
+/// device opens on the first sound, not here and not when clips are loaded, so
+/// installing the engine in an app that never plays anything costs nothing.
 pub fn install() -> AudioPlayerRef {
     let engine: AudioPlayerRef = create();
     set_platform_audio(Rc::clone(&engine));

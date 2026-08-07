@@ -50,6 +50,46 @@ ALSA, whose development headers (`libasound2-dev` or the distribution
 equivalent) must be present at build time. Enable it through Cranpose with
 `features = ["audio-desktop"]`.
 
+## Keeping the device shut
+
+A `LowLatency` output stream on Android is an MMAP route with the always-on
+audio DSP behind it, and it draws power for as long as it exists — tens of
+milliwatts on a phone, whether or not the samples crossing it are zero. So the
+engine treats the device as something to borrow, not to hold:
+
+* **Opening it is triggered by sound, not by setup.** `install()` does not open
+  it, and neither does `load_clip`. Loading a clip is a push onto the command
+  queue, and that queue is created with the engine, so a whole sound bank can be
+  resident with no device open at all; the first mixer to start drains the loads
+  that were waiting for it. The first `play` is what opens the device.
+* **It is given back when nothing is playing.** After two seconds with no voice
+  putting samples into a buffer, the mixer stops the stream: the AAudio callback
+  returns `AAUDIO_CALLBACK_RESULT_STOP`, and the engine calls
+  `AAudioStream_requestStop` to release the route. The next `play` starts it
+  again. Two seconds is chosen to sit above the gap between taps in a menu and
+  above the length of a one-shot cue, so an active screen never thrashes the
+  stream while an idle one goes quiet almost at once.
+* **The handover is race-free without locking.** The engine queues its command
+  and then reads a shared flag; the mixer clears the flag and then re-reads the
+  queue. A `SeqCst` fence on each side puts both pairs into one order, so every
+  interleaving leaves exactly one side responsible for the stream. Neither side
+  spins, and the real-time thread does two atomic operations for it.
+
+A consequence worth stating: `load_clip` can no longer report that the device is
+missing, because finding that out means opening it. Its only error is
+`ClipTableFull`; whether sound works is `AudioPlayer::is_available()`, and the
+device's own failure is `AudioEngine::take_last_error()` once a play has tried.
+That matches `NoopAudioPlayer`, which also hands out real `SoundId`s on a
+machine with no audio.
+
+The cpal backend is treated the same way with one honest gap: a cpal data
+callback returns nothing, so it cannot stop its own stream. The mixer still
+publishes that it has gone idle and the engine pauses the stream on its next
+call, which means a desktop app that plays a sound and then never touches the
+engine again holds its stream longer than an Android one would. Desktop has no
+always-on audio DSP to keep awake, and a timer thread to close that gap would
+cost more than it saves.
+
 ## Keeping the audio callback real-time
 
 The platform calls back on a thread with a hard deadline. Allocating, locking,
