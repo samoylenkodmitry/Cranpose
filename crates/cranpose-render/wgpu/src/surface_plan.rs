@@ -85,15 +85,30 @@ pub(crate) struct LayerSurfaceRenderOptions<'a> {
 }
 
 fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
-    layer.children.iter().any(|child| {
-        matches!(
-            child,
-            RenderNode::Primitive(PrimitiveEntry {
-                node: PrimitiveNode::Text(_),
-                ..
-            })
-        )
+    layer.children.iter().any(|child| match child {
+        RenderNode::Primitive(PrimitiveEntry {
+            node: PrimitiveNode::Text(_),
+            ..
+        }) => true,
+        // Text drawn through a `DrawScope` rasterizes the same glyph masks and
+        // wants the same rigid snapping; missing it here would leave canvas
+        // text blurred on a fractionally offset layer.
+        RenderNode::Primitive(PrimitiveEntry {
+            node: PrimitiveNode::Draw(draw),
+            ..
+        }) => draw_primitive_contains_text(&draw.primitive),
+        RenderNode::Layer(_) => false,
     })
+}
+
+fn draw_primitive_contains_text(draw: &cranpose_ui_graphics::DrawPrimitive) -> bool {
+    match draw {
+        cranpose_ui_graphics::DrawPrimitive::Text(_) => true,
+        cranpose_ui_graphics::DrawPrimitive::Blend { primitive, .. } => {
+            draw_primitive_contains_text(primitive)
+        }
+        _ => false,
+    }
 }
 
 fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
@@ -499,8 +514,8 @@ pub(crate) fn layer_surface_requirements_cached(
 mod tests {
     use super::{
         composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-        effect_layer_target_scale, effective_surface_requirements, layer_surface_requirements,
-        layer_surface_scale, layer_surface_target_scale,
+        effect_layer_target_scale, effective_surface_requirements, layer_needs_rigid_snap,
+        layer_surface_requirements, layer_surface_scale, layer_surface_target_scale,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::EffectLayer;
@@ -1113,5 +1128,38 @@ mod tests {
             vec![(36, 36), (45, 45)],
             "a 41-frame scale sweep must reuse two surfaces, not reallocate per frame"
         );
+    }
+
+    #[test]
+    fn a_layer_drawing_scope_text_snaps_as_rigidly_as_one_holding_a_text_node() {
+        // Glyph masks are rasterized on the pixel grid either way; a canvas that
+        // draws its own text has exactly the same crispness requirement as a
+        // `Text` composable.
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 120.0,
+            height: 40.0,
+        });
+        assert!(!layer_needs_rigid_snap(&layer, false));
+
+        layer.children.push(RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 60.0,
+                        height: 20.0,
+                    },
+                    text: std::rc::Rc::from("SCORE"),
+                    style: cranpose_ui_graphics::TextStyle::new(16.0),
+                    color: cranpose_ui_graphics::Color::WHITE,
+                })),
+                clip: None,
+            }),
+        }));
+        assert!(layer_needs_rigid_snap(&layer, false));
     }
 }

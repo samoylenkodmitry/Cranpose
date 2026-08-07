@@ -427,6 +427,15 @@ fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
             size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(primitive)
         }
         DrawPrimitive::Image { .. } => 0,
+        DrawPrimitive::Text(text) => {
+            size_of::<cranpose_ui_graphics::TextPrimitive>()
+                + text.text.len()
+                + text
+                    .style
+                    .font_family
+                    .as_ref()
+                    .map_or(0, |family| family.capacity())
+        }
         DrawPrimitive::Shadow(shadow) => shadow_primitive_heap_bytes(shadow),
     }
 }

@@ -13,7 +13,7 @@ use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
-    ShapeDrawParams,
+    ShapeDrawParams, TextDrawParams,
 };
 use cranpose_render_common::Brush;
 use cranpose_render_common::RenderScene;
@@ -2018,6 +2018,11 @@ fn collect_hits_from_graph(
     collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
+/// Node id recorded for text that came from a draw primitive rather than a
+/// `Text` node. Text draws only carry a node id for per-node prewarm
+/// bookkeeping, and a draw primitive belongs to its layer, not to a text node.
+const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
+
 pub(crate) fn push_draw_primitive(
     primitive: DrawPrimitive,
     layer_bounds: Rect,
@@ -2071,6 +2076,25 @@ pub(crate) fn push_draw_primitive(
             clip: Option<Rect>,
         ) {
             push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+        }
+
+        fn push_text(&mut self, params: TextDrawParams) {
+            // Straight into the compositor's text list — the same one `Text`
+            // nodes land in, so the run shares its glyph atlas, run cache and
+            // pipeline. `emit_text_style_draws` is skipped deliberately: a draw
+            // primitive carries no spans, background, shadow or decoration for
+            // it to expand.
+            self.scene.push_text(
+                DRAW_PRIMITIVE_TEXT_NODE_ID,
+                params.rect,
+                params.text,
+                params.color,
+                params.text_style,
+                params.font_size,
+                params.scale,
+                params.layout_options,
+                params.clip,
+            );
         }
     }
 
@@ -4668,6 +4692,107 @@ mod tests {
             prepared.text.text.contains('\u{2026}'),
             "ellipsis should remain active: {:?}",
             prepared.text
+        );
+    }
+
+    // ── DrawScope text ──────────────────────────────────────────────────────
+
+    fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
+        DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
+            rect,
+            text: std::rc::Rc::from(text),
+            style: cranpose_ui_graphics::TextStyle::new(16.0),
+            color: cranpose_ui_graphics::Color::WHITE,
+        }))
+    }
+
+    #[test]
+    fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
+        let mut scene = Scene::new();
+        push_draw_primitive(
+            text_draw_primitive(
+                Rect {
+                    x: 4.0,
+                    y: 5.0,
+                    width: 60.0,
+                    height: 20.0,
+                },
+                "SCORE",
+            ),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            &GraphicsLayer::default(),
+            None,
+            &mut scene,
+            None,
+            false,
+        );
+
+        assert_eq!(scene.texts.len(), 1, "text must reach the glyph-atlas path");
+        assert!(
+            scene.shapes.is_empty() && scene.images.is_empty(),
+            "text must not be lowered into a shape or a rasterized image"
+        );
+        let text = &scene.texts[0];
+        assert_eq!(text.text.text, "SCORE");
+        assert_eq!(text.rect.x, 14.0);
+        assert_eq!(text.rect.y, 25.0);
+        assert_eq!(text.color, cranpose_ui_graphics::Color::WHITE);
+        assert!(
+            scene
+                .draw_ops
+                .iter()
+                .any(|op| matches!(op.kind, crate::scene::DrawOpKind::Text(0))),
+            "the run must be ordered with the rest of the layer's draws"
+        );
+    }
+
+    #[test]
+    fn text_draw_primitives_keep_their_z_order_against_the_shapes_around_them() {
+        let mut scene = Scene::new();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let backdrop = DrawPrimitive::Rect {
+            rect: bounds,
+            brush: Brush::solid(cranpose_ui_graphics::Color::BLACK),
+            stroke: None,
+        };
+        for primitive in [
+            backdrop.clone(),
+            text_draw_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 40.0,
+                    height: 20.0,
+                },
+                "HUD",
+            ),
+        ] {
+            push_draw_primitive(
+                primitive,
+                bounds,
+                &GraphicsLayer::default(),
+                None,
+                &mut scene,
+                None,
+                false,
+            );
+        }
+
+        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.texts.len(), 1);
+        assert!(
+            scene.texts[0].z_index > scene.shapes[0].z_index,
+            "text drawn after a rect must composite above it"
         );
     }
 }

@@ -54,12 +54,13 @@ pub(crate) fn apply_draw_commands(
                 scene,
                 blend_mode.or(Some(nested)),
             ),
-            // Shapes (fills, strokes and arcs) go through the one shared
-            // lowering in `cranpose_render_common::primitive_emit` so this
-            // test-only helper can never drift from the production path.
+            // Shapes (fills, strokes and arcs) and text go through the one
+            // shared lowering in `cranpose_render_common::primitive_emit` so
+            // this test-only helper can never drift from the production path.
             shape_primitive @ (DrawPrimitive::Rect { .. }
             | DrawPrimitive::RoundRect { .. }
-            | DrawPrimitive::Arc { .. }) => {
+            | DrawPrimitive::Arc { .. }
+            | DrawPrimitive::Text(_)) => {
                 crate::pipeline::push_draw_primitive(
                     shape_primitive,
                     layer_bounds,

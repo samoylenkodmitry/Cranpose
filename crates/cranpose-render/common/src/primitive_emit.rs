@@ -1,7 +1,12 @@
+use std::rc::Rc;
+
+use cranpose_ui::text::{
+    text_style_for_draw_style, AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle,
+};
 use cranpose_ui_graphics::{
-    arc_band, inflate_rect, ArcGeometry, BlendMode, Brush, ColorFilter, DrawPrimitive,
+    arc_band, inflate_rect, ArcGeometry, BlendMode, Brush, Color, ColorFilter, DrawPrimitive,
     GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape, ShadowPrimitive,
-    Stroke,
+    Stroke, TextPrimitive,
 };
 
 use crate::graph::quad_bounds;
@@ -9,7 +14,9 @@ use crate::layer_transform::{
     apply_layer_affine_to_point, apply_layer_affine_to_rect, apply_layer_to_quad,
     apply_layer_to_rect, layer_uniform_scale,
 };
-use crate::style_shared::{apply_layer_to_brush, compose_color_filters, scale_corner_radii};
+use crate::style_shared::{
+    apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrimitiveClipSpace {
@@ -82,6 +89,26 @@ pub struct ImageDrawParams {
     pub motion_context_animated: bool,
 }
 
+/// A `DrawScope` text run, lowered into the vocabulary the text pipeline
+/// already speaks.
+///
+/// The fields line up one-for-one with `CompositorScene::push_text` in both
+/// backends, so a text primitive joins the same glyph atlas, run cache and
+/// shader the `Text` composable uses instead of getting a pipeline of its own.
+pub struct TextDrawParams {
+    /// Layer-transformed block box. Glyphs are laid out from its top-left; the
+    /// draw scope already resolved alignment into it.
+    pub rect: Rect,
+    pub text: Rc<AnnotatedString>,
+    pub color: Color,
+    pub text_style: TextStyle,
+    pub font_size: f32,
+    /// Uniform layer scale — the factor glyphs are rasterized at.
+    pub scale: f32,
+    pub layout_options: TextLayoutOptions,
+    pub clip: Option<Rect>,
+}
+
 pub trait DrawPrimitiveSink {
     fn push_shape(&mut self, params: ShapeDrawParams);
 
@@ -94,6 +121,13 @@ pub trait DrawPrimitiveSink {
         layer: &GraphicsLayer,
         clip: Option<Rect>,
     );
+
+    /// Draws a text run. The default drops it, for sinks that only collect
+    /// geometry (shadow casters, hit testing) and backends with no text
+    /// pipeline.
+    fn push_text(&mut self, params: TextDrawParams) {
+        let _ = params;
+    }
 }
 
 pub fn draw_shape_params_for_primitive(
@@ -325,10 +359,67 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 motion_context_animated,
             });
         }
+        DrawPrimitive::Text(text) => {
+            if let Some(params) = text_draw_params(*text, layer_bounds, layer, clip) {
+                sink.push_text(params);
+            }
+        }
         DrawPrimitive::Shadow(shadow_primitive) => {
             sink.push_shadow(shadow_primitive, layer_bounds, layer, clip);
         }
     }
+}
+
+/// Lowers a text primitive into [`TextDrawParams`].
+///
+/// The block box is translated into layer space and transformed exactly like a
+/// `Text` node's rect, and the style is built by the *same*
+/// [`text_style_for_draw_style`] the draw scope measured through — so the
+/// glyphs the rasterizer lays out and the extent the caller was told about come
+/// from one description.
+///
+/// Returns `None` for geometry no rasterizer would draw, so degenerate text
+/// never reaches a scene.
+fn text_draw_params(
+    text: TextPrimitive,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+) -> Option<TextDrawParams> {
+    if text.text.is_empty() {
+        return None;
+    }
+    let draw_rect = text.rect.translate(layer_bounds.x, layer_bounds.y);
+    let rect = apply_layer_to_rect(draw_rect, layer_bounds, layer);
+    if !(rect.width > 0.0 && rect.height > 0.0) {
+        return None;
+    }
+    let scale = layer_uniform_scale(layer);
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let color = apply_layer_to_color(text.color, layer);
+    if color.3 <= 0.0 {
+        return None;
+    }
+
+    Some(TextDrawParams {
+        rect,
+        text: Rc::new(AnnotatedString::from(text.text.as_ref())),
+        color,
+        text_style: text_style_for_draw_style(&text.style),
+        font_size: text.style.resolved_font_size(),
+        scale,
+        // A draw scope hands the renderer a box it measured itself: re-wrapping
+        // or ellipsizing it against that same box could only shorten text the
+        // caller already sized for.
+        layout_options: TextLayoutOptions {
+            soft_wrap: false,
+            overflow: TextOverflow::Visible,
+            ..TextLayoutOptions::default()
+        },
+        clip,
+    })
 }
 
 #[cfg(test)]
@@ -747,5 +838,254 @@ mod tests {
         assert!(params.stroke.is_none());
         assert!(params.arc.is_none());
         assert!(params.shape.is_some());
+    }
+
+    // ── Text lowering ───────────────────────────────────────────────────────
+
+    use cranpose_ui_graphics::{
+        FontWeight as DrawFontWeight, TextPrimitive, TextStyle as DrawTextStyle,
+    };
+    use std::rc::Rc as StdRc;
+
+    #[derive(Default)]
+    struct CollectingTextSink {
+        texts: Vec<TextDrawParams>,
+    }
+
+    impl DrawPrimitiveSink for CollectingTextSink {
+        fn push_shape(&mut self, _params: ShapeDrawParams) {}
+        fn push_image(&mut self, _params: ImageDrawParams) {}
+        fn push_shadow(
+            &mut self,
+            _shadow_primitive: ShadowPrimitive,
+            _layer_bounds: Rect,
+            _layer: &GraphicsLayer,
+            _clip: Option<Rect>,
+        ) {
+        }
+        fn push_text(&mut self, params: TextDrawParams) {
+            self.texts.push(params);
+        }
+    }
+
+    fn text_primitive(rect: Rect, text: &str, style: DrawTextStyle) -> DrawPrimitive {
+        DrawPrimitive::Text(Box::new(TextPrimitive {
+            rect,
+            text: StdRc::from(text),
+            style,
+            color: Color::WHITE,
+        }))
+    }
+
+    fn lower_text(primitive: DrawPrimitive, layer: &GraphicsLayer) -> Vec<TextDrawParams> {
+        let mut sink = CollectingTextSink::default();
+        emit_draw_primitive(
+            primitive,
+            layer_bounds(),
+            layer,
+            None,
+            &mut sink,
+            None,
+            false,
+        );
+        sink.texts
+    }
+
+    #[test]
+    fn text_lowers_into_the_layer_translated_block_the_scope_measured() {
+        let params = lower_text(
+            text_primitive(
+                Rect {
+                    x: 5.0,
+                    y: 6.0,
+                    width: 40.0,
+                    height: 18.0,
+                },
+                "SCORE",
+                DrawTextStyle::new(12.0),
+            ),
+            &GraphicsLayer::default(),
+        );
+        assert_eq!(params.len(), 1);
+        // Layer bounds are (10, 20); an untransformed layer only translates.
+        assert_eq!(
+            params[0].rect,
+            Rect {
+                x: 15.0,
+                y: 26.0,
+                width: 40.0,
+                height: 18.0,
+            }
+        );
+        assert_eq!(params[0].text.text, "SCORE");
+        assert_eq!(params[0].font_size, 12.0);
+        assert_eq!(params[0].scale, 1.0);
+        assert_eq!(params[0].color, Color::WHITE);
+    }
+
+    #[test]
+    fn text_lowering_carries_the_uniform_layer_scale_for_rasterization() {
+        let layer = GraphicsLayer {
+            scale: 2.0,
+            transform_origin: cranpose_ui_graphics::TransformOrigin::new(0.0, 0.0),
+            ..Default::default()
+        };
+        let params = lower_text(
+            text_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 30.0,
+                    height: 14.0,
+                },
+                "AB",
+                DrawTextStyle::new(10.0),
+            ),
+            &layer,
+        );
+        assert_eq!(params[0].scale, 2.0, "glyphs rasterize at the layer scale");
+        assert!(approx(params[0].rect.width, 60.0), "{:?}", params[0].rect);
+    }
+
+    #[test]
+    fn text_lowering_folds_the_layer_alpha_into_the_glyph_color() {
+        let layer = GraphicsLayer {
+            alpha: 0.5,
+            ..Default::default()
+        };
+        let params = lower_text(
+            text_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 30.0,
+                    height: 14.0,
+                },
+                "AB",
+                DrawTextStyle::new(10.0),
+            ),
+            &layer,
+        );
+        assert!(approx(params[0].color.3, 0.5));
+    }
+
+    #[test]
+    fn text_lowering_uses_the_same_style_translation_the_draw_scope_measured_with() {
+        let style = DrawTextStyle::new(18.0)
+            .with_font_family("Fira Sans")
+            .with_weight(DrawFontWeight::BOLD);
+        let params = lower_text(
+            text_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 30.0,
+                    height: 20.0,
+                },
+                "AB",
+                style.clone(),
+            ),
+            &GraphicsLayer::default(),
+        );
+        assert_eq!(params[0].text_style, text_style_for_draw_style(&style));
+    }
+
+    #[test]
+    fn lowered_text_is_never_re_wrapped_against_the_box_it_was_measured_into() {
+        // The draw scope already sized the box from the string; wrapping or
+        // ellipsizing here could only truncate text the caller asked for.
+        let params = lower_text(
+            text_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 4.0,
+                    height: 14.0,
+                },
+                "a very long line",
+                DrawTextStyle::new(10.0),
+            ),
+            &GraphicsLayer::default(),
+        );
+        assert!(!params[0].layout_options.soft_wrap);
+        assert_eq!(params[0].layout_options.overflow, TextOverflow::Visible);
+    }
+
+    #[test]
+    fn degenerate_text_never_reaches_a_sink() {
+        let invisible_layer = GraphicsLayer {
+            alpha: 0.0,
+            ..Default::default()
+        };
+        let cases: [(DrawPrimitive, GraphicsLayer); 3] = [
+            (
+                text_primitive(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    "",
+                    DrawTextStyle::new(10.0),
+                ),
+                GraphicsLayer::default(),
+            ),
+            (
+                text_primitive(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 0.0,
+                        height: 10.0,
+                    },
+                    "AB",
+                    DrawTextStyle::new(10.0),
+                ),
+                GraphicsLayer::default(),
+            ),
+            (
+                text_primitive(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    "AB",
+                    DrawTextStyle::new(10.0),
+                ),
+                invisible_layer,
+            ),
+        ];
+        for (primitive, layer) in cases {
+            assert!(
+                lower_text(primitive, &layer).is_empty(),
+                "degenerate text must not reach the renderer"
+            );
+        }
+    }
+
+    #[test]
+    fn blended_text_still_lowers_because_glyphs_composite_src_over() {
+        // `DrawScope` offers no blended text, but a nested `Blend` wrapper must
+        // not swallow the run if one is built by hand.
+        let params = lower_text(
+            DrawPrimitive::Blend {
+                primitive: Box::new(text_primitive(
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    "AB",
+                    DrawTextStyle::new(10.0),
+                )),
+                blend_mode: BlendMode::DstOut,
+            },
+            &GraphicsLayer::default(),
+        );
+        assert_eq!(params.len(), 1);
     }
 }
