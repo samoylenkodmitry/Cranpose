@@ -78,7 +78,19 @@ const MIN_VSYNC_PERIOD_NS: i64 = 4_000_000;
 const MAX_VSYNC_PERIOD_NS: i64 = 40_000_000;
 
 /// Starts the `AChoreographer` vsync anchor if `debug.cranpose.vsync_probe` is
-/// set. Must be called from the thread that owns the `ALooper` (android_main).
+/// set.
+///
+/// The probe runs on its own thread with its own `ALooper`, and **must not** be
+/// hosted on `android_main`. `AChoreographer` delivers frame callbacks by waking
+/// the looper of the thread that registered them, so a probe registered on the
+/// app's looper wakes the frame loop once per vsync and paces the very thing it
+/// is meant to observe: with the probe on `android_main`, Fifo and Mailbox
+/// measure identically to within 0.03 ms on every stage (both pinned to 60 fps),
+/// while with the probe off the same build free-runs at 230 fps under Mailbox.
+/// That made the probe useless for exactly the comparison it exists to support.
+///
+/// On its own thread the callbacks wake only that thread, and the frame loop
+/// reads the results out of the atomics below.
 pub(crate) fn start_vsync_probe_if_enabled() {
     if !property_flag("debug.cranpose.vsync_probe") {
         return;
@@ -86,24 +98,62 @@ pub(crate) fn start_vsync_probe_if_enabled() {
     if VSYNC_PROBE_RUNNING.swap(true, Ordering::Relaxed) {
         return;
     }
+    if let Err(error) = std::thread::Builder::new()
+        .name("cranpose-vsync".to_owned())
+        .spawn(run_vsync_probe)
+    {
+        VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
+        log::warn!("[android-frame] vsync probe thread failed to start: {error}");
+    }
+}
+
+fn run_vsync_probe() {
+    // SAFETY: `ALooper_prepare` is being called on this freshly spawned thread,
+    // which owns the looper it creates and is the only thread that polls it.
+    let looper = unsafe { ndk_sys::ALooper_prepare(0) };
+    if looper.is_null() {
+        VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
+        log::warn!("[android-frame] ALooper_prepare returned null; vsync probe not started");
+        return;
+    }
     // The period must come from the display, not from the gap between two
-    // callbacks: the callback is serviced from the app's looper, so when a frame
-    // overruns, consecutive callbacks land two or three vsyncs apart and any
-    // averaging of those deltas converges on the *frame* period rather than the
-    // *display* period — which would then make every phase-modulo meaningless.
-    // SAFETY: called on the looper-owning thread with a `'static` callback.
+    // callbacks: when a frame overruns, consecutive callbacks land two or three
+    // vsyncs apart and any averaging of those deltas converges on the *frame*
+    // period rather than the *display* period — which would then make every
+    // phase-modulo meaningless.
+    // SAFETY: this thread owns a prepared looper, and the callback is a
+    // `'static` function taking null user data.
     unsafe {
         let choreographer = ndk_sys::AChoreographer_getInstance();
-        if !choreographer.is_null() {
-            ndk_sys::AChoreographer_registerRefreshRateCallback(
-                choreographer,
-                Some(on_refresh_rate),
-                std::ptr::null_mut(),
-            );
+        if choreographer.is_null() {
+            VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
+            log::warn!("[android-frame] AChoreographer_getInstance returned null on probe thread");
+            return;
         }
+        ndk_sys::AChoreographer_registerRefreshRateCallback(
+            choreographer,
+            Some(on_refresh_rate),
+            std::ptr::null_mut(),
+        );
     }
     post_vsync_callback();
-    log::info!("[android-frame] vsync probe started");
+    log::info!("[android-frame] vsync probe started on its own looper");
+    while VSYNC_PROBE_RUNNING.load(Ordering::Relaxed) {
+        // SAFETY: this thread prepared the looper it is polling.
+        let result = unsafe {
+            ndk_sys::ALooper_pollOnce(
+                -1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if result == ndk_sys::ALOOPER_POLL_ERROR {
+            log::warn!("[android-frame] vsync probe looper returned an error; stopping");
+            VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
+            return;
+        }
+    }
 }
 
 unsafe extern "C" fn on_refresh_rate(vsync_period_ns: i64, _data: *mut c_void) {
