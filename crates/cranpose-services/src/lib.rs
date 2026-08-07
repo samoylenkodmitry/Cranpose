@@ -54,7 +54,8 @@ pub use image_picker::{
     ProvideImagePicker, IMAGE_EXTENSIONS,
 };
 pub use navigation::{
-    back_interception_enabled, push_back_request, set_back_interception, take_back_requests,
+    back_interception_enabled, push_back_request, set_back_interception, set_back_request_listener,
+    take_back_requests,
 };
 pub use network_status::{
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
