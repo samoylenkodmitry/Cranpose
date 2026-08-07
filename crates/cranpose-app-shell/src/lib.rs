@@ -856,7 +856,7 @@ where
                 let after_frame_callbacks = Instant::now();
                 runtime_handle.drain_ui();
                 let after_ui_drain = Instant::now();
-                let should_render = self.composition.should_render();
+                let should_render = self.composition.should_recompose();
                 let mut reconcile_attempted = false;
                 let mut reconcile_changed = false;
                 if should_render {

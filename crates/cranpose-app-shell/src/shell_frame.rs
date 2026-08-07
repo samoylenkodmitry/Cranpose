@@ -295,7 +295,7 @@ where
     }
 
     fn run_post_layout_recomposition(&mut self) -> bool {
-        if !self.composition.should_render() {
+        if !self.composition.should_recompose() {
             return false;
         }
 

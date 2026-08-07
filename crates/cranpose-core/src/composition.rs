@@ -315,6 +315,25 @@ impl<A: Applier + 'static> Composition<A> {
         self.root_render_requested || self.runtime.needs_frame() || self.runtime.has_updates()
     }
 
+    /// Whether any composition scope is actually invalid, i.e. whether running
+    /// the composable tree could produce a different result than last time.
+    ///
+    /// Deliberately excludes [`Runtime::needs_frame`], which [`should_render`]
+    /// includes. An armed frame callback means the *runtime* owes someone a
+    /// tick - a future to resume, a dispatcher to drain - and every app with a
+    /// game loop or a polling effect has one armed at all times. Re-running the
+    /// composition for it recomposes a tree that nothing invalidated. Callers
+    /// deciding "should I tick" want [`should_render`]; callers deciding
+    /// "should I recompose" want this.
+    ///
+    /// It is only meaningful *after* the frame callbacks have been drained: a
+    /// callback that writes state invalidates its readers as it runs, so the
+    /// answer is a question about work already discovered, not work still to
+    /// come.
+    pub fn should_recompose(&self) -> bool {
+        self.root_render_requested || self.runtime.has_updates()
+    }
+
     pub fn runtime_handle(&self) -> RuntimeHandle {
         self.runtime.handle()
     }
