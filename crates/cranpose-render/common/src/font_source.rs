@@ -19,6 +19,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
 
@@ -96,10 +97,17 @@ impl SoftwareTextFontRegistry {
             return Err(FontLoadError::EmptyFamily);
         }
 
+        let mut reads = FontFileReads::default();
         let mut first_error = None;
         let mut loaded = 0usize;
         for file in &files {
-            match self.register_face_path(family, file.weight, file.style, &file.path) {
+            match self.register_read_face(
+                &mut reads,
+                family,
+                file.weight,
+                file.style,
+                Path::new(&file.path),
+            ) {
                 Ok(()) => loaded += 1,
                 Err(error) => first_error = first_error.or(Some(error)),
             }
@@ -119,17 +127,29 @@ impl SoftwareTextFontRegistry {
         style: FontStyle,
         path: impl AsRef<Path>,
     ) -> Result<(), FontLoadError> {
-        let path = path.as_ref();
-        let bytes = std::fs::read(path).map_err(|source| FontLoadError::Read {
+        self.register_read_face(
+            &mut FontFileReads::default(),
+            family,
+            weight,
+            style,
+            path.as_ref(),
+        )
+    }
+
+    fn register_read_face(
+        &mut self,
+        reads: &mut FontFileReads,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        path: &Path,
+    ) -> Result<(), FontLoadError> {
+        let bytes = reads.read(path)?;
+        let face = SoftwareTextFont::from_registered_bytes(family, weight, style, bytes.to_vec())
+            .map_err(|source| FontLoadError::Parse {
             path: path.to_path_buf(),
             source,
         })?;
-        let face = SoftwareTextFont::from_registered_bytes(family, weight, style, bytes).map_err(
-            |source| FontLoadError::Parse {
-                path: path.to_path_buf(),
-                source,
-            },
-        )?;
         self.faces.push(face);
         Ok(())
     }
@@ -204,10 +224,17 @@ impl SoftwareTextFontRegistry {
         weights: &[FontWeight],
     ) -> Result<(), FontLoadError> {
         let directory = directory.as_ref();
+        let mut reads = FontFileReads::default();
         let mut first_error = None;
         let mut loaded = 0usize;
         for weight in weights {
-            match self.register_system_face(directory, family, *weight, FontStyle::Normal) {
+            match self.register_read_system_face(
+                &mut reads,
+                directory,
+                family,
+                *weight,
+                FontStyle::Normal,
+            ) {
                 Ok(()) => loaded += 1,
                 Err(error) => first_error = first_error.or(Some(error)),
             }
@@ -228,13 +255,29 @@ impl SoftwareTextFontRegistry {
         weight: FontWeight,
         style: FontStyle,
     ) -> Result<(), FontLoadError> {
-        let directory = directory.as_ref();
+        self.register_read_system_face(
+            &mut FontFileReads::default(),
+            directory.as_ref(),
+            family,
+            weight,
+            style,
+        )
+    }
+
+    fn register_read_system_face(
+        &mut self,
+        reads: &mut FontFileReads,
+        directory: &Path,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> Result<(), FontLoadError> {
         let path = system_font_file(directory, family, weight).ok_or_else(|| {
             FontLoadError::NoSystemFontFile {
                 directory: directory.to_path_buf(),
             }
         })?;
-        self.register_face_path(family, weight, style, path)
+        self.register_read_face(reads, family, weight, style, &path)
     }
 
     /// The faces registered so far.
@@ -264,6 +307,33 @@ impl SoftwareTextFontRegistry {
             }
         }
         SoftwareTextFontSet::from_faces(self.faces)
+    }
+}
+
+/// Font files read during one registration call.
+///
+/// A family that instances a single variable file at several weights names that
+/// file once per weight, and on Wear the file backing `sans-serif` is 2.3 MiB —
+/// worth reading once. Each face still needs its own copy of the bytes, because
+/// `ab_glyph` bakes the axis values into the parsed face.
+#[derive(Default)]
+struct FontFileReads {
+    entries: Vec<(PathBuf, Arc<[u8]>)>,
+}
+
+impl FontFileReads {
+    fn read(&mut self, path: &Path) -> Result<Arc<[u8]>, FontLoadError> {
+        if let Some((_, bytes)) = self.entries.iter().find(|(read, _)| read == path) {
+            return Ok(Arc::clone(bytes));
+        }
+        let bytes: Arc<[u8]> = std::fs::read(path)
+            .map_err(|source| FontLoadError::Read {
+                path: path.to_path_buf(),
+                source,
+            })?
+            .into();
+        self.entries.push((path.to_path_buf(), Arc::clone(&bytes)));
+        Ok(bytes)
     }
 }
 
