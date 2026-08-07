@@ -13,6 +13,7 @@ pub mod file_picker;
 pub mod haptics;
 pub mod http;
 pub mod image_picker;
+pub mod launch_args;
 pub mod navigation;
 pub mod network_status;
 pub mod notifier;
@@ -58,6 +59,11 @@ pub use image_picker::{
     clear_platform_image_picker, default_image_picker, local_image_picker,
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
+};
+pub use launch_args::{
+    clear_platform_launch_args, is_debuggable, isDebuggable, launch_args,
+    launch_args_from_command_line, local_launch_args, set_platform_launch_args, LaunchArgValue,
+    LaunchArgs, LaunchArgsRef, ProvideLaunchArgs,
 };
 pub use navigation::{
     back_interception_enabled, push_back_request, set_back_interception, take_back_requests,
