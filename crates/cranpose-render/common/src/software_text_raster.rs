@@ -439,11 +439,18 @@ fn apply_declared_variations(
     weight: FontWeight,
     style: FontStyle,
 ) -> Vec<([u8; 4], f32)> {
+    // Faces spell italic either as `ital` (0..1) or as `slnt`, a counter-
+    // clockwise angle where a right-leaning oblique is negative. The angle
+    // matches the slant `TextStyleSynthesis` would shear in, so a face that
+    // carries the axis lands where a synthesized one would.
+    const OBLIQUE_DEGREES: f32 = -12.0;
+
     let mut applied = Vec::new();
     for axis in font.variations() {
         let requested = match &axis.tag {
             b"wght" => f32::from(weight.value()),
             b"ital" if style == FontStyle::Italic => 1.0,
+            b"slnt" if style == FontStyle::Italic => OBLIQUE_DEGREES,
             _ => continue,
         };
         let value = requested.clamp(axis.min_value, axis.max_value);
@@ -5414,6 +5421,125 @@ mod tests {
         assert!(
             bold_metrics.width > regular_metrics.width,
             "bold face resolution should affect real text metrics: regular={regular_metrics:?} bold={bold_metrics:?}"
+        );
+    }
+
+    fn registered_face(family: &FontFamily, weight: FontWeight) -> SoftwareTextFont {
+        SoftwareTextFont::from_registered_bytes(
+            family,
+            weight,
+            FontStyle::Normal,
+            include_bytes!("../assets/NotoSansMerged.ttf").to_vec(),
+        )
+        .expect("registered test face")
+    }
+
+    fn style_naming(family: &FontFamily) -> TextStyle {
+        TextStyle {
+            span_style: SpanStyle {
+                font_family: Some(family.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_named_family_resolves_the_face_registered_under_it() {
+        // The file's own `name` table says Noto Sans; the app filed it as
+        // "Game UI", and asking for that has to find it.
+        let family = FontFamily::named("Game UI");
+        let fonts = SoftwareTextFontSet::from_faces(vec![
+            default_software_text_font().expect("bundled default test font"),
+            registered_face(&family, FontWeight::NORMAL),
+        ]);
+
+        let resolved = fonts
+            .resolve(&style_naming(&family))
+            .expect("registered face");
+        assert_eq!(
+            resolved.registered_family(),
+            Some(FontFamilyKey::of(&family))
+        );
+    }
+
+    #[test]
+    fn a_file_backed_family_never_resolves_a_face_filed_under_another_one() {
+        let mine = FontFamily::loaded_typeface_path("/fonts/Mine.ttf");
+        let theirs = FontFamily::loaded_typeface_path("/fonts/Theirs.ttf");
+        let default_font = default_software_text_font().expect("bundled default test font");
+        let fonts = SoftwareTextFontSet::from_faces(vec![
+            default_font.clone(),
+            registered_face(&theirs, FontWeight::NORMAL),
+        ]);
+
+        let resolved = fonts.resolve(&style_naming(&mine)).expect("fallback face");
+        assert_eq!(
+            resolved.content_hash(),
+            default_font.content_hash(),
+            "an unregistered family must fall back rather than borrow someone else's face"
+        );
+    }
+
+    #[test]
+    fn a_generic_family_only_constrains_the_set_once_a_face_is_registered_for_it() {
+        let bold_sans_serif = TextStyle {
+            span_style: SpanStyle {
+                font_family: Some(FontFamily::SansSerif),
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Nothing claims `sans-serif`, so weight matching still runs over the
+        // whole set the way it did before app-supplied families existed.
+        let unclaimed = software_text_font_set_from_fonts_or_default(&[
+            include_bytes!("../assets/NotoSansMerged.ttf"),
+            include_bytes!("../assets/NotoSansBold.ttf"),
+        ]);
+        assert_eq!(
+            unclaimed
+                .resolve(&bold_sans_serif)
+                .expect("bold face")
+                .weight(),
+            FontWeight::BOLD
+        );
+
+        // Once a face is filed under `sans-serif` it wins, because that is what
+        // the app said the alias means.
+        let claimed = SoftwareTextFontSet::from_faces(vec![
+            SoftwareTextFont::from_bytes(include_bytes!("../assets/NotoSansBold.ttf").to_vec())
+                .expect("bold test face"),
+            registered_face(&FontFamily::SansSerif, FontWeight::NORMAL),
+        ]);
+        let resolved = claimed.resolve(&bold_sans_serif).expect("system face");
+        assert_eq!(
+            resolved.registered_family(),
+            Some(FontFamilyKey::of(&FontFamily::SansSerif))
+        );
+    }
+
+    #[test]
+    fn an_app_supplied_family_measures_once_and_is_served_from_the_metrics_cache() {
+        let family = FontFamily::named("Game UI");
+        let measurer = SoftwareTextMeasurer::from_font_set(
+            SoftwareTextFontSet::from_faces(vec![registered_face(&family, FontWeight::NORMAL)]),
+            64,
+        );
+        let style = style_naming(&family);
+        let text = AnnotatedString::from("SCORE 1234");
+
+        let first = measurer.measure(&text, &style);
+        let stats_after_first = measurer.lock_cache().glyph_metrics.stats();
+        for _ in 0..60 {
+            assert_eq!(measurer.measure(&text, &style), first);
+        }
+
+        assert_eq!(
+            measurer.lock_cache().glyph_metrics.stats(),
+            stats_after_first,
+            "repeat frames of an unchanged string must not re-shape against the app face"
         );
     }
 
