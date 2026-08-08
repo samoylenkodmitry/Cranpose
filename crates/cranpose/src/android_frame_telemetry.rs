@@ -206,11 +206,7 @@ fn run_vsync_probe() {
             log::warn!("[android-frame] AChoreographer_getInstance returned null on probe thread");
             return;
         }
-        ndk_sys::AChoreographer_registerRefreshRateCallback(
-            choreographer,
-            Some(on_refresh_rate),
-            std::ptr::null_mut(),
-        );
+        register_refresh_rate_callback(choreographer);
     }
     post_vsync_callback();
     log::info!("[android-frame] vsync probe started on its own looper");
@@ -229,6 +225,43 @@ fn run_vsync_probe() {
             VSYNC_PROBE_RUNNING.store(false, Ordering::Relaxed);
             return;
         }
+    }
+}
+
+/// Registers for display refresh-rate updates when the platform can deliver
+/// them.
+///
+/// `AChoreographer_registerRefreshRateCallback` appeared in API 30, and it was
+/// the only post-29 symbol in the whole library — referenced strongly, it made
+/// `dlopen` fail on Android 10 with an `UnsatisfiedLinkError`, killing the app
+/// before `main` for the sake of a telemetry probe. Resolved at runtime
+/// instead: on an older device the probe simply never learns the display
+/// period, which every consumer already handles as the pre-probe state.
+fn register_refresh_rate_callback(choreographer: *mut ndk_sys::AChoreographer) {
+    type RegisterRefreshRateCallback = unsafe extern "C" fn(
+        *mut ndk_sys::AChoreographer,
+        ndk_sys::AChoreographer_refreshRateCallback,
+        *mut c_void,
+    );
+    let symbol = unsafe {
+        libc::dlsym(
+            libc::RTLD_DEFAULT,
+            c"AChoreographer_registerRefreshRateCallback".as_ptr(),
+        )
+    };
+    if symbol.is_null() {
+        log::info!(
+            "[android-frame] AChoreographer_registerRefreshRateCallback needs API 30; \
+             display period stays unknown on this device"
+        );
+        return;
+    }
+    // SAFETY: the symbol was just resolved from the loaded libandroid.so and
+    // has the NDK-documented signature; the callback is a `'static` function
+    // taking null user data.
+    unsafe {
+        let register: RegisterRefreshRateCallback = std::mem::transmute(symbol);
+        register(choreographer, Some(on_refresh_rate), std::ptr::null_mut());
     }
 }
 
