@@ -26,7 +26,9 @@ use cranpose_render_common::primitive_emit::{
     arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
     round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke,
+};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -701,34 +703,108 @@ struct LocalPrimitiveContext<'a> {
     text_snap_anchor: Option<SnapAnchor>,
 }
 
-/// True for the primitives a shape run can carry: the plain shape variants
-/// and a single-level blend of one. Everything else (text, images, shadows,
-/// content markers, nested blends) flushes the run and takes the ordinary
-/// per-primitive path.
-fn is_shape_run_primitive(primitive: &DrawPrimitive) -> bool {
-    match primitive {
-        DrawPrimitive::Rect { .. }
-        | DrawPrimitive::RoundRect { .. }
-        | DrawPrimitive::Arc { .. } => true,
-        DrawPrimitive::Blend {
-            primitive,
-            blend_mode: _,
-        } => matches!(
-            primitive.as_ref(),
-            DrawPrimitive::Rect { .. }
-                | DrawPrimitive::RoundRect { .. }
-                | DrawPrimitive::Arc { .. }
-        ),
-        _ => false,
-    }
+/// The shape payload of one run entry, extracted from its [`DrawPrimitive`]
+/// when the run is collected. The small fields are copied and the brush is
+/// borrowed, so the entry holds no `Rc`-bearing enum variant and the whole
+/// run is `Send` — which is what lets [`flush_shape_run`] fan the emit math
+/// out across threads on hardware where that wins.
+enum ShapeRunShape<'a> {
+    Rect {
+        rect: Rect,
+        brush: &'a Brush,
+        stroke: Option<Stroke>,
+    },
+    RoundRect {
+        rect: Rect,
+        brush: &'a Brush,
+        radii: CornerRadii,
+        stroke: Option<Stroke>,
+    },
+    Arc {
+        rect: Rect,
+        brush: &'a Brush,
+        center: Point,
+        radius: f32,
+        start_angle: f32,
+        sweep_angle: f32,
+        stroke: Option<Stroke>,
+        inner_radius: f32,
+    },
 }
 
-/// One accumulated draw in a shape run: the primitive plus the per-draw clip
-/// its graph node carried (`None` for every [`DrawRunNode`] draw — a run node
+/// One accumulated draw in a shape run: the extracted shape, its blend mode
+/// (single-level `Blend` wrappers resolve here), and the per-draw clip its
+/// graph node carried (`None` for every [`DrawRunNode`] draw — a run node
 /// records a whole canvas command, which never clips per primitive).
 struct ShapeRunEntry<'a> {
-    primitive: &'a DrawPrimitive,
+    shape: ShapeRunShape<'a>,
+    blend_mode: BlendMode,
     clip: Option<Rect>,
+}
+
+/// Extracts the run-entry view of a primitive a shape run can carry: the
+/// plain shape variants and a single-level blend of one. Everything else
+/// (text, images, shadows, content markers, nested blends) returns `None`,
+/// flushes the run and takes the ordinary per-primitive path.
+fn shape_run_view(primitive: &DrawPrimitive) -> Option<(ShapeRunShape<'_>, BlendMode)> {
+    let (primitive, blend_mode) = match primitive {
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => (primitive.as_ref(), *blend_mode),
+        other => (other, BlendMode::SrcOver),
+    };
+    match primitive {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => Some((
+            ShapeRunShape::Rect {
+                rect: *rect,
+                brush,
+                stroke: *stroke,
+            },
+            blend_mode,
+        )),
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => Some((
+            ShapeRunShape::RoundRect {
+                rect: *rect,
+                brush,
+                radii: *radii,
+                stroke: *stroke,
+            },
+            blend_mode,
+        )),
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => Some((
+            ShapeRunShape::Arc {
+                rect: *rect,
+                brush,
+                center: *center,
+                radius: *radius,
+                start_angle: *start_angle,
+                sweep_angle: *sweep_angle,
+                stroke: *stroke,
+                inner_radius: *inner_radius,
+            },
+            blend_mode,
+        )),
+        _ => None,
+    }
 }
 
 /// Runs the shared per-variant emit math for one run entry, returning the
@@ -752,45 +828,38 @@ fn emit_shape_run_entry(
     if entry.clip.is_some() && clip.is_none() {
         return None;
     }
-    let (primitive, blend_mode) = match entry.primitive {
-        DrawPrimitive::Blend {
-            primitive,
-            blend_mode,
-        } => (primitive.as_ref(), *blend_mode),
-        other => (other, BlendMode::SrcOver),
-    };
-    match primitive {
-        DrawPrimitive::Rect {
+    match entry.shape {
+        ShapeRunShape::Rect {
             rect,
             brush,
             stroke,
         } => rect_shape_params(
-            *rect,
+            rect,
             brush,
-            *stroke,
+            stroke,
             layer_bounds,
             layer,
             clip,
-            blend_mode,
+            entry.blend_mode,
             motion_context_animated,
         ),
-        DrawPrimitive::RoundRect {
+        ShapeRunShape::RoundRect {
             rect,
             brush,
             radii,
             stroke,
         } => round_rect_shape_params(
-            *rect,
+            rect,
             brush,
-            *radii,
-            *stroke,
+            radii,
+            stroke,
             layer_bounds,
             layer,
             clip,
-            blend_mode,
+            entry.blend_mode,
             motion_context_animated,
         ),
-        DrawPrimitive::Arc {
+        ShapeRunShape::Arc {
             rect,
             brush,
             center,
@@ -800,35 +869,127 @@ fn emit_shape_run_entry(
             stroke,
             inner_radius,
         } => arc_shape_params(
-            *rect,
+            rect,
             brush,
-            *center,
-            *radius,
-            *start_angle,
-            *sweep_angle,
-            *stroke,
-            *inner_radius,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
             layer_bounds,
             layer,
             clip,
-            blend_mode,
+            entry.blend_mode,
             motion_context_animated,
         ),
-        // `is_shape_run_primitive` admits no other variant.
-        _ => None,
     }
+}
+
+/// Self-tuning serial/parallel switch for [`flush_shape_run`].
+///
+/// The emit fan-out is a win only when a core is slow enough that the work
+/// dwarfs the spawn wave: a Kirin 980 big core clears a 15k-shape MEGA run
+/// in ~3 ms and measured WORSE with workers, while a watch-class in-order
+/// core takes tens of milliseconds for the same run and has three siblings
+/// sitting idle. Rather than guess by device, both paths are timed where
+/// they actually run: each large flush records its ns-per-entry into an
+/// EMA for the path taken, the cheaper EMA wins the next flush, and every
+/// 128th large flush deliberately runs the loser so a stale verdict (DVFS,
+/// thermals) can be overturned.
+#[cfg(not(target_arch = "wasm32"))]
+mod shape_run_tuning {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Below this many entries the flush is always serial and untimed.
+    pub(super) const PARALLEL_MIN_ENTRIES: usize = 2048;
+    /// Serial runs cheaper than this are not worth a spawn wave regardless
+    /// of the EMAs.
+    const CHEAP_RUN_NS: u64 = 2_000_000;
+    /// EMA of ns per entry for each path; 0 = no sample yet.
+    static SERIAL_NS: AtomicU64 = AtomicU64::new(0);
+    static PARALLEL_NS: AtomicU64 = AtomicU64::new(0);
+    static LARGE_FLUSHES: AtomicU64 = AtomicU64::new(0);
+    #[cfg(test)]
+    pub(super) static FORCE_PARALLEL: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    pub(super) fn choose_parallel(entries: usize) -> bool {
+        #[cfg(test)]
+        if FORCE_PARALLEL.load(Ordering::Relaxed) {
+            return true;
+        }
+        if entries < PARALLEL_MIN_ENTRIES {
+            return false;
+        }
+        let flush_index = LARGE_FLUSHES.fetch_add(1, Ordering::Relaxed);
+        let serial = SERIAL_NS.load(Ordering::Relaxed);
+        let parallel = PARALLEL_NS.load(Ordering::Relaxed);
+        // Bootstrap: sample serial first, then parallel once serial has
+        // proven expensive enough to bother.
+        if serial == 0 {
+            return false;
+        }
+        if serial.saturating_mul(entries as u64) < CHEAP_RUN_NS {
+            return false;
+        }
+        if parallel == 0 {
+            return true;
+        }
+        // Re-trial the losing path occasionally so the verdict can flip.
+        if flush_index.is_multiple_of(128) {
+            return parallel >= serial;
+        }
+        parallel < serial
+    }
+
+    pub(super) fn record(parallel: bool, entries: usize, elapsed_ns: u64) {
+        if entries < PARALLEL_MIN_ENTRIES {
+            return;
+        }
+        let per_entry = (elapsed_ns / entries as u64).max(1);
+        let slot = if parallel { &PARALLEL_NS } else { &SERIAL_NS };
+        let old = slot.load(Ordering::Relaxed);
+        let new = if old == 0 {
+            per_entry
+        } else {
+            (old * 7 + per_entry) / 8
+        };
+        slot.store(new.max(1), Ordering::Relaxed);
+    }
+}
+
+/// Test-only override that routes every flush through the parallel path,
+/// bypassing the size gate — the equivalence test uses it to exercise the
+/// fan-out on a scene small enough to assert against exactly.
+#[cfg(test)]
+pub(crate) fn force_shape_run_parallel_for_tests(on: bool) {
+    shape_run_tuning::FORCE_PARALLEL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// Slot buffer for the parallel emit path, kept across frames so a 15k
+    /// run does not remap megabytes of scratch every flush.
+    static SHAPE_RUN_SCRATCH: std::cell::RefCell<Vec<Option<ShapeDrawParams>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Emits an accumulated run of consecutive shape draws into the scene.
 ///
 /// Emission order — and therefore z order — matches the per-primitive path
-/// exactly. The run exists for its emission shape, not for threads: params go
-/// from the builder's stack slot straight into the scene, skipping the
+/// exactly. Params go from the builder straight into the scene, skipping the
 /// per-item scene bookkeeping `push_local_primitive` pays, and the shared
-/// snap anchor is applied once at the end. (A scoped-thread fan-out of the
-/// builder math was measured here and REGRESSED: a spawn wave costs more
-/// wall clock than it recovers even at thousands of draws per run, and the
-/// extra burst CPU pushed the phone's governor the wrong way.)
+/// snap anchor is applied once at the end.
+///
+/// On native targets a large run may fan the emit math out across scoped
+/// threads: workers write `Option<ShapeDrawParams>` into disjoint slots of a
+/// reused scratch buffer and the main thread pushes the results in entry
+/// order, so z order and snap anchoring are byte-identical to the serial
+/// path. Whether the fan-out actually runs is decided by measured cost — see
+/// [`shape_run_tuning`] — because the same spawn wave that pays for itself
+/// many times over on a watch-class in-order core measurably loses on a big
+/// phone core.
 fn flush_shape_run(
     local_scene: &mut CompositorScene,
     run: &mut Vec<ShapeRunEntry<'_>>,
@@ -839,6 +1000,34 @@ fn flush_shape_run(
     }
     let counts_before = scene_counts(local_scene);
     let motion = context.motion_context_animated || context.content_offset_translation;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let entries = run.len();
+        let parallel = shape_run_tuning::choose_parallel(entries);
+        let started = web_time::Instant::now();
+        if parallel {
+            flush_shape_run_parallel(local_scene, run, context, motion);
+        } else {
+            flush_shape_run_serial(local_scene, run, context, motion);
+        }
+        shape_run_tuning::record(parallel, entries, started.elapsed().as_nanos() as u64);
+    }
+    #[cfg(target_arch = "wasm32")]
+    flush_shape_run_serial(local_scene, run, context, motion);
+
+    // The whole run shares one layer context, so applying the anchor once at
+    // the end lands on exactly the shapes the per-primitive path would have
+    // anchored one at a time.
+    assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
+}
+
+fn flush_shape_run_serial(
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) {
     for entry in run.drain(..) {
         if let Some(params) = emit_shape_run_entry(
             &entry,
@@ -850,10 +1039,55 @@ fn flush_shape_run(
             push_shape_params(local_scene, params);
         }
     }
-    // The whole run shares one layer context, so applying the anchor once at
-    // the end lands on exactly the shapes the per-primitive path would have
-    // anchored one at a time.
-    assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_shape_run_parallel(
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) {
+    let layer_bounds = context.layer_bounds;
+    let layer = context.local_layer;
+    let visual_clip = context.visual_clip;
+    SHAPE_RUN_SCRATCH.with(|scratch| {
+        let mut scratch = scratch.borrow_mut();
+        scratch.clear();
+        scratch.resize_with(run.len(), || None);
+        let workers = crate::render::shape_convert_worker_count().max(1);
+        let chunk_len = run.len().div_ceil(workers);
+        std::thread::scope(|scope| {
+            let mut slots_rest = &mut scratch[..];
+            let mut entries_rest = &run[..];
+            while !entries_rest.is_empty() {
+                let count = chunk_len.min(entries_rest.len());
+                let (chunk_entries, rest) = entries_rest.split_at(count);
+                entries_rest = rest;
+                let (chunk_slots, rest) = std::mem::take(&mut slots_rest).split_at_mut(count);
+                slots_rest = rest;
+                let mut emit_chunk = move || {
+                    for (slot, entry) in chunk_slots.iter_mut().zip(chunk_entries) {
+                        *slot =
+                            emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion);
+                    }
+                };
+                if entries_rest.is_empty() {
+                    // The final chunk runs inline: the caller would only
+                    // block at the scope join anyway, so this saves a spawn.
+                    emit_chunk();
+                } else {
+                    scope.spawn(emit_chunk);
+                }
+            }
+        });
+        for slot in scratch.iter_mut() {
+            if let Some(params) = slot.take() {
+                push_shape_params(local_scene, params);
+            }
+        }
+    });
+    run.clear();
 }
 
 /// Feeds one [`DrawRunNode`]'s primitives through the shape run, spilling any
@@ -865,9 +1099,10 @@ fn collect_draw_run<'a>(
     context: &LocalPrimitiveContext<'_>,
 ) {
     for primitive in &run.primitives {
-        if is_shape_run_primitive(primitive) {
+        if let Some((shape, blend_mode)) = shape_run_view(primitive) {
             shape_run.push(ShapeRunEntry {
-                primitive,
+                shape,
+                blend_mode,
                 clip: None,
             });
             continue;
@@ -1096,9 +1331,10 @@ fn collect_layer_contents_into<'a>(
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
                     if let PrimitiveNode::Draw(draw) = &primitive.node {
-                        if is_shape_run_primitive(&draw.primitive) {
+                        if let Some((shape, blend_mode)) = shape_run_view(&draw.primitive) {
                             shape_run.push(ShapeRunEntry {
-                                primitive: &draw.primitive,
+                                shape,
+                                blend_mode,
                                 clip: draw.clip,
                             });
                             continue;
@@ -1280,9 +1516,10 @@ fn collect_layer_contents_into<'a>(
         match child {
             RenderNode::Primitive(primitive) => {
                 if let PrimitiveNode::Draw(draw) = &primitive.node {
-                    if is_shape_run_primitive(&draw.primitive) {
+                    if let Some((shape, blend_mode)) = shape_run_view(&draw.primitive) {
                         shape_run.push(ShapeRunEntry {
-                            primitive: &draw.primitive,
+                            shape,
+                            blend_mode,
                             clip: draw.clip,
                         });
                         continue;

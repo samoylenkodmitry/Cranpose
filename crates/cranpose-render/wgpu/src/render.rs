@@ -13842,8 +13842,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shape_run_collect_matches_per_primitive_emission_exactly() {
+    /// Shared body for the serial and forced-parallel equivalence tests:
+    fn assert_shape_run_collect_matches_per_primitive_emission() {
         use cranpose_render_common::graph::DrawPrimitiveNode;
         use cranpose_render_common::layer_composition::local_content_layer_for;
         use cranpose_render_common::primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace};
@@ -14033,6 +14033,22 @@ mod tests {
                 got.motion_context_animated, want.motion_context_animated,
                 "shape {index} motion flag"
             );
+        }
+    }
+
+    /// The run collector must emit exactly what per-primitive emission does,
+    /// on BOTH flush paths: the serial drain and the scoped-thread fan-out
+    /// (forced via the tuning override, since a test-sized scene would never
+    /// cross the size gate on its own).
+    #[test]
+    fn shape_run_collect_matches_per_primitive_emission_exactly() {
+        assert_shape_run_collect_matches_per_primitive_emission();
+        crate::normalized_scene::force_shape_run_parallel_for_tests(true);
+        let outcome =
+            std::panic::catch_unwind(assert_shape_run_collect_matches_per_primitive_emission);
+        crate::normalized_scene::force_shape_run_parallel_for_tests(false);
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
         }
     }
 
