@@ -829,6 +829,61 @@ impl AndroidGpuBackend {
             Self::Gl => wgpu::Backends::GL,
         }
     }
+
+    /// The backend to probe first, honouring `CRANPOSE_ANDROID_GPU_BACKEND`.
+    ///
+    /// Vulkan is the default and the only backend the fallback below can arrive
+    /// at on its own, which makes the two impossible to compare on one device:
+    /// whichever one Vulkan probing picks is the one you measure. The two have
+    /// genuinely different CPU costs per frame — a Mali Vulkan driver rebuilds
+    /// its command list every submit, where the GLES driver keeps more state —
+    /// so which is cheaper is a question about the device, not one we can settle
+    /// by reasoning. This switch exists so it can be measured instead.
+    ///
+    /// Unrecognised values fall back to Vulkan rather than failing, since a
+    /// mistyped diagnostic should not stop an app from starting.
+    fn preferred() -> Self {
+        Self::preferred_from(std::env::var("CRANPOSE_ANDROID_GPU_BACKEND").ok().as_deref())
+    }
+
+    fn preferred_from(value: Option<&str>) -> Self {
+        match value.map(|value| value.trim().to_ascii_lowercase()).as_deref() {
+            Some("gl") | Some("gles") | Some("opengl") => Self::Gl,
+            _ => Self::Vulkan,
+        }
+    }
+}
+
+#[cfg(test)]
+mod gpu_backend_tests {
+    use super::AndroidGpuBackend;
+
+    #[test]
+    fn vulkan_is_what_an_app_gets_without_asking() {
+        assert_eq!(
+            AndroidGpuBackend::preferred_from(None),
+            AndroidGpuBackend::Vulkan
+        );
+    }
+
+    #[test]
+    fn the_switch_names_gl_however_it_is_spelled() {
+        for spelling in ["gl", "GL", " gles ", "OpenGL"] {
+            assert_eq!(
+                AndroidGpuBackend::preferred_from(Some(spelling)),
+                AndroidGpuBackend::Gl,
+                "{spelling:?} should select the GL backend"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mistyped_value_still_starts_the_app() {
+        assert_eq!(
+            AndroidGpuBackend::preferred_from(Some("vulkan2")),
+            AndroidGpuBackend::Vulkan
+        );
+    }
 }
 
 struct AndroidWgpuContext {
@@ -1466,7 +1521,7 @@ pub fn run(
     // adapter exists. Keeping the backends separate is important on emulators:
     // a failed Vulkan probe can otherwise leave the ANativeWindow connected and
     // make EGL surface creation abort with `EGL_BAD_ALLOC`.
-    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Vulkan);
+    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::preferred());
 
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
