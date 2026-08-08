@@ -62,6 +62,26 @@ pub(crate) struct AccessibilityElement {
     pub(crate) clickable: bool,
 }
 
+/// Re-projects accessibility elements only when the shell's semantics revision
+/// moved since `seen_revision`. On an animation-only frame — the steady state
+/// of any game or transition — this is one integer compare, where the
+/// unconditional snapshot used to walk the full layout tree every frame.
+pub(crate) fn snapshot_if_changed<R>(
+    shell: &mut AppShell<R>,
+    seen_revision: &mut Option<u64>,
+) -> Option<Vec<AccessibilityElement>>
+where
+    R: Renderer,
+    R::Error: Debug,
+{
+    let revision = shell.semantics_snapshot_revision();
+    if *seen_revision == Some(revision) {
+        return None;
+    }
+    *seen_revision = Some(revision);
+    Some(snapshot(shell))
+}
+
 /// Extracts the current semantics and layout snapshots from an app shell.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn snapshot<R>(shell: &mut AppShell<R>) -> Vec<AccessibilityElement>
@@ -69,6 +89,11 @@ where
     R: Renderer,
     R::Error: Debug,
 {
+    // With semantics tracking off the projection is empty by definition, so
+    // don't pay for the layout walk that would only prove it.
+    if !shell.semantics_active() {
+        return Vec::new();
+    }
     // Borrowed rather than cloned: this runs on every frame that updates, and
     // deep-copying the layout and semantics trees to read them dominated the
     // accessibility cost.

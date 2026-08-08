@@ -5133,6 +5133,37 @@ fn semantics_collection_is_opt_in_for_app_shell() {
 }
 
 #[test]
+fn semantics_snapshot_revision_is_still_when_nothing_semantic_changed() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, semantics_content);
+
+    let disabled = shell.semantics_snapshot_revision();
+    assert_eq!(
+        disabled,
+        shell.semantics_snapshot_revision(),
+        "with semantics off the revision must not move on its own"
+    );
+
+    shell.set_semantics_enabled(true);
+    shell.process_frame();
+    assert_ne!(
+        disabled,
+        shell.semantics_snapshot_revision(),
+        "enabling semantics must move the revision"
+    );
+
+    let _ = shell.semantics_tree();
+    let settled = shell.semantics_snapshot_revision();
+    shell.process_frame();
+    assert_eq!(
+        settled,
+        shell.semantics_snapshot_revision(),
+        "a frame that changed nothing semantic must keep the revision still"
+    );
+}
+
+#[test]
 fn lazy_item_animation_updates_semantics_after_app_shell_frame() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());

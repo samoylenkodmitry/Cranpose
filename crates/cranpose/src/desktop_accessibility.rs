@@ -56,6 +56,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     centers: HashMap<NodeId, (f32, f32)>,
     previous: Vec<AccessibilityElement>,
+    seen_revision: Option<u64>,
 }
 
 impl DesktopAccessibilityBridge {
@@ -77,6 +78,7 @@ impl DesktopAccessibilityBridge {
             actions,
             centers: HashMap::new(),
             previous: Vec::new(),
+            seen_revision: None,
         }
     }
 
@@ -85,13 +87,17 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn sync(&mut self, shell: &mut AppShell<WgpuRenderer>) {
-        let elements = accessibility::snapshot(shell);
+        let Some(elements) = accessibility::snapshot_if_changed(shell, &mut self.seen_revision)
+        else {
+            return;
+        };
         if elements == self.previous {
             return;
         }
-        self.previous.clone_from(&elements);
-        let update = tree_update(&elements);
-        self.centers = elements
+        self.previous = elements;
+        let update = tree_update(&self.previous);
+        self.centers = self
+            .previous
             .iter()
             .map(|element| (NodeId(element.node_id as u64), element.bounds.center()))
             .collect();

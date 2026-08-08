@@ -121,6 +121,12 @@ where
     layout_tree: Option<LayoutTree>,
     semantics_tree: Option<SemanticsTree>,
     semantics_enabled: bool,
+    /// Monotonic counter that moves whenever the cached layout/semantics
+    /// snapshots are invalidated or semantics tracking is toggled. Accessibility
+    /// bridges compare it against the revision they last projected so a frame
+    /// that changed nothing semantic costs them one integer compare instead of
+    /// a full tree walk. See [`AppShell::semantics_snapshot_revision`].
+    semantics_snapshot_revision: u64,
     layout_requested: bool,
     force_layout_pass: bool,
     scene_dirty: bool,
@@ -473,6 +479,7 @@ where
             layout_tree: None,
             semantics_tree: None,
             semantics_enabled: false,
+            semantics_snapshot_revision: 0,
             layout_requested: true,
             force_layout_pass: true,
             scene_dirty: true,

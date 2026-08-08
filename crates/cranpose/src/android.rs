@@ -1472,6 +1472,7 @@ pub fn run(
     // App shell (created once, persists across window recreations)
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = Vec::new();
+    let mut accessibility_revision = None;
 
     // Initialize logging
     android_logger::init_once(
@@ -2163,6 +2164,7 @@ pub fn run(
                     shell,
                     android_platform.scale_factor() as f32,
                     &mut accessibility_elements,
+                    &mut accessibility_revision,
                 ) {
                     log::warn!("{error}");
                 }

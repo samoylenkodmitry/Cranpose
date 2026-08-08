@@ -118,6 +118,7 @@ where
             return;
         }
         self.semantics_enabled = enabled;
+        self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
         if enabled {
             self.request_forced_layout_pass();
             self.mark_dirty();
@@ -260,6 +261,8 @@ where
             ) {
                 Ok(_measurements) => {
                     self.layout_tree = None;
+                    self.semantics_snapshot_revision =
+                        self.semantics_snapshot_revision.wrapping_add(1);
                     if self.semantics_enabled {
                         self.semantics_tree = None;
                     }
@@ -278,6 +281,8 @@ where
                     log::error!("failed to compute layout: {err}");
                     self.layout_tree = None;
                     self.semantics_tree = None;
+                    self.semantics_snapshot_revision =
+                        self.semantics_snapshot_revision.wrapping_add(1);
                     self.scoped_layout_scene_nodes.clear();
                     self.scene_dirty = true;
                 }
@@ -286,6 +291,8 @@ where
         } else {
             self.layout_tree = None;
             self.semantics_tree = None;
+            self.semantics_snapshot_revision =
+                self.semantics_snapshot_revision.wrapping_add(1);
             self.scoped_layout_scene_nodes.clear();
             self.scene_dirty = true;
             self.layout_requested = false;
