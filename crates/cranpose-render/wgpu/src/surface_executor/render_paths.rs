@@ -992,6 +992,33 @@ fn scene_range_meets_direct_cache_floor(
         >= MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES
 }
 
+/// Whether a chunk is small enough that the range cache would accept it.
+///
+/// This is the same size gate [`cached_direct_scene_range_surface`] applies
+/// before it computes a key, hoisted so the caller can tell — cheaply, and
+/// without touching the cache — whether cutting the range here could ever
+/// produce a stored entry. A chunk that fails it is going to be rendered
+/// directly whatever happens, so there is no reason to give it its own pass.
+fn direct_scene_range_chunk_fits_cache_entry(
+    max_texture_dim: u32,
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    root_scale: f32,
+) -> bool {
+    let Some(logical_rect) = scene_range_visible_bounds(scene, z_start, z_end)
+        .and_then(|bounds| snap_scene_range_bounds_to_pixels(bounds, root_scale))
+    else {
+        return false;
+    };
+    let (target_width, target_height) =
+        surface_target_size(logical_rect, root_scale, max_texture_dim);
+    direct_scene_range_cache_enabled_for_entry_bytes(offscreen_byte_size(
+        target_width,
+        target_height,
+    ))
+}
+
 fn direct_scene_range_cache_chunk_end(
     scene: &CompositorScene,
     z_start: usize,
@@ -3411,9 +3438,29 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
 ) -> Result<(), String> {
     let mut cursor_z = z_start;
     while cursor_z < z_end {
-        let chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
+        let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
+        }
+        // A chunk boundary only exists to keep a *cache entry* small enough to
+        // store. When the chunk is too big to be admitted anyway, the split
+        // buys nothing and costs a whole render pass — and on a tile-based
+        // mobile GPU a render pass is a tile store and reload of the entire
+        // target. An animated scene is the worst case: every chunk covers the
+        // whole surface, so every one is refused, and a game frame of ~640
+        // draw ops was being cut into ten passes that all wrote the same
+        // pixels. Rendering the remainder in one pass measured 18% less CPU
+        // on a Pixel 9 Pro.
+        if chunk_end < z_end
+            && !direct_scene_range_chunk_fits_cache_entry(
+                backend.max_texture_dim(),
+                scene,
+                cursor_z,
+                chunk_end,
+                root_scale,
+            )
+        {
+            chunk_end = z_end;
         }
         if !queue_cached_direct_scene_range(
             backend,
@@ -5124,6 +5171,7 @@ mod tests {
         backdrop_underlay_is_covered_by_local_content, child_composite_visible,
         composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
         direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
+        direct_scene_range_chunk_fits_cache_entry,
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
         layer_surface_dest_quad, layer_surface_translation_context,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
@@ -5590,6 +5638,59 @@ mod tests {
         assert!(
             key.is_some(),
             "ordinary SrcOver root ranges should be retained"
+        );
+    }
+
+    #[test]
+    fn a_chunk_too_large_to_cache_is_not_worth_splitting_for() {
+        // Every shape covers the full 1280x2856 surface, the way a game frame's
+        // moving objects do once their bounds are unioned. Each 64-op chunk is
+        // then far past the entry budget, so the cache would refuse it and the
+        // split would buy a render pass for nothing.
+        let mut scene = CompositorScene::new();
+        for z_index in 0..(MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2) {
+            let mut shape = prefix_shape(z_index, Color::BLACK);
+            shape.rect = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1280.0,
+                height: 2856.0,
+            };
+            shape.local_rect = shape.rect;
+            shape.quad = crate::rect_to_quad(shape.rect);
+            let shape_index = scene.shapes.len();
+            scene.shapes.push(shape);
+            scene.draw_ops.push(DrawOp {
+                z_index,
+                kind: DrawOpKind::Shape(shape_index),
+            });
+        }
+        scene.next_z = MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS * 2;
+
+        assert!(
+            !direct_scene_range_chunk_fits_cache_entry(
+                8192,
+                &scene,
+                0,
+                MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                1.0,
+            ),
+            "a full-surface chunk is far past the per-entry byte budget"
+        );
+    }
+
+    #[test]
+    fn a_chunk_small_enough_to_cache_still_reports_that_it_fits() {
+        let scene = scene_with_cacheable_prefix_shapes(Color::BLACK);
+        assert!(
+            direct_scene_range_chunk_fits_cache_entry(
+                8192,
+                &scene,
+                0,
+                MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                1.0,
+            ),
+            "a small range is exactly what the range cache is for"
         );
     }
 
