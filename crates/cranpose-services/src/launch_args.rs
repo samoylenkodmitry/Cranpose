@@ -414,12 +414,21 @@ mod tests {
 
     #[test]
     fn the_command_line_maps_flags_and_assignments_to_arguments() {
-        let args = command_line(&["--ob_debug", "--ob_level=7", "positional", "--ob_screen=lobby"]);
+        let args = command_line(&[
+            "--ob_debug",
+            "--ob_level=7",
+            "positional",
+            "--ob_screen=lobby",
+        ]);
 
         assert_eq!(args.boolean("ob_debug"), Some(true));
         assert_eq!(args.int("ob_level"), Some(7));
         assert_eq!(args.string("ob_screen"), Some("lobby"));
-        assert_eq!(args.len(), 3, "positional arguments are not launch arguments");
+        assert_eq!(
+            args.len(),
+            3,
+            "positional arguments are not launch arguments"
+        );
     }
 
     #[test]
@@ -479,8 +488,10 @@ mod tests {
                     true,
                 ));
                 ProvideLaunchArgs(provided, move || {
-                    *captured.borrow_mut() =
-                        Some((local_launch_args().current().int("ob_level"), isDebuggable()));
+                    *captured.borrow_mut() = Some((
+                        local_launch_args().current().int("ob_level"),
+                        isDebuggable(),
+                    ));
                 });
             });
         }

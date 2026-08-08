@@ -843,11 +843,18 @@ impl AndroidGpuBackend {
     /// Unrecognised values fall back to Vulkan rather than failing, since a
     /// mistyped diagnostic should not stop an app from starting.
     fn preferred() -> Self {
-        Self::preferred_from(std::env::var("CRANPOSE_ANDROID_GPU_BACKEND").ok().as_deref())
+        Self::preferred_from(
+            std::env::var("CRANPOSE_ANDROID_GPU_BACKEND")
+                .ok()
+                .as_deref(),
+        )
     }
 
     fn preferred_from(value: Option<&str>) -> Self {
-        match value.map(|value| value.trim().to_ascii_lowercase()).as_deref() {
+        match value
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
             Some("gl") | Some("gles") | Some("opengl") => Self::Gl,
             _ => Self::Vulkan,
         }
@@ -1602,8 +1609,8 @@ pub fn run(
         if let Some(shell) = app_shell.as_ref() {
             let preference = shell.frame_rate_preference();
             let producing_frames = android_frame_driver.frame_requested();
-            let interacting = last_interaction
-                .is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
+            let interacting =
+                last_interaction.is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
             let panel_max = match preference {
                 cranpose_app_shell::FrameRatePreference::Auto if interacting => {
                     crate::android_frame_rate::panel_max_refresh_rate(&app)

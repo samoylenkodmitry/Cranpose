@@ -306,8 +306,7 @@ where
         } else {
             self.layout_tree = None;
             self.semantics_tree = None;
-            self.semantics_snapshot_revision =
-                self.semantics_snapshot_revision.wrapping_add(1);
+            self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
             self.scoped_layout_scene_nodes.clear();
             self.scene_dirty = true;
             self.layout_requested = false;

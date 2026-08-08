@@ -7383,9 +7383,9 @@ thread_local! {
 #[composable]
 fn app_shell_pointer_scope_size_probe() {
     Box(
-        Modifier::empty()
-            .fill_max_size()
-            .pointer_input((), move |scope: PointerInputScope| async move {
+        Modifier::empty().fill_max_size().pointer_input(
+            (),
+            move |scope: PointerInputScope| async move {
                 APP_SHELL_POINTER_SCOPE.with(|slot| {
                     *slot.borrow_mut() = Some(scope.clone());
                 });
@@ -7401,7 +7401,8 @@ fn app_shell_pointer_scope_size_probe() {
                         }
                     })
                     .await;
-            }),
+            },
+        ),
         BoxSpec::default(),
         || {},
     );
@@ -7453,7 +7454,10 @@ fn pointer_input_scope_reports_node_size_in_running_shell() {
         "cursor should hover the full-screen pointer surface"
     );
     shell.update();
-    assert!(shell.pointer_pressed(), "pointer down should hit the surface");
+    assert!(
+        shell.pointer_pressed(),
+        "pointer down should hit the surface"
+    );
     shell.update();
 
     let (event_size, event_position) = APP_SHELL_POINTER_SCOPE_EVENTS
@@ -8408,7 +8412,10 @@ fn the_shell_stores_the_frame_rate_preference_it_is_given() {
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(TestRenderer::default(), root_key, || {});
 
-    assert_eq!(shell.frame_rate_preference(), crate::FrameRatePreference::Auto);
+    assert_eq!(
+        shell.frame_rate_preference(),
+        crate::FrameRatePreference::Auto
+    );
     shell.set_frame_rate_preference(crate::FrameRatePreference::Exact(60.0));
     assert_eq!(
         shell.frame_rate_preference(),

@@ -59,13 +59,10 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
             device.build_output_stream(
                 config,
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let _ = render_into_integer(
-                        &mut mixer,
-                        &mut scratch,
-                        data,
-                        channels,
-                        |sample| (sample * f32::from(i16::MAX)) as i16,
-                    );
+                    let _ =
+                        render_into_integer(&mut mixer, &mut scratch, data, channels, |sample| {
+                            (sample * f32::from(i16::MAX)) as i16
+                        });
                 },
                 error_callback,
                 None,

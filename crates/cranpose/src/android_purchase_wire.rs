@@ -197,7 +197,10 @@ mod tests {
 
         assert_eq!(state.products.len(), 1);
         assert_eq!(state.display_price("com.example.pro"), Some("34,99 €"));
-        assert_eq!(state.product("com.example.pro").map(|p| p.title.len()), Some(0));
+        assert_eq!(
+            state.product("com.example.pro").map(|p| p.title.len()),
+            Some(0)
+        );
         assert_eq!(state.owned.len(), 1);
     }
 

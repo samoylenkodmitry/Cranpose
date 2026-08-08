@@ -843,7 +843,10 @@ mod tests {
         // Loading no longer touches the device, so it no longer discovers that
         // there isn't one; it hands back a real handle exactly as the no-op
         // player would.
-        let id = rig.engine.load_clip(tone(8)).expect("loads without a device");
+        let id = rig
+            .engine
+            .load_clip(tone(8))
+            .expect("loads without a device");
         assert!(id.is_valid());
         assert!(rig.engine.take_last_error().is_none());
 

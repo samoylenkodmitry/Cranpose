@@ -23,7 +23,7 @@
 //! Set them with `adb shell setprop` before launching the activity.
 #![allow(unsafe_code)]
 
-use std::ffi::{CString, c_void};
+use std::ffi::{c_void, CString};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 /// Frames aggregated into one report when `debug.cranpose.frame_telemetry=1`.
@@ -97,10 +97,7 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 10] = [
         "debug.cranpose.no_range_cache",
         "CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE",
     ),
-    (
-        "debug.cranpose.gpu_backend",
-        "CRANPOSE_ANDROID_GPU_BACKEND",
-    ),
+    ("debug.cranpose.gpu_backend", "CRANPOSE_ANDROID_GPU_BACKEND"),
 ];
 
 /// Copies the [`PROPERTY_BACKED_ENV_VARS`] properties that are set into the
@@ -394,7 +391,11 @@ impl AndroidFrameTelemetry {
 
     /// Timestamp helper that compiles to nothing when telemetry is off.
     pub(crate) fn now(&self) -> i64 {
-        if self.enabled { monotonic_nanos() } else { 0 }
+        if self.enabled {
+            monotonic_nanos()
+        } else {
+            0
+        }
     }
 
     /// A loop iteration that woke up but presented nothing.
@@ -469,7 +470,12 @@ impl AndroidFrameTelemetry {
     /// whose work does not fit predicts the two distributions look alike.
     fn report_vsync_phase(&self) {
         let period_us = us(vsync_period_ns());
-        if period_us <= 0 || !self.samples.iter().any(|sample| sample.vsync_offset_us >= 0) {
+        if period_us <= 0
+            || !self
+                .samples
+                .iter()
+                .any(|sample| sample.vsync_offset_us >= 0)
+        {
             return;
         }
         // One display period of slack before a frame counts as late.

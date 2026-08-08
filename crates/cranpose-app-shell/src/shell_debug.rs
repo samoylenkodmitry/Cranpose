@@ -90,8 +90,7 @@ where
                 cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
             });
             if semantics_dirty {
-                self.semantics_snapshot_revision =
-                    self.semantics_snapshot_revision.wrapping_add(1);
+                self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
             }
         }
         self.semantics_snapshot_revision

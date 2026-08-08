@@ -61,7 +61,7 @@ pub use image_picker::{
     ProvideImagePicker, IMAGE_EXTENSIONS,
 };
 pub use launch_args::{
-    clear_platform_launch_args, is_debuggable, isDebuggable, launch_args,
+    clear_platform_launch_args, isDebuggable, is_debuggable, launch_args,
     launch_args_from_command_line, local_launch_args, set_platform_launch_args, LaunchArgValue,
     LaunchArgs, LaunchArgsRef, ProvideLaunchArgs,
 };

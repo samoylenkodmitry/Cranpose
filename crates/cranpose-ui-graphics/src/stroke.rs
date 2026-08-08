@@ -335,6 +335,7 @@ impl ArcGeometry {
 /// * `stroke = None` — a filled annular sector from `inner_radius` to `radius`
 ///   with flat (butt) radial ends. `inner_radius <= 0` yields a filled pie
 ///   wedge.
+///
 /// Non-finite input collapses to an empty band so the caller drops the draw
 /// instead of pushing NaN down the pipeline.
 pub fn arc_band(radius: f32, inner_radius: f32, stroke: Option<Stroke>) -> (f32, f32, StrokeCap) {

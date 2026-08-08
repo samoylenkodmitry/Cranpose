@@ -133,7 +133,11 @@ pub(crate) fn apply_pending_platform_signals(
     density: f32,
     shell: &mut Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>>,
 ) {
-    if let Some(payload) = PENDING_LAUNCH_ARGS.lock().ok().and_then(|mut slot| slot.take()) {
+    if let Some(payload) = PENDING_LAUNCH_ARGS
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+    {
         set_platform_launch_args(Rc::new(decode_launch_arguments(&payload)));
         if let Some(shell) = shell {
             shell.request_root_render();
@@ -616,7 +620,9 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotifica
 /// `setIntent` replacing what a Compose activity reads from `getIntent`.
 #[doc(hidden)]
 #[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<'local>(
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<
+    'local,
+>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     payload: JString<'local>,

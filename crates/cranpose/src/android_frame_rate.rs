@@ -65,9 +65,8 @@ fn vote_symbol() -> &'static VoteSymbol {
         // SAFETY: symbols come from the loaded libnativewindow.so; the
         // transmutes target the NDK-documented signatures.
         unsafe {
-            let with_strategy = resolve_native_window_symbol(
-                c"ANativeWindow_setFrameRateWithChangeStrategy",
-            );
+            let with_strategy =
+                resolve_native_window_symbol(c"ANativeWindow_setFrameRateWithChangeStrategy");
             if !with_strategy.is_null() {
                 return VoteSymbol::WithStrategy(std::mem::transmute::<
                     *mut c_void,

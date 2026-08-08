@@ -6650,9 +6650,7 @@ impl GpuRenderer {
                 shapes[start..end]
                     .iter()
                     .map(|(shape, _blend_mode)| shape)
-                    .filter(|shape| {
-                        shape_draw_is_visible_in_viewport(shape, viewport, root_scale)
-                    }),
+                    .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
                 root_scale,
                 viewport,
                 &mut staged_uploads,

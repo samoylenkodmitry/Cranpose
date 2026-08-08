@@ -25,8 +25,8 @@
 #![allow(unsafe_code)]
 
 use std::ffi::c_void;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 /// Set while a frame callback is posted and has not fired yet, so a loop that
 /// iterates several times before the next vsync posts one callback, not one per

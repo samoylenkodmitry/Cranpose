@@ -5171,14 +5171,13 @@ mod tests {
         backdrop_underlay_is_covered_by_local_content, child_composite_visible,
         composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
         direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
-        direct_scene_range_chunk_fits_cache_entry,
-        layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
-        layer_surface_dest_quad, layer_surface_translation_context,
-        minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
-        retained_render_effect_hash, surface_target_size, visible_backdrop_capture_rect,
-        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
-        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        direct_scene_range_chunk_fits_cache_entry, layer_source_cache_key,
+        layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
+        layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
+        rects_intersect, retained_render_effect_hash, surface_target_size,
+        visible_backdrop_capture_rect, BackdropPrefixChildContribution,
+        DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::{

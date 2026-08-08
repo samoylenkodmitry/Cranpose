@@ -93,8 +93,10 @@ fn integration_provide_launch_args_overrides_the_platform_snapshot() {
             let captured = Rc::clone(&captured);
             let provided = Rc::new(LaunchArgs::new(std::iter::empty(), false));
             ProvideLaunchArgs(provided, move || {
-                *captured.borrow_mut() =
-                    Some((local_launch_args().current().int("ob_level"), isDebuggable()));
+                *captured.borrow_mut() = Some((
+                    local_launch_args().current().int("ob_level"),
+                    isDebuggable(),
+                ));
             });
         });
     }

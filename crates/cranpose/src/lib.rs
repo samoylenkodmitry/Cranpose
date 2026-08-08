@@ -26,13 +26,20 @@ mod android_host_window;
 mod android_input;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_jni;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_keyboard;
 /// The Android intent-extra wire format behind `cranpose_services::launch_args`.
 /// Built on the host as well so its decoding tests run everywhere.
 #[cfg(any(test, all(feature = "android", target_os = "android")))]
 mod android_launch_args;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_overlay_window;
 /// The Play Billing wire format behind `cranpose_services::purchases`. Built on
 /// the host as well so its decoding tests run everywhere.
-#[cfg(any(test, all(feature = "android", feature = "playbilling", target_os = "android")))]
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "playbilling", target_os = "android")
+))]
 mod android_purchase_wire;
 #[cfg(all(
     feature = "android",
@@ -41,10 +48,6 @@ mod android_purchase_wire;
     target_os = "android"
 ))]
 mod android_purchases;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_keyboard;
-#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
-mod android_overlay_window;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_services;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
@@ -62,20 +65,19 @@ pub use android_host_window::{
     rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
     AndroidHostWindowSizeStatus, AndroidHostWindowState,
 };
+/// Font registration vocabulary named by [`AppLauncher`]'s font methods:
+/// the platform font directory [`AppLauncher::with_system_font_family`] wants,
+/// the weight set it registers, and the registry and error
+/// [`AppLauncher::with_fonts_from`] hands out.
+pub use cranpose_render_common::font_source::{
+    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+};
 #[cfg(all(
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
 ))]
 pub use launcher::LaunchError;
 pub use launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
-/// Font registration vocabulary named by [`AppLauncher`]'s font methods:
-/// the platform font directory [`AppLauncher::with_system_font_family`] wants,
-/// the weight set it registers, and the registry and error
-/// [`AppLauncher::with_fonts_from`] hands out.
-pub use cranpose_render_common::font_source::{
-    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR,
-    DEFAULT_SYSTEM_FAMILY_WEIGHTS,
-};
 pub use native_window::{
     current_native_window_surface_origin, rememberWindowState, Window, WindowAttachPolicy,
     WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
