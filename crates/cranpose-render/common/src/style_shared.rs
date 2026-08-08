@@ -116,6 +116,16 @@ pub fn compose_color_filters(
 }
 
 pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
+    // The overwhelmingly common case — full-alpha layer, no filter, unit
+    // scale — leaves every brush untouched; a scene of thousands of shape
+    // draws per frame should not rebuild its colors to discover that.
+    if layer.alpha == 1.0
+        && layer.color_filter.is_none()
+        && layer_scale_x(layer) == 1.0
+        && layer_scale_y(layer) == 1.0
+    {
+        return brush;
+    }
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
     let uniform_scale = layer_uniform_scale(layer);
@@ -210,6 +220,15 @@ pub fn primitives_for_placement(
     // frame. `Content` markers are rare, so the input length is the right
     // capacity.
     let filter_content = |primitives: Vec<DrawPrimitive>| {
+        // The marker scan is a cheap discriminant read; a canvas that never
+        // calls `draw_content()` — every game scene — keeps its vector as-is
+        // instead of moving thousands of primitives through a second one.
+        if !primitives
+            .iter()
+            .any(|primitive| matches!(primitive, DrawPrimitive::Content))
+        {
+            return primitives;
+        }
         let mut out = Vec::with_capacity(primitives.len());
         out.extend(
             primitives

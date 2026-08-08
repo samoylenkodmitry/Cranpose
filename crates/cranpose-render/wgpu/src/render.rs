@@ -1541,8 +1541,8 @@ fn stroke_join_code(join: StrokeJoin) -> u32 {
 /// Packs kind/cap/join into the single float `ShapeData::stroke_params[1]`.
 ///
 /// Three 2-bit fields fit in one f32 exactly (integers below 2^24 are exact),
-/// which keeps `ShapeData` at 112 bytes instead of the 128 it would need if
-/// each field got its own slot — 585 shapes per 64 KiB batch instead of 512.
+/// which keeps `ShapeData` a slot smaller than it would be if each field got
+/// its own float — batch capacity is set by this size on uniform backends.
 fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
     ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
 }
@@ -1553,7 +1553,7 @@ fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
 const PARALLEL_SHAPE_CONVERT_THRESHOLD: usize = 512;
 
 #[cfg(not(target_arch = "wasm32"))]
-fn shape_convert_worker_count() -> usize {
+pub(crate) fn shape_convert_worker_count() -> usize {
     static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *WORKERS.get_or_init(|| {
         std::thread::available_parallelism()
@@ -1564,7 +1564,7 @@ fn shape_convert_worker_count() -> usize {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn shape_convert_worker_count() -> usize {
+pub(crate) fn shape_convert_worker_count() -> usize {
     1
 }
 
@@ -13649,6 +13649,309 @@ mod tests {
             Point::new(11.4, 23.6),
             "translated plain text's bounded local surface should composite at the content-origin snap phase",
         );
+    }
+
+    /// Not a correctness test: a local timing harness for the shape-run
+    /// collect path. Run manually with
+    /// `cargo test --release -p cranpose-render-wgpu -- --ignored collect_timing --nocapture`.
+    #[test]
+    #[ignore]
+    fn shape_run_collect_timing_harness() {
+        use cranpose_render_common::graph::DrawPrimitiveNode;
+        use cranpose_render_common::layer_composition::local_content_layer_for;
+        use cranpose_ui_graphics::Stroke;
+
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1080.0,
+            height: 2244.0,
+        };
+        let graphics_layer = GraphicsLayer::default();
+
+        // A MEGA-BOSS-shaped workload: thousands of consecutive arcs, most
+        // solid, some gradient, one text-free layer.
+        let mut nodes: Vec<DrawPrimitiveNode> = Vec::new();
+        for i in 0..3000u32 {
+            let f = i as f32;
+            let brush = if i % 8 == 0 {
+                Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])
+            } else {
+                Brush::Solid(Color(0.5, 0.2, 0.8, 1.0))
+            };
+            let center = Point::new(540.0 + (f % 400.0), 1122.0 + (f % 350.0));
+            let radius = 8.0 + (i % 23) as f32;
+            let half = radius + 4.0;
+            nodes.push(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Arc {
+                    rect: Rect {
+                        x: center.x - half,
+                        y: center.y - half,
+                        width: half * 2.0,
+                        height: half * 2.0,
+                    },
+                    brush,
+                    center,
+                    radius,
+                    start_angle: f * 0.07,
+                    sweep_angle: 0.5 + (i % 5) as f32,
+                    stroke: (i % 3 != 0).then(|| Stroke::new(4.0)),
+                    inner_radius: if i % 3 == 0 { radius * 0.6 } else { 0.0 },
+                },
+                clip: None,
+            });
+        }
+
+        let children: Vec<RenderNode> = nodes
+            .iter()
+            .map(|node| {
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(node.clone()),
+                })
+            })
+            .collect();
+        let layer = crate::test_support::layer_node(
+            bounds,
+            ProjectiveTransform::identity(),
+            graphics_layer,
+            children,
+        );
+
+        const ITERS: usize = 300;
+
+        // Reference: the pre-run per-primitive path.
+        let local_layer = local_content_layer_for(&layer.graphics_layer);
+        let start = Instant::now();
+        let mut sink_shapes = 0usize;
+        for _ in 0..ITERS {
+            let mut scene = CompositorScene::new();
+            for node in &nodes {
+                crate::pipeline::push_draw_primitive(
+                    &node.primitive,
+                    bounds,
+                    &local_layer,
+                    None,
+                    &mut scene,
+                    None,
+                    false,
+                );
+            }
+            sink_shapes = scene.shapes.len();
+        }
+        let serial = start.elapsed();
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let start = Instant::now();
+        let mut run_shapes = 0usize;
+        for _ in 0..ITERS {
+            let collected = collect_layer_contents(
+                &layer,
+                None,
+                None,
+                &mut rect_cache,
+                &mut requirements_cache,
+            );
+            run_shapes = collected.scene.shapes.len();
+        }
+        let run = start.elapsed();
+
+        println!(
+            "per-primitive: {:?}/iter ({sink_shapes} shapes)  shape-run: {:?}/iter ({run_shapes} shapes)",
+            serial / ITERS as u32,
+            run / ITERS as u32,
+        );
+    }
+
+    #[test]
+    fn shape_run_collect_matches_per_primitive_emission_exactly() {
+        use cranpose_render_common::graph::DrawPrimitiveNode;
+        use cranpose_render_common::layer_composition::local_content_layer_for;
+        use cranpose_render_common::primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace};
+        use cranpose_ui_graphics::{CornerRadii, Stroke};
+
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 800.0,
+        };
+        // Rotation keeps rigid snapping off, so both paths agree on
+        // `snap_anchor: None` without replicating the anchor computation here.
+        let graphics_layer = GraphicsLayer {
+            scale: 1.25,
+            translation_x: 3.5,
+            translation_y: -2.0,
+            alpha: 0.9,
+            rotation_z: 0.35,
+            ..GraphicsLayer::default()
+        };
+
+        let mut nodes: Vec<DrawPrimitiveNode> = Vec::new();
+        for i in 0..600u32 {
+            let f = i as f32;
+            let brush = if i % 11 == 0 {
+                Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])
+            } else {
+                Brush::Solid(Color(0.1 + (i % 7) as f32 * 0.1, 0.5, 0.9, 1.0))
+            };
+            let stroke = (i % 5 == 0).then(|| Stroke::new(1.0 + (i % 3) as f32));
+            let primitive = match i % 3 {
+                0 => DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: f % 37.0,
+                        y: f % 53.0,
+                        width: 8.0 + f % 9.0,
+                        height: 6.0 + f % 5.0,
+                    },
+                    brush,
+                    stroke,
+                },
+                1 => DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: f % 41.0,
+                        y: f % 43.0,
+                        width: 12.0,
+                        height: 10.0,
+                    },
+                    brush,
+                    radii: CornerRadii::uniform(2.0 + (i % 4) as f32),
+                    stroke,
+                },
+                _ => {
+                    let center = Point::new(60.0 + f % 71.0, 60.0 + f % 67.0);
+                    let radius = 5.0 + (i % 13) as f32;
+                    // One degenerate sweep proves dropped draws stay dropped.
+                    let sweep_angle = if i == 302 { 0.0 } else { 0.4 + (i % 6) as f32 };
+                    let half = radius + 4.0;
+                    DrawPrimitive::Arc {
+                        rect: Rect {
+                            x: center.x - half,
+                            y: center.y - half,
+                            width: half * 2.0,
+                            height: half * 2.0,
+                        },
+                        brush,
+                        center,
+                        radius,
+                        start_angle: f * 0.11,
+                        sweep_angle,
+                        stroke: (i % 2 == 0).then(|| Stroke::new(3.0)),
+                        inner_radius: if i % 4 == 2 { radius * 0.5 } else { 0.0 },
+                    }
+                }
+            };
+            let primitive = if i == 300 {
+                // A nested blend disqualifies the run view and forces a
+                // mid-run flush through the serial path, splitting 600 draws
+                // into two runs that are both long enough to fan out.
+                DrawPrimitive::Blend {
+                    primitive: Box::new(DrawPrimitive::Blend {
+                        primitive: Box::new(primitive),
+                        blend_mode: BlendMode::SrcOver,
+                    }),
+                    blend_mode: BlendMode::DstOut,
+                }
+            } else if i % 7 == 3 {
+                DrawPrimitive::Blend {
+                    primitive: Box::new(primitive),
+                    blend_mode: BlendMode::DstOut,
+                }
+            } else {
+                primitive
+            };
+            let clip = (i % 31 == 7).then(|| Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 30.0,
+                height: 30.0,
+            });
+            nodes.push(DrawPrimitiveNode { primitive, clip });
+        }
+
+        let children: Vec<RenderNode> = nodes
+            .iter()
+            .map(|node| {
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(node.clone()),
+                })
+            })
+            .collect();
+        let layer = crate::test_support::layer_node(
+            bounds,
+            ProjectiveTransform::identity(),
+            graphics_layer,
+            children,
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&layer, None, None, &mut rect_cache, &mut requirements_cache);
+
+        // The reference scene: every primitive through the per-primitive
+        // emission path, exactly as the pre-run collect loop ran it.
+        let local_layer = local_content_layer_for(&layer.graphics_layer);
+        let mut expected = CompositorScene::new();
+        for node in &nodes {
+            let clip = resolve_primitive_clip(
+                node.clip,
+                bounds,
+                &local_layer,
+                None,
+                PrimitiveClipSpace::Local,
+            );
+            if node.clip.is_some() && clip.is_none() {
+                continue;
+            }
+            crate::pipeline::push_draw_primitive(
+                &node.primitive,
+                bounds,
+                &local_layer,
+                clip,
+                &mut expected,
+                None,
+                false,
+            );
+        }
+
+        assert!(
+            collected.scene.shapes.len() >= 590,
+            "the runs should engage the parallel branch: got {} shapes",
+            collected.scene.shapes.len()
+        );
+        assert_eq!(collected.scene.shapes.len(), expected.shapes.len());
+        assert_eq!(collected.scene.draw_ops, expected.draw_ops);
+        assert_eq!(collected.scene.next_z, expected.next_z);
+        assert!(
+            collected.scene.shapes.iter().all(|s| s.snap_anchor.is_none()),
+            "a rotated layer must not rigid-snap; the reference scene assumes it"
+        );
+        for (index, (got, want)) in collected
+            .scene
+            .shapes
+            .iter()
+            .zip(&expected.shapes)
+            .enumerate()
+        {
+            assert_eq!(got.rect, want.rect, "shape {index} rect");
+            assert_eq!(got.local_rect, want.local_rect, "shape {index} local_rect");
+            assert_eq!(got.quad, want.quad, "shape {index} quad");
+            assert_eq!(got.snap_anchor, want.snap_anchor, "shape {index} snap");
+            assert_eq!(got.brush, want.brush, "shape {index} brush");
+            assert_eq!(got.shape, want.shape, "shape {index} shape");
+            assert_eq!(got.stroke, want.stroke, "shape {index} stroke");
+            assert_eq!(got.arc, want.arc, "shape {index} arc");
+            assert_eq!(got.z_index, want.z_index, "shape {index} z");
+            assert_eq!(got.clip, want.clip, "shape {index} clip");
+            assert_eq!(got.blend_mode, want.blend_mode, "shape {index} blend");
+            assert_eq!(
+                got.motion_context_animated, want.motion_context_animated,
+                "shape {index} motion flag"
+            );
+        }
     }
 
     #[test]

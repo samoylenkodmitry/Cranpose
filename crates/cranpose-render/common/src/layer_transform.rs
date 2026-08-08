@@ -14,7 +14,22 @@ pub fn layer_uniform_scale(layer: &GraphicsLayer) -> f32 {
     layer_scale_x(layer).min(layer_scale_y(layer))
 }
 
+/// True when the layer's affine part moves nothing: unit scale and zero
+/// translation. A plain draw canvas — the layer under every game scene —
+/// looks like this, and the per-primitive transform helpers below run once
+/// per recorded shape per frame, so the scan matters at scene scale.
+pub(crate) fn layer_affine_is_identity(layer: &GraphicsLayer) -> bool {
+    layer.scale == 1.0
+        && layer.scale_x == 1.0
+        && layer.scale_y == 1.0
+        && layer.translation_x == 0.0
+        && layer.translation_y == 0.0
+}
+
 pub fn apply_layer_affine_to_rect(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> Rect {
+    if layer_affine_is_identity(layer) {
+        return rect;
+    }
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
     let (pivot_x, pivot_y) = layer_rotation_pivot(layer_bounds, layer);
@@ -35,6 +50,9 @@ pub fn apply_layer_affine_to_point(
     layer_bounds: Rect,
     layer: &GraphicsLayer,
 ) -> Point {
+    if layer_affine_is_identity(layer) {
+        return point;
+    }
     let (pivot_x, pivot_y) = layer_rotation_pivot(layer_bounds, layer);
     Point::new(
         pivot_x + (point.x - pivot_x) * layer_scale_x(layer) + layer.translation_x,
@@ -108,14 +126,16 @@ fn apply_layer_to_point(point: [f32; 2], pivot: (f32, f32), layer: &GraphicsLaye
 }
 
 pub fn apply_layer_to_quad(rect: Rect, layer_bounds: Rect, layer: &GraphicsLayer) -> [[f32; 2]; 4] {
-    let pivot = layer_rotation_pivot(layer_bounds, layer);
     let quad = [
         [rect.x, rect.y],
         [rect.x + rect.width, rect.y],
         [rect.x, rect.y + rect.height],
         [rect.x + rect.width, rect.y + rect.height],
     ];
-
+    if layer_affine_is_identity(layer) && !layer_has_rotation(layer) {
+        return quad;
+    }
+    let pivot = layer_rotation_pivot(layer_bounds, layer);
     quad.map(|point| apply_layer_to_point(point, pivot, layer))
 }
 

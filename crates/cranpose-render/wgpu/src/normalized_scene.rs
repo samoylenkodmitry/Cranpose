@@ -21,10 +21,12 @@ use cranpose_render_common::graph::{
     RenderNode,
 };
 use cranpose_render_common::layer_composition::local_content_layer_for;
+use cranpose_render_common::graph::DrawPrimitiveNode;
 use cranpose_render_common::primitive_emit::{
-    resolve_clip, resolve_primitive_clip, PrimitiveClipSpace,
+    arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
+    round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, Point, Rect};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -699,6 +701,166 @@ struct LocalPrimitiveContext<'a> {
     text_snap_anchor: Option<SnapAnchor>,
 }
 
+/// True for the primitives a shape run can carry: the plain shape variants
+/// and a single-level blend of one. Everything else (text, images, shadows,
+/// content markers, nested blends) flushes the run and takes the ordinary
+/// per-primitive path.
+fn is_shape_run_primitive(primitive: &DrawPrimitive) -> bool {
+    match primitive {
+        DrawPrimitive::Rect { .. }
+        | DrawPrimitive::RoundRect { .. }
+        | DrawPrimitive::Arc { .. } => true,
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode: _,
+        } => matches!(
+            primitive.as_ref(),
+            DrawPrimitive::Rect { .. } | DrawPrimitive::RoundRect { .. } | DrawPrimitive::Arc { .. }
+        ),
+        _ => false,
+    }
+}
+
+/// Runs the shared per-variant emit math for one run entry, returning the
+/// shape params instead of touching the scene. `None` means the draw resolved
+/// away (fully clipped or degenerate), exactly the cases where the
+/// per-primitive path emits nothing.
+fn emit_shape_run_node(
+    node: &DrawPrimitiveNode,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    visual_clip: Option<Rect>,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    let clip = resolve_primitive_clip(
+        node.clip,
+        layer_bounds,
+        layer,
+        visual_clip,
+        PrimitiveClipSpace::Local,
+    );
+    if node.clip.is_some() && clip.is_none() {
+        return None;
+    }
+    let (primitive, blend_mode) = match &node.primitive {
+        DrawPrimitive::Blend {
+            primitive,
+            blend_mode,
+        } => (primitive.as_ref(), *blend_mode),
+        other => (other, BlendMode::SrcOver),
+    };
+    match primitive {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => rect_shape_params(
+            *rect,
+            brush,
+            *stroke,
+            layer_bounds,
+            layer,
+            clip,
+            blend_mode,
+            motion_context_animated,
+        ),
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => round_rect_shape_params(
+            *rect,
+            brush,
+            *radii,
+            *stroke,
+            layer_bounds,
+            layer,
+            clip,
+            blend_mode,
+            motion_context_animated,
+        ),
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => arc_shape_params(
+            *rect,
+            brush,
+            *center,
+            *radius,
+            *start_angle,
+            *sweep_angle,
+            *stroke,
+            *inner_radius,
+            layer_bounds,
+            layer,
+            clip,
+            blend_mode,
+            motion_context_animated,
+        ),
+        // `is_shape_run_primitive` admits no other variant.
+        _ => None,
+    }
+}
+
+/// Emits an accumulated run of consecutive shape draws into the scene.
+///
+/// Emission order — and therefore z order — matches the per-primitive path
+/// exactly. The run exists for its emission shape, not for threads: params go
+/// from the builder's stack slot straight into the scene, skipping the
+/// per-item scene bookkeeping `push_local_primitive` pays, and the shared
+/// snap anchor is applied once at the end. (A scoped-thread fan-out of the
+/// builder math was measured here and REGRESSED: a spawn wave costs more
+/// wall clock than it recovers even at thousands of draws per run, and the
+/// extra burst CPU pushed the phone's governor the wrong way.)
+fn flush_shape_run(
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<&DrawPrimitiveNode>,
+    context: &LocalPrimitiveContext<'_>,
+) {
+    if run.is_empty() {
+        return;
+    }
+    let counts_before = scene_counts(local_scene);
+    let motion = context.motion_context_animated || context.content_offset_translation;
+    for node in run.drain(..) {
+        if let Some(params) = emit_shape_run_node(
+            node,
+            context.layer_bounds,
+            context.local_layer,
+            context.visual_clip,
+            motion,
+        ) {
+            push_shape_params(local_scene, params);
+        }
+    }
+    // The whole run shares one layer context, so applying the anchor once at
+    // the end lands on exactly the shapes the per-primitive path would have
+    // anchored one at a time.
+    assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
+}
+
+fn push_shape_params(scene: &mut CompositorScene, params: ShapeDrawParams) {
+    scene.push_shape_with_stroke_and_arc(
+        params.rect,
+        params.local_rect,
+        params.quad,
+        params.brush,
+        params.shape,
+        params.stroke,
+        params.arc,
+        params.clip,
+        params.blend_mode,
+        params.motion_context_animated,
+    );
+}
+
 fn push_local_primitive(
     local_scene: &mut CompositorScene,
     text_layout: &mut impl TextLayoutResolver,
@@ -872,11 +1034,23 @@ fn collect_layer_contents_into<'a>(
         local_picture_capture_active: translation_context.local_picture_capture_active,
     };
     let mut deferred_primitives = Vec::new();
+    // Consecutive plain shape draws accumulate here and emit as one batch
+    // instead of one bookkept scene push at a time. Anything else (text,
+    // images, child layers) flushes the run first so z order is exactly what
+    // the per-primitive path would have produced.
+    let mut shape_run: Vec<&DrawPrimitiveNode> = Vec::new();
 
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
+                    if let PrimitiveNode::Draw(draw) = &primitive.node {
+                        if is_shape_run_primitive(&draw.primitive) {
+                            shape_run.push(draw);
+                            continue;
+                        }
+                    }
+                    flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
                     push_local_primitive(
                         local_scene,
                         text_layout,
@@ -887,6 +1061,7 @@ fn collect_layer_contents_into<'a>(
                 PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
             },
             RenderNode::Layer(child_layer) => {
+                flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
                 let child_requirements = layer_surface_requirements_cached(
                     child_layer.as_ref(),
                     layer_surface_requirements_cache,
@@ -1042,6 +1217,13 @@ fn collect_layer_contents_into<'a>(
     }
 
     for primitive in deferred_primitives {
+        if let PrimitiveNode::Draw(draw) = &primitive.node {
+            if is_shape_run_primitive(&draw.primitive) {
+                shape_run.push(draw);
+                continue;
+            }
+        }
+        flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
         push_local_primitive(
             local_scene,
             text_layout,
@@ -1049,6 +1231,7 @@ fn collect_layer_contents_into<'a>(
             &local_primitive_context,
         );
     }
+    flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
     flush_translated_local_picture(
         local_scene,
         &mut translated_local_picture_state,

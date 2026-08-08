@@ -4,9 +4,9 @@ use cranpose_ui::text::{
     text_style_for_draw_style, AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle,
 };
 use cranpose_ui_graphics::{
-    arc_band, inflate_rect, ArcGeometry, BlendMode, Brush, Color, ColorFilter, DrawPrimitive,
-    GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape, ShadowPrimitive,
-    Stroke, TextPrimitive,
+    arc_band, inflate_rect, ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii,
+    DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape,
+    ShadowPrimitive, Stroke, TextPrimitive,
 };
 
 use crate::graph::quad_bounds;
@@ -205,6 +205,123 @@ pub fn resolve_primitive_clip(
     resolve_clip(parent_clip, Some(requested_clip))
 }
 
+/// The [`DrawPrimitive::Rect`] arm of [`emit_draw_primitive`] as a pure
+/// builder over borrowed fields. The parallel shape-run collect calls these
+/// directly from worker threads — a `&DrawPrimitive` cannot cross (the text
+/// variant carries `Rc`), but the shape variants' fields can.
+#[allow(clippy::too_many_arguments)]
+pub fn rect_shape_params(
+    local_rect: Rect,
+    brush: &Brush,
+    stroke: Option<Stroke>,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    let (draw_rect, stroke) = stroked_draw_rect(local_rect, stroke, layer_bounds, layer)?;
+    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    Some(ShapeDrawParams {
+        rect: quad_bounds(quad),
+        local_rect,
+        quad,
+        brush: apply_layer_to_brush(brush.clone(), layer),
+        shape: None,
+        stroke,
+        arc: None,
+        clip,
+        blend_mode,
+        motion_context_animated,
+    })
+}
+
+/// The [`DrawPrimitive::RoundRect`] arm of [`emit_draw_primitive`]; see
+/// [`rect_shape_params`].
+#[allow(clippy::too_many_arguments)]
+pub fn round_rect_shape_params(
+    local_rect: Rect,
+    brush: &Brush,
+    radii: CornerRadii,
+    stroke: Option<Stroke>,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    let (draw_rect, stroke) = stroked_draw_rect(local_rect, stroke, layer_bounds, layer)?;
+    let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    let shape = RoundedCornerShape::with_radii(scale_corner_radii(radii, layer_uniform_scale(layer)));
+    Some(ShapeDrawParams {
+        rect: quad_bounds(quad),
+        local_rect,
+        quad,
+        brush: apply_layer_to_brush(brush.clone(), layer),
+        shape: Some(shape),
+        stroke,
+        arc: None,
+        clip,
+        blend_mode,
+        motion_context_animated,
+    })
+}
+
+/// The [`DrawPrimitive::Arc`] arm of [`emit_draw_primitive`]; see
+/// [`rect_shape_params`].
+#[allow(clippy::too_many_arguments)]
+pub fn arc_shape_params(
+    local_rect: Rect,
+    brush: &Brush,
+    center: Point,
+    radius: f32,
+    start_angle: f32,
+    sweep_angle: f32,
+    stroke: Option<Stroke>,
+    inner_radius: f32,
+    layer_bounds: Rect,
+    layer: &GraphicsLayer,
+    clip: Option<Rect>,
+    blend_mode: BlendMode,
+    motion_context_animated: bool,
+) -> Option<ShapeDrawParams> {
+    let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
+    let arc = ArcGeometry::new(center, band_inner, band_outer, start_angle, sweep_angle, cap);
+    if arc.is_degenerate() {
+        return None;
+    }
+    // `rect` already is the tight, cap-inclusive bounding box, so the
+    // quad needs no extra inflation here.
+    let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
+    let out_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
+    let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
+    // Radii scale by the *uniform* (minimum) layer scale, matching how
+    // corner radii are handled. Under a non-uniform scale the true
+    // shape would be an ellipse; taking the minimum keeps the band
+    // strictly inside the (independently scaled) bounding box, so the
+    // quad never clips it.
+    let scale = layer_uniform_scale(layer);
+    let arc_center = apply_layer_affine_to_point(
+        Point::new(center.x + layer_bounds.x, center.y + layer_bounds.y),
+        layer_bounds,
+        layer,
+    );
+    Some(ShapeDrawParams {
+        rect: quad_bounds(quad),
+        local_rect: out_rect,
+        quad,
+        brush: apply_layer_to_brush(brush.clone(), layer),
+        shape: None,
+        stroke: None,
+        arc: Some(arc.scaled_about(arc_center, scale)),
+        clip,
+        blend_mode,
+        motion_context_animated,
+    })
+}
+
 pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     primitive: &DrawPrimitive,
     layer_bounds: Rect,
@@ -236,25 +353,18 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             brush,
             stroke,
         } => {
-            let Some((draw_rect, stroke)) =
-                stroked_draw_rect(*local_rect, *stroke, layer_bounds, layer)
-            else {
-                return;
-            };
-            let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-            let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-            sink.push_shape(ShapeDrawParams {
-                rect: quad_bounds(quad),
-                local_rect,
-                quad,
-                brush: apply_layer_to_brush(brush.clone(), layer),
-                shape: None,
-                stroke,
-                arc: None,
+            if let Some(params) = rect_shape_params(
+                *local_rect,
+                brush,
+                *stroke,
+                layer_bounds,
+                layer,
                 clip,
-                blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                blend_mode.unwrap_or(BlendMode::SrcOver),
                 motion_context_animated,
-            });
+            ) {
+                sink.push_shape(params);
+            }
         }
         DrawPrimitive::RoundRect {
             rect: local_rect,
@@ -262,29 +372,19 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             radii,
             stroke,
         } => {
-            let Some((draw_rect, stroke)) =
-                stroked_draw_rect(*local_rect, *stroke, layer_bounds, layer)
-            else {
-                return;
-            };
-            let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-            let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-            let shape = RoundedCornerShape::with_radii(scale_corner_radii(
+            if let Some(params) = round_rect_shape_params(
+                *local_rect,
+                brush,
                 *radii,
-                layer_uniform_scale(layer),
-            ));
-            sink.push_shape(ShapeDrawParams {
-                rect: quad_bounds(quad),
-                local_rect,
-                quad,
-                brush: apply_layer_to_brush(brush.clone(), layer),
-                shape: Some(shape),
-                stroke,
-                arc: None,
+                *stroke,
+                layer_bounds,
+                layer,
                 clip,
-                blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                blend_mode.unwrap_or(BlendMode::SrcOver),
                 motion_context_animated,
-            });
+            ) {
+                sink.push_shape(params);
+            }
         }
         DrawPrimitive::Arc {
             rect: local_rect,
@@ -296,46 +396,23 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
             inner_radius,
         } => {
-            let (band_inner, band_outer, cap) = arc_band(*radius, *inner_radius, *stroke);
-            let arc = ArcGeometry::new(
+            if let Some(params) = arc_shape_params(
+                *local_rect,
+                brush,
                 *center,
-                band_inner,
-                band_outer,
+                *radius,
                 *start_angle,
                 *sweep_angle,
-                cap,
-            );
-            if arc.is_degenerate() {
-                return;
-            }
-            // `rect` already is the tight, cap-inclusive bounding box, so the
-            // quad needs no extra inflation here.
-            let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-            let out_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-            let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-            // Radii scale by the *uniform* (minimum) layer scale, matching how
-            // corner radii are handled. Under a non-uniform scale the true
-            // shape would be an ellipse; taking the minimum keeps the band
-            // strictly inside the (independently scaled) bounding box, so the
-            // quad never clips it.
-            let scale = layer_uniform_scale(layer);
-            let arc_center = apply_layer_affine_to_point(
-                Point::new(center.x + layer_bounds.x, center.y + layer_bounds.y),
+                *stroke,
+                *inner_radius,
                 layer_bounds,
                 layer,
-            );
-            sink.push_shape(ShapeDrawParams {
-                rect: quad_bounds(quad),
-                local_rect: out_rect,
-                quad,
-                brush: apply_layer_to_brush(brush.clone(), layer),
-                shape: None,
-                stroke: None,
-                arc: Some(arc.scaled_about(arc_center, scale)),
                 clip,
-                blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
+                blend_mode.unwrap_or(BlendMode::SrcOver),
                 motion_context_animated,
-            });
+            ) {
+                sink.push_shape(params);
+            }
         }
         DrawPrimitive::Image {
             rect: local_rect,
