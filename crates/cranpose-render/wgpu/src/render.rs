@@ -1973,6 +1973,12 @@ fn convert_shapes_into_outputs(
             chunk_start = chunk_end;
         }
     });
+    #[cfg(not(target_arch = "wasm32"))]
+    SHAPE_CONVERT_TUNER.record(
+        true,
+        shape_count,
+        convert_started.elapsed().as_nanos() as u64,
+    );
 }
 
 #[repr(C)]
