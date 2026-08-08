@@ -886,85 +886,23 @@ fn emit_shape_run_entry(
     }
 }
 
-/// Self-tuning serial/parallel switch for [`flush_shape_run`].
-///
-/// The emit fan-out is a win only when a core is slow enough that the work
-/// dwarfs the spawn wave: a Kirin 980 big core clears a 15k-shape MEGA run
-/// in ~3 ms and measured WORSE with workers, while a watch-class in-order
-/// core takes tens of milliseconds for the same run and has three siblings
-/// sitting idle. Rather than guess by device, both paths are timed where
-/// they actually run: each large flush records its ns-per-entry into an
-/// EMA for the path taken, the cheaper EMA wins the next flush, and every
-/// 128th large flush deliberately runs the loser so a stale verdict (DVFS,
-/// thermals) can be overturned.
+/// Whether a large flush fans out is decided by measurement — see
+/// [`crate::cost_tuner::CostTuner`]. 2048 entries is the floor; a serial
+/// run projected under 2 ms is never worth the spawn wave.
 #[cfg(not(target_arch = "wasm32"))]
-mod shape_run_tuning {
-    use std::sync::atomic::{AtomicU64, Ordering};
+static SHAPE_RUN_TUNER: crate::cost_tuner::CostTuner =
+    crate::cost_tuner::CostTuner::new(2048, 2_000_000);
 
-    /// Below this many entries the flush is always serial and untimed.
-    pub(super) const PARALLEL_MIN_ENTRIES: usize = 2048;
-    /// Serial runs cheaper than this are not worth a spawn wave regardless
-    /// of the EMAs.
-    const CHEAP_RUN_NS: u64 = 2_000_000;
-    /// EMA of ns per entry for each path; 0 = no sample yet.
-    static SERIAL_NS: AtomicU64 = AtomicU64::new(0);
-    static PARALLEL_NS: AtomicU64 = AtomicU64::new(0);
-    static LARGE_FLUSHES: AtomicU64 = AtomicU64::new(0);
-    #[cfg(test)]
-    pub(super) static FORCE_PARALLEL: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
-
-    pub(super) fn choose_parallel(entries: usize) -> bool {
-        #[cfg(test)]
-        if FORCE_PARALLEL.load(Ordering::Relaxed) {
-            return true;
-        }
-        if entries < PARALLEL_MIN_ENTRIES {
-            return false;
-        }
-        let flush_index = LARGE_FLUSHES.fetch_add(1, Ordering::Relaxed);
-        let serial = SERIAL_NS.load(Ordering::Relaxed);
-        let parallel = PARALLEL_NS.load(Ordering::Relaxed);
-        // Bootstrap: sample serial first, then parallel once serial has
-        // proven expensive enough to bother.
-        if serial == 0 {
-            return false;
-        }
-        if serial.saturating_mul(entries as u64) < CHEAP_RUN_NS {
-            return false;
-        }
-        if parallel == 0 {
-            return true;
-        }
-        // Re-trial the losing path occasionally so the verdict can flip.
-        if flush_index.is_multiple_of(128) {
-            return parallel >= serial;
-        }
-        parallel < serial
-    }
-
-    pub(super) fn record(parallel: bool, entries: usize, elapsed_ns: u64) {
-        if entries < PARALLEL_MIN_ENTRIES {
-            return;
-        }
-        let per_entry = (elapsed_ns / entries as u64).max(1);
-        let slot = if parallel { &PARALLEL_NS } else { &SERIAL_NS };
-        let old = slot.load(Ordering::Relaxed);
-        let new = if old == 0 {
-            per_entry
-        } else {
-            (old * 7 + per_entry) / 8
-        };
-        slot.store(new.max(1), Ordering::Relaxed);
-    }
-}
+#[cfg(test)]
+static FORCE_SHAPE_RUN_PARALLEL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Test-only override that routes every flush through the parallel path,
 /// bypassing the size gate — the equivalence test uses it to exercise the
 /// fan-out on a scene small enough to assert against exactly.
 #[cfg(test)]
 pub(crate) fn force_shape_run_parallel_for_tests(on: bool) {
-    shape_run_tuning::FORCE_PARALLEL.store(on, std::sync::atomic::Ordering::Relaxed);
+    FORCE_SHAPE_RUN_PARALLEL.store(on, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1004,14 +942,19 @@ fn flush_shape_run(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let entries = run.len();
-        let parallel = shape_run_tuning::choose_parallel(entries);
+        #[allow(unused_mut)]
+        let mut parallel = SHAPE_RUN_TUNER.choose_parallel(entries);
+        #[cfg(test)]
+        {
+            parallel |= FORCE_SHAPE_RUN_PARALLEL.load(std::sync::atomic::Ordering::Relaxed);
+        }
         let started = web_time::Instant::now();
         if parallel {
             flush_shape_run_parallel(local_scene, run, context, motion);
         } else {
             flush_shape_run_serial(local_scene, run, context, motion);
         }
-        shape_run_tuning::record(parallel, entries, started.elapsed().as_nanos() as u64);
+        SHAPE_RUN_TUNER.record(parallel, entries, started.elapsed().as_nanos() as u64);
     }
     #[cfg(target_arch = "wasm32")]
     flush_shape_run_serial(local_scene, run, context, motion);

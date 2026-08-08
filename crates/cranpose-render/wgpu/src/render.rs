@@ -1550,10 +1550,16 @@ fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
     ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
 }
 
-/// Below this many shapes a batch converts inline: the per-shape math is
-/// sub-microsecond, so a small batch finishes before spawned workers would
-/// even start.
-const PARALLEL_SHAPE_CONVERT_THRESHOLD: usize = 512;
+/// Whether a batch conversion fans out is decided by measurement — see
+/// [`crate::cost_tuner::CostTuner`]. The floor of 256 matters: a device
+/// whose uniform binding caps batches at ~409 shapes never crossed the old
+/// fixed threshold of 512, so conversion ran serial on exactly the class of
+/// hardware (watch-grade in-order cores) where fanning out pays most. The
+/// 400 µs cheap floor keeps a big phone core, which clears such a batch in
+/// well under that, from ever paying for a spawn wave.
+#[cfg(not(target_arch = "wasm32"))]
+static SHAPE_CONVERT_TUNER: crate::cost_tuner::CostTuner =
+    crate::cost_tuner::CostTuner::new(256, 400_000);
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn shape_convert_worker_count() -> usize {
@@ -1850,6 +1856,10 @@ fn convert_shapes_into_outputs(
     gradients_out: &mut [GradientStop],
 ) {
     let shape_count = shape_refs.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let convert_started = Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    let parallel = SHAPE_CONVERT_TUNER.choose_parallel(shape_count);
     if quad_area_diag_enabled() {
         let quad_area = |q: [[f32; 2]; 4]| {
             // Shoelace over the quad polygon TL, TR, BR, BL (corners 0,1,3,2).
@@ -1893,7 +1903,9 @@ fn convert_shapes_into_outputs(
             other_quad * scale2,
         );
     }
-    let workers = if shape_count >= PARALLEL_SHAPE_CONVERT_THRESHOLD {
+    #[cfg(target_arch = "wasm32")]
+    let parallel = false;
+    let workers = if parallel {
         shape_convert_worker_count()
     } else {
         1
@@ -1910,6 +1922,12 @@ fn convert_shapes_into_outputs(
                 &mut gradients_out[gradient_start as usize..gradient_end as usize],
             );
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        SHAPE_CONVERT_TUNER.record(
+            false,
+            shape_count,
+            convert_started.elapsed().as_nanos() as u64,
+        );
         return;
     }
 

@@ -5,6 +5,8 @@
 
 #![deny(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
+mod cost_tuner;
 mod effect_renderer;
 mod frame_graph;
 pub(crate) mod gpu_stats;
