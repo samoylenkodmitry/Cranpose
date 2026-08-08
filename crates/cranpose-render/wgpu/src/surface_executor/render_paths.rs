@@ -345,11 +345,10 @@ fn scene_range_has_opaque_cover_before(
         return false;
     }
 
-    for op in draw_ops
+    for op in scene_range_draw_ops(draw_ops, 0, z_end)
         .iter()
         .rev()
         .copied()
-        .filter(|op| op.z_index < z_end)
     {
         match op.kind {
             DrawOpKind::Shape(index) => {
@@ -931,10 +930,7 @@ fn scene_range_has_content_or_events(
     z_start: usize,
     z_end: usize,
 ) -> bool {
-    scene
-        .draw_ops
-        .iter()
-        .any(|op| op.z_index >= z_start && op.z_index < z_end)
+    !scene_range_draw_ops(&scene.draw_ops, z_start, z_end).is_empty()
         || range_contains_layer_events(&scene.effect_layers, &scene.backdrop_layers, z_start, z_end)
 }
 
@@ -942,12 +938,23 @@ fn scene_range_has_draw_ops(scene: &CompositorScene, z_start: usize, z_end: usiz
     scene_range_draw_op_count(scene, z_start, z_end) > 0
 }
 
+/// The draw ops that fall inside `z_start..z_end`, found by binary search.
+///
+/// Every push assigns the scene's monotonically increasing `next_z`, so
+/// `draw_ops` is always sorted by `z_index` and a z range is a contiguous
+/// slice. The range queries here used to filter the whole list instead; an
+/// animated game frame carries ~17k draw ops and asks for ranges several
+/// times per frame, which made those linear scans a measurable slice of the
+/// frame budget on a mobile core.
+fn scene_range_draw_ops(draw_ops: &[DrawOp], z_start: usize, z_end: usize) -> &[DrawOp] {
+    debug_assert!(draw_ops.windows(2).all(|w| w[0].z_index <= w[1].z_index));
+    let start = draw_ops.partition_point(|op| op.z_index < z_start);
+    let len = draw_ops[start..].partition_point(|op| op.z_index < z_end);
+    &draw_ops[start..start + len]
+}
+
 fn scene_range_draw_op_count(scene: &CompositorScene, z_start: usize, z_end: usize) -> usize {
-    scene
-        .draw_ops
-        .iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
-        .count()
+    scene_range_draw_ops(&scene.draw_ops, z_start, z_end).len()
 }
 
 fn scene_range_can_cache_as_transparent_surface(
@@ -1026,11 +1033,7 @@ fn direct_scene_range_cache_chunk_end(
     root_scale: f32,
 ) -> usize {
     let mut draw_count = 0usize;
-    for draw_op in scene
-        .draw_ops
-        .iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
-    {
+    for draw_op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         if draw_op_splits_direct_scene_range_cache(scene, *draw_op, root_scale) {
             if draw_op.z_index <= z_start {
                 return draw_op.z_index.saturating_add(1).min(z_end);
@@ -1107,11 +1110,7 @@ fn scene_range_visible_bounds(
     z_end: usize,
 ) -> Option<Rect> {
     let mut bounds = None;
-    for op in scene
-        .draw_ops
-        .iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
-    {
+    for op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         let rect = draw_op_visible_bounds(scene, *op);
         if let Some(rect) = rect {
             bounds = union_rect(bounds, rect);
@@ -2362,7 +2361,7 @@ fn backdrop_scene_prefix_hash(
     hash_f32_bits(root_scale, &mut hasher);
     z_end.hash(&mut hasher);
 
-    for draw_op in scene.draw_ops.iter().filter(|op| op.z_index < z_end) {
+    for draw_op in scene_range_draw_ops(&scene.draw_ops, 0, z_end) {
         0u8.hash(&mut hasher);
         hash_draw_op(scene, draw_op, &mut hasher);
     }
@@ -2407,11 +2406,7 @@ fn scene_range_content_hash(
     z_start.hash(&mut hasher);
     z_end.hash(&mut hasher);
 
-    for draw_op in scene
-        .draw_ops
-        .iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
-    {
+    for draw_op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         0u8.hash(&mut hasher);
         hash_draw_op(scene, draw_op, &mut hasher);
     }
@@ -2535,11 +2530,7 @@ fn log_direct_scene_range_hash_diag(
     }
 
     let mut entries = String::new();
-    for draw_op in scene
-        .draw_ops
-        .iter()
-        .filter(|op| op.z_index >= z_start && op.z_index < z_end)
-    {
+    for draw_op in scene_range_draw_ops(&scene.draw_ops, z_start, z_end) {
         if !entries.is_empty() {
             entries.push(' ');
         }
@@ -3453,6 +3444,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         // draw ops was being cut into ten passes that all wrote the same
         // pixels. Rendering the remainder in one pass measured 18% less CPU
         // on a Pixel 9 Pro.
+        let mut chunk_can_cache = true;
         if chunk_end < z_end
             && !direct_scene_range_chunk_fits_cache_entry(
                 backend.max_texture_dim(),
@@ -3463,18 +3455,26 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             )
         {
             chunk_end = z_end;
+            // The widened range can only fail the same admission check: its
+            // visible bounds contain the refused chunk's, and the byte budget
+            // is monotone in bounds. Asking the cache anyway would union the
+            // visible bounds of every remaining draw op — ~17k rects in an
+            // animated game frame — just to be told no.
+            chunk_can_cache = false;
         }
-        if !queue_cached_direct_scene_range(
-            backend,
-            text_state,
-            scene,
-            cursor_z,
-            chunk_end,
-            root_scale,
-            pending_composites,
-            pending_composite_load_op,
-            next_load_op,
-        )? {
+        if !chunk_can_cache
+            || !queue_cached_direct_scene_range(
+                backend,
+                text_state,
+                scene,
+                cursor_z,
+                chunk_end,
+                root_scale,
+                pending_composites,
+                pending_composite_load_op,
+                next_load_op,
+            )?
+        {
             render_non_effect_range_with_pending_composites(
                 backend,
                 text_state,
