@@ -2024,7 +2024,7 @@ fn collect_hits_from_graph(
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 pub(crate) fn push_draw_primitive(
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -4710,7 +4710,7 @@ mod tests {
     fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
         let mut scene = Scene::new();
         push_draw_primitive(
-            text_draw_primitive(
+            &text_draw_primitive(
                 Rect {
                     x: 4.0,
                     y: 5.0,
@@ -4778,7 +4778,7 @@ mod tests {
             ),
         ] {
             push_draw_primitive(
-                primitive,
+                &primitive,
                 bounds,
                 &GraphicsLayer::default(),
                 None,

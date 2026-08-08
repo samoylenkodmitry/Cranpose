@@ -5,7 +5,7 @@ use crate::pipeline::{
 };
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    ShadowDraw, SnapAnchor, TextDraw,
+    SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
 };
 use crate::surface_plan::{
     composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
@@ -719,7 +719,7 @@ fn push_local_primitive(
                 return;
             }
             push_draw_primitive(
-                draw.primitive.clone(),
+                &draw.primitive,
                 context.layer_bounds,
                 context.local_layer,
                 clip,
@@ -1025,7 +1025,7 @@ fn collect_layer_contents_into<'a>(
                     )),
                     visual_clip,
                     surface_clip,
-                    shadow_draws: shadow_scene.shadow_draws,
+                    shadow_draws: std::mem::take(&mut shadow_scene.shadow_draws),
                     needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
                 });
                 local_scene.next_z += 1;
@@ -1107,7 +1107,59 @@ pub(crate) fn collect_layer_contents_with_translation_context_and_text_layout<'a
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) -> CollectedLayer<'a> {
-    let mut local_scene = CompositorScene::new();
+    collect_layer_contents_with_capacity(
+        layer,
+        text_layout,
+        inherited_clip,
+        inherited_translated_snap_anchor,
+        translation_context,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+        SceneCapacityHint::default(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_layer_contents_with_capacity<'a>(
+    layer: &'a LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    inherited_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<SnapAnchor>,
+    translation_context: TranslationRenderContext,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+    capacity: SceneCapacityHint,
+) -> CollectedLayer<'a> {
+    collect_layer_contents_reusing(
+        layer,
+        text_layout,
+        inherited_clip,
+        inherited_translated_snap_anchor,
+        translation_context,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+        CompositorScene::with_capacity(capacity),
+    )
+}
+
+/// Like [`collect_layer_contents_with_capacity`], but fills a scene recycled
+/// from a previous frame. A fully animated scene re-collects every primitive
+/// each frame, and its draw-op vector is megabytes — large enough that a
+/// fresh allocation goes straight to mmap and back every frame. Reusing the
+/// buffers keeps the steady-state frame allocation-free.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn collect_layer_contents_reusing<'a>(
+    layer: &'a LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    inherited_clip: Option<Rect>,
+    inherited_translated_snap_anchor: Option<SnapAnchor>,
+    translation_context: TranslationRenderContext,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+    scene: CompositorScene,
+) -> CollectedLayer<'a> {
+    let mut local_scene = scene;
+    local_scene.clear();
     let mut child_layers = Vec::new();
     collect_layer_contents_with_translation_context_into(
         layer,

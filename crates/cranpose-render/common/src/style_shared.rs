@@ -204,47 +204,56 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
+    // `filter(...).collect()` reports a zero lower-bound size hint, so it
+    // grows the output through the whole doubling schedule; for an animated
+    // scene these vectors hold thousands of primitives and are rebuilt every
+    // frame. `Content` markers are rare, so the input length is the right
+    // capacity.
+    let filter_content = |primitives: Vec<DrawPrimitive>| {
+        let mut out = Vec::with_capacity(primitives.len());
+        out.extend(
+            primitives
+                .into_iter()
+                .filter(|primitive| !matches!(primitive, DrawPrimitive::Content)),
+        );
+        out
+    };
+
     let split_with_content = |primitives: Vec<DrawPrimitive>, placement| {
         let Some(last_content_idx) = primitives
             .iter()
             .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
         else {
             return if matches!(placement, DrawPlacement::Overlay) {
-                primitives
-                    .into_iter()
-                    .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-                    .collect()
+                filter_content(primitives)
             } else {
                 Vec::new()
             };
         };
 
-        primitives
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, primitive)| {
-                if matches!(primitive, DrawPrimitive::Content) {
-                    return None;
-                }
-                let is_before = index < last_content_idx;
-                match placement {
-                    DrawPlacement::Behind if is_before => Some(primitive),
-                    DrawPlacement::Overlay if !is_before => Some(primitive),
-                    _ => None,
-                }
-            })
-            .collect()
+        let mut out = Vec::with_capacity(primitives.len());
+        out.extend(
+            primitives
+                .into_iter()
+                .enumerate()
+                .filter_map(|(index, primitive)| {
+                    if matches!(primitive, DrawPrimitive::Content) {
+                        return None;
+                    }
+                    let is_before = index < last_content_idx;
+                    match placement {
+                        DrawPlacement::Behind if is_before => Some(primitive),
+                        DrawPlacement::Overlay if !is_before => Some(primitive),
+                        _ => None,
+                    }
+                }),
+        );
+        out
     };
 
     match (placement, command) {
-        (DrawPlacement::Behind, DrawCommand::Behind(func)) => func(size)
-            .into_iter()
-            .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-            .collect(),
-        (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => func(size)
-            .into_iter()
-            .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
-            .collect(),
+        (DrawPlacement::Behind, DrawCommand::Behind(func)) => filter_content(func(size)),
+        (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => filter_content(func(size)),
         (_, DrawCommand::WithContent(func)) => split_with_content(func(size), placement),
         _ => Vec::new(),
     }

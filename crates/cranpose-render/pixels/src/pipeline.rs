@@ -1022,7 +1022,7 @@ fn render_graph_primitive(
                 return;
             }
             push_draw_primitive(
-                draw.primitive.clone(),
+                &draw.primitive,
                 rect,
                 context.node_layer,
                 effective_clip,
@@ -1088,7 +1088,7 @@ fn render_graph_text(
 const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
 
 pub(crate) fn push_draw_primitive(
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,

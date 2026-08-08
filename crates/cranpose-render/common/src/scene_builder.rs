@@ -734,7 +734,12 @@ fn draw_nodes(
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
     for command in commands {
-        for primitive in primitives_for_placement(command, placement, size) {
+        let primitives = primitives_for_placement(command, placement, size);
+        // A single canvas command can carry thousands of primitives; reserving
+        // up front keeps an animated scene from re-growing (and re-copying)
+        // this vector through the whole doubling schedule each frame.
+        nodes.reserve(primitives.len());
+        for primitive in primitives {
             nodes.push(RenderNode::Primitive(PrimitiveEntry {
                 phase,
                 node: PrimitiveNode::Draw(DrawPrimitiveNode {

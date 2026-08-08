@@ -841,11 +841,44 @@ pub struct DrawScopeDefault {
     text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
 }
 
+/// Per-thread memory of how many primitives the scope of a given size emitted
+/// last time, keyed by the scope's size bits. Draw closures re-record every
+/// frame, and a heavy animated canvas emits thousands of primitives; starting
+/// its vector at the previous count skips the whole doubling schedule of
+/// reallocations. Keying by size keeps a small HUD scope from inheriting the
+/// arena's multi-thousand capacity.
+const RECORDED_PRIMITIVE_COUNTS_LIMIT: usize = 64;
+
+thread_local! {
+    static RECORDED_PRIMITIVE_COUNTS: std::cell::RefCell<std::collections::HashMap<(u32, u32), usize>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn recorded_primitive_capacity(size: Size) -> usize {
+    RECORDED_PRIMITIVE_COUNTS.with(|counts| {
+        counts
+            .borrow()
+            .get(&(size.width.to_bits(), size.height.to_bits()))
+            .copied()
+            .unwrap_or(0)
+    })
+}
+
+fn note_recorded_primitive_count(size: Size, count: usize) {
+    RECORDED_PRIMITIVE_COUNTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        if counts.len() >= RECORDED_PRIMITIVE_COUNTS_LIMIT {
+            counts.clear();
+        }
+        counts.insert((size.width.to_bits(), size.height.to_bits()), count);
+    });
+}
+
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
         Self {
             size,
-            primitives: Vec::new(),
+            primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
             text_measurer: None,
         }
     }
@@ -857,7 +890,7 @@ impl DrawScopeDefault {
     pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
         Self {
             size,
-            primitives: Vec::new(),
+            primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
             text_measurer: Some(text_measurer),
         }
     }
@@ -1460,6 +1493,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
+        note_recorded_primitive_count(self.size, self.primitives.len());
         self.primitives
     }
 }

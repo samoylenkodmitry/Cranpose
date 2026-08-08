@@ -1678,7 +1678,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     height: u32,
     root_scale: f32,
     initial_load_op: wgpu::LoadOp<wgpu::Color>,
-) -> Result<(), String> {
+) -> Result<CompositorScene, String> {
     let CollectedLayer {
         scene: local_scene,
         child_layers,
@@ -2020,8 +2020,10 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
 
         Ok(())
     })();
-    drop(local_scene);
-    result
+    // Hand the scene back so the caller can recycle its buffers; for a heavy
+    // animated frame they are megabytes of Vec that would otherwise round-trip
+    // through mmap on every frame.
+    result.map(|()| local_scene)
 }
 
 pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(

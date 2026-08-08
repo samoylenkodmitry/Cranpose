@@ -162,7 +162,7 @@ pub fn draw_shape_params_for_primitive(
 
     let mut sink = SingleShapeSink { shape: None };
     emit_draw_primitive(
-        primitive,
+        &primitive,
         layer_bounds,
         layer,
         clip,
@@ -206,7 +206,7 @@ pub fn resolve_primitive_clip(
 }
 
 pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -214,18 +214,21 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
     blend_mode: Option<BlendMode>,
     motion_context_animated: bool,
 ) {
+    // Borrowing the primitive keeps the per-frame collect walk from cloning
+    // the whole enum for every draw; only the payloads a sink actually keeps
+    // (brush, image handle, text block, shadow) are cloned below.
     match primitive {
         DrawPrimitive::Content => {}
         DrawPrimitive::Blend {
             primitive,
             blend_mode: nested,
         } => emit_draw_primitive(
-            *primitive,
+            primitive,
             layer_bounds,
             layer,
             clip,
             sink,
-            blend_mode.or(Some(nested)),
+            blend_mode.or(Some(*nested)),
             motion_context_animated,
         ),
         DrawPrimitive::Rect {
@@ -234,7 +237,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
         } => {
             let Some((draw_rect, stroke)) =
-                stroked_draw_rect(local_rect, stroke, layer_bounds, layer)
+                stroked_draw_rect(*local_rect, *stroke, layer_bounds, layer)
             else {
                 return;
             };
@@ -244,7 +247,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 rect: quad_bounds(quad),
                 local_rect,
                 quad,
-                brush: apply_layer_to_brush(brush, layer),
+                brush: apply_layer_to_brush(brush.clone(), layer),
                 shape: None,
                 stroke,
                 arc: None,
@@ -260,21 +263,21 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
         } => {
             let Some((draw_rect, stroke)) =
-                stroked_draw_rect(local_rect, stroke, layer_bounds, layer)
+                stroked_draw_rect(*local_rect, *stroke, layer_bounds, layer)
             else {
                 return;
             };
             let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
             let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
             let shape = RoundedCornerShape::with_radii(scale_corner_radii(
-                radii,
+                *radii,
                 layer_uniform_scale(layer),
             ));
             sink.push_shape(ShapeDrawParams {
                 rect: quad_bounds(quad),
                 local_rect,
                 quad,
-                brush: apply_layer_to_brush(brush, layer),
+                brush: apply_layer_to_brush(brush.clone(), layer),
                 shape: Some(shape),
                 stroke,
                 arc: None,
@@ -293,13 +296,13 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
             stroke,
             inner_radius,
         } => {
-            let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
+            let (band_inner, band_outer, cap) = arc_band(*radius, *inner_radius, *stroke);
             let arc = ArcGeometry::new(
-                center,
+                *center,
                 band_inner,
                 band_outer,
-                start_angle,
-                sweep_angle,
+                *start_angle,
+                *sweep_angle,
                 cap,
             );
             if arc.is_degenerate() {
@@ -325,7 +328,7 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 rect: quad_bounds(quad),
                 local_rect: out_rect,
                 quad,
-                brush: apply_layer_to_brush(brush, layer),
+                brush: apply_layer_to_brush(brush.clone(), layer),
                 shape: None,
                 stroke: None,
                 arc: Some(arc.scaled_about(arc_center, scale)),
@@ -349,23 +352,23 @@ pub fn emit_draw_primitive<S: DrawPrimitiveSink>(
                 rect: quad_bounds(quad),
                 local_rect,
                 quad,
-                image,
+                image: image.clone(),
                 alpha: (alpha * layer.alpha).clamp(0.0, 1.0),
-                color_filter: compose_color_filters(color_filter, layer.color_filter),
-                sampling,
+                color_filter: compose_color_filters(*color_filter, layer.color_filter),
+                sampling: *sampling,
                 clip,
-                src_rect,
+                src_rect: *src_rect,
                 blend_mode: blend_mode.unwrap_or(BlendMode::SrcOver),
                 motion_context_animated,
             });
         }
         DrawPrimitive::Text(text) => {
-            if let Some(params) = text_draw_params(*text, layer_bounds, layer, clip) {
+            if let Some(params) = text_draw_params((**text).clone(), layer_bounds, layer, clip) {
                 sink.push_text(params);
             }
         }
         DrawPrimitive::Shadow(shadow_primitive) => {
-            sink.push_shadow(shadow_primitive, layer_bounds, layer, clip);
+            sink.push_shadow(shadow_primitive.clone(), layer_bounds, layer, clip);
         }
     }
 }
@@ -880,7 +883,7 @@ mod tests {
     fn lower_text(primitive: DrawPrimitive, layer: &GraphicsLayer) -> Vec<TextDrawParams> {
         let mut sink = CollectingTextSink::default();
         emit_draw_primitive(
-            primitive,
+            &primitive,
             layer_bounds(),
             layer,
             None,

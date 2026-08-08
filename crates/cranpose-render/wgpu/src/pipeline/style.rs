@@ -61,7 +61,7 @@ pub(crate) fn apply_draw_commands(
             | DrawPrimitive::Arc { .. }
             | DrawPrimitive::Text(_)) => {
                 super::push_draw_primitive(
-                    shape_primitive,
+                    &shape_primitive,
                     layer_bounds,
                     layer,
                     clip,

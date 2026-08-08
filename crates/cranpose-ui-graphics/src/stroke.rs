@@ -137,6 +137,23 @@ pub struct ArcGeometry {
     pub cap: StrokeCap,
 }
 
+/// `x mod TAU` into `[0, TAU)` without `rem_euclid`, whose `fmodf` lowers to
+/// the software routine in compiler_builtins on aarch64 Android and shows up
+/// in profiles at two calls per arc per frame. Multiply-floor keeps it to a
+/// couple of instructions; the fixup folds the one-ulp overshoot cases back
+/// into range.
+#[inline]
+fn wrap_angle_tau(x: f32) -> f32 {
+    let wrapped = x - (x * (1.0 / TAU)).floor() * TAU;
+    if wrapped >= TAU {
+        wrapped - TAU
+    } else if wrapped < 0.0 {
+        0.0
+    } else {
+        wrapped
+    }
+}
+
 impl ArcGeometry {
     /// Normalizing constructor. Never panics and never stores a NaN.
     pub fn new(
@@ -173,7 +190,7 @@ impl ArcGeometry {
             sweep = TAU;
             start = 0.0;
         }
-        start = start.rem_euclid(TAU);
+        start = wrap_angle_tau(start);
         if !start.is_finite() {
             start = 0.0;
         }
@@ -221,7 +238,7 @@ impl ArcGeometry {
         if self.sweep_angle >= TAU {
             return true;
         }
-        let delta = (angle - self.start_angle).rem_euclid(TAU);
+        let delta = wrap_angle_tau(angle - self.start_angle);
         delta <= self.sweep_angle + 1e-6
     }
 

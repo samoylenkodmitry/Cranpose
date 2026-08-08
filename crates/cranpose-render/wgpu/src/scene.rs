@@ -160,17 +160,103 @@ pub(crate) struct CompositorScene {
     pub next_z: usize,
 }
 
+/// Last frame's element counts, used to pre-size the next frame's scene Vecs.
+/// A fully animated scene re-collects every primitive each frame; growing the
+/// Vecs from empty re-copies roughly twice the final payload through the
+/// doubling schedule, which is pure overhead once the sizes are known.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SceneCapacityHint {
+    pub shapes: usize,
+    pub images: usize,
+    pub texts: usize,
+    pub shadow_draws: usize,
+    pub draw_ops: usize,
+    pub effect_layers: usize,
+    pub backdrop_layers: usize,
+}
+
+/// How many dropped scenes' buffers each thread keeps for reuse. Scenes are
+/// collected fresh every frame (root plus one per composited child layer);
+/// for a heavy animated frame the draw vectors are megabytes, big enough
+/// that dropping and reallocating them round-trips through mmap each frame.
+const SCENE_BUFFER_POOL_LIMIT: usize = 4;
+
+thread_local! {
+    static SCENE_BUFFER_POOL: std::cell::RefCell<Vec<SceneBuffers>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The emptied-but-still-allocated vectors of a dropped [`CompositorScene`].
+struct SceneBuffers {
+    shapes: Vec<DrawShape>,
+    images: Vec<ImageDraw>,
+    texts: Vec<TextDraw>,
+    shadow_draws: Vec<ShadowDraw>,
+    draw_ops: Vec<DrawOp>,
+    effect_layers: Vec<EffectLayer>,
+    backdrop_layers: Vec<BackdropLayer>,
+}
+
+impl Drop for CompositorScene {
+    fn drop(&mut self) {
+        SCENE_BUFFER_POOL.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
+                return;
+            }
+            self.clear();
+            pool.push(SceneBuffers {
+                shapes: std::mem::take(&mut self.shapes),
+                images: std::mem::take(&mut self.images),
+                texts: std::mem::take(&mut self.texts),
+                shadow_draws: std::mem::take(&mut self.shadow_draws),
+                draw_ops: std::mem::take(&mut self.draw_ops),
+                effect_layers: std::mem::take(&mut self.effect_layers),
+                backdrop_layers: std::mem::take(&mut self.backdrop_layers),
+            });
+        });
+    }
+}
+
 impl CompositorScene {
     pub fn new() -> Self {
+        Self::with_capacity(SceneCapacityHint::default())
+    }
+
+    pub fn with_capacity(hint: SceneCapacityHint) -> Self {
+        if let Some(buffers) = SCENE_BUFFER_POOL.with(|pool| pool.borrow_mut().pop()) {
+            return Self {
+                shapes: buffers.shapes,
+                images: buffers.images,
+                texts: buffers.texts,
+                shadow_draws: buffers.shadow_draws,
+                draw_ops: buffers.draw_ops,
+                effect_layers: buffers.effect_layers,
+                backdrop_layers: buffers.backdrop_layers,
+                next_z: 0,
+            };
+        }
         Self {
-            shapes: Vec::new(),
-            images: Vec::new(),
-            texts: Vec::new(),
-            shadow_draws: Vec::new(),
-            draw_ops: Vec::new(),
-            effect_layers: Vec::new(),
-            backdrop_layers: Vec::new(),
+            shapes: Vec::with_capacity(hint.shapes),
+            images: Vec::with_capacity(hint.images),
+            texts: Vec::with_capacity(hint.texts),
+            shadow_draws: Vec::with_capacity(hint.shadow_draws),
+            draw_ops: Vec::with_capacity(hint.draw_ops),
+            effect_layers: Vec::with_capacity(hint.effect_layers),
+            backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
             next_z: 0,
+        }
+    }
+
+    pub fn capacity_hint(&self) -> SceneCapacityHint {
+        SceneCapacityHint {
+            shapes: self.shapes.len(),
+            images: self.images.len(),
+            texts: self.texts.len(),
+            shadow_draws: self.shadow_draws.len(),
+            draw_ops: self.draw_ops.len(),
+            effect_layers: self.effect_layers.len(),
+            backdrop_layers: self.backdrop_layers.len(),
         }
     }
 

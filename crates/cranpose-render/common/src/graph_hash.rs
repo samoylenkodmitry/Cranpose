@@ -5,19 +5,48 @@ use cranpose_ui_graphics::{
 };
 
 use crate::graph::{
-    LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
 };
 use crate::layer_composition::{layer_composite_params, local_content_layer_for};
 use crate::raster_cache::LayerRasterCacheHashes;
 
 pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
+    recompute_layer_raster_cache_hashes_inner(layer, false);
+}
+
+/// True when some consumer might read this layer's stored hashes this frame:
+/// the raster-cache candidate checks and the child-surface composite paths all
+/// key off cache policy or an isolating property. A plain content layer (the
+/// common case for a full-screen game canvas) has no reader, and eagerly
+/// hashing its whole subtree is a pure walk over every primitive per frame.
+fn layer_hashes_have_consumers(layer: &LayerNode) -> bool {
+    layer.cache_policy != CachePolicy::None
+        || layer.isolation.has_any()
+        || layer.effect().is_some()
+        || layer.backdrop().is_some()
+        || layer.blend_mode() != BlendMode::SrcOver
+        || layer.opacity() < 1.0
+}
+
+fn recompute_layer_raster_cache_hashes_inner(layer: &mut LayerNode, ancestor_hashed: bool) {
+    // A hashed parent folds `child.target_content_hash()` into its own hash,
+    // so every descendant of a hashed layer must stay eagerly hashed or each
+    // parent recompute would re-walk the child subtree through the lazy path.
+    let eager = ancestor_hashed || layer_hashes_have_consumers(layer);
     for child in &mut layer.children {
         if let RenderNode::Layer(child_layer) = child {
-            recompute_layer_raster_cache_hashes(child_layer);
+            recompute_layer_raster_cache_hashes_inner(child_layer, eager);
         }
     }
-    layer.cache_hashes = layer_raster_cache_hashes(layer);
-    layer.cache_hashes_valid = true;
+    if eager {
+        layer.cache_hashes = layer_raster_cache_hashes(layer);
+        layer.cache_hashes_valid = true;
+    } else {
+        // Readers fall back to computing on demand (`target_content_hash`),
+        // which keeps correctness if a consumer shows up unexpectedly.
+        layer.cache_hashes_valid = false;
+    }
 }
 
 pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHashes {
