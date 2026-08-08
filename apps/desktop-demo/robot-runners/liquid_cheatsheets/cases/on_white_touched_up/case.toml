@@ -1,0 +1,9 @@
+name = "on_white_touched_up"
+frame_count = 31
+source_video = "example/iphone17_records/on_white/touched_up_state.mov"
+source_video_available = true
+reference = "example/target/on-white/touched-up-state/touch-drag-release.png"
+crop = "native recording crop; target grid is precomposed"
+fps = 60
+timing = "tile labels are native frame numbers; one frame is approximately 16.7 ms"
+selected = ["touch-drag-release.png@native-frame-labels"]

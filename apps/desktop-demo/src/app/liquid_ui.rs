@@ -89,6 +89,17 @@ fn tab_swipe_reference_tabs() -> Vec<LiquidTab> {
     ]
 }
 
+fn tab_swipe_reference_page(progress: f32) -> usize {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress < 0.5 {
+        0
+    } else if progress < 0.92 {
+        2
+    } else {
+        3
+    }
+}
+
 fn heading_style(color: Color) -> TextStyle {
     TextStyle {
         span_style: SpanStyle {
@@ -151,10 +162,9 @@ fn TogglePressReferenceStage(checked: bool, on_change: impl Fn(bool) + 'static) 
     );
 }
 
-#[composable]
-fn TouchedUpReferenceStage() {
+fn touched_up_action_spec() -> GlassButtonSpec {
     let action = Color::from_rgb_u8(0, 199, 208);
-    let action_spec = GlassButtonSpec::prominent()
+    GlassButtonSpec::prominent()
         .with_glass(
             Glass::regular()
                 .tint(action.with_alpha(0.82))
@@ -164,15 +174,42 @@ fn TouchedUpReferenceStage() {
                 .highlight(0.72)
                 .adaptive_frost(Color::WHITE, 0.12),
         )
-        .with_content_color(Color::WHITE);
-    // Reference touched-up lifecycle: confirming dissolves the pair down to
-    // the lone "..." (f_0360-0400); pressing "..." expands the actions again.
+        .with_content_color(Color::WHITE)
+}
+
+#[composable]
+fn TouchedUpButtonGroup(
+    confirmed: cranpose_core::MutableState<bool>,
+    action_spec: GlassButtonSpec,
+) {
+    let more_confirmed = confirmed;
+    let check_confirmed = confirmed;
+    let mut items = vec![GlassIconButtonGroupItem::new(
+        icons::MORE_HORIZ,
+        "More grouped action",
+        move || more_confirmed.set(false),
+    )];
+    if !confirmed.get() {
+        items.push(
+            GlassIconButtonGroupItem::new(icons::CHECK, "Confirm grouped action", move || {
+                check_confirmed.set(true)
+            })
+            .with_spec(action_spec),
+        );
+    }
+    GlassIconButtonGroup(
+        Modifier::empty(),
+        GlassIconButtonGroupSpec::new(44.0)
+            .with_spacing(14.0)
+            .with_glue_radius(36.0),
+        items,
+    );
+}
+
+#[composable]
+fn TouchedUpReferenceStage() {
     let confirmed = remember(|| mutableStateOf(false)).with(|s| *s);
     Box(
-        // Trailing-anchored like the reference toolbar (buttons at the
-        // card's top-right): collapsing the pair makes the survivor glide
-        // INTO the fading ball's slot instead of splitting the contraction
-        // across both edges.
         Modifier::empty()
             .fill_max_width()
             .height(82.0)
@@ -181,38 +218,56 @@ fn TouchedUpReferenceStage() {
             HorizontalAlignment::End,
             VerticalAlignment::CenterVertically,
         )),
-        move || {
-            let more_confirmed = confirmed;
-            let check_confirmed = confirmed;
-            let mut items = vec![GlassIconButtonGroupItem::new(
-                icons::MORE_HORIZ,
-                "More grouped action",
-                move || more_confirmed.set(false),
-            )];
-            if !confirmed.get() {
-                items.push(
-                    GlassIconButtonGroupItem::new(
-                        icons::CHECK,
-                        "Confirm grouped action",
-                        move || check_confirmed.set(true),
-                    )
-                    .with_spec(action_spec.clone()),
+        move || TouchedUpButtonGroup(confirmed, touched_up_action_spec()),
+    );
+}
+
+#[composable]
+fn TouchedUpFixtureStage() {
+    let confirmed = remember(|| mutableStateOf(false)).with(|s| *s);
+    Box(
+        Modifier::empty()
+            .size(Size::new(220.0, 236.0))
+            .draw_behind(|scope| {
+                scope.draw_rect(Brush::solid(Color::from_rgb_u8(241, 240, 247)));
+                scope.draw_circle(Brush::solid(Color::BLACK), Point::new(0.0, 48.0), 23.0);
+                scope.draw_round_rect_at(
+                    Rect {
+                        x: 0.0,
+                        y: 172.0,
+                        width: 220.0,
+                        height: 96.0,
+                    },
+                    Brush::solid(Color::WHITE),
+                    CornerRadii::uniform(30.0),
                 );
-            }
-            GlassIconButtonGroup(
-                Modifier::empty(),
-                GlassIconButtonGroupSpec::new(44.0)
-                    // Measured on the raw recording (f_0280): circle pitch
-                    // 59dp for 45dp discs — the swollen ball keeps a ~9dp
-                    // gap that the capillary neck bridges. 8dp spacing made
-                    // the swell OVERLAP the neighbor outright, so no neck
-                    // could ever read.
-                    .with_spacing(14.0)
-                    // smin k: across the ~8.5dp held gap, k=18 leaves a
-                    // hairline (k/4 barely beats the half-gap); the
-                    // reference bridge is ~15dp thick, which needs k~36.
-                    .with_glue_radius(36.0),
-                items,
+            }),
+        BoxSpec::default(),
+        move || {
+            Text(
+                "••••     Wi-Fi     64",
+                Modifier::empty().offset(43.0, 18.0),
+                TextStyle {
+                    span_style: SpanStyle {
+                        color: Some(Color::BLACK),
+                        font_size: TextUnit::Sp(14.0),
+                        font_weight: Some(cranpose::text::FontWeight::BOLD),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            );
+            Box(
+                Modifier::empty()
+                    .fill_max_width()
+                    .height(82.0)
+                    .offset(0.0, 60.0)
+                    .padding_each(0.0, 0.0, 18.0, 0.0),
+                BoxSpec::default().content_alignment(Alignment::new(
+                    HorizontalAlignment::End,
+                    VerticalAlignment::CenterVertically,
+                )),
+                move || TouchedUpButtonGroup(confirmed, touched_up_action_spec()),
             );
         },
     );
@@ -441,96 +496,184 @@ fn GradientStripe(colors: [Color; 2], height: f32) {
 }
 
 #[composable]
-fn TabSwipeReferenceBackdrop() {
+fn TabSwipeBackdropContent(page: usize, offset_x: f32) {
     let layout = tab_swipe_reference_layout();
+    let secondary = Color::from_rgb_u8(112, 112, 120);
+    let label = Color::from_rgb_u8(24, 24, 28);
+    let modifier = Modifier::empty().size(layout.size);
+    let modifier = if offset_x == 0.0 {
+        modifier
+    } else {
+        modifier.offset(offset_x, 0.0)
+    };
+    Box(
+        modifier.size(layout.size).draw_behind(|scope| {
+            scope.draw_rect(Brush::solid(Color::from_rgb_u8(245, 245, 251)));
+        }),
+        BoxSpec::default(),
+        move || match page {
+            0 | 1 => {
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(122.0, 66.0))
+                        .offset(20.0, 6.0)
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::linear_gradient_range(
+                                    vec![
+                                        Color::from_rgb_u8(75, 119, 180),
+                                        Color::from_rgb_u8(232, 198, 149),
+                                    ],
+                                    Point::new(0.0, 0.0),
+                                    Point::new(scope.size().width, scope.size().height),
+                                ),
+                                CornerRadii::uniform(8.0),
+                            );
+                        }),
+                    BoxSpec::default(),
+                    || {},
+                );
+                Text(
+                    "WWDC26",
+                    Modifier::empty().offset(154.0, 7.0),
+                    TextStyle {
+                        span_style: SpanStyle {
+                            color: Some(secondary),
+                            font_size: TextUnit::Sp(11.0),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                );
+                Text(
+                    "Build a responsive camera app that\nlaunches quickly",
+                    Modifier::empty().offset(154.0, 23.0),
+                    TextStyle {
+                        span_style: SpanStyle {
+                            color: Some(label),
+                            font_size: TextUnit::Sp(14.0),
+                            font_weight: Some(cranpose::text::FontWeight::SEMI_BOLD),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                );
+            }
+            2 => {
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(layout.xcode.width, layout.xcode.height))
+                        .offset(layout.xcode.x, layout.xcode.y)
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color::from_rgb_u8(250, 250, 252)),
+                                CornerRadii::uniform(18.0),
+                            );
+                        }),
+                    BoxSpec::default(),
+                    move || {
+                        Text(
+                            "Xcode",
+                            Modifier::empty().offset(30.0, 8.0),
+                            TextStyle {
+                                span_style: SpanStyle {
+                                    color: Some(Color::from_rgb_u8(208, 208, 214)),
+                                    font_size: TextUnit::Sp(18.0),
+                                    font_weight: Some(cranpose::text::FontWeight::BOLD),
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                        );
+                    },
+                );
+                GlassSurface(
+                    Modifier::empty()
+                        .size(Size::new(layout.enroll.width, layout.enroll.height))
+                        .offset(layout.enroll.x, layout.enroll.y),
+                    tab_swipe_reference_glass(),
+                    || {
+                        Box(
+                            Modifier::empty().fill_max_size(),
+                            BoxSpec::default(),
+                            || {
+                                Text(
+                                    "Enroll Now",
+                                    Modifier::empty().offset(20.0, 12.0),
+                                    TextStyle {
+                                        span_style: SpanStyle {
+                                            color: Some(Color::from_rgb_u8(0, 122, 255)),
+                                            font_size: TextUnit::Sp(17.0),
+                                            ..Default::default()
+                                        },
+                                        ..Default::default()
+                                    },
+                                );
+                            },
+                        );
+                    },
+                );
+                Text(
+                    "Apple Developer Program",
+                    Modifier::empty().offset(layout.title.x, layout.title.y),
+                    TextStyle {
+                        span_style: SpanStyle {
+                            color: Some(Color::from_rgb_u8(124, 124, 130)),
+                            font_size: TextUnit::Sp(17.0),
+                            font_weight: Some(cranpose::text::FontWeight::MEDIUM),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                );
+            }
+            _ => {
+                Text(
+                    "Explore the latest in watchOS.",
+                    Modifier::empty().offset(36.0, 8.0),
+                    body_style(secondary),
+                );
+                Box(
+                    Modifier::empty()
+                        .size(Size::new(376.0, 52.0))
+                        .offset(32.0, 32.0)
+                        .draw_behind(|scope| {
+                            scope.draw_round_rect(
+                                Brush::solid(Color::from_rgb_u8(250, 250, 252)),
+                                CornerRadii::uniform(14.0),
+                            );
+                        }),
+                    BoxSpec::default(),
+                    move || {
+                        Text(
+                            "Xcode",
+                            Modifier::empty().offset(28.0, 13.0),
+                            heading_style(label),
+                        );
+                    },
+                );
+            }
+        },
+    );
+}
+
+#[composable]
+fn TabSwipeReferenceBackdrop() {
     Box(
         Modifier::empty()
             .fill_max_width()
-            .height(layout.size.height),
+            .height(tab_swipe_reference_layout().size.height),
         BoxSpec::default().content_alignment(Alignment::new(
             HorizontalAlignment::CenterHorizontally,
             VerticalAlignment::Top,
         )),
-        move || {
-            Box(
-                Modifier::empty()
-                    .size(layout.size)
-                    .offset(4.0, 0.0)
-                    .draw_behind(|scope| {
-                        scope.draw_rect(Brush::solid(Color::from_rgb_u8(245, 245, 251)));
-                    }),
-                BoxSpec::default(),
-                move || {
-                    Box(
-                        Modifier::empty()
-                            .size(Size::new(layout.xcode.width, layout.xcode.height))
-                            .offset(layout.xcode.x, layout.xcode.y)
-                            .draw_behind(|scope| {
-                                scope.draw_round_rect(
-                                    Brush::solid(Color::from_rgb_u8(250, 250, 252)),
-                                    CornerRadii::uniform(18.0),
-                                );
-                            }),
-                        BoxSpec::default(),
-                        || {
-                            Text(
-                                "Xcode",
-                                Modifier::empty().offset(30.0, 8.0),
-                                TextStyle {
-                                    span_style: SpanStyle {
-                                        color: Some(Color::from_rgb_u8(208, 208, 214)),
-                                        font_size: TextUnit::Sp(18.0),
-                                        font_weight: Some(cranpose::text::FontWeight::BOLD),
-                                        ..Default::default()
-                                    },
-                                    ..Default::default()
-                                },
-                            );
-                        },
-                    );
-                    GlassSurface(
-                        Modifier::empty()
-                            .size(Size::new(layout.enroll.width, layout.enroll.height))
-                            .offset(layout.enroll.x, layout.enroll.y),
-                        tab_swipe_reference_glass(),
-                        || {
-                            Box(
-                                Modifier::empty().fill_max_size(),
-                                BoxSpec::default(),
-                                || {
-                                    Text(
-                                        "Enroll Now",
-                                        Modifier::empty().offset(20.0, 12.0),
-                                        TextStyle {
-                                            span_style: SpanStyle {
-                                                color: Some(Color::from_rgb_u8(0, 122, 255)),
-                                                font_size: TextUnit::Sp(17.0),
-                                                ..Default::default()
-                                            },
-                                            ..Default::default()
-                                        },
-                                    );
-                                },
-                            );
-                        },
-                    );
-                    Text(
-                        "Apple Developer Program",
-                        Modifier::empty().offset(layout.title.x, layout.title.y),
-                        TextStyle {
-                            span_style: SpanStyle {
-                                color: Some(Color::from_rgb_u8(124, 124, 130)),
-                                font_size: TextUnit::Sp(17.0),
-                                font_weight: Some(cranpose::text::FontWeight::MEDIUM),
-                                ..Default::default()
-                            },
-                            ..Default::default()
-                        },
-                    );
-                },
-            );
-        },
+        || TabSwipeBackdropContent(2, 4.0),
     );
+}
+
+#[composable]
+fn TabSwipeFixtureBackdrop(page: usize) {
+    TabSwipeBackdropContent(page, 0.0);
 }
 
 #[composable]
@@ -763,7 +906,7 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
 /// whose "Sort by" / "Filter" rows expand the container in place (the
 /// accordion morph from the 16-jul recording).
 #[composable]
-fn SortFilterReferenceStage() {
+fn SortFilterStage(suggestion_offset: f32) {
     let menu_open = remember(|| mutableStateOf(false)).with(|s| *s);
     // 0 = collapsed, 1 = "Sort by" expanded, 2 = "Filter" expanded.
     let section = remember(|| mutableStateOf(0usize)).with(|s| *s);
@@ -990,9 +1133,15 @@ fn SortFilterReferenceStage() {
                                         )));
                                     }),
                                 BoxSpec::default(),
-                                || {
+                                move || {
+                                    let row_modifier = Modifier::empty();
+                                    let row_modifier = if suggestion_offset == 0.0 {
+                                        row_modifier
+                                    } else {
+                                        row_modifier.offset(suggestion_offset, 0.0)
+                                    };
                                     Row(
-                                        Modifier::empty().padding_each(16.0, 18.0, 16.0, 0.0),
+                                        row_modifier.padding_each(16.0, 18.0, 16.0, 0.0),
                                         RowSpec::default(),
                                         || {
                                             SuggestionTile("Later", "1 item");
@@ -1043,6 +1192,16 @@ fn SortFilterReferenceStage() {
             );
         },
     );
+}
+
+#[composable]
+fn SortFilterReferenceStage() {
+    SortFilterStage(0.0);
+}
+
+#[composable]
+fn SortFilterFixtureStage() {
+    SortFilterStage(104.0);
 }
 
 /// One white suggestion tile ("Later / 1 item") from the recording's page.
@@ -1517,6 +1676,217 @@ fn FeaturedVideosReferenceCard(
         },
     );
     Box(Modifier::empty().height(12.0), BoxSpec::default(), || {});
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LiquidReferenceFixtureCase {
+    TogglePress,
+    MenuOpen,
+    TabSwipe,
+    Segmented,
+    MenuExpand,
+    BottomBarForm,
+    OnWhiteClick,
+    OnWhiteClickHold,
+    OnWhiteTouchedUp,
+}
+
+#[composable]
+fn MenuOpenReferenceStage() {
+    let menu_open = remember(|| mutableStateOf(false)).with(|state| *state);
+    let menu_selection = remember(|| mutableStateOf(0usize)).with(|state| *state);
+    let menu_gesture = remember_liquid_menu_gesture();
+    let menu_anchor_rect = remember(|| {
+        std::rc::Rc::new(std::cell::Cell::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }))
+    })
+    .with(std::rc::Rc::clone);
+    let menu_absorbed_rect = remember(|| {
+        std::rc::Rc::new(std::cell::Cell::new(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        }))
+    })
+    .with(std::rc::Rc::clone);
+    let absorbed_button_spec = GlassButtonSpec::glass();
+
+    Box(
+        Modifier::empty().width(330.0).height(226.0),
+        BoxSpec::default(),
+        move || {
+            let stage_gesture = menu_gesture.clone();
+            FeaturedVideosReferenceStage(
+                menu_open,
+                stage_gesture,
+                std::rc::Rc::clone(&menu_anchor_rect),
+                std::rc::Rc::clone(&menu_absorbed_rect),
+                absorbed_button_spec.clone(),
+            );
+
+            let menu_state = menu_open;
+            let menu_dismiss = menu_open;
+            let selection = menu_selection;
+            LiquidMenu(
+                menu_state.get(),
+                menu_anchor_rect.get(),
+                LiquidMenuSpec::default(),
+                vec![
+                    LiquidMenuAbsorbedSource::new(
+                        menu_absorbed_rect.get(),
+                        absorbed_button_spec.clone(),
+                        36.0,
+                        icons::FILTER,
+                    ),
+                    LiquidMenuAbsorbedSource::new(
+                        menu_anchor_rect.get(),
+                        GlassButtonSpec::glass(),
+                        40.0,
+                        icons::MORE_HORIZ,
+                    ),
+                ],
+                vec![
+                    LiquidMenuItem::new("List")
+                        .icon(icons::LIST_OUTLINE)
+                        .checked(selection.get() == 0),
+                    LiquidMenuItem::new("Grid")
+                        .icon(icons::GRID_OUTLINE)
+                        .checked(selection.get() == 1),
+                ],
+                menu_gesture.clone(),
+                move |index| selection.set(index),
+                move || menu_dismiss.set(false),
+            );
+        },
+    );
+}
+
+#[composable]
+fn TabSwipeReferenceStage() {
+    let selected = remember(|| mutableStateOf(0usize)).with(|state| *state);
+    let timeline_started = remember(|| mutableStateOf(false)).with(|state| *state);
+    let timeline_progress = cranpose_animation::animateFloatAsState(
+        if timeline_started.get() { 1.0 } else { 0.0 },
+        cranpose_animation::tween(1_867, cranpose_animation::Easing::LinearEasing),
+        "tab-reference-backdrop",
+    );
+    Box(
+        Modifier::empty().width(440.0).height(132.0),
+        BoxSpec::default(),
+        move || {
+            TabSwipeFixtureBackdrop(tab_swipe_reference_page(timeline_progress.get()));
+            let tab_state = selected;
+            let start_timeline = timeline_started;
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .padding_each(0.0, 0.0, 0.0, 10.0),
+                BoxSpec::default().content_alignment(Alignment::new(
+                    HorizontalAlignment::CenterHorizontally,
+                    VerticalAlignment::Bottom,
+                )),
+                move || {
+                    let callback_state = tab_state;
+                    LiquidTabBarWithAccessory(
+                        Modifier::empty(),
+                        LiquidTabBarSpec::default(),
+                        tab_swipe_reference_tabs(),
+                        tab_state.get(),
+                        move |index| {
+                            start_timeline.set(true);
+                            callback_state.set(index);
+                        },
+                        || LiquidTabBarSearchAccessory(|| {}),
+                    );
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+pub fn LiquidReferenceFixture(case: LiquidReferenceFixtureCase) {
+    let background = match case {
+        LiquidReferenceFixtureCase::MenuExpand => Color::from_rgb_u8(25, 8, 29),
+        LiquidReferenceFixtureCase::OnWhiteClick | LiquidReferenceFixtureCase::OnWhiteClickHold => {
+            Color::from_rgb_u8(241, 240, 247)
+        }
+        LiquidReferenceFixtureCase::OnWhiteTouchedUp => Color::from_rgb_u8(241, 240, 247),
+        _ => Color::from_rgb_u8(245, 245, 251),
+    };
+    Box(
+        Modifier::empty().fill_max_size().draw_behind(move |scope| {
+            scope.draw_rect(Brush::solid(background));
+        }),
+        BoxSpec::default().content_alignment(Alignment::CENTER),
+        move || match case {
+            LiquidReferenceFixtureCase::TogglePress => {
+                let checked = remember(|| mutableStateOf(true)).with(|state| *state);
+                LiquidTheme(
+                    LiquidThemeSpec {
+                        scheme: SchemeMode::Light,
+                        accent: Color::from_rgb_u8(52, 199, 89),
+                        ..LiquidThemeSpec::default()
+                    },
+                    move || {
+                        let state = checked;
+                        TogglePressReferenceStage(state.get(), move |value| state.set(value));
+                    },
+                );
+            }
+            LiquidReferenceFixtureCase::MenuOpen => {
+                LiquidTheme(LiquidThemeSpec::default(), MenuOpenReferenceStage);
+            }
+            LiquidReferenceFixtureCase::TabSwipe => {
+                LiquidTheme(LiquidThemeSpec::default(), TabSwipeReferenceStage);
+            }
+            LiquidReferenceFixtureCase::Segmented => {
+                let selected = remember(|| mutableStateOf(0usize)).with(|state| *state);
+                LiquidTheme(LiquidThemeSpec::default(), move || {
+                    let state = selected;
+                    LiquidSegmentedControl(
+                        Modifier::empty().width(310.0),
+                        vec![
+                            "Receiving".to_string(),
+                            "Sending".to_string(),
+                            "Errored".to_string(),
+                        ],
+                        state.get(),
+                        move |index| state.set(index),
+                    );
+                });
+            }
+            LiquidReferenceFixtureCase::MenuExpand => SortFilterFixtureStage(),
+            LiquidReferenceFixtureCase::BottomBarForm => {
+                let selected = remember(|| mutableStateOf(4usize)).with(|state| *state);
+                LiquidTheme(LiquidThemeSpec::default(), move || {
+                    let store_state = selected;
+                    let headers_state = selected;
+                    Column(Modifier::empty(), ColumnSpec::default(), move || {
+                        StoreBottomBarExample(store_state.get(), move |index| {
+                            store_state.set(index);
+                        });
+                        Box(Modifier::empty().height(24.0), BoxSpec::default(), || {});
+                        StoreHeadersBarExample(headers_state.get(), move |index| {
+                            headers_state.set(index);
+                        });
+                    });
+                });
+            }
+            LiquidReferenceFixtureCase::OnWhiteClick
+            | LiquidReferenceFixtureCase::OnWhiteClickHold => {
+                let selected = remember(|| mutableStateOf(0usize)).with(|state| *state);
+                let state = selected;
+                OnWhiteBottomBarExample(state.get(), move |index| state.set(index));
+            }
+            LiquidReferenceFixtureCase::OnWhiteTouchedUp => TouchedUpFixtureStage(),
+        },
+    );
 }
 
 /// The showcase page.

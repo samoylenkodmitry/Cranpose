@@ -1,0 +1,9 @@
+name = "segmented"
+frame_count = 10
+source_video = "example/iphone17_records/16-jul-2026/ScreenRecording_07-16-2026 19-44-19_1.mov"
+source_video_available = true
+reference = "example/target/segmented"
+crop = "900:130:50:60"
+fps = 60
+timing = "source timestamps; tap-flight starts 6950 ms, drag starts 7700 ms"
+selected = ["tap-flight/f_001.png@6950ms", "tap-flight/f_012.png@7133ms", "tap-flight/f_023.png@7317ms", "tap-flight/f_034.png@7500ms", "tap-flight/f_045.png@7683ms", "drag/f_001.png@7700ms", "drag/f_033.png@8233ms", "drag/f_066.png@8783ms", "drag/f_099.png@9333ms", "drag/f_132.png@9883ms"]

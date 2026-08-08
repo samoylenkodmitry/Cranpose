@@ -1,0 +1,9 @@
+name = "text_selection"
+frame_count = 10
+source_video = "example/iphone17_records/text_handles_bubble_and_popup.MP4"
+source_video_available = true
+reference = "example/target/text-selection"
+crop = "1320:520:0:660 (except idle_full.png)"
+fps = 120
+timing = "named phases are independent source clips; source time resets between phases; effective 60 fps sequences retain every other source frame"
+selected = ["loupe-grow/a_066.png@1442ms", "loupe-grow/a_084.png@1592ms", "loupe-grow/a_108.png@1792ms", "loupe-steady/h_030.png@10040ms", "loupe-dissolve/b_024.png@4392ms", "loupe-dissolve/b_030.png@4442ms", "loupe-dissolve/b_036.png@4492ms", "menu-materialize/c_044.png@6958ms", "menu-materialize/c_058.png@7075ms", "menu-materialize/c_072.png@7192ms"]

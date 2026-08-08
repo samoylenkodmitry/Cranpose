@@ -1,0 +1,9 @@
+name = "bottom_bar_form"
+frame_count = 4
+source_video = "example/iphone17_records/bottom_bar_glass_effects_and_form.MP4"
+source_video_available = true
+reference = "example/target/bottom-bar-form"
+crop = "1320:340:0:2500"
+fps = 60
+timing = "four independently staged source stills; actual captures are settled-state X11 snapshots"
+selected = ["bar_over_orange_purple.png@4000ms", "bar_tiles_refracting.png@14500ms", "bar_headers_folded.png@21000ms", "bar_over_headers.png@30000ms"]

@@ -42,6 +42,7 @@ use images::images_tab;
 use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
 use liquid_ui::LiquidUiTab;
+pub use liquid_ui::{LiquidReferenceFixture, LiquidReferenceFixtureCase};
 use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
