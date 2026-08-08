@@ -1426,6 +1426,33 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
+    // Logging first: the registrations below already have failure paths worth
+    // hearing about (a launch-args read that fails here is otherwise silent).
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("ComposeRS")
+            .with_filter(
+                android_logger::FilterBuilder::new()
+                    .filter_level(log::LevelFilter::Info)
+                    .filter_module("wgpu_core", log::LevelFilter::Warn)
+                    .filter_module("wgpu_hal", log::LevelFilter::Warn)
+                    .filter_module("naga", log::LevelFilter::Warn)
+                    // `AChoreographer` registers its display-event fd with this
+                    // thread's looper, so every vsync makes `ALooper_pollOnce`
+                    // return `ALOOPER_POLL_CALLBACK`. android-activity 0.6.1
+                    // believes that return value is impossible and logs it at
+                    // `error!` — once per frame, which is a synchronous
+                    // `writev` to logd plus a tag property lookup 60 times a
+                    // second. The event is genuinely harmless (the crate
+                    // ignores it and polls again), but the logging is not, so
+                    // the module stays quiet. Frame pacing lives in
+                    // `android_vsync`, which reports its own failures.
+                    .filter_module("android_activity::activity_impl", log::LevelFilter::Off)
+                    .build(),
+            ),
+    );
+
     // Mirror the `debug.cranpose.*` diagnostic properties into the environment
     // before anything reads it, so the renderer's and app shell's existing
     // environment-gated telemetry is reachable on device.
@@ -1473,32 +1500,6 @@ pub fn run(
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = Vec::new();
     let mut accessibility_revision = None;
-
-    // Initialize logging
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("ComposeRS")
-            .with_filter(
-                android_logger::FilterBuilder::new()
-                    .filter_level(log::LevelFilter::Info)
-                    .filter_module("wgpu_core", log::LevelFilter::Warn)
-                    .filter_module("wgpu_hal", log::LevelFilter::Warn)
-                    .filter_module("naga", log::LevelFilter::Warn)
-                    // `AChoreographer` registers its display-event fd with this
-                    // thread's looper, so every vsync makes `ALooper_pollOnce`
-                    // return `ALOOPER_POLL_CALLBACK`. android-activity 0.6.1
-                    // believes that return value is impossible and logs it at
-                    // `error!` — once per frame, which is a synchronous
-                    // `writev` to logd plus a tag property lookup 60 times a
-                    // second. The event is genuinely harmless (the crate
-                    // ignores it and polls again), but the logging is not, so
-                    // the module stays quiet. Frame pacing lives in
-                    // `android_vsync`, which reports its own failures.
-                    .filter_module("android_activity::activity_impl", log::LevelFilter::Off)
-                    .build(),
-            ),
-    );
 
     log::info!("Starting Compose Android Application");
 

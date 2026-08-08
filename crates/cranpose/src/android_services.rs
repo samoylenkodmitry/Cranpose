@@ -116,7 +116,10 @@ fn read_launch_arguments(app: &android_activity::AndroidApp) -> LaunchArgs {
     }) {
         Ok(payload) => decode_launch_arguments(&payload),
         Err(error) => {
-            log::debug!("Android launch arguments unavailable: {error}");
+            // Worth a warning, not a debug line: an app whose debug/bench
+            // flags silently read as absent is measurably indistinguishable
+            // from one that ignores them, and that cost a device session once.
+            log::warn!("Android launch arguments unavailable: {error}");
             LaunchArgs::default()
         }
     }
