@@ -891,7 +891,7 @@ fn emit_shape_run_entry(
 /// run projected under 2 ms is never worth the spawn wave.
 #[cfg(not(target_arch = "wasm32"))]
 static SHAPE_RUN_TUNER: crate::cost_tuner::CostTuner =
-    crate::cost_tuner::CostTuner::new(2048, 2_000_000);
+    crate::cost_tuner::CostTuner::new("shape-emit", 2048, 2_000_000);
 
 #[cfg(test)]
 static FORCE_SHAPE_RUN_PARALLEL: std::sync::atomic::AtomicBool =
@@ -925,7 +925,7 @@ thread_local! {
 /// reused scratch buffer and the main thread pushes the results in entry
 /// order, so z order and snap anchoring are byte-identical to the serial
 /// path. Whether the fan-out actually runs is decided by measured cost — see
-/// [`shape_run_tuning`] — because the same spawn wave that pays for itself
+/// [`crate::cost_tuner::CostTuner`] — because the same spawn wave that pays for itself
 /// many times over on a watch-class in-order core measurably loses on a big
 /// phone core.
 fn flush_shape_run(
@@ -943,7 +943,8 @@ fn flush_shape_run(
     {
         let entries = run.len();
         #[allow(unused_mut)]
-        let mut parallel = SHAPE_RUN_TUNER.choose_parallel(entries);
+        let mut parallel = SHAPE_RUN_TUNER.choose_parallel(entries)
+            && crate::render::shape_convert_worker_count() > 1;
         #[cfg(test)]
         {
             parallel |= FORCE_SHAPE_RUN_PARALLEL.load(std::sync::atomic::Ordering::Relaxed);

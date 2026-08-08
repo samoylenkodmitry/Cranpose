@@ -16,6 +16,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) struct CostTuner {
+    /// Stage name for the one-shot first-trial log line.
+    name: &'static str,
     /// Below this many entries the stage is always serial and untimed.
     min_entries: usize,
     /// Serial invocations projected cheaper than this are not worth a spawn
@@ -28,8 +30,9 @@ pub(crate) struct CostTuner {
 }
 
 impl CostTuner {
-    pub(crate) const fn new(min_entries: usize, cheap_ns: u64) -> Self {
+    pub(crate) const fn new(name: &'static str, min_entries: usize, cheap_ns: u64) -> Self {
         Self {
+            name,
             min_entries,
             cheap_ns,
             serial_ns: AtomicU64::new(0),
@@ -74,6 +77,16 @@ impl CostTuner {
             &self.serial_ns
         };
         let old = slot.load(Ordering::Relaxed);
+        if parallel && old == 0 {
+            // One line per process: the verdict of the first head-to-head
+            // trial is the number that explains this device's behaviour.
+            log::info!(
+                "[cost-tuner] {}: first parallel trial {} ns/entry vs serial {} ns/entry",
+                self.name,
+                per_entry,
+                self.serial_ns.load(Ordering::Relaxed),
+            );
+        }
         let new = if old == 0 {
             per_entry
         } else {
@@ -89,7 +102,7 @@ mod tests {
 
     #[test]
     fn tuner_bootstraps_serial_then_settles_on_the_measured_winner() {
-        let tuner = CostTuner::new(100, 1_000_000);
+        let tuner = CostTuner::new("test", 100, 1_000_000);
 
         // Small invocations never fan out.
         assert!(!tuner.choose_parallel(99));
@@ -112,7 +125,7 @@ mod tests {
         assert!(parallel_wins >= 99);
 
         // A cheap workload stays serial even with a parallel-favouring EMA.
-        let cheap = CostTuner::new(100, 1_000_000_000);
+        let cheap = CostTuner::new("test", 100, 1_000_000_000);
         cheap.record(false, 1000, 1_000); // 1ns/entry
         assert!(!cheap.choose_parallel(1000));
     }

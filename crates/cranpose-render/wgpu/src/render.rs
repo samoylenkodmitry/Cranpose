@@ -1559,16 +1559,21 @@ fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
 /// well under that, from ever paying for a spawn wave.
 #[cfg(not(target_arch = "wasm32"))]
 static SHAPE_CONVERT_TUNER: crate::cost_tuner::CostTuner =
-    crate::cost_tuner::CostTuner::new(256, 400_000);
+    crate::cost_tuner::CostTuner::new("shape-convert", 256, 400_000);
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn shape_convert_worker_count() -> usize {
     static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *WORKERS.get_or_init(|| {
-        std::thread::available_parallelism()
+        let cpus = std::thread::available_parallelism()
             .map(|count| count.get())
-            .unwrap_or(1)
-            .clamp(1, 4)
+            .unwrap_or(1);
+        let workers = cpus.clamp(1, 4);
+        // One line per process: on devices whose scheduler confines the
+        // process (affinity masks, cpusets), this is the number that
+        // explains why fan-out stages stayed serial.
+        log::info!("[shape-convert] fan-out width {workers} (available parallelism {cpus})");
+        workers
     })
 }
 
@@ -1859,7 +1864,8 @@ fn convert_shapes_into_outputs(
     #[cfg(not(target_arch = "wasm32"))]
     let convert_started = Instant::now();
     #[cfg(not(target_arch = "wasm32"))]
-    let parallel = SHAPE_CONVERT_TUNER.choose_parallel(shape_count);
+    let parallel =
+        SHAPE_CONVERT_TUNER.choose_parallel(shape_count) && shape_convert_worker_count() > 1;
     if quad_area_diag_enabled() {
         let quad_area = |q: [[f32; 2]; 4]| {
             // Shoelace over the quad polygon TL, TR, BR, BL (corners 0,1,3,2).
