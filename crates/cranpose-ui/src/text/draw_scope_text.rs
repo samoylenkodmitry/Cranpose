@@ -85,7 +85,7 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
         }
 
         let text_style = text_style_for_draw_style(style);
-        let annotated = super::AnnotatedString::from(text);
+        let annotated = super::shared_plain_annotated_string(text);
         let metrics = super::measure_text(&annotated, &text_style);
         let line_height = if metrics.line_height.is_finite() && metrics.line_height > 0.0 {
             metrics.line_height

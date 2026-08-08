@@ -97,6 +97,47 @@ pub struct RangeStyle<T> {
     pub range: Range<usize>,
 }
 
+/// Returns the shared [`AnnotatedString`] for a plain, style-free string,
+/// reusing the copy made on an earlier frame when the content matches.
+///
+/// Draw scopes lower every `draw_text*` call through an `AnnotatedString` on
+/// every frame — once to measure and once to emit — and a HUD label or score
+/// counter has the same characters frame after frame. Without this pool each
+/// pass re-copied a string it had copied the frame before, only to hash it and
+/// hit a layout cache that is keyed by content anyway. Entries are verified by
+/// content on hit, so a hash collision costs a fresh copy, never wrong text.
+/// The pool clears itself when full; a live scene re-warms within one frame.
+pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+
+    const POOL_CAPACITY: usize = 256;
+    thread_local! {
+        static POOL: RefCell<HashMap<u64, Rc<AnnotatedString>>> =
+            RefCell::new(HashMap::new());
+    }
+
+    let mut hasher = cranpose_ui_graphics::FxHasher::default();
+    text.hash(&mut hasher);
+    let key = hasher.finish();
+
+    POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if let Some(shared) = pool.get(&key) {
+            if shared.text == text {
+                return Rc::clone(shared);
+            }
+        }
+        let shared = Rc::new(AnnotatedString::new(text.to_owned()));
+        if pool.len() >= POOL_CAPACITY {
+            pool.clear();
+        }
+        pool.insert(key, Rc::clone(&shared));
+        shared
+    })
+}
+
 impl AnnotatedString {
     pub fn new(text: String) -> Self {
         Self {
@@ -602,6 +643,35 @@ impl Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_redrawn_string_reuses_the_annotated_copy_from_last_frame() {
+        let first = shared_plain_annotated_string("SCORE 340");
+        let second = shared_plain_annotated_string("SCORE 340");
+        assert!(Rc::ptr_eq(&first, &second));
+        assert_eq!(second.text, "SCORE 340");
+        assert!(second.span_styles.is_empty());
+    }
+
+    #[test]
+    fn distinct_strings_never_share_an_annotated_copy() {
+        let first = shared_plain_annotated_string("READY");
+        let second = shared_plain_annotated_string("GO");
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(first.text, "READY");
+        assert_eq!(second.text, "GO");
+    }
+
+    #[test]
+    fn the_pool_survives_overflowing_its_capacity() {
+        for index in 0..600 {
+            let text = format!("distinct-{index}");
+            let shared = shared_plain_annotated_string(&text);
+            assert_eq!(shared.text, text);
+        }
+        let after = shared_plain_annotated_string("still correct");
+        assert_eq!(after.text, "still correct");
+    }
 
     #[test]
     fn test_builder_span() {

@@ -405,7 +405,7 @@ fn text_draw_params(
 
     Some(TextDrawParams {
         rect,
-        text: Rc::new(AnnotatedString::from(text.text.as_ref())),
+        text: cranpose_ui::text::shared_plain_annotated_string(text.text.as_ref()),
         color,
         text_style: text_style_for_draw_style(&text.style),
         font_size: text.style.resolved_font_size(),

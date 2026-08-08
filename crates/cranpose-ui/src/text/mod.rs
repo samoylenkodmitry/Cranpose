@@ -8,7 +8,9 @@ pub mod paragraph;
 pub mod style;
 pub mod unit;
 
-pub use annotated_string::{AnnotatedString, LinkAnnotation, RangeStyle, StringAnnotation};
+pub use annotated_string::{
+    shared_plain_annotated_string, AnnotatedString, LinkAnnotation, RangeStyle, StringAnnotation,
+};
 
 pub use crate::text_layout_result::TextLayoutResult;
 pub use decoration::{Shadow, TextDecoration};

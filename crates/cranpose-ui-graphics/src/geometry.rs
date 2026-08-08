@@ -473,6 +473,45 @@ pub struct TextPrimitive {
     pub color: Color,
 }
 
+/// Returns a shared `Rc<str>` for `text`, reusing the copy made on an earlier
+/// frame when the content matches.
+///
+/// Apps hand `draw_text*` a `&str` every frame, and a score counter or label
+/// is the same characters frame after frame — without this pool every call
+/// copied them into a fresh `Rc<str>` anyway, defeating the sharing
+/// [`TextPrimitive::text`] exists for. Hits are verified by content, so a hash
+/// collision costs one fresh copy, never the wrong text. The pool clears
+/// itself when full; a live scene re-warms within one frame.
+fn shared_text_str(text: &str) -> Rc<str> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::hash::{Hash, Hasher};
+
+    const POOL_CAPACITY: usize = 256;
+    thread_local! {
+        static POOL: RefCell<HashMap<u64, Rc<str>>> = RefCell::new(HashMap::new());
+    }
+
+    let mut hasher = crate::FxHasher::default();
+    text.hash(&mut hasher);
+    let key = hasher.finish();
+
+    POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        if let Some(shared) = pool.get(&key) {
+            if &**shared == text {
+                return Rc::clone(shared);
+            }
+        }
+        let shared: Rc<str> = Rc::from(text);
+        if pool.len() >= POOL_CAPACITY {
+            pool.clear();
+        }
+        pool.insert(key, Rc::clone(&shared));
+        shared
+    })
+}
+
 /// Describes a shadow to be rendered. Each renderer chooses how to blur.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShadowPrimitive {
@@ -1414,7 +1453,7 @@ impl DrawScope for DrawScopeDefault {
         self.primitives
             .push(DrawPrimitive::Text(Box::new(TextPrimitive {
                 rect: Rect::from_origin_size(origin, measurement.size),
-                text: Rc::from(text),
+                text: shared_text_str(text),
                 style: style.clone(),
                 color,
             })));
@@ -1442,6 +1481,32 @@ fn solid_fill_color(brush: &Brush) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
+
+    #[test]
+    fn redrawing_the_same_text_shares_one_str_allocation() {
+        let first = shared_text_str("BREAK THE RING");
+        let second = shared_text_str("BREAK THE RING");
+        assert!(Rc::ptr_eq(&first, &second));
+        assert_eq!(&*second, "BREAK THE RING");
+    }
+
+    #[test]
+    fn different_text_gets_its_own_str() {
+        let first = shared_text_str("340");
+        let second = shared_text_str("350");
+        assert!(!Rc::ptr_eq(&first, &second));
+        assert_eq!(&*first, "340");
+        assert_eq!(&*second, "350");
+    }
+
+    #[test]
+    fn the_text_pool_survives_overflowing_its_capacity() {
+        for index in 0..600 {
+            let text = format!("run-{index}");
+            assert_eq!(&*shared_text_str(&text), text.as_str());
+        }
+        assert_eq!(&*shared_text_str("still correct"), "still correct");
+    }
 
     fn assert_image_alpha(primitive: &DrawPrimitive, expected: f32) {
         match primitive {
