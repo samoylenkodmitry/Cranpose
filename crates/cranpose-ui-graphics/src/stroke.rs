@@ -274,6 +274,23 @@ impl ArcGeometry {
             };
         }
 
+        // A closed ring reaches `center ± outer` on all four axes and nothing
+        // in it — caps included — reaches further, so its box needs no
+        // endpoint trig at all. Most primitives in a particle-heavy scene are
+        // full circles (dots, rings, glow discs), and the two `sin_cos` calls
+        // below were the single largest trig cost of recording such a frame.
+        // (`new` forces `Round` at a full sweep; a hand-built square cap can
+        // project past `outer` along the tangent, so it keeps the long path.)
+        if self.sweep_angle >= TAU && self.cap != StrokeCap::Square {
+            let r = self.outer_radius;
+            return Rect {
+                x: self.center.x - r,
+                y: self.center.y - r,
+                width: r + r,
+                height: r + r,
+            };
+        }
+
         let mut min_x = f32::INFINITY;
         let mut min_y = f32::INFINITY;
         let mut max_x = f32::NEG_INFINITY;
@@ -599,6 +616,37 @@ mod tests {
         // A stroke wider than the radius clamps the inner radius at 0.
         let (inner, outer, _) = arc_band(1.0, 0.0, Some(Stroke::new(10.0)));
         assert_eq!((inner, outer), (0.0, 6.0));
+    }
+
+    #[test]
+    fn full_ring_bounds_shortcut_matches_the_endpoint_walk() {
+        // The trig-free full-sweep path must return exactly what the endpoint
+        // walk would: `center ± outer` on both axes. The walk's answer for a
+        // full ring is forced by the four axis crossings plus a round cap
+        // whose farthest point sits at `mid + half_thickness == outer`.
+        let ring = ArcGeometry::new(Point::new(10.0, -4.0), 6.0, 9.0, 1.3, TAU, StrokeCap::Butt);
+        assert_eq!(
+            ring.bounds(),
+            Rect {
+                x: 1.0,
+                y: -13.0,
+                width: 18.0,
+                height: 18.0
+            }
+        );
+
+        // A hand-built square cap can project past `outer` along the tangent
+        // (its corner sits at distance `sqrt(outer² + rb²)` from the center),
+        // so a full-sweep square ring must keep the endpoint walk. The
+        // endpoint angle is chosen so the corner lands on the +x axis, where
+        // the excess is largest.
+        let square = ArcGeometry {
+            cap: StrokeCap::Square,
+            start_angle: TAU - (1.5f32 / 9.0).atan(),
+            ..ring
+        };
+        let bounds = square.bounds();
+        assert!(bounds.x + bounds.width > square.center.x + square.outer_radius);
     }
 
     #[test]
