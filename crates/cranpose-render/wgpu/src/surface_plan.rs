@@ -97,6 +97,7 @@ fn layer_contains_text_primitives(layer: &LayerNode) -> bool {
             node: PrimitiveNode::Draw(draw),
             ..
         }) => draw_primitive_contains_text(&draw.primitive),
+        RenderNode::DrawRun(run) => run.primitives.iter().any(draw_primitive_contains_text),
         RenderNode::Layer(_) => false,
     })
 }
@@ -125,7 +126,7 @@ fn layer_contains_draw_primitives(layer: &LayerNode) -> bool {
 
 fn layer_contains_rendered_content(layer: &LayerNode) -> bool {
     layer.children.iter().any(|child| match child {
-        RenderNode::Primitive(_) => true,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => true,
         RenderNode::Layer(child_layer) => layer_contains_rendered_content(child_layer),
     })
 }
@@ -228,14 +229,14 @@ fn layer_contains_backdrop(layer: &LayerNode) -> bool {
     layer.backdrop().is_some()
         || layer.children.iter().any(|child| match child {
             RenderNode::Layer(layer) => layer_contains_backdrop(layer),
-            RenderNode::Primitive(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         })
 }
 
 pub(crate) fn layer_contains_descendant_backdrop(layer: &LayerNode) -> bool {
     layer.children.iter().any(|child| match child {
         RenderNode::Layer(layer) => layer_contains_backdrop(layer),
-        RenderNode::Primitive(_) => false,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
     })
 }
 
@@ -458,6 +459,21 @@ pub(crate) fn layer_surface_requirements_cached(
                     }
                 },
             },
+            RenderNode::DrawRun(run) => {
+                for primitive in &run.primitives {
+                    match primitive {
+                        cranpose_ui_graphics::DrawPrimitive::Shadow(_) => {
+                            surface_requirements.insert(SurfaceRequirement::ImmediateShadow);
+                        }
+                        primitive => {
+                            has_direct_safe_primitive = true;
+                            if draw_primitive_is_pixel_sensitive(primitive) {
+                                has_pixel_sensitive_content = true;
+                            }
+                        }
+                    }
+                }
+            }
             RenderNode::Layer(child_layer) => {
                 let child_requirements = layer_surface_requirements_cached(
                     child_layer.as_ref(),

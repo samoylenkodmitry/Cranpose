@@ -953,7 +953,7 @@ fn populate_draws_from_graph(
         shadow_clip,
     );
 
-    let mut deferred_primitives = Vec::new();
+    let mut deferred_draws: Vec<&RenderNode> = Vec::new();
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
@@ -969,7 +969,23 @@ fn populate_draws_from_graph(
                     render_graph_primitive(scene, primitive, primitive_context);
                 }
                 PrimitivePhase::AfterChildren => {
-                    deferred_primitives.push(primitive);
+                    deferred_draws.push(child);
+                }
+            },
+            RenderNode::DrawRun(run) => match run.phase {
+                PrimitivePhase::BeforeChildren => {
+                    let primitive_context = PrimitiveRenderContext {
+                        layer_bounds: mapping.layer_bounds,
+                        node_layer: &mapping.raster_content_layer,
+                        visual_clip,
+                        motion_context_animated: layer.motion_context_animated,
+                        content_offset_translation: effective_translated_content_context,
+                        layer_snap_anchor,
+                    };
+                    render_graph_draw_run(scene, run, primitive_context);
+                }
+                PrimitivePhase::AfterChildren => {
+                    deferred_draws.push(child);
                 }
             },
             RenderNode::Layer(child_layer) => {
@@ -989,7 +1005,7 @@ fn populate_draws_from_graph(
         }
     }
 
-    for primitive in deferred_primitives {
+    for child in deferred_draws {
         let primitive_context = PrimitiveRenderContext {
             layer_bounds: mapping.layer_bounds,
             node_layer: &mapping.raster_content_layer,
@@ -998,8 +1014,40 @@ fn populate_draws_from_graph(
             content_offset_translation: effective_translated_content_context,
             layer_snap_anchor,
         };
-        render_graph_primitive(scene, primitive, primitive_context);
+        match child {
+            RenderNode::Primitive(primitive) => {
+                render_graph_primitive(scene, primitive, primitive_context);
+            }
+            RenderNode::DrawRun(run) => {
+                render_graph_draw_run(scene, run, primitive_context);
+            }
+            // Only primitive and run nodes are ever deferred.
+            RenderNode::Layer(_) => {}
+        }
     }
+}
+
+/// [`render_graph_primitive`]'s draw arm for every primitive of a
+/// [`DrawRunNode`] — run draws never carry a per-primitive clip.
+fn render_graph_draw_run(
+    scene: &mut RasterScene,
+    run: &cranpose_render_common::graph::DrawRunNode,
+    context: PrimitiveRenderContext<'_>,
+) {
+    let rect = context.layer_bounds.raster_rect();
+    let counts_before = scene_counts(scene);
+    for primitive in &run.primitives {
+        push_draw_primitive(
+            primitive,
+            rect,
+            context.node_layer,
+            context.visual_clip,
+            scene,
+            None,
+            context.motion_context_animated || context.content_offset_translation,
+        );
+    }
+    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
 fn render_graph_primitive(

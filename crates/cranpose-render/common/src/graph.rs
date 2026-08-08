@@ -357,7 +357,20 @@ impl LayerNode {
 #[derive(Clone)]
 pub enum RenderNode {
     Primitive(PrimitiveEntry),
+    /// A whole draw command's primitives as one node. A heavy canvas records
+    /// thousands of primitives per frame; wrapping each in its own
+    /// [`RenderNode`] made the graph rebuild move every one of them twice and
+    /// free seventeen thousand nodes per frame on a stress scene. The run
+    /// keeps the recorded vector intact — semantically it is exactly that
+    /// many consecutive `Primitive` draw entries with no per-primitive clip.
+    DrawRun(DrawRunNode),
     Layer(Box<LayerNode>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawRunNode {
+    pub phase: PrimitivePhase,
+    pub primitives: Vec<DrawPrimitive>,
 }
 
 #[derive(Clone)]
@@ -378,6 +391,7 @@ impl RenderGraph {
                 .iter()
                 .map(|child| match child {
                     RenderNode::Primitive(_) => 1,
+                    RenderNode::DrawRun(run) => run.primitives.len(),
                     RenderNode::Layer(child_layer) => count_layer(child_layer),
                 })
                 .sum::<usize>()
@@ -404,6 +418,14 @@ fn layer_heap_bytes(layer: &LayerNode) -> usize {
 fn render_node_heap_bytes(node: &RenderNode) -> usize {
     match node {
         RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
+        RenderNode::DrawRun(run) => {
+            size_of::<DrawPrimitive>() * run.primitives.capacity()
+                + run
+                    .primitives
+                    .iter()
+                    .map(draw_primitive_heap_bytes)
+                    .sum::<usize>()
+        }
         RenderNode::Layer(layer) => size_of::<LayerNode>() + layer_heap_bytes(layer),
     }
 }

@@ -254,7 +254,8 @@ pub fn round_rect_shape_params(
     let (draw_rect, stroke) = stroked_draw_rect(local_rect, stroke, layer_bounds, layer)?;
     let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
     let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-    let shape = RoundedCornerShape::with_radii(scale_corner_radii(radii, layer_uniform_scale(layer)));
+    let shape =
+        RoundedCornerShape::with_radii(scale_corner_radii(radii, layer_uniform_scale(layer)));
     Some(ShapeDrawParams {
         rect: quad_bounds(quad),
         local_rect,
@@ -288,7 +289,14 @@ pub fn arc_shape_params(
     motion_context_animated: bool,
 ) -> Option<ShapeDrawParams> {
     let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
-    let arc = ArcGeometry::new(center, band_inner, band_outer, start_angle, sweep_angle, cap);
+    let arc = ArcGeometry::new(
+        center,
+        band_inner,
+        band_outer,
+        start_angle,
+        sweep_angle,
+        cap,
+    );
     if arc.is_degenerate() {
         return None;
     }

@@ -4009,6 +4009,15 @@ fn graph_layer_contains_rect_color(
                     }
                 }
             }
+            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                for primitive in &run.primitives {
+                    if let DrawPrimitive::Rect { brush, .. } = primitive {
+                        if *brush == Brush::solid(color) {
+                            return true;
+                        }
+                    }
+                }
+            }
             cranpose_render_common::graph::RenderNode::Layer(inner) => {
                 if graph_layer_contains_rect_color(inner, color) {
                     return true;
@@ -4688,6 +4697,7 @@ fn graph_scene_text_values(scene: &cranpose_render_common::graph_scene::Scene) -
                         out.push(text.text.text.clone());
                     }
                 }
+                cranpose_render_common::graph::RenderNode::DrawRun(_) => {}
             }
         }
     }
@@ -7295,6 +7305,17 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
                         brush: cranpose_ui_graphics::Brush::Solid(color),
                         ..
                     } = &draw.primitive
+                    {
+                        out.push(*color);
+                    }
+                }
+            }
+            cranpose_render_common::graph::RenderNode::DrawRun(run) => {
+                for primitive in &run.primitives {
+                    if let DrawPrimitive::Rect {
+                        brush: cranpose_ui_graphics::Brush::Solid(color),
+                        ..
+                    } = primitive
                     {
                         out.push(*color);
                     }

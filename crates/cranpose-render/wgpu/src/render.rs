@@ -7560,7 +7560,10 @@ impl GpuRenderer {
         render_pass.set_bind_group(1, &shape_buffers.bind_group, &[]);
         // Six unindexed vertices per shape; `vs_main` derives the corner from
         // `vertex_index` and pulls the quad out of `ShapeData`.
-        render_pass.draw(batch.vertex_start..batch.vertex_start + batch.vertex_count, 0..1);
+        render_pass.draw(
+            batch.vertex_start..batch.vertex_start + batch.vertex_count,
+            0..1,
+        );
     }
 
     /// Stage shape buffer writes and record a shape render pass onto the
@@ -13861,7 +13864,7 @@ mod tests {
             } else {
                 primitive
             };
-            let clip = (i % 31 == 7).then(|| Rect {
+            let clip = (i % 31 == 7).then_some(Rect {
                 x: 0.0,
                 y: 0.0,
                 width: 30.0,
@@ -13926,7 +13929,11 @@ mod tests {
         assert_eq!(collected.scene.draw_ops, expected.draw_ops);
         assert_eq!(collected.scene.next_z, expected.next_z);
         assert!(
-            collected.scene.shapes.iter().all(|s| s.snap_anchor.is_none()),
+            collected
+                .scene
+                .shapes
+                .iter()
+                .all(|s| s.snap_anchor.is_none()),
             "a rotated layer must not rigid-snap; the reference scene assumes it"
         );
         for (index, (got, want)) in collected
@@ -14728,7 +14735,7 @@ mod tests {
                     RenderNode::Layer(child_layer) => {
                         collect_graph_text_labels(child_layer, labels)
                     }
-                    RenderNode::Primitive(_) => {}
+                    RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
                 }
             }
         }

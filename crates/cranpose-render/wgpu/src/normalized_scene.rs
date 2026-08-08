@@ -16,12 +16,12 @@ use crate::surface_plan::{
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_core::collections::map::HashMap;
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
+use cranpose_render_common::graph::DrawRunNode;
 use cranpose_render_common::graph::{
     quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
     RenderNode,
 };
 use cranpose_render_common::layer_composition::local_content_layer_for;
-use cranpose_render_common::graph::DrawPrimitiveNode;
 use cranpose_render_common::primitive_emit::{
     arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
     round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
@@ -89,7 +89,7 @@ fn layer_contains_text_primitive(layer: &LayerNode) -> bool {
             ..
         }) => true,
         RenderNode::Layer(child_layer) => layer_contains_text_primitive(child_layer),
-        RenderNode::Primitive(_) => false,
+        RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
     })
 }
 
@@ -715,34 +715,44 @@ fn is_shape_run_primitive(primitive: &DrawPrimitive) -> bool {
             blend_mode: _,
         } => matches!(
             primitive.as_ref(),
-            DrawPrimitive::Rect { .. } | DrawPrimitive::RoundRect { .. } | DrawPrimitive::Arc { .. }
+            DrawPrimitive::Rect { .. }
+                | DrawPrimitive::RoundRect { .. }
+                | DrawPrimitive::Arc { .. }
         ),
         _ => false,
     }
+}
+
+/// One accumulated draw in a shape run: the primitive plus the per-draw clip
+/// its graph node carried (`None` for every [`DrawRunNode`] draw — a run node
+/// records a whole canvas command, which never clips per primitive).
+struct ShapeRunEntry<'a> {
+    primitive: &'a DrawPrimitive,
+    clip: Option<Rect>,
 }
 
 /// Runs the shared per-variant emit math for one run entry, returning the
 /// shape params instead of touching the scene. `None` means the draw resolved
 /// away (fully clipped or degenerate), exactly the cases where the
 /// per-primitive path emits nothing.
-fn emit_shape_run_node(
-    node: &DrawPrimitiveNode,
+fn emit_shape_run_entry(
+    entry: &ShapeRunEntry<'_>,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     visual_clip: Option<Rect>,
     motion_context_animated: bool,
 ) -> Option<ShapeDrawParams> {
     let clip = resolve_primitive_clip(
-        node.clip,
+        entry.clip,
         layer_bounds,
         layer,
         visual_clip,
         PrimitiveClipSpace::Local,
     );
-    if node.clip.is_some() && clip.is_none() {
+    if entry.clip.is_some() && clip.is_none() {
         return None;
     }
-    let (primitive, blend_mode) = match &node.primitive {
+    let (primitive, blend_mode) = match entry.primitive {
         DrawPrimitive::Blend {
             primitive,
             blend_mode,
@@ -821,7 +831,7 @@ fn emit_shape_run_node(
 /// extra burst CPU pushed the phone's governor the wrong way.)
 fn flush_shape_run(
     local_scene: &mut CompositorScene,
-    run: &mut Vec<&DrawPrimitiveNode>,
+    run: &mut Vec<ShapeRunEntry<'_>>,
     context: &LocalPrimitiveContext<'_>,
 ) {
     if run.is_empty() {
@@ -829,9 +839,9 @@ fn flush_shape_run(
     }
     let counts_before = scene_counts(local_scene);
     let motion = context.motion_context_animated || context.content_offset_translation;
-    for node in run.drain(..) {
-        if let Some(params) = emit_shape_run_node(
-            node,
+    for entry in run.drain(..) {
+        if let Some(params) = emit_shape_run_entry(
+            &entry,
             context.layer_bounds,
             context.local_layer,
             context.visual_clip,
@@ -843,6 +853,47 @@ fn flush_shape_run(
     // The whole run shares one layer context, so applying the anchor once at
     // the end lands on exactly the shapes the per-primitive path would have
     // anchored one at a time.
+    assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
+}
+
+/// Feeds one [`DrawRunNode`]'s primitives through the shape run, spilling any
+/// non-shape draw through the ordinary emit path at its exact z position.
+fn collect_draw_run<'a>(
+    local_scene: &mut CompositorScene,
+    run: &'a DrawRunNode,
+    shape_run: &mut Vec<ShapeRunEntry<'a>>,
+    context: &LocalPrimitiveContext<'_>,
+) {
+    for primitive in &run.primitives {
+        if is_shape_run_primitive(primitive) {
+            shape_run.push(ShapeRunEntry {
+                primitive,
+                clip: None,
+            });
+            continue;
+        }
+        flush_shape_run(local_scene, shape_run, context);
+        push_loose_draw_primitive(local_scene, primitive, context);
+    }
+}
+
+/// The `PrimitiveNode::Draw` arm of [`push_local_primitive`] for a primitive
+/// with no per-draw clip — the shape a [`DrawRunNode`] carries.
+fn push_loose_draw_primitive(
+    local_scene: &mut CompositorScene,
+    primitive: &DrawPrimitive,
+    context: &LocalPrimitiveContext<'_>,
+) {
+    let counts_before = scene_counts(local_scene);
+    push_draw_primitive(
+        primitive,
+        context.layer_bounds,
+        context.local_layer,
+        context.visual_clip,
+        local_scene,
+        None,
+        context.motion_context_animated || context.content_offset_translation,
+    );
     assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
 }
 
@@ -1033,12 +1084,12 @@ fn collect_layer_contents_into<'a>(
         surface_capture_active: translation_context.surface_capture_active,
         local_picture_capture_active: translation_context.local_picture_capture_active,
     };
-    let mut deferred_primitives = Vec::new();
+    let mut deferred_draws: Vec<&RenderNode> = Vec::new();
     // Consecutive plain shape draws accumulate here and emit as one batch
     // instead of one bookkept scene push at a time. Anything else (text,
     // images, child layers) flushes the run first so z order is exactly what
     // the per-primitive path would have produced.
-    let mut shape_run: Vec<&DrawPrimitiveNode> = Vec::new();
+    let mut shape_run: Vec<ShapeRunEntry<'_>> = Vec::new();
 
     for child in &layer.children {
         match child {
@@ -1046,7 +1097,10 @@ fn collect_layer_contents_into<'a>(
                 PrimitivePhase::BeforeChildren => {
                     if let PrimitiveNode::Draw(draw) = &primitive.node {
                         if is_shape_run_primitive(&draw.primitive) {
-                            shape_run.push(draw);
+                            shape_run.push(ShapeRunEntry {
+                                primitive: &draw.primitive,
+                                clip: draw.clip,
+                            });
                             continue;
                         }
                     }
@@ -1058,7 +1112,13 @@ fn collect_layer_contents_into<'a>(
                         &local_primitive_context,
                     );
                 }
-                PrimitivePhase::AfterChildren => deferred_primitives.push(primitive),
+                PrimitivePhase::AfterChildren => deferred_draws.push(child),
+            },
+            RenderNode::DrawRun(run) => match run.phase {
+                PrimitivePhase::BeforeChildren => {
+                    collect_draw_run(local_scene, run, &mut shape_run, &local_primitive_context);
+                }
+                PrimitivePhase::AfterChildren => deferred_draws.push(child),
             },
             RenderNode::Layer(child_layer) => {
                 flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
@@ -1216,20 +1276,32 @@ fn collect_layer_contents_into<'a>(
         }
     }
 
-    for primitive in deferred_primitives {
-        if let PrimitiveNode::Draw(draw) = &primitive.node {
-            if is_shape_run_primitive(&draw.primitive) {
-                shape_run.push(draw);
-                continue;
+    for child in deferred_draws {
+        match child {
+            RenderNode::Primitive(primitive) => {
+                if let PrimitiveNode::Draw(draw) = &primitive.node {
+                    if is_shape_run_primitive(&draw.primitive) {
+                        shape_run.push(ShapeRunEntry {
+                            primitive: &draw.primitive,
+                            clip: draw.clip,
+                        });
+                        continue;
+                    }
+                }
+                flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
+                push_local_primitive(
+                    local_scene,
+                    text_layout,
+                    primitive,
+                    &local_primitive_context,
+                );
             }
+            RenderNode::DrawRun(run) => {
+                collect_draw_run(local_scene, run, &mut shape_run, &local_primitive_context);
+            }
+            // Only primitive and run nodes are ever deferred.
+            RenderNode::Layer(_) => {}
         }
-        flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
-        push_local_primitive(
-            local_scene,
-            text_layout,
-            primitive,
-            &local_primitive_context,
-        );
     }
     flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
     flush_translated_local_picture(

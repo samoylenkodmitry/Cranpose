@@ -45,6 +45,7 @@ fn find_painted<'a>(layer: &'a LayerNode, needle: &str) -> Option<&'a TextPrimit
                     return Some(found);
                 }
             }
+            RenderNode::DrawRun(_) => {}
         }
     }
     None

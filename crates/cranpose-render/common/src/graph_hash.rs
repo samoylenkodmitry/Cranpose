@@ -95,6 +95,17 @@ fn hash_layer_content<H: Hasher>(
                 0u8.hash(state);
                 hash_primitive_entry(primitive, state);
             }
+            RenderNode::DrawRun(run) => {
+                2u8.hash(state);
+                match run.phase {
+                    PrimitivePhase::BeforeChildren => 0u8.hash(state),
+                    PrimitivePhase::AfterChildren => 1u8.hash(state),
+                }
+                run.primitives.len().hash(state);
+                for primitive in &run.primitives {
+                    primitive.render_hash().hash(state);
+                }
+            }
             RenderNode::Layer(child_layer) => {
                 1u8.hash(state);
                 hash_child_layer_contribution(child_layer, translated_content_offset, state);

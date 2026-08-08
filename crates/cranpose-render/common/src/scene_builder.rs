@@ -15,7 +15,7 @@ use cranpose_ui_graphics::{
 };
 
 use crate::graph::{
-    CachePolicy, DrawPrimitiveNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
+    CachePolicy, DrawRunNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
     PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
 };
 use crate::layer_transform::layer_transform_to_parent;
@@ -230,7 +230,7 @@ fn replace_dirty_layers_from_applier(
         parent.has_hit_targets = parent.hit_test.is_some()
             || parent.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                RenderNode::Primitive(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
     }
 
@@ -373,7 +373,7 @@ fn build_layer_node_internal(
     let has_hit_targets = hit_test.is_some()
         || children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-            RenderNode::Primitive(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
     LayerNode {
@@ -690,7 +690,7 @@ fn build_layer_node_from_data(
     let has_hit_targets = hit_test.is_some()
         || render_children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-            RenderNode::Primitive(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
     let layer = LayerNode {
@@ -735,19 +735,13 @@ fn draw_nodes(
     let mut nodes = Vec::new();
     for command in commands {
         let primitives = primitives_for_placement(command, placement, size);
-        // A single canvas command can carry thousands of primitives; reserving
-        // up front keeps an animated scene from re-growing (and re-copying)
-        // this vector through the whole doubling schedule each frame.
-        nodes.reserve(primitives.len());
-        for primitive in primitives {
-            nodes.push(RenderNode::Primitive(PrimitiveEntry {
-                phase,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
-                    primitive,
-                    clip: None,
-                }),
-            }));
+        if primitives.is_empty() {
+            continue;
         }
+        // The recorded vector rides into the graph whole: a single canvas
+        // command can carry thousands of primitives, and wrapping each in its
+        // own node moved every one of them an extra time each frame.
+        nodes.push(RenderNode::DrawRun(DrawRunNode { phase, primitives }));
     }
     nodes
 }
@@ -1103,6 +1097,7 @@ mod tests {
                         return Some(motion);
                     }
                 }
+                RenderNode::DrawRun(_) => {}
             }
         }
 
@@ -1119,6 +1114,7 @@ mod tests {
                     labels.push(text.text.text.clone());
                 }
                 RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
+                RenderNode::DrawRun(_) => {}
             }
         }
     }
@@ -1146,6 +1142,7 @@ mod tests {
                             return Some(top);
                         }
                     }
+                    RenderNode::DrawRun(_) => {}
                 }
             }
             None
@@ -1160,7 +1157,7 @@ mod tests {
         }
         layer.children.iter().find_map(|child| match child {
             RenderNode::Layer(child_layer) => find_layer_by_node_id(child_layer, node_id),
-            RenderNode::Primitive(_) => None,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
         })
     }
 
@@ -1179,7 +1176,7 @@ mod tests {
                     node_id,
                     child_layer.transform_to_parent.then(transform),
                 ),
-                RenderNode::Primitive(_) => None,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
             })
         }
 
@@ -1208,7 +1205,7 @@ mod tests {
             .is_some_and(RenderEffect::contains_runtime_shader)
             || layer.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => graph_has_runtime_shader_effect(child_layer),
-                RenderNode::Primitive(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             })
     }
 
@@ -1298,18 +1295,14 @@ mod tests {
         let RenderNode::Layer(moved_child) = &moved_graph.children[0] else {
             panic!("expected child layer");
         };
-        let RenderNode::Primitive(static_draw) = &static_child.children[0] else {
-            panic!("expected draw primitive");
+        let RenderNode::DrawRun(static_run) = &static_child.children[0] else {
+            panic!("expected draw run");
         };
-        let PrimitiveNode::Draw(static_draw) = &static_draw.node else {
-            panic!("expected draw primitive");
+        let static_draw = &static_run.primitives[0];
+        let RenderNode::DrawRun(moved_run) = &moved_child.children[0] else {
+            panic!("expected draw run");
         };
-        let RenderNode::Primitive(moved_draw) = &moved_child.children[0] else {
-            panic!("expected draw primitive");
-        };
-        let PrimitiveNode::Draw(moved_draw) = &moved_draw.node else {
-            panic!("expected draw primitive");
-        };
+        let moved_draw = &moved_run.primitives[0];
 
         assert_ne!(
             static_graph.transform_to_parent, moved_graph.transform_to_parent,
@@ -2344,14 +2337,14 @@ mod tests {
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
-        let RenderNode::Primitive(behind) = &graph.children[0] else {
-            panic!("expected before-children primitive");
+        let RenderNode::DrawRun(behind) = &graph.children[0] else {
+            panic!("expected before-children draw run");
         };
         let RenderNode::Layer(_) = &graph.children[1] else {
             panic!("expected child layer");
         };
-        let RenderNode::Primitive(overlay) = &graph.children[2] else {
-            panic!("expected after-children primitive");
+        let RenderNode::DrawRun(overlay) = &graph.children[2] else {
+            panic!("expected after-children draw run");
         };
 
         assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
@@ -3378,6 +3371,7 @@ mod tests {
                                 return Some(found);
                             }
                         }
+                        RenderNode::DrawRun(_) => {}
                     }
                 }
                 None
