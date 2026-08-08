@@ -1503,6 +1503,15 @@ pub fn run(
     log::info!("Starting Compose Android Application");
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
+    let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
+    // How long after the last input event the Auto frame-rate vote keeps the
+    // panel's fast rate. SurfaceFlinger's own touch boost holds for seconds,
+    // and a shorter hold-off measurably hurts: at 1 s the display mode
+    // flip-flopped between gestures and the switch hiccups pulled presented
+    // fps *below* 60 (55.9 measured); at 3 s a continuously-driven scene
+    // holds the fast rate while an untouched animation still settles quickly.
+    const FRAME_RATE_BOOST_HOLD_OFF: Duration = Duration::from_secs(3);
+    let mut last_interaction: Option<Instant> = None;
     crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
@@ -1578,6 +1587,33 @@ pub fn run(
         let frame_deadline_timeout = android_frame_driver.deadline_timeout();
         let idle_timeout =
             earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout);
+
+        // Vote the display frame rate the way HWUI does: the panel's fastest
+        // rate while the user is interacting, the quiet rate while an
+        // untouched animation runs, no preference when still. The interaction
+        // gate matters for fidelity both ways — Compose runs an untouched
+        // infinite animation at the display's quiet rate (measured: its
+        // spinning title holds 60 on a 120 Hz panel) and bursts on touch, so
+        // a vote tied to animation alone would overshoot it. Without any vote
+        // at all, SurfaceFlinger infers a rate from our cadence and pins us
+        // via frameRateOverride, choreographer included, so the inferred 60
+        // is self-reinforcing and even SF's own touch boost cannot lift it.
+        if let Some(shell) = app_shell.as_ref() {
+            let preference = shell.frame_rate_preference();
+            let producing_frames = android_frame_driver.frame_requested();
+            let interacting = last_interaction
+                .is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
+            let panel_max = match preference {
+                cranpose_app_shell::FrameRatePreference::Auto if interacting => {
+                    crate::android_frame_rate::panel_max_refresh_rate(&app)
+                }
+                _ => None,
+            };
+            frame_rate_voter.apply(
+                &app,
+                preference.desired_rate_hz(producing_frames, interacting, panel_max),
+            );
+        }
 
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
@@ -2074,6 +2110,7 @@ pub fn run(
 
         // Process pending input events outside poll_events to prevent ANR
         if !pending_inputs.is_empty() {
+            last_interaction = Some(Instant::now());
             if let Some(shell) = &mut app_shell {
                 for input in pending_inputs.drain(..) {
                     match input {

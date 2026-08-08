@@ -127,6 +127,21 @@ where
         }
     }
 
+    /// Sets how the platform should vote the display's frame rate for this
+    /// app. The default, [`FrameRatePreference::Auto`], mirrors Compose: the
+    /// panel's fastest rate while frames are being produced, no preference
+    /// when the scene is still.
+    pub fn set_frame_rate_preference(&mut self, preference: crate::FrameRatePreference) {
+        self.frame_rate_preference = preference;
+    }
+
+    /// The app's current display frame-rate preference. Read by platform
+    /// backends each frame; the vote itself is applied by the backend that
+    /// owns the native window.
+    pub fn frame_rate_preference(&self) -> crate::FrameRatePreference {
+        self.frame_rate_preference
+    }
+
     pub(crate) fn process_frame(&mut self) -> FrameUpdateResult {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(|| self.process_frame_in_context(false))

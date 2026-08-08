@@ -8350,3 +8350,68 @@ fn rotary_scroll_factor_rejects_unusable_values() {
 
     assert_eq!(shell.rotary_scroll_factor(), 12.0);
 }
+
+#[test]
+fn the_default_frame_rate_preference_boosts_on_interaction_and_holds_the_quiet_baseline() {
+    use crate::FrameRatePreference;
+
+    let auto = FrameRatePreference::default();
+    assert_eq!(auto, FrameRatePreference::Auto);
+    assert_eq!(auto.desired_rate_hz(true, true, Some(120.0)), 120.0);
+    assert_eq!(
+        auto.desired_rate_hz(true, false, Some(120.0)),
+        FrameRatePreference::AUTO_QUIET_RATE_HZ,
+        "an untouched animation votes the quiet baseline, not the panel max"
+    );
+    assert_eq!(
+        auto.desired_rate_hz(false, true, Some(120.0)),
+        120.0,
+        "the boost holds through momentarily-still screens inside the hold-off, \
+         so a gesture crossing a static screen does not flap the display rate"
+    );
+    assert_eq!(
+        auto.desired_rate_hz(false, false, Some(120.0)),
+        0.0,
+        "an idle scene with no recent interaction clears the vote"
+    );
+    assert_eq!(
+        auto.desired_rate_hz(true, true, None),
+        FrameRatePreference::AUTO_QUIET_RATE_HZ
+    );
+    assert_eq!(
+        auto.desired_rate_hz(true, true, Some(0.0)),
+        FrameRatePreference::AUTO_QUIET_RATE_HZ
+    );
+}
+
+#[test]
+fn explicit_frame_rate_preferences_ignore_the_animation_state() {
+    use crate::FrameRatePreference;
+
+    assert_eq!(
+        FrameRatePreference::NoPreference.desired_rate_hz(true, true, Some(120.0)),
+        0.0
+    );
+    assert_eq!(
+        FrameRatePreference::Exact(90.0).desired_rate_hz(false, false, Some(120.0)),
+        90.0
+    );
+    assert_eq!(
+        FrameRatePreference::Exact(-1.0).desired_rate_hz(true, true, Some(120.0)),
+        0.0
+    );
+}
+
+#[test]
+fn the_shell_stores_the_frame_rate_preference_it_is_given() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, || {});
+
+    assert_eq!(shell.frame_rate_preference(), crate::FrameRatePreference::Auto);
+    shell.set_frame_rate_preference(crate::FrameRatePreference::Exact(60.0));
+    assert_eq!(
+        shell.frame_rate_preference(),
+        crate::FrameRatePreference::Exact(60.0)
+    );
+}
