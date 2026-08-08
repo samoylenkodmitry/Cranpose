@@ -227,10 +227,10 @@ mod tests {
         // Native pipelines rewrite the uniform array lengths; the rewritten
         // source is what actually gets compiled, so validate that shape too.
         let resized = super::SHADER
-            .replace("array<ShapeData, 146>", "array<ShapeData, 585>")
+            .replace("array<ShapeData, 102>", "array<ShapeData, 409>")
             .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");
         assert!(
-            resized.contains("array<ShapeData, 585>"),
+            resized.contains("array<ShapeData, 409>"),
             "array length literal drifted from `shape_shader_source`"
         );
         assert!(validate_wgsl_module(&resized).is_ok());

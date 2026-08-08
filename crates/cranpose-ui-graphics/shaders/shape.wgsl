@@ -1,11 +1,5 @@
 
 // Shared structs
-struct VertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) uv: vec2<f32>,
-}
-
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
@@ -23,29 +17,53 @@ struct Uniforms {
 var<uniform> uniforms: Uniforms;
 
 // Vertex shader
+//
+// There is no vertex buffer: each shape is six unindexed vertices whose
+// corner positions, color and UVs are pulled from `shape_data` by
+// `vertex_index`. Corner numbering matches the quad the CPU records:
+// 0 = top-left, 1 = top-right, 2 = bottom-left, 3 = bottom-right, drawn as
+// triangles (0, 1, 2) and (2, 1, 3).
 @vertex
-fn vs_main(input: VertexInput, @builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     var output: VertexOutput;
+
+    let shape_idx = vertex_idx / 6u;
+    let slot = vertex_idx % 6u;
+    var corner: u32;
+    switch slot {
+        case 0u: { corner = 0u; }
+        case 1u, 4u: { corner = 1u; }
+        case 2u, 3u: { corner = 2u; }
+        default: { corner = 3u; }
+    }
+
+    let shape = shape_data[shape_idx];
+    var position: vec2<f32>;
+    switch corner {
+        case 0u: { position = shape.quad01.xy; }
+        case 1u: { position = shape.quad01.zw; }
+        case 2u: { position = shape.quad23.xy; }
+        default: { position = shape.quad23.zw; }
+    }
 
     // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
     // so that a sub-region of the viewport maps to the full NDC range)
-    let x = ((input.position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
-    let y = 1.0 - ((input.position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
 
     output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
-    output.color = input.color;
-    output.uv = input.uv;
-    output.world_pos = input.position;
-    // Each shape has 4 vertices, so divide by 4 to get shape index
-    output.shape_idx = vertex_idx / 4u;
+    output.color = shape.color;
+    output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
+    output.world_pos = position;
+    output.shape_idx = shape_idx;
 
     return output;
 }
 
 // Fragment shader structs and data
 //
-// `stroke_params.y` packs three 2-bit fields so the struct stays at seven
-// vec4-sized slots (112 bytes) instead of eight:
+// `stroke_params.y` packs three 2-bit fields so the struct stays at ten
+// vec4-sized slots (160 bytes) instead of eleven:
 //
 //   bits 0-1  shape kind : 0 = fill, 1 = stroked rect/round-rect, 2 = arc band
 //   bits 2-3  stroke cap : 0 = butt, 1 = round, 2 = square   (arcs only)
@@ -61,6 +79,9 @@ struct ShapeData {
     clip_rect: vec4<f32>,       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
     stroke_params: vec4<f32>,   // stroke width, packed flags, arc outer radius, arc inner radius
     arc_params: vec4<f32>,      // arc center.xy, start_angle, sweep_angle
+    quad01: vec4<f32>,          // device-space quad corners 0 (xy) and 1 (zw)
+    quad23: vec4<f32>,          // device-space quad corners 2 (xy) and 3 (zw)
+    color: vec4<f32>,           // vertex color (solid brush color or first gradient stop)
     brush_type: u32,            // 0=solid, 1=linear_gradient, 2=radial_gradient, 3=sweep
     gradient_start: u32,
     gradient_count: u32,
@@ -74,12 +95,12 @@ struct GradientStop {
 
 // Use uniform buffers for WebGL compatibility
 // Note: WebGL has a minimum uniform buffer size of 16KB
-// ShapeData is 112 bytes now (clip_rect + stroke/arc params), so 146 shapes =
-// 16352 bytes, the most that fits the 16KB floor. Native pipelines rewrite
+// ShapeData is 160 bytes now (quad corners + color ride along), so 102 shapes =
+// 16320 bytes, the most that fits the 16KB floor. Native pipelines rewrite
 // both array lengths from the real device limits — see `shape_shader_source`,
 // which string-replaces these exact literals.
 @group(1) @binding(0)
-var<uniform> shape_data: array<ShapeData, 146>;
+var<uniform> shape_data: array<ShapeData, 102>;
 
 @group(1) @binding(1)
 var<uniform> gradient_stops: array<GradientStop, 256>;

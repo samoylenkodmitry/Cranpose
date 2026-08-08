@@ -325,10 +325,13 @@ impl ArcGeometry {
             }
         }
 
-        for quadrant in 0..4 {
+        // The axis directions have constant sines and cosines; going through
+        // `sin_cos` here doubled the trig cost of every arc in a shape-heavy
+        // scene.
+        const AXIS_DIRECTIONS: [(f32, f32); 4] = [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)];
+        for (quadrant, (sin, cos)) in AXIS_DIRECTIONS.into_iter().enumerate() {
             let angle = quadrant as f32 * std::f32::consts::FRAC_PI_2;
             if self.contains_angle(angle) {
-                let (sin, cos) = angle.sin_cos();
                 include(
                     self.center.x + cos * self.outer_radius,
                     self.center.y + sin * self.outer_radius,

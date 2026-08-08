@@ -83,8 +83,6 @@ pub struct DebugCpuAllocationStats {
     pub image_texture_cache_cap: usize,
     pub scratch_shape_data_cap: usize,
     pub scratch_gradients_cap: usize,
-    pub scratch_vertices_cap: usize,
-    pub scratch_indices_cap: usize,
     pub scratch_image_vertices_cap: usize,
     pub scratch_image_indices_cap: usize,
     pub scratch_image_cmds_cap: usize,
