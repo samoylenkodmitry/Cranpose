@@ -1496,8 +1496,11 @@ struct Uniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct ShapeData {
-    rect: [f32; 4],            // x, y, width, height
-    radii: [f32; 4],           // top_left, top_right, bottom_left, bottom_right
+    rect: [f32; 4], // x, y, width, height
+    /// Rects: top_left, top_right, bottom_left, bottom_right corner radii.
+    /// Arcs: (sin, cos) of the mid angle and of the half sweep — the shader's
+    /// per-shape trig, precomputed so `sdf_arc_band` needs none per fragment.
+    radii: [f32; 4],
     gradient_params: [f32; 4], // linear: start.xy,end.xy; radial: center.xy,radius,unused
     clip_rect: [f32; 4],       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
     /// stroke width, packed flags (see [`pack_shape_flags`]), arc outer radius,
@@ -1709,7 +1712,25 @@ fn convert_shape_into_slots(
     let geometry_width = (local_rect.width - stroke_outset * 2.0).max(0.0);
     let geometry_height = (local_rect.height - stroke_outset * 2.0).max(0.0);
 
-    let radii = if let Some(rounded) = shape.shape {
+    let radii = if let Some(arc) = shape.arc {
+        // Arcs never carry corner radii, so this slot ships the shader's
+        // per-shape trig instead: (sin, cos) of the sweep's mid angle and of
+        // the half sweep. Computing these here — once per shape — is what
+        // lets `sdf_arc_band` run without a single transcendental per
+        // fragment. A full ring is the common case (dots, particles) and
+        // `ArcGeometry::new` normalizes it to start 0 / sweep TAU, whose
+        // values are exact constants; the half-sweep sine is pinned to
+        // non-negative just like the shader used to, so a closed ring keeps
+        // its seam-free (0, -1) form.
+        if arc.sweep_angle >= cranpose_ui_graphics::TAU && arc.start_angle == 0.0 {
+            [0.0, -1.0, 0.0, -1.0]
+        } else {
+            let half_sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU) * 0.5;
+            let (mid_sin, mid_cos) = (arc.start_angle + half_sweep).sin_cos();
+            let (half_sin, half_cos) = half_sweep.sin_cos();
+            [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+        }
+    } else if let Some(rounded) = shape.shape {
         let resolved = rounded.resolve(geometry_width, geometry_height);
         [
             resolved.top_left * root_scale,

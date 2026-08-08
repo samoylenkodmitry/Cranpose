@@ -74,7 +74,8 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
 // gets from atan2(dy, dx).
 struct ShapeData {
     rect: vec4<f32>,            // x, y, width, height
-    radii: vec4<f32>,           // top_left, top_right, bottom_left, bottom_right
+    radii: vec4<f32>,           // rects: top_left, top_right, bottom_left, bottom_right
+                                // arcs: mid-angle (sin, cos), half-sweep (sin, cos)
     gradient_params: vec4<f32>, // linear: start.xy,end.xy; radial: center.xy,radius,unused
     clip_rect: vec4<f32>,       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
     stroke_params: vec4<f32>,   // stroke width, packed flags, arc outer radius, arc inner radius
@@ -190,34 +191,33 @@ fn sdf_stroked_rounded_rect(
 // Built on the analytic arc SDF (Inigo Quilez's sdArc), which natively yields
 // ROUND ends; butt and square ends come from clipping against the two radial
 // half-planes.
+//
+// The two direction vectors are (sin, cos) of the sweep's midpoint angle and
+// of the half sweep. They are constants of the shape, so the CPU computes
+// them once per shape (see `convert_shape_into_slots`) instead of this
+// shader paying four transcendentals on every fragment — in an arc-heavy
+// scene that is by far the largest ALU term of the whole pipeline.
 fn sdf_arc_band(
     p: vec2<f32>,
     center: vec2<f32>,
     inner: f32,
     outer: f32,
-    start_angle: f32,
-    sweep_angle: f32,
+    mid_sin_cos: vec2<f32>,
+    half_sin_cos: vec2<f32>,
     cap: u32,
 ) -> f32 {
     let ra = (outer + inner) * 0.5;
     let rb = max((outer - inner) * 0.5, 0.0);
-    let sweep = clamp(sweep_angle, 0.0, TAU);
-    let half_sweep = sweep * 0.5;
-    let mid = start_angle + half_sweep;
 
     // Rotate into the frame the arc SDF expects: the band straddles +Y and is
     // symmetric about it.
-    let sm = sin(mid);
-    let cm = cos(mid);
+    let sm = mid_sin_cos.x;
+    let cm = mid_sin_cos.y;
     let d = p - center;
     var q = vec2<f32>(-sm * d.x + cm * d.y, cm * d.x + sm * d.y);
     q.x = abs(q.x);
 
-    // sin() of a half sweep in [0, PI] is non-negative in exact math; the max()
-    // pins a full turn (half_sweep == PI) to exactly (0, -1) instead of the
-    // tiny negative float sin(PI) actually returns, which would otherwise open
-    // a hairline seam across a closed ring.
-    let sc = vec2<f32>(max(sin(half_sweep), 0.0), cos(half_sweep));
+    let sc = half_sin_cos;
 
     var dist: f32;
     if (sc.y * q.x > sc.x * q.y) {
@@ -339,13 +339,15 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
                      shape.radii[2] > 0.0 || shape.radii[3] > 0.0);
     var alpha: f32;
     if (shape_kind == SHAPE_KIND_ARC) {
+        // Arcs have no corner radii, so `radii` carries the precomputed
+        // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(
             rect_pos,
             shape.arc_params.xy,
             shape.stroke_params.w,
             shape.stroke_params.z,
-            shape.arc_params.z,
-            shape.arc_params.w,
+            shape.radii.xy,
+            shape.radii.zw,
             stroke_cap,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
