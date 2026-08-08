@@ -3912,7 +3912,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .iter()
                 .map(|(z_index, composite)| (*z_index, composite.batch_item())),
         );
-        ordered_items.sort_by_key(|(z_index, _)| *z_index);
+        // Z indices are unique — the scene hands every op its own `next_z` — so an
+        // unstable sort cannot reorder anything a stable one wouldn't, and it skips
+        // the stable sort's scratch allocation, paid here once per segment per frame.
+        ordered_items.sort_unstable_by_key(|(z_index, _)| *z_index);
         #[cfg(not(target_arch = "wasm32"))]
         maybe_print_segment_diag(
             z_start..z_end,
@@ -6644,7 +6647,12 @@ impl GpuRenderer {
                 offset: viewport_offset,
             };
             let Some(prepared_shape) = self.prepare_shapes_batch(
-                shapes[start..end].iter().map(|(shape, _blend_mode)| shape),
+                shapes[start..end]
+                    .iter()
+                    .map(|(shape, _blend_mode)| shape)
+                    .filter(|shape| {
+                        shape_draw_is_visible_in_viewport(shape, viewport, root_scale)
+                    }),
                 root_scale,
                 viewport,
                 &mut staged_uploads,
@@ -6878,14 +6886,16 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let _ = staged_uploads;
 
-        // Build shape data for this subset
+        // Build shape data for this subset. Callers hand in only shapes visible in
+        // `viewport`: the segment paths culled at collect time, and the layer and
+        // shadow-source paths filter at the call site. Re-checking here would run
+        // the same quad math a second time on every shape of every frame.
         self.scratch_shape_data.clear();
         self.scratch_gradients.clear();
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
 
         for (idx, shape) in layer_shapes
-            .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale))
             .take(self.shape_batch_limits.max_shapes_per_batch)
             .enumerate()
         {
@@ -7294,9 +7304,13 @@ impl GpuRenderer {
             height,
             offset: viewport_offset,
         };
-        let Some(batch) =
-            self.prepare_shapes_batch(layer_shapes, root_scale, viewport, &mut staged_uploads)
-        else {
+        let Some(batch) = self.prepare_shapes_batch(
+            layer_shapes
+                .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+            root_scale,
+            viewport,
+            &mut staged_uploads,
+        ) else {
             self.restore_staged_uploads(staged_uploads);
             return;
         };

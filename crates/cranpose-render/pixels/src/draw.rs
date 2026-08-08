@@ -135,7 +135,9 @@ fn draw_raster_scene(
     for (index, text) in scene.texts.iter().enumerate() {
         ordered_items.push((text.z_index, RenderItem::Text(index)));
     }
-    ordered_items.sort_by_key(|(z, _)| *z);
+    // Unique z per item (the scene's `next_z` counter), so unstable sorting is
+    // order-identical and avoids the stable sort's per-frame scratch allocation.
+    ordered_items.sort_unstable_by_key(|(z, _)| *z);
 
     for (_, item) in ordered_items {
         match item {
