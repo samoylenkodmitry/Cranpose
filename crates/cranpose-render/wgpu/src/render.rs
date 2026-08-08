@@ -1826,6 +1826,17 @@ fn convert_shape_into_slots(
     };
 }
 
+/// `CRANPOSE_QUAD_AREA_DIAG=1` prints, per shape batch, how many device
+/// pixels the emitted quads cover — split into arc quads, the true arc band
+/// coverage inside them, and everything else. Fill cost is the product of
+/// fragment count and shader cost, and this is the fragment-count half: it
+/// is how the MEGA scene's ~10x overdraw (and the ~50% of arc-quad area that
+/// the SDF discards) was measured.
+fn quad_area_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_QUAD_AREA_DIAG").is_some())
+}
+
 /// Converts a batch of shapes into pre-sized output slices, fanning the work
 /// across scoped threads when the batch is large enough to pay for spawns.
 /// The outputs may be scratch vectors or mapped GPU staging memory; each
@@ -1839,6 +1850,49 @@ fn convert_shapes_into_outputs(
     gradients_out: &mut [GradientStop],
 ) {
     let shape_count = shape_refs.len();
+    if quad_area_diag_enabled() {
+        let quad_area = |q: [[f32; 2]; 4]| {
+            // Shoelace over the quad polygon TL, TR, BR, BL (corners 0,1,3,2).
+            let poly = [q[0], q[1], q[3], q[2]];
+            let mut twice = 0.0f64;
+            for i in 0..4 {
+                let a = poly[i];
+                let b = poly[(i + 1) % 4];
+                twice += a[0] as f64 * b[1] as f64 - b[0] as f64 * a[1] as f64;
+            }
+            twice.abs() * 0.5
+        };
+        let mut arc_quad = 0.0f64; // quad px of arc shapes
+        let mut arc_band = 0.0f64; // true band coverage of those arcs
+        let mut arc_count = 0usize;
+        let mut ring_count = 0usize;
+        let mut other_quad = 0.0f64;
+        let mut other_count = 0usize;
+        for shape in shape_refs {
+            let area = quad_area(shape.quad);
+            if let Some(arc) = shape.arc {
+                arc_quad += area;
+                arc_count += 1;
+                if arc.sweep_angle >= cranpose_ui_graphics::TAU {
+                    ring_count += 1;
+                }
+                let ra = arc.mid_radius() as f64;
+                let rb = arc.half_thickness() as f64;
+                arc_band +=
+                    arc.sweep_angle as f64 * ra * (2.0 * rb) + std::f64::consts::PI * rb * rb;
+            } else {
+                other_quad += area;
+                other_count += 1;
+            }
+        }
+        let scale2 = (root_scale as f64) * (root_scale as f64);
+        eprintln!(
+            "[quad-area] arcs={arc_count} (rings={ring_count}) arc_quad_px={:.0} arc_band_px={:.0} | other={other_count} other_px={:.0}",
+            arc_quad * scale2,
+            arc_band * scale2,
+            other_quad * scale2,
+        );
+    }
     let workers = if shape_count >= PARALLEL_SHAPE_CONVERT_THRESHOLD {
         shape_convert_worker_count()
     } else {

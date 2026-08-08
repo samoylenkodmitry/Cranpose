@@ -1,11 +1,27 @@
 
 // Shared structs
+//
+// Everything the fragment shader needs from ShapeData rides here as a flat
+// varying instead of being re-fetched from the uniform array per fragment.
+// The vertex shader runs six times per shape; the fragment shader runs once
+// per covered pixel — thousands of times more in an overdraw-heavy scene —
+// and a dynamically indexed uniform array cannot be promoted to registers,
+// so every one of those fragment fetches was a real memory load on the
+// GPU's load/store pipe. Flat varyings move that traffic to the (otherwise
+// idle) varying interpolator. Only the gradient-stop array is still fetched
+// per fragment, and solid brushes never touch it.
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) world_pos: vec2<f32>,
-    @location(3) @interpolate(flat) shape_idx: u32,
+    @location(3) @interpolate(flat) rect: vec4<f32>,
+    @location(4) @interpolate(flat) radii: vec4<f32>,
+    @location(5) @interpolate(flat) gradient_params: vec4<f32>,
+    @location(6) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(7) @interpolate(flat) stroke_params: vec4<f32>,
+    @location(8) @interpolate(flat) arc_params: vec4<f32>,
+    @location(9) @interpolate(flat) brush: vec4<u32>,
 }
 
 struct Uniforms {
@@ -55,7 +71,18 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     output.color = shape.color;
     output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
     output.world_pos = position;
-    output.shape_idx = shape_idx;
+    output.rect = shape.rect;
+    output.radii = shape.radii;
+    output.gradient_params = shape.gradient_params;
+    output.clip_rect = shape.clip_rect;
+    output.stroke_params = shape.stroke_params;
+    output.arc_params = shape.arc_params;
+    output.brush = vec4<u32>(
+        shape.brush_type,
+        shape.gradient_start,
+        shape.gradient_count,
+        shape.gradient_tile_mode,
+    );
 
     return output;
 }
@@ -264,17 +291,16 @@ fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
     return GradientSample(clamp(raw_t, 0.0, 1.0), true);
 }
 
-fn sample_gradient(shape: ShapeData, t: f32) -> vec4<f32> {
-    let count = shape.gradient_count;
+fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
     if (count == 0u) {
         return vec4<f32>(0.0);
     }
     if (count == 1u) {
-        return gradient_stops[shape.gradient_start].color;
+        return gradient_stops[gradient_start].color;
     }
 
     let clamped = clamp(t, 0.0, 1.0);
-    let first = gradient_stops[shape.gradient_start];
+    let first = gradient_stops[gradient_start];
     if (clamped <= first.position.x) {
         return first.color;
     }
@@ -284,8 +310,8 @@ fn sample_gradient(shape: ShapeData, t: f32) -> vec4<f32> {
         if (i + 1u >= count) {
             break;
         }
-        let current = gradient_stops[shape.gradient_start + i];
-        let next = gradient_stops[shape.gradient_start + i + 1u];
+        let current = gradient_stops[gradient_start + i];
+        let next = gradient_stops[gradient_start + i + 1u];
         if (clamped <= next.position.x) {
             let denom = max(next.position.x - current.position.x, 0.00001);
             let local_t = clamp((clamped - current.position.x) / denom, 0.0, 1.0);
@@ -294,35 +320,34 @@ fn sample_gradient(shape: ShapeData, t: f32) -> vec4<f32> {
         i = i + 1u;
     }
 
-    return gradient_stops[shape.gradient_start + count - 1u].color;
+    return gradient_stops[gradient_start + count - 1u].color;
 }
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let shape = shape_data[input.shape_idx];
     let world_pos = input.world_pos;
     // Local layer-space pixel coordinate derived from uv, independent of
     // world-space quad deformation (rotation/perspective).
-    let rect_pos = shape.rect.xy + input.uv * shape.rect.zw;
-    
+    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
+
     // Apply clipping: if clip_rect has non-zero size, clip to it
-    let clip_w = shape.clip_rect.z;
-    let clip_h = shape.clip_rect.w;
+    let clip_w = input.clip_rect.z;
+    let clip_h = input.clip_rect.w;
     if (clip_w > 0.0 && clip_h > 0.0) {
-        let clip_left = shape.clip_rect.x;
-        let clip_top = shape.clip_rect.y;
+        let clip_left = input.clip_rect.x;
+        let clip_top = input.clip_rect.y;
         let clip_right = clip_left + clip_w;
         let clip_bottom = clip_top + clip_h;
-        
+
         // Discard fragments outside clip rect
         if (world_pos.x < clip_left || world_pos.x > clip_right ||
             world_pos.y < clip_top || world_pos.y > clip_bottom) {
             discard;
         }
     }
-    
-    let rect_center = shape.rect.xy + shape.rect.zw * 0.5;
-    let half_size = shape.rect.zw * 0.5;
+
+    let rect_center = input.rect.xy + input.rect.zw * 0.5;
+    let half_size = input.rect.zw * 0.5;
     let local_pos = rect_pos - rect_center;
 
     // Packed stroke/arc flags (see the ShapeData comment). Fills leave
@@ -330,24 +355,24 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // byte — and, crucially, stroked and arc shapes stay on this same pipeline
     // and blend state, so they batch together with fills instead of splitting
     // the batch.
-    let flags = u32(max(shape.stroke_params.y, 0.0));
+    let flags = u32(max(input.stroke_params.y, 0.0));
     let shape_kind = flags & 3u;
     let stroke_cap = (flags >> 2u) & 3u;
     let stroke_join = (flags >> 4u) & 3u;
 
-    let has_radii = (shape.radii[0] > 0.0 || shape.radii[1] > 0.0 ||
-                     shape.radii[2] > 0.0 || shape.radii[3] > 0.0);
+    let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
+                     input.radii[2] > 0.0 || input.radii[3] > 0.0);
     var alpha: f32;
     if (shape_kind == SHAPE_KIND_ARC) {
         // Arcs have no corner radii, so `radii` carries the precomputed
         // (sin, cos) of the mid angle (xy) and of the half sweep (zw).
         let dist = sdf_arc_band(
             rect_pos,
-            shape.arc_params.xy,
-            shape.stroke_params.w,
-            shape.stroke_params.z,
-            shape.radii.xy,
-            shape.radii.zw,
+            input.arc_params.xy,
+            input.stroke_params.w,
+            input.stroke_params.z,
+            input.radii.xy,
+            input.radii.zw,
             stroke_cap,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
@@ -355,14 +380,14 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         let dist = sdf_stroked_rounded_rect(
             local_pos,
             half_size,
-            shape.radii,
-            shape.stroke_params.x * 0.5,
+            input.radii,
+            input.stroke_params.x * 0.5,
             stroke_join,
         );
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else if (has_radii) {
         // Rounded rect: SDF + smoothstep for curved edges
-        let dist = sdf_rounded_rect(local_pos, half_size, shape.radii);
+        let dist = sdf_rounded_rect(local_pos, half_size, input.radii);
         alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
     } else {
         // Non-rounded rect: analytical box coverage.
@@ -382,44 +407,48 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     var color = input.color;
 
     // Apply gradient if needed
-    if (shape.brush_type == 1u) {
+    let brush_type = input.brush.x;
+    let gradient_start = input.brush.y;
+    let gradient_count = input.brush.z;
+    let gradient_tile_mode = input.brush.w;
+    if (brush_type == 1u) {
         // Linear gradient projected from start.xy to end.xy
-        let start = shape.gradient_params.xy;
-        let end = shape.gradient_params.zw;
+        let start = input.gradient_params.xy;
+        let end = input.gradient_params.zw;
         let dir = end - start;
         let denom = max(dot(dir, dir), 0.00001);
         let raw_t = dot(rect_pos - start, dir) / denom;
-        let sample = remap_gradient_t(raw_t, shape.gradient_tile_mode);
+        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(shape, sample.t);
+            color = sample_gradient(gradient_start, gradient_count, sample.t);
         }
-    } else if (shape.brush_type == 2u) {
+    } else if (brush_type == 2u) {
         // Radial gradient - use explicit center and radius from gradient_params
-        let center = shape.gradient_params.xy;
-        let radius = max(shape.gradient_params.z, 0.00001);
+        let center = input.gradient_params.xy;
+        let radius = max(input.gradient_params.z, 0.00001);
         let dist_from_center = length(rect_pos - center);
         let raw_t = dist_from_center / radius;
-        let sample = remap_gradient_t(raw_t, shape.gradient_tile_mode);
+        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(shape, sample.t);
+            color = sample_gradient(gradient_start, gradient_count, sample.t);
         }
-    } else if (shape.brush_type == 3u) {
+    } else if (brush_type == 3u) {
         // Sweep gradient - angle-based interpolation around center
-        let center = shape.gradient_params.xy;
+        let center = input.gradient_params.xy;
         let dx = rect_pos.x - center.x;
         let dy = rect_pos.y - center.y;
         let angle = atan2(dy, dx);
         // Map [-PI, PI] to [0, 1]
         let raw_t = angle / (2.0 * 3.14159265358979) + 0.5;
-        let sample = remap_gradient_t(raw_t, shape.gradient_tile_mode);
+        let sample = remap_gradient_t(raw_t, gradient_tile_mode);
         if (!sample.valid) {
             color = vec4<f32>(0.0);
         } else {
-            color = sample_gradient(shape, sample.t);
+            color = sample_gradient(gradient_start, gradient_count, sample.t);
         }
     }
 
