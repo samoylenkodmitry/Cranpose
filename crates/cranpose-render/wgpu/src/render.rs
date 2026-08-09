@@ -2060,7 +2060,7 @@ struct ReplaySlot {
 /// side) owns slot LIFECYCLE decisions; this store owns the GPU resources.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlotStore {
-    slots: std::collections::HashMap<u32, ReplaySlot>,
+    slots: std::collections::HashMap<u32, ReplaySlot, cranpose_ui_graphics::FxBuildHasher>,
     transform_buffer: wgpu::Buffer,
     free_ids: Vec<u32>,
 }
@@ -2075,7 +2075,7 @@ impl ReplaySlotStore {
             mapped_at_creation: false,
         });
         Self {
-            slots: std::collections::HashMap::new(),
+            slots: std::collections::HashMap::default(),
             transform_buffer,
             free_ids: (0..MAX_REPLAY_SLOTS).rev().collect(),
         }
@@ -8044,7 +8044,8 @@ impl GpuRenderer {
             stop_min: u32::MAX,
             stop_max: 0,
         };
-        let mut dirty: std::collections::HashMap<u32, DirtySpan> = std::collections::HashMap::new();
+        let mut dirty: std::collections::HashMap<u32, DirtySpan, cranpose_ui_graphics::FxBuildHasher> =
+            std::collections::HashMap::default();
 
         for patch in &patches {
             let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {

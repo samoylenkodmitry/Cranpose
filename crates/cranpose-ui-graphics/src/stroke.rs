@@ -137,6 +137,25 @@ pub struct ArcGeometry {
     pub cap: StrokeCap,
 }
 
+/// Exact `x.floor()` without the libm call `f32::floor` lowers to on armv7
+/// (no `vrintm` there): truncate via int cast, fix up negatives. Bit-equal
+/// to `floorf` for every input — casts only run below 2^23, where i32 cannot
+/// saturate, and at 2^23 and above every finite f32 is already an integer.
+/// NaN fails the range test and passes through unchanged, like `floorf`.
+#[inline]
+fn exact_floor(x: f32) -> f32 {
+    if x == 0.0 {
+        // The int round-trip would turn -0.0 into +0.0; floorf keeps the sign.
+        return x;
+    }
+    if x.abs() < 8_388_608.0 {
+        let truncated = x as i32 as f32;
+        truncated - ((x < truncated) as i32 as f32)
+    } else {
+        x
+    }
+}
+
 /// `x mod TAU` into `[0, TAU)` without `rem_euclid`, whose `fmodf` lowers to
 /// the software routine in compiler_builtins on aarch64 Android and shows up
 /// in profiles at two calls per arc per frame. Multiply-floor keeps it to a
@@ -144,7 +163,7 @@ pub struct ArcGeometry {
 /// into range.
 #[inline]
 fn wrap_angle_tau(x: f32) -> f32 {
-    let wrapped = x - (x * (1.0 / TAU)).floor() * TAU;
+    let wrapped = x - exact_floor(x * (1.0 / TAU)) * TAU;
     if wrapped >= TAU {
         wrapped - TAU
     } else if wrapped < 0.0 {
@@ -456,6 +475,40 @@ mod tests {
     /// noise. The containment property test below is the strict guard.
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 0.15
+    }
+
+    #[test]
+    fn exact_floor_is_bit_equal_to_floorf() {
+        let mut probes: Vec<f32> = vec![
+            0.0,
+            -0.0,
+            0.5,
+            -0.5,
+            1.0,
+            -1.0,
+            8_388_607.5,
+            -8_388_607.5,
+            8_388_608.0,
+            -8_388_608.0,
+            1.0e30,
+            -1.0e30,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MIN_POSITIVE,
+            -f32::MIN_POSITIVE,
+        ];
+        for i in -4000..4000 {
+            probes.push(i as f32 * 0.01737);
+            probes.push(i as f32 * PI);
+        }
+        for x in probes {
+            assert_eq!(
+                exact_floor(x).to_bits(),
+                x.floor().to_bits(),
+                "exact_floor({x}) diverged from floorf"
+            );
+        }
+        assert!(exact_floor(f32::NAN).is_nan());
     }
 
     #[test]

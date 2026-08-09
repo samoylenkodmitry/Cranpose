@@ -178,7 +178,7 @@ pub(crate) struct ShapeReplayState {
     pub segments: Vec<ReplaySegment>,
     /// Live references per renderer slot — split siblings share one slot,
     /// which is released only when its last segment dies.
-    pub slot_refs: std::collections::HashMap<u32, u32>,
+    pub slot_refs: std::collections::HashMap<u32, u32, cranpose_ui_graphics::FxBuildHasher>,
     pub captured_root_scale: Option<f32>,
     /// Frame of the last coverage-triggered rebuild, for the cooldown.
     pub last_rebuild_frame: u64,
