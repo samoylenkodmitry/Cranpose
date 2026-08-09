@@ -62,5 +62,10 @@ fn composite_sample(
     if (sampling_mode <= 0.5) {
         return textureSample(input_texture, input_sampler, uv);
     }
-    return composite_sample_box4(source_pos, safe_source_size, span_hint);
+    if (sampling_mode <= 1.5) {
+        return composite_sample_box4(source_pos, safe_source_size, span_hint);
+    }
+    let dims = vec2<i32>(textureDimensions(input_texture));
+    let texel = clamp(vec2<i32>(floor(source_pos)), vec2<i32>(0), dims - vec2<i32>(1));
+    return textureLoad(input_texture, texel, 0);
 }

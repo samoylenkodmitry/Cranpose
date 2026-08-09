@@ -348,6 +348,8 @@ pub struct SpringSpec {
     pub velocity_threshold: f32,
     /// Position threshold to stop animation.
     pub position_threshold: f32,
+    /// Delay before the spring begins advancing.
+    pub delay_millis: u64,
 }
 
 impl SpringSpec {
@@ -358,7 +360,14 @@ impl SpringSpec {
             stiffness,
             velocity_threshold: 0.1,
             position_threshold: 0.01,
+            delay_millis: 0,
         }
+    }
+
+    /// Add a delay before the spring starts integrating.
+    pub fn with_delay(mut self, delay_millis: u64) -> Self {
+        self.delay_millis = delay_millis;
+        self
     }
 
     /// Create a spring with default material design values.
@@ -368,6 +377,7 @@ impl SpringSpec {
             stiffness: 1500.0,
             velocity_threshold: 0.1,
             position_threshold: 0.01,
+            delay_millis: 0,
         }
     }
 
@@ -378,6 +388,7 @@ impl SpringSpec {
             stiffness: 1500.0,
             velocity_threshold: 0.1,
             position_threshold: 0.01,
+            delay_millis: 0,
         }
     }
 
@@ -388,6 +399,7 @@ impl SpringSpec {
             stiffness: 3000.0,
             velocity_threshold: 0.1,
             position_threshold: 0.01,
+            delay_millis: 0,
         }
     }
 }
@@ -431,6 +443,16 @@ pub enum AnimationType {
     Tween(AnimationSpec),
     /// Physics-based spring animation.
     Spring(SpringSpec),
+}
+
+impl AnimationType {
+    /// Add the same start delay regardless of the animation model.
+    pub fn with_delay(self, delay_millis: u64) -> Self {
+        match self {
+            Self::Tween(spec) => Self::Tween(spec.with_delay(delay_millis)),
+            Self::Spring(spec) => Self::Spring(spec.with_delay(delay_millis)),
+        }
+    }
 }
 
 impl Default for AnimationType {
@@ -772,8 +794,18 @@ impl<T: SpringScalar + 'static> Animatable<T> {
     /// Retargeting mid-flight keeps the in-flight velocity (springs continue
     /// their physical motion toward the new target).
     pub fn animateTo(&mut self, target: T, animation: AnimationType) {
+        self.start_animation(target, animation, None);
+    }
+
+    fn start_animation(
+        &mut self,
+        target: T,
+        animation: AnimationType,
+        exact_start_time_nanos: Option<u64>,
+    ) {
         {
             let mut inner = self.inner.borrow_mut();
+            let previous_animation = inner.animation_type;
 
             // Cancel existing animation
             if let Some(registration) = inner.registration.take() {
@@ -783,7 +815,22 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             inner.start = inner.current.clone();
             inner.target = target;
             inner.animation_type = animation;
-            inner.start_time_nanos = None;
+            inner.start_time_nanos = exact_start_time_nanos;
+            match animation {
+                AnimationType::Spring(spec) => {
+                    let continues_spring = matches!(previous_animation, AnimationType::Spring(_));
+                    if let Some(start_time_nanos) = exact_start_time_nanos {
+                        let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
+                        inner.last_frame_nanos = Some(start_time_nanos.saturating_add(delay_nanos));
+                    } else if !continues_spring {
+                        inner.last_frame_nanos = None;
+                    }
+                }
+                AnimationType::Tween(_) => {
+                    inner.last_frame_nanos = None;
+                    inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
+                }
+            }
             // The spring frame chain (`last_frame_nanos`) survives a
             // retarget: a mid-flight spring keeps integrating real frame
             // deltas toward the new target. Clearing it made the first
@@ -808,6 +855,26 @@ impl<T: SpringScalar + 'static> Animatable<T> {
             }
         }
         self.animateTo(target, animation);
+    }
+
+    /// Animate from an exact point on the shared frame clock. The first
+    /// rendered spring sample integrates every elapsed nanosecond since this
+    /// boundary, so input-to-animation handoff is independent of which vsync
+    /// first services the callback.
+    pub fn animate_to_with_velocity_at(
+        &mut self,
+        target: T,
+        velocity: T,
+        animation: AnimationType,
+        start_time_nanos: u64,
+    ) {
+        {
+            let mut inner = self.inner.borrow_mut();
+            for index in 0..T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS) {
+                inner.velocity[index] = velocity.dimension(index);
+            }
+        }
+        self.start_animation(target, animation, Some(start_time_nanos));
     }
 
     /// The current velocity in value units per second (zero when settled).
@@ -872,7 +939,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                 AnimationType::Tween(spec) => {
                     let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
                     let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
-                    let delay_nanos = spec.delay_millis * 1_000_000;
+                    let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
 
                     if elapsed_nanos < delay_nanos {
                         schedule_next = true;
@@ -899,54 +966,64 @@ impl<T: SpringScalar + 'static> Animatable<T> {
                     }
                 }
                 AnimationType::Spring(spec) => {
-                    // Damped harmonic oscillator advanced per dimension in
-                    // VALUE space using the closed-form solution (exact for
-                    // any frame delta — no integration drift at low frame
-                    // rates). Velocity carries across frames and retargets.
-                    let last = inner.last_frame_nanos.replace(frame_time_nanos);
-                    let dt = last
-                        .map(|last| frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0)
-                        .unwrap_or(0.0);
-
-                    if dt <= 0.0 {
+                    let start_time = inner.start_time_nanos.get_or_insert(frame_time_nanos);
+                    let elapsed_nanos = frame_time_nanos.saturating_sub(*start_time);
+                    let delay_nanos = spec.delay_millis.saturating_mul(1_000_000);
+                    if elapsed_nanos < delay_nanos {
+                        inner.last_frame_nanos = Some(start_time.saturating_add(delay_nanos));
                         schedule_next = true;
                     } else {
-                        let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
-                        let mut position = [0.0f32; SPRING_MAX_DIMENSIONS];
-                        for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
-                            let value = inner.current.dimension(index);
-                            let target = inner.target.dimension(index);
-                            let (next_value, next_velocity) = advance_spring(
-                                value,
-                                inner.velocity[index],
-                                target,
-                                spec.damping_ratio,
-                                spec.stiffness,
-                                dt,
-                            );
-                            *slot = next_value;
-                            inner.velocity[index] = next_velocity;
-                        }
+                        // Damped harmonic oscillator advanced per dimension in
+                        // VALUE space using the closed-form solution (exact for
+                        // any frame delta — no integration drift at low frame
+                        // rates). Velocity carries across frames and retargets.
+                        let last = inner.last_frame_nanos.replace(frame_time_nanos);
+                        let dt = last
+                            .map(|last| {
+                                frame_time_nanos.saturating_sub(last) as f32 / 1_000_000_000.0
+                            })
+                            .unwrap_or(0.0);
 
-                        inner.current = T::from_dimensions(position);
-                        inner.state.set_value(inner.current.clone());
-
-                        // Settled when every dimension is at rest near the target.
-                        let settled = (0..dimensions).all(|index| {
-                            inner.velocity[index].abs() < spec.velocity_threshold
-                                && (position[index] - inner.target.dimension(index)).abs()
-                                    < spec.position_threshold
-                        });
-
-                        if settled {
-                            inner.current = inner.target.clone();
-                            inner.start = inner.target.clone();
-                            inner.start_time_nanos = None;
-                            inner.last_frame_nanos = None;
-                            inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
-                            inner.state.set_value(inner.target.clone());
-                        } else {
+                        if dt <= 0.0 {
                             schedule_next = true;
+                        } else {
+                            let dimensions = T::DIMENSIONS.min(SPRING_MAX_DIMENSIONS);
+                            let mut position = [0.0f32; SPRING_MAX_DIMENSIONS];
+                            for (index, slot) in position.iter_mut().enumerate().take(dimensions) {
+                                let value = inner.current.dimension(index);
+                                let target = inner.target.dimension(index);
+                                let (next_value, next_velocity) = advance_spring(
+                                    value,
+                                    inner.velocity[index],
+                                    target,
+                                    spec.damping_ratio,
+                                    spec.stiffness,
+                                    dt,
+                                );
+                                *slot = next_value;
+                                inner.velocity[index] = next_velocity;
+                            }
+
+                            inner.current = T::from_dimensions(position);
+                            inner.state.set_value(inner.current.clone());
+
+                            // Settled when every dimension is at rest near the target.
+                            let settled = (0..dimensions).all(|index| {
+                                inner.velocity[index].abs() < spec.velocity_threshold
+                                    && (position[index] - inner.target.dimension(index)).abs()
+                                        < spec.position_threshold
+                            });
+
+                            if settled {
+                                inner.current = inner.target.clone();
+                                inner.start = inner.target.clone();
+                                inner.start_time_nanos = None;
+                                inner.last_frame_nanos = None;
+                                inner.velocity = [0.0; SPRING_MAX_DIMENSIONS];
+                                inner.state.set_value(inner.target.clone());
+                            } else {
+                                schedule_next = true;
+                            }
                         }
                     }
                 }

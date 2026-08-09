@@ -26,6 +26,7 @@ const FRAME_WIDTH: u32 = 128;
 const FRAME_HEIGHT: u32 = 96;
 const ROOT_SCALE_TEST_SCALE: f32 = 2.0;
 const FRACTIONAL_ROOT_SCALE: f32 = 130.0 / 96.0;
+const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
 const ALPHA_LAYER_SIZE: (u32, u32) = (48, 24);
 const BLUR_LAYER_SIZE: (u32, u32) = (28, 28);
 const BACKDROP_LAYER_SIZE: (u32, u32) = (24, 20);
@@ -2834,8 +2835,12 @@ fn normalize_translated_region_at_scale(
     local_size: (u32, u32),
     root_scale: f32,
 ) -> Vec<u8> {
-    let start_x = (translation.x * root_scale).round() as u32;
-    let start_y = (translation.y * root_scale).round() as u32;
+    let canonical_device_origin = |logical: f32| {
+        let device = f64::from(logical) * f64::from(root_scale);
+        ((device * DEVICE_SNAP_SUBPIXEL_STEPS).round() / DEVICE_SNAP_SUBPIXEL_STEPS).round() as u32
+    };
+    let start_x = canonical_device_origin(translation.x);
+    let start_y = canonical_device_origin(translation.y);
     let width = scaled_dimension(local_size.0, root_scale);
     let height = scaled_dimension(local_size.1, root_scale);
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);

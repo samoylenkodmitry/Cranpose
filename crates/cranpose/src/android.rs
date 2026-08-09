@@ -1861,8 +1861,9 @@ pub fn run(
                     match input {
                         PendingInput::PointerDown(x, y, time_ms, source) => {
                             shell.set_pointer_source(source);
-                            shell.set_cursor_at_time(x, y, time_ms);
-                            shell.pointer_pressed_at_time(time_ms);
+                            let event_time = shell.realtime_pointer_event_time(time_ms);
+                            shell.set_cursor_at_event_time(x, y, event_time);
+                            shell.pointer_pressed_at_event_time(event_time);
                         }
                         PendingInput::PointerUp(x, y, time_ms, source) => {
                             // ACTION_UP coordinates carry lift-off roll-back
@@ -1870,11 +1871,13 @@ pub fn run(
                             // (a synthesized Move here can flip the fling
                             // direction), so release without a Move dispatch.
                             shell.set_pointer_source(source);
-                            shell.pointer_released_at_position_time(x, y, time_ms);
+                            let event_time = shell.realtime_pointer_event_time(time_ms);
+                            shell.pointer_released_at_position_event_time(x, y, event_time);
                         }
                         PendingInput::PointerMove(x, y, time_ms, source) => {
                             shell.set_pointer_source(source);
-                            shell.set_cursor_at_time(x, y, time_ms);
+                            let event_time = shell.realtime_pointer_event_time(time_ms);
+                            shell.set_cursor_at_event_time(x, y, event_time);
                         }
                         PendingInput::PointerCancel => {
                             shell.cancel_gesture();

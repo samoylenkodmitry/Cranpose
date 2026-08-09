@@ -29,12 +29,48 @@ pub(crate) struct ScrollStabilityConfig {
     pub step_epsilon: f32,
     pub fallback_trim_top_px: u32,
     pub fallback_trim_bottom_px: u32,
+    pub fallback_trim_left_px: u32,
+    pub fallback_trim_right_px: u32,
     pub compare_search_offset_px: u32,
     pub compare_max_adjacent_score: u32,
     pub compare_stabilized_guard_px: u32,
     pub compare_viewport_inset_px: u32,
     pub render_stats_env: Option<&'static str>,
     pub active_frame: Option<ActiveFrameConfig>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub(crate) struct ExactScrollStepConfig {
+    pub target_text: &'static str,
+    pub window_width: u32,
+    pub window_height: u32,
+    pub scroll_steps: usize,
+    pub scroll_delta_y: f32,
+    pub step_epsilon: f32,
+    pub fallback_trim_top_px: u32,
+    pub fallback_trim_bottom_px: u32,
+}
+
+impl ScrollStabilityConfig {
+    fn exact_step_config(self) -> ExactScrollStepConfig {
+        ExactScrollStepConfig {
+            target_text: self.target_text,
+            window_width: self.window_width,
+            window_height: self.window_height,
+            scroll_steps: self.scroll_steps,
+            scroll_delta_y: self.scroll_delta_y,
+            step_epsilon: self.step_epsilon,
+            fallback_trim_top_px: self.fallback_trim_top_px,
+            fallback_trim_bottom_px: self.fallback_trim_bottom_px,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScrollStepDriver<'a> {
+    PointerWheel,
+    AppHook(&'a str),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +94,118 @@ pub(crate) fn run_scroll_stability_capture(
     robot: &cranpose::Robot,
     config: ScrollStabilityConfig,
     internal_diagnostic: Option<&InternalDiagnostic>,
+) -> bool {
+    run_scroll_stability_capture_with_driver(
+        robot,
+        config,
+        internal_diagnostic,
+        ScrollStepDriver::PointerWheel,
+    )
+}
+
+#[allow(dead_code)]
+pub(crate) fn run_scroll_stability_capture_with_app_hook(
+    robot: &cranpose::Robot,
+    config: ScrollStabilityConfig,
+    internal_diagnostic: Option<&InternalDiagnostic>,
+    hook_name: &str,
+) -> bool {
+    assert!(
+        config.active_frame.is_none(),
+        "app-hook scrolling does not support active-frame capture"
+    );
+    run_scroll_stability_capture_with_driver(
+        robot,
+        config,
+        internal_diagnostic,
+        ScrollStepDriver::AppHook(hook_name),
+    )
+}
+
+#[allow(dead_code)]
+pub(crate) fn run_presented_scroll_probe_with_app_hook(
+    robot: &cranpose::Robot,
+    config: ScrollStabilityConfig,
+    hook_name: &str,
+    mut inspect_frame: impl FnMut(usize, &Path) -> bool,
+) -> bool {
+    assert!(
+        config.scroll_steps >= 2,
+        "presented scroll probe needs at least two steps"
+    );
+    let output_dir = prepare_named_output_dir(config.output_name);
+    println!("Output dir: {}", output_dir.display());
+    let window_id = find_window_id(config.window_title);
+    let mut previous_bounds = find_exact_target_in_semantics(robot, config.target_text)
+        .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
+    let mut capture_paths = Vec::with_capacity(config.scroll_steps);
+    let mut passed = true;
+
+    for step in 0..config.scroll_steps {
+        previous_bounds = scroll_once_and_expect_target_delta(
+            robot,
+            config.exact_step_config(),
+            previous_bounds,
+            step,
+            "probe step",
+            ScrollStepDriver::AppHook(hook_name),
+        );
+        let screenshot_path = output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
+        take_x11_screenshot(&window_id, screenshot_path.to_str().expect("utf8 path"));
+        passed &= inspect_frame(step, &screenshot_path);
+        capture_paths.push(screenshot_path);
+    }
+
+    if passed {
+        cleanup_capture_paths(&capture_paths);
+    } else {
+        eprintln!(
+            "presented scroll probe failed; captures retained in {}",
+            output_dir.display()
+        );
+    }
+    passed
+}
+
+#[allow(dead_code)]
+pub(crate) fn semantics_bounds_for_exact_text(
+    robot: &cranpose::Robot,
+    text: &str,
+) -> (f32, f32, f32, f32) {
+    wait_for_semantics_text_exact(robot, text, 2_000)
+        .unwrap_or_else(|| fail_with_semantics(robot, "semantic bounds must be visible"))
+}
+
+#[allow(dead_code)]
+pub(crate) fn advance_scroll_with_app_hook(
+    robot: &cranpose::Robot,
+    config: ExactScrollStepConfig,
+    hook_name: &str,
+) {
+    assert!(
+        config.scroll_steps > 0,
+        "exact scroll advance needs at least one step"
+    );
+    let mut previous_bounds = find_exact_target_in_semantics(robot, config.target_text)
+        .unwrap_or_else(|| fail_with_semantics(robot, "target text must be visible"));
+
+    for step in 0..config.scroll_steps {
+        previous_bounds = scroll_once_and_expect_target_delta(
+            robot,
+            config,
+            previous_bounds,
+            step,
+            "phase step",
+            ScrollStepDriver::AppHook(hook_name),
+        );
+    }
+}
+
+fn run_scroll_stability_capture_with_driver(
+    robot: &cranpose::Robot,
+    config: ScrollStabilityConfig,
+    internal_diagnostic: Option<&InternalDiagnostic>,
+    scroll_driver: ScrollStepDriver<'_>,
 ) -> bool {
     assert!(
         config.scroll_steps >= 2,
@@ -113,8 +261,14 @@ pub(crate) fn run_scroll_stability_capture(
             active_capture_paths.extend(active.active_paths);
             previous_presented = Some(active.settled_screenshot);
         } else {
-            previous_bounds =
-                scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
+            previous_bounds = scroll_once_and_expect_target_delta(
+                robot,
+                config.exact_step_config(),
+                previous_bounds,
+                step,
+                "step",
+                scroll_driver,
+            );
 
             let screenshot_path =
                 output_dir.join(format!("{}_step{step:02}.png", config.file_prefix));
@@ -182,8 +336,14 @@ pub(crate) fn run_internal_scroll_stability_capture(
 
     let mut capture_paths = Vec::with_capacity(config.scroll_steps);
     for step in 0..config.scroll_steps {
-        previous_bounds =
-            scroll_once_and_expect_target_delta(robot, config, previous_bounds, step, "step");
+        previous_bounds = scroll_once_and_expect_target_delta(
+            robot,
+            config.exact_step_config(),
+            previous_bounds,
+            step,
+            "step",
+            ScrollStepDriver::PointerWheel,
+        );
 
         let screenshot = robot
             .screenshot_with_scale(capture_scale)
@@ -206,10 +366,11 @@ pub(crate) fn run_internal_scroll_stability_capture(
 
 fn scroll_once_and_expect_target_delta(
     robot: &cranpose::Robot,
-    config: ScrollStabilityConfig,
+    config: ExactScrollStepConfig,
     previous_bounds: (f32, f32, f32, f32),
     step: usize,
     label: &str,
+    scroll_driver: ScrollStepDriver<'_>,
 ) -> (f32, f32, f32, f32) {
     let anchor_x =
         (previous_bounds.0 + previous_bounds.2 * 0.5).clamp(1.0, config.window_width as f32 - 1.0);
@@ -221,11 +382,22 @@ fn scroll_once_and_expect_target_delta(
     } else {
         anchor_center_y.clamp(1.0, config.window_height as f32 - 1.0)
     };
-    robot.mouse_move(anchor_x, anchor_y).expect("move cursor");
-    std::thread::sleep(Duration::from_millis(30));
-    robot
-        .mouse_scroll(0.0, config.scroll_delta_y)
-        .expect("1px scroll should succeed");
+    match scroll_driver {
+        ScrollStepDriver::PointerWheel => {
+            robot.mouse_move(anchor_x, anchor_y).expect("move cursor");
+            std::thread::sleep(Duration::from_millis(30));
+            robot
+                .mouse_scroll(0.0, config.scroll_delta_y)
+                .expect("1px scroll should succeed");
+        }
+        ScrollStepDriver::AppHook(hook_name) => {
+            let delta = config.scroll_delta_y.to_string();
+            let result = robot
+                .invoke_app_hook(hook_name, &delta)
+                .unwrap_or_else(|err| panic!("exact scroll hook '{hook_name}' failed: {err}"));
+            println!("{label} {step}: exact scroll hook result={result:?}");
+        }
+    }
     std::thread::sleep(Duration::from_millis(150));
     let _ = robot.wait_for_idle();
 
@@ -554,8 +726,8 @@ fn compare_crop(robot: &cranpose::Robot, config: ScrollStabilityConfig) -> Compa
     CompareCrop {
         trim_top_px: config.fallback_trim_top_px,
         trim_bottom_px: config.fallback_trim_bottom_px,
-        trim_left_px: 0,
-        trim_right_px: 0,
+        trim_left_px: config.fallback_trim_left_px,
+        trim_right_px: config.fallback_trim_right_px,
         logical_window_space: false,
     }
 }
@@ -841,6 +1013,8 @@ mod tests {
             step_epsilon: 0.05,
             fallback_trim_top_px: 0,
             fallback_trim_bottom_px: 0,
+            fallback_trim_left_px: 0,
+            fallback_trim_right_px: 0,
             compare_search_offset_px: 4,
             compare_max_adjacent_score: 0,
             compare_stabilized_guard_px: 0,

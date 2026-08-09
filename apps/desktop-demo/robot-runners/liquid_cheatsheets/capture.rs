@@ -1,7 +1,9 @@
 //! Real-X11 capture support for the static Liquid cheatsheet fixtures.
 
 use anyhow::{bail, Context, Result};
-use cranpose::Robot;
+use cranpose::{Robot, RobotScreenshot};
+use image::imageops::crop_imm;
+use image::RgbaImage;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,6 +25,59 @@ pub(crate) struct Crop {
 pub(crate) struct Keyframe {
     pub capture_ms: u64,
     pub label: String,
+}
+
+pub(crate) fn save_exact_robot_keyframe_crops<Label: AsRef<str>>(
+    screenshots: &[RobotScreenshot],
+    case_dir: &Path,
+    crop: Crop,
+    labels: &[Label],
+) -> Result<Vec<PathBuf>> {
+    if screenshots.len() != labels.len() {
+        bail!(
+            "exact-clock capture returned {} screenshots for {} labels",
+            screenshots.len(),
+            labels.len()
+        );
+    }
+    let output_dir = case_dir.join("actual/keyframes");
+    fs::create_dir_all(&output_dir).context("create exact-clock keyframe directory")?;
+    let mut outputs = Vec::with_capacity(screenshots.len());
+    for (index, (screenshot, label)) in screenshots.iter().zip(labels).enumerate() {
+        let scale_x = screenshot.width as f32 / screenshot.logical_width.max(f32::EPSILON);
+        let scale_y = screenshot.height as f32 / screenshot.logical_height.max(f32::EPSILON);
+        if (scale_x - scale_y).abs() > 0.01 {
+            bail!("exact-clock screenshot has non-uniform scale {scale_x}x by {scale_y}x");
+        }
+        let x = (crop.x * scale_x).round() as u32;
+        let y = (crop.y * scale_y).round() as u32;
+        let width = (crop.width * scale_x).round() as u32;
+        let height = (crop.height * scale_y).round() as u32;
+        if width == 0
+            || height == 0
+            || x.saturating_add(width) > screenshot.width
+            || y.saturating_add(height) > screenshot.height
+        {
+            bail!(
+                "exact-clock crop {width}x{height}+{x}+{y} exceeds screenshot {}x{}",
+                screenshot.width,
+                screenshot.height
+            );
+        }
+        let image = RgbaImage::from_raw(
+            screenshot.width,
+            screenshot.height,
+            screenshot.pixels.clone(),
+        )
+        .context("decode exact-clock screenshot buffer")?;
+        let output = output_dir.join(format!("{:02}-{}.png", index + 1, label.as_ref()));
+        crop_imm(&image, x, y, width, height)
+            .to_image()
+            .save(&output)
+            .with_context(|| format!("save exact-clock keyframe {}", output.display()))?;
+        outputs.push(output);
+    }
+    Ok(outputs)
 }
 
 #[derive(Clone, Copy, Debug)]

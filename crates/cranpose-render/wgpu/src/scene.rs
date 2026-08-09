@@ -130,6 +130,7 @@ pub(crate) struct BackdropLayer {
     pub node_id: Option<NodeId>,
     pub rect: Rect,
     pub clip: Option<Rect>,
+    pub snap_anchor: Option<SnapAnchor>,
     pub effect: RenderEffect,
     /// Z-index at which this backdrop effect should be applied.
     pub z_index: usize,

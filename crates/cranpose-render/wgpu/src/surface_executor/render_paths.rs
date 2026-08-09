@@ -2,11 +2,12 @@ use super::backend::{
     LayerSurface, LayerSurfaceRoundedClip, LayerSurfaceTexture, SurfaceExecutionBackend,
 };
 use super::geometry::{
-    axis_aligned_quad_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
-    device_pixel_exact_surface_rect, fit_capture_rect_to_scale_budget_for_axes,
-    offscreen_byte_size, quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
-    snap_motion_stable_dest_quad, surface_pixel_rect, surface_target_size, target_quad,
-    visible_layer_rect,
+    axis_aligned_quad_rect, canonicalized_anchored_scaled_quad, clamp_effect_surface_scale,
+    content_effect_pixel_rect, device_pixel_exact_surface_rect,
+    fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
+    quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
+    snap_dest_quad_to_stable_point, snap_motion_stable_dest_quad, surface_pixel_rect,
+    surface_target_size, target_quad, visible_layer_rect,
 };
 use crate::effect_renderer::{
     CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
@@ -44,7 +45,9 @@ use cranpose_render_common::graph::{CachePolicy, LayerNode, ProjectiveTransform}
 use cranpose_render_common::layer_composition::effective_layer_isolation;
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkAnnotation;
-use cranpose_ui_graphics::{BlendMode, Brush, Rect, RenderEffect, RenderHash, RuntimeShader};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
+};
 use std::cell::RefCell;
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
@@ -149,17 +152,22 @@ impl AnnotatedStringHashCache {
 fn anchored_composite_dest_quad(
     dest_quad: [[f32; 2]; 4],
     snap_anchor: Option<SnapAnchor>,
+    stable_origin: Option<Point>,
     root_scale: f32,
     sample_mode: CompositeSampleMode,
 ) -> [[f32; 2]; 4] {
     let scaled = if let Some(anchor) = snap_anchor {
-        let snap_delta = snap_delta_for_anchor(anchor, root_scale);
-        scaled_quad(translate_quad(dest_quad, snap_delta), root_scale)
+        canonicalized_anchored_scaled_quad(dest_quad, anchor, root_scale)
     } else {
         scaled_quad(dest_quad, root_scale)
     };
 
-    snap_motion_stable_dest_quad(scaled, sample_mode)
+    if let Some(origin) = stable_origin {
+        let stable_point = [origin.x * root_scale, origin.y * root_scale];
+        snap_dest_quad_to_stable_point(scaled, stable_point)
+    } else {
+        snap_motion_stable_dest_quad(scaled, sample_mode)
+    }
 }
 
 fn composite_dest_viewport(
@@ -423,6 +431,7 @@ fn layer_source_uses_external_backdrop_underlay(
             node_id: child.layer.node_id,
             rect: child.backdrop_rect,
             clip: child.visual_clip,
+            snap_anchor: child.snap_anchor,
             effect: effect.clone(),
             z_index: child.z_index,
         };
@@ -578,6 +587,14 @@ fn axis_aligned_backdrop_snapshot_copy_plan(
 fn backdrop_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some())
+}
+
+fn snapped_backdrop_geometry(layer: &BackdropLayer, root_scale: f32) -> (Rect, Option<Rect>) {
+    let Some(anchor) = layer.snap_anchor else {
+        return (layer.rect, layer.clip);
+    };
+    let delta = snap_delta_for_anchor(anchor, root_scale);
+    (layer.rect.translate(delta.x, delta.y), layer.clip)
 }
 
 fn backdrop_capture_rect(
@@ -1371,6 +1388,7 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     let dest_quad = anchored_composite_dest_quad(
         crate::rect_to_quad(capture_rect),
         layer.snap_anchor,
+        None,
         root_scale,
         sample_mode,
     );
@@ -1827,6 +1845,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             let dest_quad = anchored_composite_dest_quad(
                 dest_quad,
                 resolved_child.snap_anchor,
+                resolved_child.composite_snap_origin,
                 root_scale,
                 child_surface.sample_mode,
             );
@@ -2772,6 +2791,7 @@ fn hash_backdrop_layer<H: Hasher>(layer: &BackdropLayer, state: &mut H) {
     layer.node_id.hash(state);
     hash_rect(layer.rect, state);
     hash_optional_rect(layer.clip, state);
+    hash_snap_anchor(layer.snap_anchor, state);
     retained_render_effect_hash(&layer.effect).hash(state);
     layer.z_index.hash(state);
 }
@@ -2791,6 +2811,7 @@ fn hash_backdrop_prefix_child<H: Hasher>(child: &BackdropPrefixChildContribution
     match child.sample_mode {
         CompositeSampleMode::Linear => 0u8.hash(state),
         CompositeSampleMode::Box4 => 1u8.hash(state),
+        CompositeSampleMode::Nearest => 2u8.hash(state),
     }
 }
 
@@ -3380,6 +3401,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     let dest_quad = anchored_composite_dest_quad(
         crate::rect_to_quad(logical_rect),
         None,
+        None,
         root_scale,
         surface.sample_mode,
     );
@@ -3663,6 +3685,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 node_id: child.layer.node_id,
                 rect: resolved_child.backdrop_rect,
                 clip: child.visual_clip,
+                snap_anchor: resolved_child.snap_anchor,
                 effect: backdrop.clone(),
                 z_index: child.z_index,
             };
@@ -3754,6 +3777,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         let dest_quad = anchored_composite_dest_quad(
             dest_quad,
             resolved_child.snap_anchor,
+            resolved_child.composite_snap_origin,
             target_scale,
             child_surface.sample_mode,
         );
@@ -4048,17 +4072,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
 
         let mut child_layers = child_layers;
         for child in &mut child_layers {
-            for point in &mut child.dest_quad {
-                point[0] += shift.x;
-                point[1] += shift.y;
-            }
-            child.backdrop_rect.x += shift.x;
-            child.backdrop_rect.y += shift.y;
-            if let Some(clip) = child.visual_clip.as_mut() {
-                clip.x += shift.x;
-                clip.y += shift.y;
-            }
-            child.shadow_draws.translate_by(shift);
+            child.translate_by(shift);
         }
         backend.record_isolated_layer_render(
             width,
@@ -4393,6 +4407,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     let dest_quad = anchored_composite_dest_quad(
         crate::rect_to_quad(capture_rect),
         layer.snap_anchor,
+        None,
         root_scale,
         sample_mode,
     );
@@ -4525,12 +4540,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     input_content_hash: Option<u64>,
 ) -> Result<Option<PreparedBackdropComposite>, String> {
     let diag = backdrop_diag_enabled();
-    let Some(visible_rect) = visible_layer_rect(layer.rect, layer.clip, root_scale, width, height)
+    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
+    let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
     else {
         if diag {
             eprintln!(
                 "[backdrop-diag] prepare SKIP: no visible rect for {:?}",
-                layer.rect
+                layer_rect
             );
         }
         return Ok(None);
@@ -4538,7 +4554,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     let Some(scissor) = scissor_rect_for_rect(
         backdrop_output_rect(
             visible_rect,
-            layer.clip,
+            layer_clip,
             &layer.effect,
             root_scale,
             (width, height),
@@ -4554,7 +4570,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     };
     let capture_rect = backdrop_capture_rect(
         visible_rect,
-        layer.clip,
+        layer_clip,
         &layer.effect,
         root_scale,
         (width, height),
@@ -4588,7 +4604,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     let copy_plan = if (backdrop_scale - root_scale).abs() <= 0.01 {
         axis_aligned_backdrop_snapshot_copy_plan(
             capture_rect,
-            layer.rect,
+            layer_rect,
             root_scale,
             (target.width, target.height),
             backend.max_texture_dim(),
@@ -4659,7 +4675,7 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
                 .map(|plan| plan.effect_pixel_rect)
                 .unwrap_or_else(|| {
                     let capture = surface_pixel_rect(capture_rect, backdrop_scale);
-                    let effect = surface_pixel_rect(layer.rect, backdrop_scale);
+                    let effect = surface_pixel_rect(layer_rect, backdrop_scale);
                     [
                         effect.x - capture.x,
                         effect.y - capture.y,
@@ -4705,11 +4721,12 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     root_scale: f32,
     input_content_hash: Option<u64>,
 ) -> Result<(), String> {
+    let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
     if backdrop_diag_enabled() {
         eprintln!(
             "[backdrop-diag] apply rect={:?} clip={:?} in_pad={} out_pad={} hash={:?}",
-            layer.rect,
-            layer.clip,
+            layer_rect,
+            layer_clip,
             layer.effect.input_padding(),
             layer.effect.output_padding(),
             input_content_hash.is_some()
@@ -4744,7 +4761,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         return Ok(());
     }
 
-    let Some(visible_rect) = visible_layer_rect(layer.rect, layer.clip, root_scale, width, height)
+    let Some(visible_rect) = visible_layer_rect(layer_rect, layer_clip, root_scale, width, height)
     else {
         if backdrop_diag_enabled() {
             eprintln!("[backdrop-diag] SKIP: no visible rect");
@@ -4754,7 +4771,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     let Some(scissor) = scissor_rect_for_rect(
         backdrop_output_rect(
             visible_rect,
-            layer.clip,
+            layer_clip,
             &layer.effect,
             root_scale,
             (width, height),
@@ -4773,7 +4790,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
             "[backdrop-diag] uncached visible={visible_rect:?} scissor={scissor:?} capture={:?}",
             backdrop_capture_rect(
                 visible_rect,
-                layer.clip,
+                layer_clip,
                 &layer.effect,
                 root_scale,
                 (width, height),
@@ -4782,7 +4799,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
     }
     let capture_rect = backdrop_capture_rect(
         visible_rect,
-        layer.clip,
+        layer_clip,
         &layer.effect,
         root_scale,
         (width, height),
@@ -4797,7 +4814,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         if backdrop_underlay.is_none() && (backdrop_scale - root_scale).abs() <= 0.01 {
             axis_aligned_backdrop_snapshot_copy_plan(
                 capture_rect,
-                layer.rect,
+                layer_rect,
                 root_scale,
                 (target.width, target.height),
                 backend.max_texture_dim(),
@@ -4813,7 +4830,7 @@ pub(crate) fn apply_backdrop_layer_to_target<B: SurfaceExecutionBackend>(
         .map(|plan| plan.effect_pixel_rect)
         .unwrap_or_else(|| {
             let capture = surface_pixel_rect(capture_rect, backdrop_scale);
-            let effect = surface_pixel_rect(layer.rect, backdrop_scale);
+            let effect = surface_pixel_rect(layer_rect, backdrop_scale);
             [
                 effect.x - capture.x,
                 effect.y - capture.y,
@@ -4936,7 +4953,12 @@ pub(crate) fn composite_surface_to_view<B: SurfaceExecutionBackend>(
     };
     let inverse = ProjectiveTransform::from_rect_to_quad(source_rect, dest_quad)
         .inverse()
-        .ok_or_else(|| "child layer transform is not invertible".to_string())?;
+        .ok_or_else(|| {
+            format!(
+                "child layer transform is not invertible: source={}x{}, destination={dest_quad:?}",
+                source.width, source.height
+            )
+        })?;
     backend.composite_to_view_projective(
         source,
         dest_view,
@@ -5128,12 +5150,13 @@ mod tests {
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
         layer_surface_dest_quad, layer_surface_translation_context,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
-        retained_render_effect_hash, surface_target_size, visible_backdrop_capture_rect,
-        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
-        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        retained_render_effect_hash, snapped_backdrop_geometry, surface_target_size,
+        visible_backdrop_capture_rect, BackdropPrefixChildContribution,
+        DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
+    use crate::normalized_scene::TranslateBy;
     use crate::scene::{
         BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, ImageDraw, SnapAnchor,
     };
@@ -5323,6 +5346,7 @@ mod tests {
             node_id: Some(77),
             rect,
             clip: None,
+            snap_anchor: None,
             effect: RenderEffect::blur(4.0),
             z_index: 1,
         }
@@ -5364,6 +5388,7 @@ mod tests {
             },
             dest_quad: crate::rect_to_quad(rect),
             snap_anchor: None,
+            composite_snap_origin: None,
             backdrop_rect: rect,
             visual_clip: None,
             surface_clip: None,
@@ -6222,6 +6247,7 @@ mod tests {
             anchored_composite_dest_quad(
                 quad,
                 Some(SnapAnchor::rigid(Point::new(0.0, 0.0))),
+                None,
                 1.25,
                 CompositeSampleMode::Box4,
             ),
@@ -6235,14 +6261,107 @@ mod tests {
     }
 
     #[test]
+    fn anchored_projective_composite_is_stable_across_device_pixel_steps() {
+        let mut quad = [
+            [185.134_52, 490.533_26],
+            [236.936_63, 495.065_03],
+            [179.556_53, 554.289_8],
+            [231.358_64, 558.821_6],
+        ];
+        let mut anchor = SnapAnchor::rigid(Point::new(48.0, 127.600_006));
+        let initial =
+            anchored_composite_dest_quad(quad, Some(anchor), None, 1.25, CompositeSampleMode::Box4);
+
+        for step in 1..=10 {
+            for point in &mut quad {
+                point[1] -= 0.8;
+            }
+            anchor.origin.y -= 0.8;
+            let translated = anchored_composite_dest_quad(
+                quad,
+                Some(anchor),
+                None,
+                1.25,
+                CompositeSampleMode::Box4,
+            );
+
+            for (initial_point, translated_point) in initial.iter().zip(translated) {
+                assert_eq!(translated_point[0], initial_point[0]);
+                assert_eq!(
+                    translated_point[1] + step as f32,
+                    initial_point[1],
+                    "projective composite geometry drifted after {step} physical pixels"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn unanchored_box4_composite_snaps_final_dest_quad() {
         let quad = [[0.25, 10.5], [40.75, 10.5], [0.25, 20.25], [40.75, 20.25]];
 
         assert_eq!(
-            anchored_composite_dest_quad(quad, None, 1.0, CompositeSampleMode::Box4),
+            anchored_composite_dest_quad(quad, None, None, 1.0, CompositeSampleMode::Box4),
             [[0.0, 11.0], [40.5, 11.0], [0.0, 20.75], [40.5, 20.75]],
             "unanchored pixel-stable surfaces should keep their composite phase snapped"
         );
+    }
+
+    #[test]
+    fn scaled_linear_composite_snaps_around_its_transform_origin() {
+        let quad = [[54.9, 416.5], [89.1, 416.5], [54.9, 450.7], [89.1, 450.7]];
+        let snapped = anchored_composite_dest_quad(
+            quad,
+            None,
+            Some(Point::new(72.0, 433.6)),
+            1.0,
+            CompositeSampleMode::Linear,
+        );
+        let center = [
+            (snapped[0][0] + snapped[3][0]) * 0.5,
+            (snapped[0][1] + snapped[3][1]) * 0.5,
+        ];
+
+        assert_eq!(center, [72.0, 434.0]);
+        assert!((snapped[1][0] - snapped[0][0] - 34.2).abs() < 1e-4);
+        assert!((snapped[2][1] - snapped[0][1] - 34.2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn parent_surface_translation_keeps_child_composite_coordinates_together() {
+        let layer = crate::test_support::layer_node(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 36.0,
+                height: 36.0,
+            },
+            ProjectiveTransform::identity(),
+            GraphicsLayer::default(),
+            vec![],
+        );
+        let mut child = child_layer_composite(
+            &layer,
+            0,
+            Rect {
+                x: 54.0,
+                y: 416.0,
+                width: 36.0,
+                height: 36.0,
+            },
+        );
+        child.snap_anchor = Some(SnapAnchor::rigid(Point::new(54.0, 416.0)));
+        child.composite_snap_origin = Some(Point::new(72.0, 434.0));
+        child.translate_by(Point::new(-12.0, 8.0));
+
+        assert_eq!(child.dest_quad[0], [42.0, 424.0]);
+        assert_eq!(
+            child.snap_anchor.expect("snap anchor").origin,
+            Point::new(42.0, 424.0)
+        );
+        assert_eq!(child.composite_snap_origin, Some(Point::new(60.0, 442.0)));
+        assert_eq!(child.backdrop_rect.x, 42.0);
+        assert_eq!(child.backdrop_rect.y, 424.0);
     }
 
     #[test]
@@ -6704,6 +6823,76 @@ mod tests {
         assert_eq!(plan.size, (281, 200));
         assert_eq!(plan.effect_pixel_rect, [0.5, 0.0, 280.0, 200.0]);
         assert_eq!(plan.dest_viewport, (24.0, 41.0, 281.0, 200.0));
+    }
+
+    #[test]
+    fn backdrop_snapshot_effect_geometry_is_stable_across_device_pixel_steps() {
+        let mut layer = test_backdrop_layer(Rect {
+            x: 59.0,
+            y: 416.932_77,
+            width: 398.0,
+            height: 54.0,
+        });
+        let fixed_clip = Rect {
+            x: 40.0,
+            y: 120.0,
+            width: 500.0,
+            height: 600.0,
+        };
+        layer.clip = Some(fixed_clip);
+        layer.snap_anchor = Some(SnapAnchor::rigid(Point::new(0.0, 127.600_006)));
+        let (effect, clip) = snapped_backdrop_geometry(&layer, 1.25);
+        assert_eq!(clip, Some(fixed_clip));
+        let capture = Rect {
+            x: effect.x - 25.9,
+            y: effect.y - 25.9,
+            width: effect.width + 51.8,
+            height: effect.height + 51.8,
+        };
+        let initial =
+            axis_aligned_backdrop_snapshot_copy_plan(capture, effect, 1.25, (900, 1_600), 4_096)
+                .expect("visible backdrop must have a copy plan");
+
+        for step in 1..=10 {
+            layer.rect.y -= 0.8;
+            layer
+                .snap_anchor
+                .as_mut()
+                .expect("test backdrop keeps its snap anchor")
+                .origin
+                .y -= 0.8;
+            let (effect, clip) = snapped_backdrop_geometry(&layer, 1.25);
+            assert_eq!(
+                clip,
+                Some(fixed_clip),
+                "content snapping moved the fixed backdrop clip after {step} physical pixels"
+            );
+            let capture = Rect {
+                x: effect.x - 25.9,
+                y: effect.y - 25.9,
+                width: effect.width + 51.8,
+                height: effect.height + 51.8,
+            };
+            let translated = axis_aligned_backdrop_snapshot_copy_plan(
+                capture,
+                effect,
+                1.25,
+                (900, 1_600),
+                4_096,
+            )
+            .expect("translated backdrop must keep a copy plan");
+
+            assert_eq!(
+                translated.effect_pixel_rect, initial.effect_pixel_rect,
+                "shader-local geometry drifted after {step} physical pixels"
+            );
+            assert_eq!(translated.size, initial.size);
+            assert_eq!(
+                translated.source_origin.1 + step,
+                initial.source_origin.1,
+                "snapshot must translate by exactly one physical pixel per step"
+            );
+        }
     }
 
     #[test]

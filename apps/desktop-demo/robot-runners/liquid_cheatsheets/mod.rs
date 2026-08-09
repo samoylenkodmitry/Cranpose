@@ -13,11 +13,11 @@ mod x11_helpers;
 
 use anyhow::{bail, Context, Result};
 use capture::{
-    capture_x11_keyframes, capture_x11_static_keyframe, compose_comparison, ActualTiming,
-    CaptureRequest, ComparisonGrid, Crop, Keyframe,
+    capture_x11_keyframes, capture_x11_static_keyframe, compose_comparison,
+    save_exact_robot_keyframe_crops, ActualTiming, CaptureRequest, ComparisonGrid, Crop, Keyframe,
 };
 use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box, BoxSpec, Text};
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use cranpose::{AppLauncher, Color, Modifier, RobotTimelineAction, RobotTimelineStep, Size};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
 use desktop_app::app;
@@ -32,6 +32,7 @@ const TEXT_FIELD_Y: f32 = 170.0;
 const TEXT_FIELD_WIDTH: f32 = 420.0;
 const TEXT_CONTENT: &str =
     "Silence. Melody. Then beats. Subtle electronic beats goaantra trance pp ulsy catching melody";
+const IOS_FORM_REFERENCE_SCALE: f32 = 3.0;
 
 type Bounds = (f32, f32, f32, f32);
 
@@ -170,6 +171,7 @@ fn run_liquid_case(case: Case, output: PathBuf) -> Result<()> {
         .with_size(LIQUID_WINDOW_SIZE.0 as u32, LIQUID_WINDOW_SIZE.1 as u32)
         .with_fonts(desktop_app::fonts::DEMO_FONTS)
         .with_headless(false)
+        .with_robot_app_hook(move |name, argument| liquid_fixture_app_hook(case, name, argument))
         .with_test_driver(move |robot| {
             settle(&robot, 900);
             let window_id = x11_helpers::find_window_id(&driver_title);
@@ -194,6 +196,24 @@ fn run_liquid_case(case: Case, output: PathBuf) -> Result<()> {
         .try_run(move || app::LiquidReferenceFixture(fixture_case))
         .context("launch Liquid fixture")?;
     Ok(())
+}
+
+fn liquid_fixture_app_hook(
+    case: Case,
+    name: String,
+    argument: String,
+) -> std::result::Result<Option<String>, String> {
+    if case != Case::TabSwipe || name != "tab-swipe-page" {
+        return Err(format!(
+            "unsupported {} fixture app hook {name}({argument})",
+            case.slug()
+        ));
+    }
+    let page = argument
+        .parse::<usize>()
+        .map_err(|error| format!("parse tab-swipe reference page: {error}"))?;
+    app::set_tab_swipe_reference_page(page)?;
+    Ok(None)
 }
 
 fn liquid_fixture_case(case: Case) -> Result<app::LiquidReferenceFixtureCase> {
@@ -341,54 +361,186 @@ fn capture_menu_open(
 
 fn capture_tab_swipe(
     robot: &cranpose::Robot,
-    window_id: &str,
+    _window_id: &str,
     output: &Path,
 ) -> Result<Vec<PathBuf>> {
     let discover = find_button(robot, "Discover")?;
     let account = find_button(robot, "Account")?;
     let (start_x, y) = center(discover);
     let (end_x, _) = center(account);
-    let keyframes = source_keyframes(14_400, &[0, 267, 533, 800, 1_067, 1_333, 1_600, 1_867]);
-    capture_x11_keyframes(
-        robot,
-        capture_request(
-            window_id,
-            output,
-            LIQUID_WINDOW_SIZE,
-            crop_within(
-                Crop {
-                    x: (LIQUID_WINDOW_SIZE.0 - 440.0) * 0.5,
-                    y: (LIQUID_WINDOW_SIZE.1 - 132.0) * 0.5,
-                    width: 440.0,
-                    height: 132.0,
-                },
-                LIQUID_WINDOW_SIZE,
-            ),
-            Duration::from_millis(2_050),
-            &keyframes,
-        ),
-        move |robot| {
-            robot
-                .click(start_x, y)
-                .context("arm tab backdrop timeline")?;
-            robot.mouse_move(start_x, y).context("hover Discover")?;
-            robot.mouse_down().context("hold tab lens")?;
-            Ok(())
+    let tab_pitch = (end_x - start_x) / 3.0;
+    let mid_swipe_x = start_x + 1.65 * tab_pitch;
+    let wwdc_x = start_x + 2.0 * tab_pitch;
+    let initial_x = start_x + 0.55 * tab_pitch;
+    robot
+        .invoke_app_hook("tab-swipe-page", "0")
+        .context("pin initial tab-swipe backdrop page")?;
+    robot
+        .click(start_x, y)
+        .context("arm tab backdrop timeline")?;
+    let shots = capture_exact_tab_swipe(robot, y, start_x, initial_x, mid_swipe_x, end_x, wwdc_x)?;
+    let labels = TAB_SWIPE_CAPTURE_OFFSETS_MS
+        .iter()
+        .map(|offset| format!("{offset:06}ms-{}ms", 14_400 + offset))
+        .collect::<Vec<_>>();
+    let frames = save_exact_robot_keyframe_crops(
+        &shots,
+        output,
+        Crop {
+            x: (LIQUID_WINDOW_SIZE.0 - app::TAB_SWIPE_REFERENCE_STAGE_WIDTH) * 0.5,
+            y: (LIQUID_WINDOW_SIZE.1 - app::TAB_SWIPE_REFERENCE_STAGE_HEIGHT) * 0.5,
+            width: app::TAB_SWIPE_REFERENCE_STAGE_WIDTH,
+            height: app::TAB_SWIPE_REFERENCE_STAGE_HEIGHT,
         },
-        move |robot, epoch| {
-            for step in 1..=116 {
-                let at = step * 16;
-                epoch.sleep_until(at);
-                let progress = (at as f32 / 1_867.0).min(1.0);
-                robot
-                    .mouse_move(start_x + (end_x - start_x) * progress, y)
-                    .context("drag tab lens")?;
-            }
-            epoch.sleep_until(1_900);
-            robot.mouse_up().context("release tab lens")?;
-            Ok(())
-        },
-    )
+        &labels,
+    )?;
+
+    Ok(frames)
+}
+
+const TAB_SWIPE_CAPTURE_OFFSETS_MS: [u64; 8] = [0, 267, 533, 800, 1_067, 1_333, 1_600, 1_867];
+const TAB_SWIPE_REVERSAL_START_MS: u64 = 1_767;
+const TAB_SWIPE_REVERSAL_END_MS: u64 = 1_867;
+fn tab_swipe_segment_position(at_ms: u64, from_ms: u64, to_ms: u64, from_x: f32, to_x: f32) -> f32 {
+    let progress =
+        (at_ms.saturating_sub(from_ms) as f32 / (to_ms - from_ms).max(1) as f32).clamp(0.0, 1.0);
+    let eased = progress * progress * (3.0 - 2.0 * progress);
+    from_x + (to_x - from_x) * eased
+}
+
+fn exact_pointer_segment_times(duration_ms: u64) -> Vec<u64> {
+    let mut samples = Vec::new();
+    let mut at = 16;
+    while at < duration_ms {
+        samples.push(at);
+        at += 16;
+    }
+    if duration_ms > 0 {
+        samples.push(duration_ms);
+    }
+    samples
+}
+
+fn tab_swipe_linear_position(at_ms: u64, from_ms: u64, to_ms: u64, from_x: f32, to_x: f32) -> f32 {
+    let progress =
+        (at_ms.saturating_sub(from_ms) as f32 / (to_ms - from_ms).max(1) as f32).clamp(0.0, 1.0);
+    from_x + (to_x - from_x) * progress
+}
+
+fn tab_swipe_pointer_position(
+    at_ms: u64,
+    initial_x: f32,
+    mid_x: f32,
+    account_x: f32,
+    wwdc_x: f32,
+) -> Option<f32> {
+    match at_ms {
+        1..=267 => Some(tab_swipe_segment_position(at_ms, 0, 267, initial_x, mid_x)),
+        268..=650 => Some(tab_swipe_segment_position(
+            at_ms, 267, 650, mid_x, account_x,
+        )),
+        TAB_SWIPE_REVERSAL_START_MS..=TAB_SWIPE_REVERSAL_END_MS => Some(tab_swipe_linear_position(
+            at_ms,
+            TAB_SWIPE_REVERSAL_START_MS,
+            TAB_SWIPE_REVERSAL_END_MS,
+            account_x,
+            wwdc_x,
+        )),
+        _ => None,
+    }
+}
+
+fn tab_swipe_exact_timeline() -> Vec<u64> {
+    let mut times = std::collections::BTreeSet::from(TAB_SWIPE_CAPTURE_OFFSETS_MS);
+    for (start, end) in [
+        (0, 267),
+        (267, 650),
+        (TAB_SWIPE_REVERSAL_START_MS, TAB_SWIPE_REVERSAL_END_MS),
+    ] {
+        let mut at = start + 16;
+        while at < end {
+            times.insert(at);
+            at += 16;
+        }
+        times.insert(end);
+    }
+    times.extend([850, 1_660, TAB_SWIPE_REVERSAL_START_MS]);
+    times.into_iter().collect()
+}
+
+fn capture_exact_tab_swipe(
+    robot: &cranpose::Robot,
+    y: f32,
+    start_x: f32,
+    initial_x: f32,
+    mid_x: f32,
+    account_x: f32,
+    wwdc_x: f32,
+) -> Result<Vec<cranpose::RobotScreenshot>> {
+    let mut steps = vec![RobotTimelineStep {
+        advance_ms: 0.0,
+        actions: vec![
+            RobotTimelineAction::MoveTo { x: start_x, y },
+            RobotTimelineAction::MouseDown,
+        ],
+        capture: false,
+    }];
+    let mut previous_ms = 0;
+    for at_ms in exact_pointer_segment_times(160) {
+        steps.push(RobotTimelineStep {
+            advance_ms: (at_ms - previous_ms) as f32,
+            actions: vec![RobotTimelineAction::MoveTo {
+                x: tab_swipe_linear_position(at_ms, 0, 160, start_x, initial_x),
+                y,
+            }],
+            capture: false,
+        });
+        previous_ms = at_ms;
+    }
+    previous_ms = 0;
+    for at_ms in tab_swipe_exact_timeline() {
+        let advance_ms = at_ms - previous_ms;
+        previous_ms = at_ms;
+        let mut actions = Vec::new();
+        if at_ms == 850 {
+            actions.push(RobotTimelineAction::MouseUp);
+            actions.push(RobotTimelineAction::InvokeAppHook {
+                name: "tab-swipe-page".to_string(),
+                argument: "2".to_string(),
+            });
+        } else if at_ms == 1_660 {
+            actions.push(RobotTimelineAction::InvokeAppHook {
+                name: "tab-swipe-page".to_string(),
+                argument: "3".to_string(),
+            });
+            actions.push(RobotTimelineAction::MoveTo { x: account_x, y });
+            actions.push(RobotTimelineAction::MouseDown);
+        }
+        if let Some(x) = tab_swipe_pointer_position(at_ms, initial_x, mid_x, account_x, wwdc_x) {
+            actions.push(RobotTimelineAction::MoveTo { x, y });
+        }
+        steps.push(RobotTimelineStep {
+            advance_ms: advance_ms as f32,
+            actions,
+            capture: TAB_SWIPE_CAPTURE_OFFSETS_MS.contains(&at_ms),
+        });
+    }
+    steps.push(RobotTimelineStep {
+        advance_ms: (1_930 - previous_ms) as f32,
+        actions: vec![RobotTimelineAction::MouseUp],
+        capture: false,
+    });
+    let shots = robot
+        .capture_interaction_keyframes(IOS_FORM_REFERENCE_SCALE, &steps)
+        .context("capture atomic exact-clock tab-swipe interaction")?;
+    if shots.len() != TAB_SWIPE_CAPTURE_OFFSETS_MS.len() {
+        bail!(
+            "exact tab swipe captured {} frames, expected {}",
+            shots.len(),
+            TAB_SWIPE_CAPTURE_OFFSETS_MS.len()
+        );
+    }
+    Ok(shots)
 }
 
 fn capture_segmented(
@@ -1177,4 +1329,56 @@ fn TextSelectionFixture() {
             );
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_tab_swipe_timeline_contains_every_reference_frame_once() {
+        let timeline = tab_swipe_exact_timeline();
+        assert!(timeline.windows(2).all(|pair| pair[0] < pair[1]));
+        for capture in TAB_SWIPE_CAPTURE_OFFSETS_MS {
+            assert_eq!(timeline.iter().filter(|time| **time == capture).count(), 1);
+        }
+        assert!(timeline.contains(&850));
+        assert!(timeline.contains(&1_660));
+        assert!(timeline.contains(&TAB_SWIPE_REVERSAL_END_MS));
+    }
+
+    #[test]
+    fn exact_tab_swipe_trajectory_preserves_speed_and_reversal_phases() {
+        let initial = 0.55;
+        let mid = 1.65;
+        let account = 3.0;
+        let wwdc = 2.0;
+        let launch =
+            tab_swipe_pointer_position(16, initial, mid, account, wwdc).expect("launch position");
+        let cruise =
+            tab_swipe_pointer_position(267, initial, mid, account, wwdc).expect("cruise position");
+        let arrival =
+            tab_swipe_pointer_position(650, initial, mid, account, wwdc).expect("arrival position");
+        let reversal = tab_swipe_pointer_position(1_817, initial, mid, account, wwdc)
+            .expect("reversal position");
+        assert!(initial < launch && launch < cruise && cruise < arrival);
+        assert_eq!(arrival, account);
+        assert!(wwdc < reversal && reversal < account);
+        assert_eq!(
+            tab_swipe_pointer_position(TAB_SWIPE_REVERSAL_END_MS, initial, mid, account, wwdc,),
+            Some(wwdc)
+        );
+    }
+
+    #[test]
+    fn exact_tab_swipe_preroll_has_real_pointer_cadence_before_frame_zero() {
+        let samples = exact_pointer_segment_times(160);
+        assert_eq!(samples.first(), Some(&16));
+        assert_eq!(samples.last(), Some(&160));
+        assert!(samples.windows(2).all(|pair| pair[1] - pair[0] <= 16));
+        assert!(samples.len() >= 10);
+        let previous = tab_swipe_linear_position(144, 0, 160, 0.0, 100.0);
+        let terminal = tab_swipe_linear_position(160, 0, 160, 0.0, 100.0);
+        assert_eq!(terminal - previous, 10.0);
+    }
 }

@@ -480,3 +480,67 @@ Compounding wasters from the same session, now protocol:
   is in the file before writing.
 - Byte-diff two captures before reasoning about any knob's effect; never
   trust "looks identical" at small scales.
+
+## Remote validation directories must be source-exact (2026-08-01)
+
+Copying only `git ls-files` into a reused remote checkout leaves untracked
+source files behind. `run_robot_test.sh` discovers every Rust runner in
+`apps/desktop-demo/robot-runners`, so three runners from an earlier checkout
+silently expanded a 140-test suite to 143 and produced a failure that could
+not exist in the local tree. Matching hashes for tracked files does not catch
+this condition.
+
+Create a fresh remote source directory or compare its source-file inventory
+against `git ls-files` before validation. Preserve the prior directory under
+an `_old` name when cleanup is needed. Reuse expensive build artifacts through
+an explicit target directory, not by reusing an unaudited source tree.
+Do not combine an excluded `target` directory with `rsync --delete-excluded`:
+that option deletes the build cache it appears to protect. A fresh source tree
+with an explicit shared target directory makes source cleanup and artifact
+retention independent.
+
+When syncing several files from different source directories, never give one
+directory destination to a single `rsync` invocation. Basename placement can
+create a plausible stray `mod.rs` or module source in the wrong directory and
+invalidate the remote build. Sync each file to its exact destination path, then
+compare the remote source inventory before the expensive command.
+
+## Score the exact cheatsheet tile, not a visually similar raw crop (2026-08-02)
+
+The Liquid cheatsheet target sheets contain registered image bands, labels,
+and grid gutters. A manually cropped frame from a nearby raw gesture strip
+looked identical at normal zoom but placed the selected artwork eight pixels
+lower than the tile consumed by `extract_reference_tiles`. Tuning against that
+crop made the correct content placement measurably worse.
+
+For RMSE work, extract the exact tile from the checked-in target sheet with the
+same band/column registration as the robot contract, then normalize the actual
+frame with the same dimensions and filter. Confirm the two candidate target
+images by pixel comparison before interpreting geometry or content offsets.
+
+## Native point-grid mismatches masquerade as material errors (2026-08-02)
+
+The bottom-bar form runner registered two states from `tab_center - 70dp` and
+two from the exact stage bounds. This introduced a repeatable 4–6 physical-px
+shift at 3× and kept the sharp component score near 0.20 despite close-looking
+material. The tab-swipe fixture separately declared a 132dp stage for a
+1320×400 reference, producing a 1320×396 capture that was silently resized.
+Always derive capture bounds from one semantic stage owner and express odd
+native dimensions as physical-pixel ratios (`400.0 / 3.0`), then assert output
+dimensions before tuning optics.
+
+A zero-valued correction is not necessarily a no-op in a modifier-based layout
+engine. Installing `.offset(0, 0)` for every tab changed raster rounding enough
+to move a strict transfer RMSE across its gate. Optional optical corrections
+must omit their modifier node when they are exactly neutral; numeric equality
+inside an installed node does not guarantee structural or pixel equality.
+
+## Visible shader contracts need a production presentation path (2026-08-09)
+
+Bare `xvfb-run` creates a 640×480 display with roughly 30 Hz presentation on
+this host. External shader drag, animation, and performance contracts can fail
+there even when the renderer is correct because the demo window is clipped and
+the expected presented-frame cadence is unavailable. Use the real X11 display
+for production visual contracts. If isolation is necessary, explicitly create
+an adequately sized Xvfb screen such as `-screen 0 1920x1080x24`, and do not use
+its timing as production-performance evidence.
