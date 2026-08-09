@@ -1358,6 +1358,12 @@ fn workspace_ffi_boundaries_are_explicit() {
         // unsafe code and opts these back in by name.
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
+        // The renderer's fixed frame worker pool: lending frame-local borrows
+        // to persistent parked workers cannot be expressed safely in std (the
+        // problem rayon exists for). The unsafety is two pointer wrappers
+        // whose invariants the pool's completion barrier enforces; the crate
+        // root denies unsafe code and opts this one module back in by name.
+        "crates/cranpose-render/wgpu/src/worker_pool.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

@@ -154,6 +154,35 @@ fn wrap_angle_tau(x: f32) -> f32 {
     }
 }
 
+/// `(sin, cos)` by refined parabola, absolute error under [`FAST_TRIG_ERR`].
+/// Bounding boxes only need trig that is close — the box gets padded by the
+/// worst-case position error afterwards — and libm's `sincosf`, called twice
+/// per partial arc, was one of the larger single costs of recording a
+/// shape-heavy frame on a watch-class core.
+#[inline]
+fn fast_sin_cos(angle: f32) -> (f32, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    #[inline]
+    fn fold_sin(x: f32) -> f32 {
+        const B: f32 = 4.0 / PI;
+        const C: f32 = -4.0 / (PI * PI);
+        let y = B * x + C * x * x.abs();
+        0.225 * (y * y.abs() - y) + y
+    }
+    let x = wrap_angle_tau(angle);
+    let x = if x > PI { x - TAU } else { x };
+    let mut c = x + FRAC_PI_2;
+    if c > PI {
+        c -= TAU;
+    }
+    (fold_sin(x), fold_sin(c))
+}
+
+/// Worst-case absolute error of [`fast_sin_cos`]; bounds derived from it are
+/// padded by radius x this so the approximate box always contains the exact
+/// shape.
+const FAST_TRIG_ERR: f32 = 1.3e-3;
+
 impl ArcGeometry {
     /// Normalizing constructor. Never panics and never stores a NaN.
     pub fn new(
@@ -307,7 +336,7 @@ impl ArcGeometry {
         let end_angle = self.start_angle + self.sweep_angle;
 
         for (angle, outward) in [(self.start_angle, -1.0f32), (end_angle, 1.0f32)] {
-            let (sin, cos) = angle.sin_cos();
+            let (sin, cos) = fast_sin_cos(angle);
             match self.cap {
                 StrokeCap::Butt => {
                     include(
@@ -356,11 +385,18 @@ impl ArcGeometry {
             }
         }
 
+        // The endpoint positions above came from approximate trig; grow the
+        // box by their worst-case error (sub-pixel at any plausible radius)
+        // so it still contains the exact shape. Square caps project rb along
+        // an approximate tangent on top of the radial term, hence the sum;
+        // the absolute floor keeps the containment margin real for tiny
+        // radii where f32 rounding competes with the scaled term.
+        let pad = (self.outer_radius + rb) * FAST_TRIG_ERR + 0.02;
         Rect {
-            x: min_x,
-            y: min_y,
-            width: (max_x - min_x).max(0.0),
-            height: (max_y - min_y).max(0.0),
+            x: min_x - pad,
+            y: min_y - pad,
+            width: (max_x - min_x + pad + pad).max(0.0),
+            height: (max_y - min_y + pad + pad).max(0.0),
         }
     }
 }
@@ -414,8 +450,12 @@ mod tests {
     use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
 
+    /// Bounds are deliberately conservative now: endpoint trig is
+    /// approximate and the box is padded by its worst-case error, so
+    /// "hugs"/"tight" means within that documented slack, not within float
+    /// noise. The containment property test below is the strict guard.
     fn approx(a: f32, b: f32) -> bool {
-        (a - b).abs() < 1e-3
+        (a - b).abs() < 0.15
     }
 
     #[test]
@@ -483,6 +523,121 @@ mod tests {
             for value in [bounds.x, bounds.y, bounds.width, bounds.height] {
                 assert!(value.is_finite(), "degenerate arc bounds must stay finite");
             }
+        }
+    }
+
+    /// The strict contract of approximate bounds: the box must CONTAIN the
+    /// box the exact-trig algorithm produces, and must not exceed it by more
+    /// than the documented pad. Sweeps every cap, many radii and angles.
+    #[test]
+    fn approximate_bounds_contain_the_exact_box_within_documented_slack() {
+        for radius in [2.0f32, 10.0, 57.0, 204.0] {
+            for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+                for step in 0..48 {
+                    let start = step as f32 * (TAU / 48.0) * 1.031;
+                    for sweep in [0.05f32, 0.9, FRAC_PI_2, 3.6] {
+                        let arc = ArcGeometry::new(
+                            Point::new(11.0, -7.0),
+                            radius * 0.55,
+                            radius,
+                            start,
+                            sweep,
+                            cap,
+                        );
+                        if arc.is_degenerate() {
+                            continue;
+                        }
+                        let bounds = arc.bounds();
+                        let exact = exact_bounds(&arc);
+                        let slack =
+                            (arc.outer_radius + arc.half_thickness()) * FAST_TRIG_ERR * 2.0 + 0.05;
+                        assert!(
+                            bounds.x <= exact.x + 1e-3
+                                && bounds.y <= exact.y + 1e-3
+                                && bounds.x + bounds.width >= exact.x + exact.width - 1e-3
+                                && bounds.y + bounds.height >= exact.y + exact.height - 1e-3,
+                            "approximate box lost containment: {bounds:?} vs exact {exact:?} \
+                             (radius {radius}, start {start}, sweep {sweep}, cap {cap:?})"
+                        );
+                        assert!(
+                            (bounds.x - exact.x).abs() <= slack
+                                && (bounds.y - exact.y).abs() <= slack
+                                && (bounds.width - exact.width).abs() <= 2.0 * slack
+                                && (bounds.height - exact.height).abs() <= 2.0 * slack,
+                            "approximate box drifted past its slack: {bounds:?} vs exact \
+                             {exact:?} slack {slack} (radius {radius}, start {start}, sweep \
+                             {sweep}, cap {cap:?})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The pre-approximation bounds algorithm, verbatim, with libm trig.
+    fn exact_bounds(arc: &ArcGeometry) -> Rect {
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        let mut include = |x: f32, y: f32| {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        };
+        let rb = arc.half_thickness();
+        let ra = arc.mid_radius();
+        let end_angle = arc.start_angle + arc.sweep_angle;
+        for (angle, outward) in [(arc.start_angle, -1.0f32), (end_angle, 1.0f32)] {
+            let (sin, cos) = angle.sin_cos();
+            match arc.cap {
+                StrokeCap::Butt => {
+                    include(
+                        arc.center.x + cos * arc.inner_radius,
+                        arc.center.y + sin * arc.inner_radius,
+                    );
+                    include(
+                        arc.center.x + cos * arc.outer_radius,
+                        arc.center.y + sin * arc.outer_radius,
+                    );
+                }
+                StrokeCap::Square => {
+                    let tx = -sin * rb * outward;
+                    let ty = cos * rb * outward;
+                    include(
+                        arc.center.x + cos * arc.inner_radius + tx,
+                        arc.center.y + sin * arc.inner_radius + ty,
+                    );
+                    include(
+                        arc.center.x + cos * arc.outer_radius + tx,
+                        arc.center.y + sin * arc.outer_radius + ty,
+                    );
+                }
+                StrokeCap::Round => {
+                    let cx = arc.center.x + cos * ra;
+                    let cy = arc.center.y + sin * ra;
+                    include(cx - rb, cy - rb);
+                    include(cx + rb, cy + rb);
+                }
+            }
+        }
+        const AXIS_DIRECTIONS: [(f32, f32); 4] =
+            [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)];
+        for (quadrant, (sin, cos)) in AXIS_DIRECTIONS.into_iter().enumerate() {
+            let angle = quadrant as f32 * FRAC_PI_2;
+            if arc.contains_angle(angle) {
+                include(
+                    arc.center.x + cos * arc.outer_radius,
+                    arc.center.y + sin * arc.outer_radius,
+                );
+            }
+        }
+        Rect {
+            x: min_x,
+            y: min_y,
+            width: (max_x - min_x).max(0.0),
+            height: (max_y - min_y).max(0.0),
         }
     }
 
