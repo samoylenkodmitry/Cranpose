@@ -1006,31 +1006,8 @@ fn flush_shape_run_parallel(
         let mut scratch = scratch.borrow_mut();
         scratch.clear();
         scratch.resize_with(run.len(), || None);
-        let workers = crate::render::shape_convert_worker_count().max(1);
-        let chunk_len = run.len().div_ceil(workers);
-        std::thread::scope(|scope| {
-            let mut slots_rest = &mut scratch[..];
-            let mut entries_rest = &run[..];
-            while !entries_rest.is_empty() {
-                let count = chunk_len.min(entries_rest.len());
-                let (chunk_entries, rest) = entries_rest.split_at(count);
-                entries_rest = rest;
-                let (chunk_slots, rest) = std::mem::take(&mut slots_rest).split_at_mut(count);
-                slots_rest = rest;
-                let mut emit_chunk = move || {
-                    for (slot, entry) in chunk_slots.iter_mut().zip(chunk_entries) {
-                        *slot =
-                            emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion);
-                    }
-                };
-                if entries_rest.is_empty() {
-                    // The final chunk runs inline: the caller would only
-                    // block at the scope join anyway, so this saves a spawn.
-                    emit_chunk();
-                } else {
-                    scope.spawn(emit_chunk);
-                }
-            }
+        crate::worker_pool::frame_pool().map_into(run, &mut scratch, |entry| {
+            emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion)
         });
         for slot in scratch.iter_mut() {
             if let Some(params) = slot.take() {
@@ -1619,33 +1596,8 @@ fn build_replay_views<'r, 'e>(
 where
     'e: 'r,
 {
-    let workers = crate::render::shape_convert_worker_count().max(1);
-    if workers <= 1 || run.len() < MIN_REPLAY_RUN_ENTRIES {
-        return run.iter().map(replay_entry_view).collect();
-    }
     let mut views: Vec<Option<(SnapshotShape, &Brush)>> = vec![None; run.len()];
-    let chunk_len = run.len().div_ceil(workers);
-    std::thread::scope(|scope| {
-        let mut slots_rest = &mut views[..];
-        let mut entries_rest = run;
-        while !entries_rest.is_empty() {
-            let count = chunk_len.min(entries_rest.len());
-            let (chunk_entries, rest) = entries_rest.split_at(count);
-            entries_rest = rest;
-            let (chunk_slots, rest) = std::mem::take(&mut slots_rest).split_at_mut(count);
-            slots_rest = rest;
-            let mut job = move || {
-                for (slot, entry) in chunk_slots.iter_mut().zip(chunk_entries) {
-                    *slot = replay_entry_view(entry);
-                }
-            };
-            if entries_rest.is_empty() {
-                job();
-            } else {
-                scope.spawn(job);
-            }
-        }
-    });
+    crate::worker_pool::frame_pool().map_into(run, &mut views, replay_entry_view);
     views
 }
 
@@ -1765,37 +1717,14 @@ fn pre_verify_segments(
         .collect();
     let mut verdicts: Vec<Option<PreVerdict>> = Vec::new();
     verdicts.resize_with(segments.len(), || None);
-    let workers = crate::render::shape_convert_worker_count().max(1);
-    if workers <= 1 || jobs.len() <= 1 {
-        for &(i, candidate, t) in &jobs {
-            verdicts[i] = Some(verify_segment_body(&segments[i], views, candidate, t, center));
-        }
-        return verdicts;
-    }
     let mut job_results: Vec<Option<PreVerdict>> = Vec::new();
     job_results.resize_with(jobs.len(), || None);
-    let chunk_len = jobs.len().div_ceil(workers);
-    std::thread::scope(|scope| {
-        let mut results_rest = &mut job_results[..];
-        let mut jobs_rest = &jobs[..];
-        while !jobs_rest.is_empty() {
-            let count = chunk_len.min(jobs_rest.len());
-            let (chunk_jobs, rest) = jobs_rest.split_at(count);
-            jobs_rest = rest;
-            let (chunk_results, rest) = std::mem::take(&mut results_rest).split_at_mut(count);
-            results_rest = rest;
-            let mut job = move || {
-                for (slot, &(i, candidate, t)) in chunk_results.iter_mut().zip(chunk_jobs) {
-                    *slot = Some(verify_segment_body(&segments[i], views, candidate, t, center));
-                }
-            };
-            if jobs_rest.is_empty() {
-                job();
-            } else {
-                scope.spawn(job);
-            }
-        }
-    });
+    crate::worker_pool::frame_pool().map_into_min(
+        &jobs,
+        &mut job_results,
+        2,
+        |&(i, candidate, t)| Some(verify_segment_body(&segments[i], views, candidate, t, center)),
+    );
     for (&(i, _, _), result) in jobs.iter().zip(job_results) {
         verdicts[i] = result;
     }
