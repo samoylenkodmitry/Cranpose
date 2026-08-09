@@ -1,9 +1,12 @@
 //! The fail-closed command feed and live bypass contract (sol's
 //! correctness gates): a bypassed span — empty primitive range, skipped at
 //! materialization because the renderer confirmed it holds the slot — must
-//! NEVER be silently omitted from drawing. Feed disable, renderer
-//! replacement, and recording loss must all end in either a full
-//! rematerialization or a loud, counted, self-healing terminal.
+//! NEVER be silently omitted from drawing. The frame OWNS a pinned handle
+//! to the exact fallback recording it was built from, so feed disable,
+//! renderer replacement, and even total ambient-registry loss all end in a
+//! full same-frame rematerialization; the miss terminal is structurally
+//! unreachable and survives only as a loud, counted, self-healing defense
+//! against artificially orphaned frames.
 //!
 //! Same-position-control discipline (documented in `command_feed_parity`):
 //! renders are only ever compared against renders taken from equivalent
@@ -21,8 +24,7 @@ use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_render_common::style_shared::DrawPlacement;
 use cranpose_render_common::Renderer;
 use cranpose_ui_graphics::{
-    Brush, Color, CommandRecording, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer,
-    Point, Rect,
+    Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
 };
 
 const SIZE: u32 = 408;
@@ -143,54 +145,42 @@ fn command_for(node_id: usize) -> DrawCommandId {
 }
 
 /// Records every frame through one live `CommandReplayState`, exactly as
-/// the scene builder's verifier would, returning each frame's graph AND its
-/// recording — the recording a production build would leave in the registry
-/// for that frame, which `render_sequence` republishes before rendering the
-/// frame so `materialize_command_span` sees frame-consistent tape ranges.
-fn build_sequence(
-    node_id: usize,
-    bypass: &mut dyn FnMut(u32) -> bool,
-) -> (Vec<RenderGraph>, Vec<CommandRecording>) {
+/// the scene builder's verifier would, returning each frame's graph. Each
+/// replay frame owns a pinned handle to the exact recording it was built
+/// from (`fallback`), exactly as production attaches the published handle
+/// in `draw_nodes` — the frame's ONLY rematerialization source; rendering
+/// never consults the ambient registry.
+fn build_sequence(node_id: usize, bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = command_for(node_id);
     let mut graphs = Vec::with_capacity(FRAMES);
-    let mut recordings = Vec::with_capacity(FRAMES);
     for frame in 0..FRAMES {
         let scope = record_frame(frame);
         let outcome = state.advance(scope.recorded());
         let center = state.center();
         let (finished, replay) = scope.finish_replay(center, outcome, bypass);
-        recordings.push(finished.recording.clone());
+        let fallback = std::rc::Rc::new(finished.recording);
+        let replay = replay.map(|mut frame| {
+            frame.fallback = Some(fallback);
+            Box::new(frame)
+        });
         graphs.push(graph_for(vec![RenderNode::DrawRun(
             DrawRunNode::for_command_replayed(
                 PrimitivePhase::BeforeChildren,
                 Some(command),
                 std::rc::Rc::new(finished.primitives),
-                replay.map(Box::new),
+                replay,
             ),
         )]));
     }
-    (graphs, recordings)
+    graphs
 }
 
-/// Renders the sequence, republishing each frame's recording under the
-/// command first — the production invariant that the recording in the
-/// registry is the one the frame being rendered was built from.
-fn render_sequence(
-    renderer: &mut support::LockedRenderer,
-    command: DrawCommandId,
-    graphs: &[RenderGraph],
-    recordings: &[CommandRecording],
-) -> Vec<Vec<u8>> {
+fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph]) -> Vec<Vec<u8>> {
     graphs
         .iter()
-        .zip(recordings)
         .enumerate()
-        .map(|(frame, (graph, recording))| {
-            cranpose_render_common::scene_builder::publish_command_recording_for_tests(
-                command,
-                recording.clone(),
-            );
+        .map(|(frame, graph)| {
             renderer.scene_mut().graph = Some(graph.clone());
             let captured = renderer
                 .capture_frame(SIZE, SIZE)
@@ -288,13 +278,10 @@ fn declare_current_epoch() {
 /// Builds the bypassed sequence against live confirmations and asserts the
 /// bypass actually engaged (materialization halved), so the fail-closed
 /// assertions that follow are not vacuous.
-fn build_bypassed_sequence(
-    node_id: usize,
-    full_primitives: usize,
-) -> (Vec<RenderGraph>, Vec<CommandRecording>) {
+fn build_bypassed_sequence(node_id: usize, full_primitives: usize) -> Vec<RenderGraph> {
     declare_current_epoch();
     let command = command_for(node_id);
-    let (graphs, recordings) = build_sequence(node_id, &mut |slot| {
+    let graphs = build_sequence(node_id, &mut |slot| {
         cranpose_render_common::scene_builder::retained_slot_confirmed(command, slot)
     });
     let bypassed_primitives = run_primitives(&graphs);
@@ -303,7 +290,7 @@ fn build_bypassed_sequence(
         "confirmed slots should have bypassed materialization \
          ({bypassed_primitives} of {full_primitives} still materialized)"
     );
-    (graphs, recordings)
+    graphs
 }
 
 /// T2: graphs built WITH bypass (confirmations live) must render complete
@@ -322,13 +309,11 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     std::env::set_var("CRANPOSE_ARC_MESH", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
     std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
-    let command = command_for(31);
 
     // Warm: captures land and slots are confirmed.
-    let (graphs, recordings) = build_sequence(31, &mut |_| false);
-    let _ = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let (bypassed_graphs, bypassed_recordings) =
-        build_bypassed_sequence(31, run_primitives(&graphs));
+    let graphs = build_sequence(31, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let bypassed_graphs = build_bypassed_sequence(31, run_primitives(&graphs));
 
     // Flip the feed (and the flat detector) off: from here both passes are
     // deterministic CPU emission with no retention state at all. One warm
@@ -336,14 +321,9 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     // discipline, see `command_feed_parity`) before anything is compared.
     std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
-    let _ = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let control = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let rematerialized = render_sequence(
-        &mut renderer,
-        command,
-        &bypassed_graphs,
-        &bypassed_recordings,
-    );
+    let _ = render_sequence(&mut renderer, &graphs);
+    let control = render_sequence(&mut renderer, &graphs);
+    let rematerialized = render_sequence(&mut renderer, &bypassed_graphs);
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
     std::env::remove_var("CRANPOSE_ARC_MESH");
@@ -351,7 +331,7 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert_eq!(
         remat_misses, 0,
-        "every bypassed span must have rebuilt from its recording"
+        "every bypassed span must have rebuilt from its frame's own recording"
     );
     assert_byte_exact("feed-disabled-vs-control", &control, &rematerialized);
 }
@@ -375,10 +355,9 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
     let command = command_for(32);
 
-    let (graphs, recordings) = build_sequence(32, &mut |_| false);
-    let _ = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let (bypassed_graphs, bypassed_recordings) =
-        build_bypassed_sequence(32, run_primitives(&graphs));
+    let graphs = build_sequence(32, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let bypassed_graphs = build_bypassed_sequence(32, run_primitives(&graphs));
 
     // The swap: same replacement path Android's surface recreation takes.
     let generation_before = cranpose_render_wgpu::retained_feed_generation();
@@ -399,19 +378,15 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     }
 
     // The in-flight frame: a bypassed graph rendered on the NEW renderer
-    // without rebuilding. Every bypassed span must rematerialize from its
-    // recording — byte-identical to the pure ordinary pipeline.
+    // without rebuilding. Every bypassed span must rematerialize from the
+    // recording its frame owns — byte-identical to the pure ordinary
+    // pipeline.
     let last = FRAMES - 1;
-    let remat_frame = render_sequence(
-        &mut renderer,
-        command,
-        &bypassed_graphs[last..],
-        &bypassed_recordings[last..],
-    );
+    let remat_frame = render_sequence(&mut renderer, &bypassed_graphs[last..]);
     let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert_eq!(
         remat_misses, 0,
-        "recordings exist; no span may terminal-miss"
+        "the frames own their recordings; no span may terminal-miss"
     );
     // The remat frame is by definition a first-pass-at-position render (the
     // in-flight frame right after the swap), so it is compared under the
@@ -419,8 +394,7 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     // of the rematerialization walk from stable positions.
     std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
-    let ordinary_frame =
-        render_sequence(&mut renderer, command, &graphs[last..], &recordings[last..]);
+    let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
     assert_noise_only("swap-remat-vs-ordinary", &ordinary_frame, &remat_frame);
 
     // Heal: a full fed pass re-earns slots and confirmations on the new
@@ -428,64 +402,130 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     // same-position fed control.
     std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    let _ = render_sequence(
-        &mut renderer,
-        command,
-        &bypassed_graphs,
-        &bypassed_recordings,
-    );
+    let _ = render_sequence(&mut renderer, &bypassed_graphs);
     let (feed_slots, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert!(
         feed_slots >= 4,
         "the new renderer must have re-earned feed slots, got {feed_slots}"
     );
     assert_eq!(remat_misses, 0);
-    let (rebuilt_graphs, rebuilt_recordings) = build_bypassed_sequence(32, run_primitives(&graphs));
+    let rebuilt_graphs = build_bypassed_sequence(32, run_primitives(&graphs));
     // Same-position-control discipline: one warm pass, then the compared
     // control and bypassed passes render from stable renderer state.
-    let _ = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let control = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let rebuilt = render_sequence(&mut renderer, command, &rebuilt_graphs, &rebuilt_recordings);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let control = render_sequence(&mut renderer, &graphs);
+    let rebuilt = render_sequence(&mut renderer, &rebuilt_graphs);
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
     std::env::remove_var("CRANPOSE_ARC_MESH");
     assert_byte_exact("post-swap-rebuild-vs-control", &control, &rebuilt);
 }
 
-/// T4: a bypassed span whose recording AND retained buffer are both gone is
-/// the terminal: counted, revoked, and self-healing at the next build.
+/// T4, reshaped to the categorical property the frame-owned fallback buys:
+/// destroying every AMBIENT rematerialization source — all registry
+/// recordings cleared AND the renderer (with every retained slot) replaced
+/// — no longer causes a miss at all. Every bypassed span rebuilds in the
+/// same frame from the recording its frame owns, and the frame renders
+/// complete.
 #[test]
-fn remat_miss_terminal_counts_revokes_and_self_heals() {
+fn registry_loss_no_longer_reaches_the_miss_terminal() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
-            eprintln!("skipping fail-closed remat-miss: headless WGPU init failed: {err}");
+            eprintln!("skipping fail-closed registry loss: headless WGPU init failed: {err}");
             return;
         }
     };
     std::env::set_var("CRANPOSE_ARC_MESH", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
     std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
-    let command = command_for(33);
 
-    let (graphs, recordings) = build_sequence(33, &mut |_| false);
-    let _ = render_sequence(&mut renderer, command, &graphs, &recordings);
-    let (bypassed_graphs, _) = build_bypassed_sequence(33, run_primitives(&graphs));
+    let graphs = build_sequence(33, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let bypassed_graphs = build_bypassed_sequence(33, run_primitives(&graphs));
 
-    // Kill both draw sources for the bypassed spans: the recordings and
-    // (via the swap) the retained slots.
+    // What used to drive the terminal: the ambient recordings and (via the
+    // swap) the retained slots are all gone. The frames' own handles are
+    // untouched by construction.
     cranpose_render_common::scene_builder::clear_command_recordings_for_tests();
     support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
 
     let last = FRAMES - 1;
-    renderer.scene_mut().graph = Some(bypassed_graphs[last].clone());
+    let remat_frame = render_sequence(&mut renderer, &bypassed_graphs[last..]);
+    let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
+    assert_eq!(
+        remat_misses, 0,
+        "the frame-owned fallback must serve every bypassed span; registry \
+         loss may no longer reach the terminal"
+    );
+
+    // Complete content: the pure ordinary pipeline is the reference. The
+    // remat frame is a first-pass-at-position render (right after the
+    // swap), so it is compared under the blending-noise envelope; T2 proves
+    // byte-exactness of the walk from stable positions.
+    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
+    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
+    std::env::remove_var("CRANPOSE_COMMAND_FEED");
+    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_ARC_MESH");
+    assert_noise_only("registry-loss-vs-ordinary", &ordinary_frame, &remat_frame);
+}
+
+/// T4's defensive remainder: the terminal itself, reachable only by
+/// artificially orphaning a frame (stripping the fallback the builder
+/// always attaches). It must stay loud, counted, revoking, and
+/// self-healing at the next build — the last line of defense behind the
+/// structural guarantee.
+#[test]
+fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping fail-closed orphaned frame: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
+    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    let command = command_for(35);
+
+    let graphs = build_sequence(35, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let bypassed_graphs = build_bypassed_sequence(35, run_primitives(&graphs));
+
+    // The artificial orphan: no frame the builder produces lacks its
+    // fallback, so construct the impossible state by hand, then kill the
+    // remaining draw sources (registry recordings, and the retained slots
+    // via the swap).
+    let last = FRAMES - 1;
+    let mut orphaned = bypassed_graphs[last].clone();
+    {
+        let RenderNode::DrawRun(run) = &mut orphaned.root.children[0] else {
+            panic!("expected draw run");
+        };
+        let frame = run
+            .replay
+            .as_mut()
+            .expect("the bypassed graph carries a replay frame");
+        assert!(
+            frame.fallback.is_some(),
+            "the build path must have attached the frame's fallback"
+        );
+        frame.fallback = None;
+    }
+    cranpose_render_common::scene_builder::clear_command_recordings_for_tests();
+    support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
+
+    renderer.scene_mut().graph = Some(orphaned);
     let missing_frame = renderer
         .capture_frame(SIZE, SIZE)
         .expect("the terminal must not panic or fail the frame");
     let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert!(
         remat_misses > 0,
-        "clearing recordings must drive bypassed spans into the miss terminal"
+        "an orphaned frame's bypassed spans must reach the miss terminal"
     );
     declare_current_epoch();
     for slot in 0..32 {
@@ -501,8 +541,8 @@ fn remat_miss_terminal_counts_revokes_and_self_heals() {
     // pass absorbs the pass-position transition before comparing.
     std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
-    let _ = render_sequence(&mut renderer, command, &graphs[last..], &recordings[last..]);
-    let control = render_sequence(&mut renderer, command, &graphs[last..], &recordings[last..]);
+    let _ = render_sequence(&mut renderer, &graphs[last..]);
+    let control = render_sequence(&mut renderer, &graphs[last..]);
     // Missing rings put many channels far beyond blending noise (≤2/255).
     let missing_differs = channels_differing_over(&control[0], &missing_frame.pixels, 60);
     assert!(
@@ -510,7 +550,7 @@ fn remat_miss_terminal_counts_revokes_and_self_heals() {
         "the miss frame should visibly lack the bypassed rings \
          ({missing_differs} channels differ by more than 60)"
     );
-    let (healed_graphs, healed_recordings) = build_sequence(33, &mut |slot| {
+    let healed_graphs = build_sequence(35, &mut |slot| {
         cranpose_render_common::scene_builder::retained_slot_confirmed(command, slot)
     });
     assert_eq!(
@@ -518,12 +558,7 @@ fn remat_miss_terminal_counts_revokes_and_self_heals() {
         run_primitives(&graphs),
         "with every confirmation revoked the next build must materialize fully"
     );
-    let healed = render_sequence(
-        &mut renderer,
-        command,
-        &healed_graphs[last..],
-        &healed_recordings[last..],
-    );
+    let healed = render_sequence(&mut renderer, &healed_graphs[last..]);
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
     std::env::remove_var("CRANPOSE_ARC_MESH");

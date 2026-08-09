@@ -2192,16 +2192,13 @@ fn try_command_feed<'a>(
                             context,
                             motion,
                         );
-                    } else if let Some(primitives) =
-                        cranpose_render_common::scene_builder::materialize_command_span(
-                            command,
-                            tape_range.0 as usize,
-                            tape_range.1 as usize,
-                        )
-                    {
+                    } else if let Some(primitives) = frame.fallback.as_ref().and_then(|recording| {
+                        recording.materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+                    }) {
                         // Bypassed span whose retained buffer went away this
-                        // frame: rebuild its primitives from the command's
-                        // surviving recording.
+                        // frame: rebuild its primitives from the recording
+                        // the frame itself owns — never from the ambient
+                        // registry, whose contents may have moved on.
                         stat_remat += 1;
                         emit_feed_range(local_scene, &primitives, context, motion);
                     } else {
@@ -2236,8 +2233,9 @@ fn try_command_feed<'a>(
 /// the historical fallback, kept bit-identical. A frame that DID bypass
 /// materialization returns `true` after emitting every span in order
 /// itself: spans with primitives ordinarily, bypassed spans rebuilt from
-/// their command's surviving recording, with the remat-miss terminal
-/// ([`note_remat_miss`]) on any span that cannot be rebuilt.
+/// the recording the frame itself owns (`frame.fallback`), with the
+/// defensive terminal ([`note_remat_miss`]) on any span that cannot be
+/// rebuilt.
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_unserved_frame_rematerialized<'a>(
     local_scene: &mut CompositorScene,
@@ -2302,11 +2300,9 @@ fn emit_unserved_frame_rematerialized<'a>(
         let Some((slot, tape_range)) = bypassed_slot else {
             continue;
         };
-        if let Some(primitives) = cranpose_render_common::scene_builder::materialize_command_span(
-            command,
-            tape_range.0 as usize,
-            tape_range.1 as usize,
-        ) {
+        if let Some(primitives) = frame.fallback.as_ref().and_then(|recording| {
+            recording.materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+        }) {
             emit_feed_range(local_scene, &primitives, context, motion);
         } else {
             note_remat_miss(command, slot);
@@ -2320,13 +2316,18 @@ fn emit_unserved_frame_rematerialized<'a>(
     true
 }
 
-/// The fail-closed terminal for a bypassed span that could neither draw
-/// retained nor rebuild from its command's recording: nothing exists to
-/// draw it this frame, so make the omission loud, counted, and bounded.
-/// Revoking the confirmation makes the very next graph build materialize
-/// the span again — the earliest self-heal point reachable from here, as
-/// scene collection has no frame-invalidation hook to request an early
-/// rebuild; on animating scenes that bound is the next frame.
+/// The defensive terminal for a bypassed span that could neither draw
+/// retained nor rebuild: structurally unreachable for any frame the
+/// builder produced, because every such frame owns a pinned handle to the
+/// exact recording its spans address (`frame.fallback`) and
+/// `materialize_range` on it cannot fail for the ranges the same recording
+/// produced. Reaching this means a hand-built frame without its fallback
+/// or a corrupt tape range — so keep the omission loud, counted, and
+/// bounded. Revoking the confirmation makes the very next graph build
+/// materialize the span again — the earliest self-heal point reachable
+/// from here, as scene collection has no frame-invalidation hook to
+/// request an early rebuild; on animating scenes that bound is the next
+/// frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn note_remat_miss(command: cranpose_render_common::graph::DrawCommandId, slot: u32) {
     cranpose_render_common::scene_builder::revoke_retained_slot(command, slot);

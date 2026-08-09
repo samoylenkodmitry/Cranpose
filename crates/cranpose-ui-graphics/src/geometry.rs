@@ -960,6 +960,14 @@ impl CommandRecording {
         self.tape.is_empty()
     }
 
+    /// Test support: the identity of the tape's allocation, so buffer-reuse
+    /// tests can assert that re-recording ping-pongs between the same two
+    /// allocations instead of growing fresh ones every frame.
+    #[doc(hidden)]
+    pub fn tape_ptr(&self) -> *const u8 {
+        self.tape.as_ptr() as *const u8
+    }
+
     fn clear(&mut self) {
         self.tape.clear();
         self.rects.clear();
@@ -1345,10 +1353,18 @@ impl DrawScopeDefault {
         // Deliberately NOT cleared: the typed stores must survive until the
         // renderer has drawn this frame, so a bypassed span that cannot be
         // drawn retained (context drift, op cap) can still be materialized
-        // on demand from the recording. The next recording's scope clears
-        // the buffers on construction anyway.
+        // on demand from the recording — which the consumer publishes and
+        // pins to the frame as its owned `fallback`. The next recording's
+        // scope clears the buffers on construction anyway.
         note_recorded_primitive_count(self.size, tape_len);
-        let frame = any_retained.then_some(CommandReplayFrame { center, spans });
+        // `fallback` is attached by the consumer once the recording is
+        // published under its shared handle — the recording is still owned
+        // by value here.
+        let frame = any_retained.then_some(CommandReplayFrame {
+            center,
+            spans,
+            fallback: None,
+        });
         (
             FinishedRecording {
                 primitives: out,

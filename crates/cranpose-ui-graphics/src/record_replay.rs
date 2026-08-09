@@ -607,12 +607,35 @@ pub trait VerifyExecutor: Sync {
 /// A command's replay verdict translated into the space its consumers see:
 /// spans address the run's materialized primitive vector, not the record
 /// tape. This is what rides the render graph next to the primitives.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CommandReplayFrame {
     /// The similarity pivot every span transform rotates and scales about.
     pub center: Point,
     /// Interleaved retained/dynamic structure in exact z order.
     pub spans: Vec<FrameSpan>,
+    /// The frame-owned rematerialization source: the exact recording this
+    /// frame's spans address, pinned for the frame's lifetime. A bypassed
+    /// span (empty primitive range) that cannot draw retained materializes
+    /// its `tape_range` from HERE — never from a sweepable ambient registry,
+    /// whose contents may have moved on by render time. `None` only before
+    /// the recording is published (the builder attaches the published
+    /// handle) or on hand-built frames with nothing bypassed. Shared, not
+    /// cloned: the handle pins the recording buffers; the depth-one frame
+    /// packet will carry this same handle as an `Arc` when the graph goes
+    /// `Send`.
+    pub fallback: Option<std::rc::Rc<crate::geometry::CommandRecording>>,
+}
+
+impl PartialEq for CommandReplayFrame {
+    fn eq(&self, other: &Self) -> bool {
+        self.center == other.center
+            && self.spans == other.spans
+            && match (&self.fallback, &other.fallback) {
+                (None, None) => true,
+                (Some(a), Some(b)) => std::rc::Rc::ptr_eq(a, b),
+                _ => false,
+            }
+    }
 }
 
 /// One primitive-space span of a [`CommandReplayFrame`].

@@ -735,19 +735,25 @@ fn build_layer_node_from_data(
 }
 
 /// Reusable per-command recording buffers, keyed by the command's stable
-/// identity. The graph shares each recording (`Rc`) and still holds last
-/// frame's buffer while this frame records, so each command keeps two
-/// handles: the frame-before-last's is the free one, and steady-state
-/// re-recording ping-pongs between the two with no allocation. A handle a
-/// live graph node still shares is never written through — reuse requires
-/// sole ownership, checked at acquisition.
+/// identity. The graph shares each primitive vector AND each compact
+/// recording (`Rc`) and still holds last frame's buffers while this frame
+/// records, so each command keeps two of each: the frame-before-last's is
+/// the free one, and steady-state re-recording ping-pongs between the two
+/// with no buffer allocation. A handle a live graph node still shares is
+/// never written through — reuse requires sole ownership, checked at
+/// acquisition.
 struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
-    /// The command's compact recording buffers (tape + typed stores). Sole
-    /// owner is always the registry or the in-flight scope, never the graph,
-    /// so unlike `handles` these need no sharing discipline.
-    recording: cranpose_ui_graphics::CommandRecording,
+    /// The command's compact recording buffers (tape + typed stores), under
+    /// the same double-buffer discipline as `handles`: the graph frame owns
+    /// a handle to the exact recording it was built from (its bypassed
+    /// spans' only rematerialization source — see
+    /// [`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so a
+    /// recording a live frame still shares is never written through, and
+    /// steady-state re-recording ping-pongs between the pair with no buffer
+    /// allocation.
+    recordings: [Option<Rc<cranpose_ui_graphics::CommandRecording>>; 2],
     /// Per-command similarity verification state: the retained snapshot and
     /// its segments. Advances every time the command re-records while a
     /// retained feed is active.
@@ -822,22 +828,6 @@ pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
     CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow().get(&(command, slot)) == Some(&epoch))
 }
 
-/// Whether any of this command's retained slots carries a live (current
-/// epoch) confirmation. A graph node may still hold a bypassed span for the
-/// command, making its recording the only rematerialization source — the
-/// idle sweep must not drop it. Stale-epoch entries are non-live, so dead
-/// confirmations never pin recordings.
-fn command_has_live_confirmation(command: DrawCommandId) -> bool {
-    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
-        return false;
-    };
-    CONFIRMED_RETAINED_SLOTS.with(|map| {
-        map.borrow()
-            .iter()
-            .any(|((id, _), generation)| *id == command && *generation == epoch)
-    })
-}
-
 thread_local! {
     static VERIFY_EXECUTOR: std::cell::Cell<
         Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>,
@@ -857,62 +847,22 @@ pub fn verify_executor() -> Option<&'static dyn cranpose_ui_graphics::VerifyExec
     VERIFY_EXECUTOR.with(|cell| cell.get())
 }
 
-/// Materializes one tape range of a command's current recording: the
-/// emergency path for a renderer that bypassed a span's materialization and
-/// then could not draw it retained (context drift, op cap). The recording
-/// survives until the command records again, which is after this frame has
-/// drawn.
-pub fn materialize_command_span(
-    command: DrawCommandId,
-    tape_start: usize,
-    tape_end: usize,
-) -> Option<Vec<cranpose_ui_graphics::DrawPrimitive>> {
-    COMMAND_RECORDINGS.with(|map| {
-        let map = map.borrow();
-        let slot = map.get(&command)?;
-        slot.recording.materialize_range(tape_start, tape_end)
-    })
-}
-
-/// Test hook: installs `recording` as `id`'s current recording, exactly as
-/// the end of a build would, so integration tests that drive the recorder
-/// by hand (outside the applier path) can exercise
-/// [`materialize_command_span`] against the frame they are about to render.
-#[doc(hidden)]
-pub fn publish_command_recording_for_tests(
-    id: DrawCommandId,
-    recording: cranpose_ui_graphics::CommandRecording,
-) {
-    COMMAND_RECORDINGS.with(|map| {
-        let mut map = map.borrow_mut();
-        let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
-        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
-            generation,
-            handles: [None, None],
-            recording: cranpose_ui_graphics::CommandRecording::default(),
-            replay: cranpose_ui_graphics::CommandReplayState::default(),
-            replay_epoch: None,
-        });
-        slot.generation = generation;
-        slot.recording = recording;
-    });
-}
-
-/// Test hook: drops every command recording on this thread, simulating the
-/// loss of all rematerialization sources (the remat-miss terminal).
+/// Test hook: drops every command recording on this thread, severing every
+/// AMBIENT rematerialization source. Frame-owned fallbacks
+/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]) are unaffected
+/// by construction — which is exactly what the fail-closed tests prove.
 #[doc(hidden)]
 pub fn clear_command_recordings_for_tests() {
     COMMAND_RECORDINGS.with(|map| map.borrow_mut().clear());
 }
 
-/// Called once per graph build/update. The sweep drops slots whose commands
-/// stopped recording long ago (screen navigated away); a slot's shared
-/// `handles` only die here if no graph node shares them, so those are a pure
-/// capacity release. The `recording` is NOT: with the retained feed, a live
-/// graph node may hold a bypassed span whose only rematerialization source
-/// is the command's recording ([`materialize_command_span`]), so a slot
-/// whose command carries a live confirmation is exempt from the sweep — it
-/// is released once its confirmations are revoked or their epoch dies.
+/// Called once per graph build/update. The sweep is pure capacity
+/// management: it drops slots whose commands stopped recording long ago
+/// (screen navigated away). A slot's shared `handles` and `recordings` only
+/// die here if no graph frame shares them — a frame that still needs its
+/// recording (bypassed spans) owns its own handle
+/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so nothing the
+/// sweep does can ever remove a frame's rematerialization source.
 /// Clean-but-live commands losing their slot merely re-earn capacity if
 /// they ever re-record.
 fn bump_recording_generation() {
@@ -923,9 +873,8 @@ fn bump_recording_generation() {
     });
     if generation.is_multiple_of(512) {
         COMMAND_RECORDINGS.with(|map| {
-            map.borrow_mut().retain(|id, slot| {
-                generation.wrapping_sub(slot.generation) <= 64 || command_has_live_confirmation(*id)
-            });
+            map.borrow_mut()
+                .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
         });
     }
 }
@@ -947,7 +896,21 @@ fn acquire_recording(
                 feed_epoch.map(|_| cranpose_ui_graphics::CommandReplayState::default()),
             );
         };
-        let recording = std::mem::take(&mut slot.recording);
+        // First recording of the pair the registry solely owns; one a live
+        // graph frame still shares (its `fallback`) is never written
+        // through. `DrawScopeDefault` clears the contents on construction,
+        // so only the capacity survives the unwrap.
+        let mut recording = cranpose_ui_graphics::CommandRecording::default();
+        for shared in &mut slot.recordings {
+            if shared
+                .as_ref()
+                .is_some_and(|shared| Rc::strong_count(shared) == 1)
+            {
+                let shared = shared.take().expect("checked some above");
+                recording = Rc::try_unwrap(shared).expect("sole owner checked above");
+                break;
+            }
+        }
         // A state from another slot universe (renderer dropped its retained
         // slots wholesale) restarts from scratch — its slot ids reference
         // buffers that no longer exist.
@@ -972,35 +935,46 @@ fn acquire_recording(
     })
 }
 
+/// Publishes the command's finished frame into the registry and returns the
+/// shared handles the graph rides: the materialized primitives and the
+/// recording they came from. The recording MOVES into its handle — the
+/// multi-thousand-record tape is never cloned — and the frame that keeps
+/// the returned handle owns its rematerialization source outright, immune
+/// to anything the registry does afterwards.
 fn publish_recording(
     id: DrawCommandId,
     recording: cranpose_ui_graphics::CommandRecording,
     primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
     replay: Option<cranpose_ui_graphics::CommandReplayState>,
-) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
+) -> (
+    Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
+    Rc<cranpose_ui_graphics::CommandRecording>,
+) {
     let shared = Rc::new(primitives);
+    let recording = Rc::new(recording);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
         let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
             handles: [None, None],
-            recording: cranpose_ui_graphics::CommandRecording::default(),
+            recordings: [None, None],
             replay: cranpose_ui_graphics::CommandReplayState::default(),
             replay_epoch: None,
         });
         slot.generation = generation;
-        slot.recording = recording;
         if let Some(replay) = replay {
             slot.replay = replay;
             slot.replay_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
         }
         // Newest first; the displaced oldest handle drops out of the
         // registry, and its buffer lives on only while a graph node holds it.
+        slot.recordings[1] = slot.recordings[0].take();
+        slot.recordings[0] = Some(recording.clone());
         slot.handles[1] = slot.handles[0].take();
         slot.handles[0] = Some(shared.clone());
     });
-    shared
+    (shared, recording)
 }
 
 fn draw_nodes(
@@ -1039,10 +1013,18 @@ fn draw_nodes(
         if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
             continue;
         }
-        let shared = publish_recording(id, recording, primitives, replay);
+        let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
         if shared.is_empty() && !has_replay_spans {
             continue;
         }
+        // The frame owns a pinned handle to the exact recording it was
+        // built from: its bypassed spans' rematerialization source travels
+        // WITH the frame, so rendering never has to look it up through the
+        // sweepable ambient registry.
+        let frame = frame.map(|mut frame| {
+            frame.fallback = Some(published_recording);
+            frame
+        });
         // The recorded vector rides into the graph whole: a single canvas
         // command can carry thousands of primitives, and wrapping each in its
         // own node moved every one of them an extra time each frame.
@@ -3792,24 +3774,6 @@ mod tests {
         });
     }
 
-    /// Records one circle through the command scope and publishes it under
-    /// `id`, returning the recording's tape length. The recording is taken
-    /// before `finish` (which clears it for capacity reuse); production's
-    /// `finish_replay` keeps it whole the same way.
-    fn publish_test_recording(id: DrawCommandId) -> usize {
-        let mut scope = DrawScopeDefault::new(cranpose_ui_graphics::Size::new(100.0, 100.0));
-        scope.draw_circle(
-            Brush::solid(cranpose_ui_graphics::Color(0.2, 0.4, 0.6, 1.0)),
-            cranpose_ui_graphics::Point::new(50.0, 50.0),
-            10.0,
-        );
-        let recording = scope.recorded().clone();
-        let tape_len = recording.len();
-        assert!(tape_len > 0, "the test circle must record");
-        publish_command_recording_for_tests(id, recording);
-        tape_len
-    }
-
     #[test]
     fn retained_slot_confirmations_are_live_only_under_their_generation() {
         let command = DrawCommandId {
@@ -3835,51 +3799,186 @@ mod tests {
         clear_retained_slot_confirmations();
     }
 
+    /// Draws enough similar arcs for the replay verifier to engage
+    /// (`MIN_REPLAY_COMMAND_RECORDS`) and to carve several segments —
+    /// partial arcs, because a chain anchor must pin rotation and circles
+    /// cannot. Static across frames, so every segment verifies under the
+    /// identity transform from the first replay frame on.
+    fn record_sweep_test_rings(scope: &mut DrawScopeDefault) {
+        let count = 600usize;
+        let sweep = std::f32::consts::TAU / count as f32 * 0.8;
+        for i in 0..count {
+            let start = i as f32 * (std::f32::consts::TAU / count as f32);
+            scope.draw_annular_sector(
+                Brush::solid(cranpose_ui_graphics::Color(0.2, 0.4, 0.6, 1.0)),
+                cranpose_ui_graphics::Point::new(204.0, 204.0),
+                140.0,
+                150.0,
+                start,
+                sweep,
+            );
+        }
+    }
+
+    /// The FLIP of the old sweep-exemption test: with the frame owning a
+    /// pinned handle to the exact recording it was built from, the idle
+    /// sweep is pure capacity management again — a live confirmation no
+    /// longer pins the registry slot, the sweep drops it anyway, and the
+    /// frame's bypassed spans still rematerialize byte-identically from the
+    /// handle the frame owns. Sweeping can categorically never sever a
+    /// frame's rematerialization source.
     #[test]
-    fn recording_sweep_exempts_commands_with_live_confirmations() {
+    fn recording_sweep_cannot_sever_a_frames_fallback() {
         let command = DrawCommandId {
             node_id: 990_102,
             command_index: 0,
             placement: DrawPlacement::Behind,
         };
-        let tape_len = publish_test_recording(command);
         set_retained_feed_epoch(Some(41));
-        confirm_retained_slot(command, 0, 41);
+        for slot in 0..64 {
+            confirm_retained_slot(command, slot, 41);
+        }
 
-        // 1024 builds without re-recording: both sweeps (512, 1024) run
-        // with the slot idle far past the 64-build window. The live
-        // confirmation must exempt it — the recording is the only source
-        // for the bypassed span a graph may still hold.
+        // The production seam order, driven by hand: acquire buffers,
+        // record, verify, finish with the confirmed slots bypassed, publish
+        // — and the frame keeps the published recording handle, exactly as
+        // `draw_nodes` attaches it.
+        let mut state = cranpose_ui_graphics::CommandReplayState::default();
+        let mut published = None;
+        for _frame in 0..4 {
+            let (recording, storage, _) = acquire_recording(command);
+            let mut scope = DrawScopeDefault::with_recording(
+                cranpose_ui_graphics::Size::new(408.0, 408.0),
+                None,
+                recording,
+                storage,
+            );
+            record_sweep_test_rings(&mut scope);
+            let outcome = state.advance(scope.recorded());
+            let center = state.center();
+            let (finished, frame) = scope.finish_replay(center, outcome, &mut |slot| {
+                retained_slot_confirmed(command, slot)
+            });
+            let (primitives, fallback) =
+                publish_recording(command, finished.recording, finished.primitives, None);
+            let frame = frame.map(|mut frame| {
+                frame.fallback = Some(fallback.clone());
+                frame
+            });
+            published = Some((primitives, fallback, frame));
+        }
+        let (_primitives, fallback, frame) = published.expect("four frames published");
+        let frame = frame.expect("the replay must produce a frame with retained spans");
+        let bypassed: Vec<(u32, u32)> = frame
+            .spans
+            .iter()
+            .filter_map(|span| match span {
+                cranpose_ui_graphics::FrameSpan::Retained {
+                    capture: false,
+                    range,
+                    tape_range,
+                    ..
+                } if range.1 <= range.0 => Some(*tape_range),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !bypassed.is_empty(),
+            "confirmed slots must actually have bypassed materialization"
+        );
+        let expected: Vec<Vec<DrawPrimitive>> = bypassed
+            .iter()
+            .map(|tape_range| {
+                fallback
+                    .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+                    .expect("a frame-consistent tape range must materialize")
+            })
+            .collect();
+
+        // 1024 builds without re-recording: both sweeps (512, 1024) run with
+        // the slot idle far past the 64-build window, confirmations still
+        // live. The slot must be GONE — capacity management owes the frame
+        // nothing anymore.
         for _ in 0..1024 {
             bump_recording_generation();
         }
         assert!(
-            materialize_command_span(command, 0, tape_len).is_some(),
-            "a confirmed command's recording must survive the idle sweep"
+            COMMAND_RECORDINGS.with(|map| !map.borrow().contains_key(&command)),
+            "the sweep must stay pure capacity management: a live confirmation \
+             no longer pins the registry slot"
         );
 
-        // Revoked, the next sweep drops it like any idle slot.
-        revoke_retained_slot(command, 0);
-        for _ in 0..512 {
-            bump_recording_generation();
+        // The categorical property: the frame's own handle survives any
+        // sweep, and its bypassed spans rematerialize byte-identically.
+        for (tape_range, expected) in bypassed.iter().zip(&expected) {
+            let after = fallback
+                .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+                .expect("the frame-owned recording must outlive the sweep");
+            assert_eq!(
+                &after, expected,
+                "post-sweep rematerialization must be byte-identical"
+            );
         }
-        assert!(
-            materialize_command_span(command, 0, tape_len).is_none(),
-            "a revoked command's recording must age out normally"
-        );
-
-        // A stale-epoch confirmation must NOT pin a recording forever.
-        let tape_len = publish_test_recording(command);
-        confirm_retained_slot(command, 0, 41);
-        set_retained_feed_epoch(Some(42));
-        for _ in 0..1024 {
-            bump_recording_generation();
-        }
-        assert!(
-            materialize_command_span(command, 0, tape_len).is_none(),
-            "a dead-epoch confirmation must not exempt the recording"
-        );
         set_retained_feed_epoch(None);
         clear_retained_slot_confirmations();
+    }
+
+    /// [`command_recordings_reuse_buffers_across_rebuilds`] for the compact
+    /// recording pair: a graph frame owns last build's recording (its
+    /// `fallback`) while this build records, so steady-state publishes
+    /// ping-pong between exactly two allocations — `Rc::try_unwrap`
+    /// succeeds at every acquisition after warmup and no recording buffer
+    /// is ever reallocated — and a recording a live frame still shares is
+    /// never written through.
+    #[test]
+    fn command_recordings_reuse_recording_buffers_across_rebuilds() {
+        let command = DrawCommandId {
+            node_id: 990_103,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        // Simulates the installed graph: it holds the newest build's
+        // handles, and the previous build's drop when it is replaced.
+        let mut held = None;
+        let mut ptrs = Vec::new();
+        for _build in 0..8 {
+            let (recording, storage, _) = acquire_recording(command);
+            let mut scope = DrawScopeDefault::with_recording(
+                cranpose_ui_graphics::Size::new(64.0, 64.0),
+                None,
+                recording,
+                storage,
+            );
+            scope.draw_rect_at(
+                Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    width: 16.0,
+                    height: 8.0,
+                },
+                Brush::solid(Color::WHITE),
+            );
+            let finished = scope.finish();
+            let (primitives, recording) =
+                publish_recording(command, finished.recording, finished.primitives, None);
+            ptrs.push(recording.tape_ptr());
+            held = Some((primitives, recording));
+        }
+        drop(held);
+        // Every buffer in play stays alive for the whole loop (registry pair
+        // or in-flight scope), so pointer equality here is reuse, not an
+        // allocator recycling a freed address.
+        for build in 2..8 {
+            assert_eq!(
+                ptrs[build],
+                ptrs[build - 2],
+                "steady-state publishes must ping-pong between the pair's \
+                 buffers (build {build} allocated)"
+            );
+        }
+        assert_ne!(
+            ptrs[6], ptrs[7],
+            "a recording a live frame still shares must never be recorded into"
+        );
     }
 }

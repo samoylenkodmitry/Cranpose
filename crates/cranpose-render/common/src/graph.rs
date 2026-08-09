@@ -437,6 +437,27 @@ impl DrawRunNode {
         primitives: std::rc::Rc<Vec<DrawPrimitive>>,
         replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
     ) -> Self {
+        // Fail-closed invariant: a bypassed span has NO primitives — the
+        // frame's own `fallback` recording is the only thing that can ever
+        // draw it, so a frame carrying bypassed spans without one is
+        // unconstructible here. The builder attaches the published handle
+        // to every frame; hand-built frames that bypass must do the same.
+        debug_assert!(
+            replay.as_ref().is_none_or(|frame| {
+                frame.fallback.is_some()
+                    || !frame.spans.iter().any(|span| {
+                        matches!(
+                            span,
+                            cranpose_ui_graphics::FrameSpan::Retained {
+                                capture: false,
+                                range,
+                                ..
+                            } if range.1 <= range.0
+                        )
+                    })
+            }),
+            "a replay frame with bypassed spans must own its fallback recording"
+        );
         let mut summary = DrawRunSummary::scan(&primitives);
         // Bypassed retained spans have no primitives to scan, but they are
         // drawable content — only shape records ever retain, never shadows.

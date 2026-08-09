@@ -120,6 +120,14 @@ fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
             let outcome = state.advance(scope.recorded());
             let center = state.center();
             let (finished, replay) = scope.finish_replay(center, outcome, bypass);
+            // Each frame owns the recording it was built from, exactly as
+            // production attaches the published handle: a bypassed span's
+            // only rematerialization source rides WITH the frame.
+            let fallback = std::rc::Rc::new(finished.recording);
+            let replay = replay.map(|mut frame| {
+                frame.fallback = Some(fallback);
+                Box::new(frame)
+            });
             let bounds = Rect {
                 x: 0.0,
                 y: 0.0,
@@ -149,7 +157,7 @@ fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
                     PrimitivePhase::BeforeChildren,
                     Some(command),
                     std::rc::Rc::new(finished.primitives),
-                    replay.map(Box::new),
+                    replay,
                 ))],
             })
         })
