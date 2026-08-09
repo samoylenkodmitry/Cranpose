@@ -534,9 +534,7 @@ pub trait DrawModifierNode: ModifierNode {
     /// evaluates at render time, not at slice collection time.
     ///
     /// Returns None by default. Override for nodes needing deferred draw.
-    fn create_draw_closure(
-        &self,
-    ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
+    fn create_draw_closure(&self) -> Option<NodeDrawClosure> {
         None
     }
 
@@ -544,12 +542,16 @@ pub trait DrawModifierNode: ModifierNode {
     /// primitives render BEHIND the node's content — e.g. a text field's
     /// selection highlight, which must sit under the glyphs (a highlight
     /// drawn over them tints the text with its translucent fill).
-    fn create_behind_draw_closure(
-        &self,
-    ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
+    fn create_behind_draw_closure(&self) -> Option<NodeDrawClosure> {
         None
     }
 }
+
+/// A deferred draw closure returned by
+/// [`DrawModifierNode::create_draw_closure`]: it records into a scope the
+/// renderer provides at render time, so the recording's identity stays with
+/// the consumer rather than with a closure-owned vector.
+pub type NodeDrawClosure = Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>;
 
 /// Marker trait for pointer input modifier nodes.
 ///

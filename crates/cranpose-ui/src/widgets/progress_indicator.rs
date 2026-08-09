@@ -391,12 +391,18 @@ mod tests {
         assert!(!commands.is_empty(), "spinner must register draw commands");
 
         let run_commands = |commands: &[(crate::DrawCommand, crate::modifier::Size)]| {
+            use cranpose_ui_graphics::DrawScope as _;
             commands
                 .iter()
-                .flat_map(|(command, size)| match command {
-                    crate::DrawCommand::Behind(func) => func(*size),
-                    crate::DrawCommand::Overlay(func) => func(*size),
-                    crate::DrawCommand::WithContent(func) => func(*size),
+                .flat_map(|(command, size)| {
+                    let func = match command {
+                        crate::DrawCommand::Behind(func) => func,
+                        crate::DrawCommand::Overlay(func) => func,
+                        crate::DrawCommand::WithContent(func) => func,
+                    };
+                    let mut scope = crate::draw::command_draw_scope(*size);
+                    func(&mut scope);
+                    scope.into_primitives()
                 })
                 .collect::<Vec<_>>()
         };

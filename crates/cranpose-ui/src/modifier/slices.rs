@@ -510,8 +510,11 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                         draw_node.draw(&mut scope);
                         let primitives = scope.into_primitives();
                         if !primitives.is_empty() {
-                            let draw_cmd =
-                                Rc::new(move |_size: crate::modifier::Size| primitives.clone());
+                            let draw_cmd = Rc::new(
+                                move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                                    scope.push_recorded(primitives.clone())
+                                },
+                            );
                             slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
                         }
                     }
@@ -590,34 +593,21 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     // Convert background + shape into a draw command
     if let Some(color) = background_color {
-        let draw_cmd = Rc::new(move |size: crate::modifier::Size| {
-            use crate::modifier::{Brush, Rect};
-            use cranpose_ui_graphics::DrawPrimitive;
+        let draw_cmd = Rc::new(
+            move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                use crate::modifier::Brush;
+                use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
 
-            let brush = Brush::solid(color);
-            let rect = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: size.width,
-                height: size.height,
-            };
-
-            if let Some(shape) = corner_shape {
-                let radii = shape.resolve(size.width, size.height);
-                vec![DrawPrimitive::RoundRect {
-                    rect,
-                    brush,
-                    radii,
-                    stroke: None,
-                }]
-            } else {
-                vec![DrawPrimitive::Rect {
-                    rect,
-                    brush,
-                    stroke: None,
-                }]
-            }
-        });
+                let size = scope.size();
+                let brush = Brush::solid(color);
+                if let Some(shape) = corner_shape {
+                    let radii: CornerRadii = shape.resolve(size.width, size.height);
+                    scope.draw_round_rect(brush, radii);
+                } else {
+                    scope.draw_rect(brush);
+                }
+            },
+        );
 
         let insert_index = background_insert_index
             .unwrap_or(0)

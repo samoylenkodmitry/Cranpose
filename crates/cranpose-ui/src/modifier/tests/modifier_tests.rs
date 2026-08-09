@@ -17,6 +17,15 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+/// Records a draw command into a fresh consumer-owned scope, the way the
+/// renderers do, and returns what it recorded.
+fn run_draw(func: &crate::draw::DrawCommandFn, size: Size) -> Vec<DrawPrimitive> {
+    use cranpose_ui_graphics::DrawScope as _;
+    let mut scope = crate::draw::command_draw_scope(size);
+    func(&mut scope);
+    scope.into_primitives()
+}
+
 #[test]
 fn modifier_debug_env_flag_is_not_process_cached() {
     let source = include_str!("../mod.rs");
@@ -427,7 +436,7 @@ fn glass_material_applies_blur_tint_and_shape() {
     let DrawCommand::Behind(draw) = &commands[0] else {
         panic!("glass_material tint should render behind content");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 100.0,
         height: 64.0,
     });
@@ -1060,7 +1069,7 @@ fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
     let DrawCommand::Behind(draw) = &commands[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 60.0,
         height: 32.0,
     });
@@ -1104,7 +1113,7 @@ fn drop_shadow_static_emits_behind_primitives() {
     let DrawCommand::Behind(draw) = &commands[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 60.0,
         height: 32.0,
     });
@@ -1135,12 +1144,12 @@ fn drop_shadow_closure_tracks_runtime_values() {
     let DrawCommand::Behind(draw) = &commands[0] else {
         panic!("drop_shadow(block) should emit a behind draw command");
     };
-    let before = draw(Size {
+    let before = run_draw(draw, Size {
         width: 40.0,
         height: 24.0,
     });
     spread.set(18.0);
-    let after = draw(Size {
+    let after = run_draw(draw, Size {
         width: 40.0,
         height: 24.0,
     });
@@ -1162,7 +1171,7 @@ fn drop_shadow_high_radius_emits_single_blurred_shadow_primitive() {
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 80.0,
         height: 50.0,
     });
@@ -1193,7 +1202,7 @@ fn inner_shadow_emits_overlay_with_dst_out_cutout() {
     let DrawCommand::Overlay(draw) = &commands[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 64.0,
         height: 40.0,
     });
@@ -1220,7 +1229,7 @@ fn inner_shadow_large_radius_keeps_fill_and_cutout_pairs_balanced() {
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 50.0,
         height: 42.0,
     });
@@ -1272,7 +1281,7 @@ fn inner_shadow_static_uses_density_for_dp_offset() {
     let DrawCommand::Overlay(draw) = &commands[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 40.0,
         height: 20.0,
     });
@@ -1293,7 +1302,7 @@ fn inner_shadow_cutout_alpha_remains_opaque_for_hole_mask() {
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 48.0,
         height: 30.0,
     });
@@ -1323,7 +1332,7 @@ fn drop_shadow_emits_primitives() {
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow should emit a behind draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 32.0,
         height: 18.0,
     });
@@ -1346,7 +1355,7 @@ fn drop_shadow_value_alias_uses_static_shadow() {
     let DrawCommand::Behind(draw) = &slices.draw_commands()[0] else {
         panic!("drop_shadow_value alias should emit a behind draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 32.0,
         height: 18.0,
     });
@@ -1367,7 +1376,7 @@ fn inner_shadow_emits_primitives() {
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 32.0,
         height: 18.0,
     });
@@ -1390,7 +1399,7 @@ fn inner_shadow_value_alias_uses_static_shadow() {
     let DrawCommand::Overlay(draw) = &slices.draw_commands()[0] else {
         panic!("inner_shadow_value alias should emit an overlay draw command");
     };
-    let primitives = draw(Size {
+    let primitives = run_draw(draw, Size {
         width: 32.0,
         height: 18.0,
     });

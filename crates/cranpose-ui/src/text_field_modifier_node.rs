@@ -1160,9 +1160,8 @@ impl DrawModifierNode for TextFieldModifierNode {
 
     fn create_draw_closure(
         &self,
-    ) -> Option<Rc<dyn Fn(cranpose_foundation::Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>>
-    {
-        use cranpose_ui_graphics::DrawPrimitive;
+    ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
+        use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
         // Capture state via Rc clone (cheap) for draw-time evaluation
         let is_focused = self.refs.is_focused.clone();
@@ -1182,7 +1181,8 @@ impl DrawModifierNode for TextFieldModifierNode {
         let press_track = self.refs.press_track.clone();
         let gesture_claimed = self.refs.gesture_claimed.clone();
 
-        Some(Rc::new(move |size| {
+        Some(Rc::new(move |scope| {
+            let size = scope.size();
             // Check focus at DRAW time
             if !*is_focused.borrow() {
                 // Publish an unfocused snapshot so the composable clears any
@@ -1201,7 +1201,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                         press: None,
                     });
                 }
-                return vec![];
+                return;
             }
 
             let mut primitives = Vec::new();
@@ -1345,15 +1345,14 @@ impl DrawModifierNode for TextFieldModifierNode {
                 }
             }
 
-            primitives
+            scope.push_recorded(primitives);
         }))
     }
 
     fn create_behind_draw_closure(
         &self,
-    ) -> Option<Rc<dyn Fn(cranpose_foundation::Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>>
-    {
-        use cranpose_ui_graphics::DrawPrimitive;
+    ) -> Option<Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>> {
+        use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
         let is_focused = self.refs.is_focused.clone();
         let state = self.state.clone();
@@ -1367,13 +1366,14 @@ impl DrawModifierNode for TextFieldModifierNode {
         let node_id = self.refs.node_id.clone();
         let pan_resolver = self.cached_pan_resolver.clone();
 
-        Some(Rc::new(move |size| {
+        Some(Rc::new(move |scope| {
+            let size = scope.size();
             if !*is_focused.borrow() {
-                return vec![];
+                return;
             }
             let selection = state.selection();
             if selection.collapsed() {
-                return vec![];
+                return;
             }
             let text = state.text();
             let padding_left = content_offset.get();
@@ -1422,7 +1422,7 @@ impl DrawModifierNode for TextFieldModifierNode {
                     });
                 }
             }
-            primitives
+            scope.push_recorded(primitives);
         }))
     }
 }
@@ -1815,9 +1815,15 @@ mod tests {
                 width: 120.0,
                 height: 20.0,
             };
+            // The closure records into a caller-provided scope; the test only
+            // cares about the metrics side effects, so the recording is dropped.
+            let run_draw = || {
+                let mut scope = crate::draw::command_draw_scope(size);
+                draw(&mut scope);
+            };
 
             node.set_focused(true);
-            let _ = draw(size);
+            run_draw();
             let keyboard_metrics = controller
                 .metrics()
                 .expect("focused field publishes handle metrics");
@@ -1826,7 +1832,7 @@ mod tests {
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Touch),
             );
-            let _ = draw(size);
+            run_draw();
             let metrics = controller
                 .metrics()
                 .expect("focused field publishes handle metrics");
@@ -1840,7 +1846,7 @@ mod tests {
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Mouse),
             );
-            let _ = draw(size);
+            run_draw();
             let metrics = controller
                 .metrics()
                 .expect("focused field publishes handle metrics");
@@ -1854,7 +1860,7 @@ mod tests {
                 PointerEvent::new(PointerEventKind::Down, at, at)
                     .with_source(PointerSource::Stylus),
             );
-            let _ = draw(size);
+            run_draw();
             let metrics = controller
                 .metrics()
                 .expect("focused field publishes handle metrics");

@@ -1,11 +1,10 @@
 use std::rc::Rc;
 
 use cranpose_foundation::PointerEvent;
-use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
+use cranpose_ui::{Brush, DrawCommand, DrawCommandFn, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    clear_recorded_content_markers, recorded_content_markers, BlendMode, Color, ColorFilter,
-    CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape,
-    Size,
+    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, DrawScope as _,
+    GraphicsLayer, Point, RoundedCornerShape, Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
@@ -215,31 +214,21 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
-    // `filter(...).collect()` reports a zero lower-bound size hint, so it
-    // grows the output through the whole doubling schedule; for an animated
-    // scene these vectors hold thousands of primitives and are rebuilt every
-    // frame. `Content` markers are rare, so the input length is the right
-    // capacity.
-    //
-    // `markers` is the recording scope's own marker count, trusted only when
-    // its identity guard matches the vector the command actually returned
-    // (see [`recorded_content_markers`]). `Some(0)` skips the marker scans
-    // below outright — on a watch-class core, re-streaming a fresh
-    // multi-thousand-primitive recording just to learn "no markers" is
-    // measurable frame time. `None` scans exactly as before.
-    let filter_content = |primitives: Vec<DrawPrimitive>, markers: Option<u32>| {
-        if markers == Some(0) {
+    // `markers` is the recording scope's own count of `Content` markers,
+    // maintained while the command records (`draw_content()` calls and pushed
+    // batches both keep it current), so it is authoritative: zero means the
+    // vector holds no marker and passes through untouched. On a watch-class
+    // core, re-streaming a fresh multi-thousand-primitive recording just to
+    // learn "no markers" is measurable frame time.
+    let filter_content = |primitives: Vec<DrawPrimitive>, markers: u32| {
+        if markers == 0 {
             return primitives;
         }
-        // The marker scan is a cheap discriminant read; a canvas that never
-        // calls `draw_content()` — every game scene — keeps its vector as-is
-        // instead of moving thousands of primitives through a second one.
-        if !primitives
-            .iter()
-            .any(|primitive| matches!(primitive, DrawPrimitive::Content))
-        {
-            return primitives;
-        }
+        // `filter(...).collect()` reports a zero lower-bound size hint, so it
+        // grows the output through the whole doubling schedule; for an
+        // animated scene these vectors hold thousands of primitives and are
+        // rebuilt every frame. `Content` markers are rare, so the input
+        // length is the right capacity.
         let mut out = Vec::with_capacity(primitives.len());
         out.extend(
             primitives
@@ -249,8 +238,8 @@ pub fn primitives_for_placement(
         out
     };
 
-    let split_with_content = |primitives: Vec<DrawPrimitive>, placement, markers: Option<u32>| {
-        let last_content_idx = if markers == Some(0) {
+    let split_with_content = |primitives: Vec<DrawPrimitive>, placement, markers: u32| {
+        let last_content_idx = if markers == 0 {
             None
         } else {
             primitives
@@ -285,24 +274,25 @@ pub fn primitives_for_placement(
         out
     };
 
-    // A note left dangling by some unrelated recording (one whose vector
-    // never came through here) must not survive into the reads below, however
-    // the allocator reuses addresses.
-    clear_recorded_content_markers();
+    // The command records into a scope this consumer owns, so the marker
+    // count travels with the recording instead of through a side channel.
+    let record = |func: &DrawCommandFn| {
+        let mut scope = cranpose_ui::command_draw_scope(size);
+        func(&mut scope);
+        let markers = scope.content_marker_count();
+        (scope.into_primitives(), markers)
+    };
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let primitives = func(size);
-            let markers = recorded_content_markers(&primitives);
+            let (primitives, markers) = record(func);
             filter_content(primitives, markers)
         }
         (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let primitives = func(size);
-            let markers = recorded_content_markers(&primitives);
+            let (primitives, markers) = record(func);
             filter_content(primitives, markers)
         }
         (_, DrawCommand::WithContent(func)) => {
-            let primitives = func(size);
-            let markers = recorded_content_markers(&primitives);
+            let (primitives, markers) = record(func);
             split_with_content(primitives, placement, markers)
         }
         _ => Vec::new(),
@@ -314,14 +304,8 @@ mod tests {
     use super::*;
     use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
 
-    fn recorded_command(
-        record: impl Fn(&mut dyn DrawScope) + 'static,
-    ) -> Rc<dyn Fn(Size) -> Vec<DrawPrimitive>> {
-        Rc::new(move |size| {
-            let mut scope = DrawScopeDefault::new(size);
-            record(&mut scope);
-            scope.into_primitives()
-        })
+    fn recorded_command(record: impl Fn(&mut dyn DrawScope) + 'static) -> DrawCommandFn {
+        Rc::new(move |scope: &mut DrawScopeDefault| record(scope))
     }
 
     fn rect_at(x: f32) -> Rect {
@@ -369,11 +353,11 @@ mod tests {
     }
 
     #[test]
-    fn hand_built_vectors_fall_back_to_scanning() {
-        // No recording scope, so no note exists: the marker must still be
-        // found and stripped by the scan path.
-        let command = DrawCommand::Behind(Rc::new(|_size| {
-            vec![
+    fn pushed_batches_keep_marker_count_authoritative() {
+        // A pre-built vector enters through `push_recorded`, which counts the
+        // `Content` marker it carries; the filter path must then strip it.
+        let command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![
                 DrawPrimitive::Rect {
                     rect: rect_at(1.0),
                     brush: Brush::solid(Color::WHITE),
@@ -385,7 +369,7 @@ mod tests {
                     brush: Brush::solid(Color::WHITE),
                     stroke: None,
                 },
-            ]
+            ]);
         }));
         let out = primitives_for_placement(&command, DrawPlacement::Behind, Size::new(10.0, 10.0));
         assert_eq!(rect_xs(&out), [1.0, 2.0]);

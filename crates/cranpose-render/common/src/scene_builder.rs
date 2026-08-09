@@ -1091,7 +1091,7 @@ mod tests {
         LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
         ScrollState, Size, Spacer, Text, TextStyle,
     };
-    use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, RenderEffect};
+    use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect};
 
     use super::*;
 
@@ -1233,8 +1233,8 @@ mod tests {
     }
 
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
-        let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
-            vec![DrawPrimitive::Rect {
+        let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![DrawPrimitive::Rect {
                 rect: Rect {
                     x: 3.0,
                     y: 4.0,
@@ -1243,7 +1243,7 @@ mod tests {
                 },
                 brush: Brush::solid(Color::WHITE),
                 stroke: None,
-            }]
+            }]);
         }));
 
         let child = BuildNodeSnapshot {
@@ -1402,8 +1402,8 @@ mod tests {
     #[test]
     fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
         fn parent_with_offset(offset: Point, motion_context_animated: bool) -> BuildNodeSnapshot {
-            let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
-                vec![DrawPrimitive::Rect {
+            let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+                scope.push_recorded(vec![DrawPrimitive::Rect {
                     rect: Rect {
                         x: 3.0,
                         y: 4.0,
@@ -1412,7 +1412,7 @@ mod tests {
                     },
                     brush: Brush::solid(Color::WHITE),
                     stroke: None,
-                }]
+                }]);
             }));
 
             let child = BuildNodeSnapshot {
@@ -2301,8 +2301,8 @@ mod tests {
             graphics_layer: None,
             children: vec![],
         };
-        let behind = DrawCommand::Behind(Rc::new(|_size: Size| {
-            vec![cranpose_ui_graphics::DrawPrimitive::Rect {
+        let behind = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect: Rect {
                     x: 1.0,
                     y: 2.0,
@@ -2311,10 +2311,10 @@ mod tests {
                 },
                 brush: Brush::solid(Color::WHITE),
                 stroke: None,
-            }]
+            }]);
         }));
-        let overlay = DrawCommand::Overlay(Rc::new(|_size: Size| {
-            vec![cranpose_ui_graphics::DrawPrimitive::Rect {
+        let overlay = DrawCommand::Overlay(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect: Rect {
                     x: 3.0,
                     y: 1.0,
@@ -2323,7 +2323,7 @@ mod tests {
                 },
                 brush: Brush::solid(Color::BLACK),
                 stroke: None,
-            }]
+            }]);
         }));
 
         let parent = BuildNodeSnapshot {

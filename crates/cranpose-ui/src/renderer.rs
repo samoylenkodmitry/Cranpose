@@ -169,19 +169,25 @@ fn collect_primitives_from_commands(
             .collect()
     };
 
+    let run = |func: &crate::draw::DrawCommandFn| {
+        use cranpose_ui_graphics::DrawScope as _;
+        let mut scope = crate::draw::command_draw_scope(size);
+        func(&mut scope);
+        scope.into_primitives()
+    };
     let mut ops = Vec::new();
     for command in commands {
         let primitives = match (layer, command) {
-            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => func(size)
+            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => run(func)
                 .into_iter()
                 .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
                 .collect(),
-            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => func(size)
+            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => run(func)
                 .into_iter()
                 .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
                 .collect(),
             (PaintLayer::Behind | PaintLayer::Overlay, ModifierDrawCommand::WithContent(func)) => {
-                split_with_content(func(size), layer)
+                split_with_content(run(func), layer)
             }
             _ => Vec::new(),
         };

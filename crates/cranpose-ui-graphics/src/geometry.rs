@@ -878,32 +878,6 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
     });
 }
 
-thread_local! {
-    /// The content-marker note left by the most recent
-    /// [`DrawScope::into_primitives`]: the produced vector's buffer address,
-    /// its length, and how many [`DrawPrimitive::Content`] markers it holds.
-    /// The address/length pair is the identity guard — a vector that did not
-    /// come out of that exact call can never match it.
-    static RECORDED_CONTENT_MARKERS: std::cell::Cell<Option<(usize, usize, u32)>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Consumes the pending content-marker note, returning it only if it
-/// describes exactly `primitives` (same buffer address and length). `None`
-/// means the vector's provenance is unknown and the caller must scan for
-/// markers itself.
-pub fn recorded_content_markers(primitives: &[DrawPrimitive]) -> Option<u32> {
-    let (ptr, len, markers) = RECORDED_CONTENT_MARKERS.take()?;
-    (ptr == primitives.as_ptr() as usize && len == primitives.len()).then_some(markers)
-}
-
-/// Discards any pending content-marker note. Consumers call this before
-/// running a draw command so a note left dangling by an unrelated recording
-/// can never be mistaken for the command's output, however the allocator
-/// reuses addresses.
-pub fn clear_recorded_content_markers() {
-    RECORDED_CONTENT_MARKERS.set(None);
-}
 
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
@@ -926,6 +900,25 @@ impl DrawScopeDefault {
             content_markers: 0,
             text_measurer: Some(text_measurer),
         }
+    }
+
+    /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
+    /// Command consumers split placements around the count instead of
+    /// re-scanning thousands of just-recorded primitives to learn "none".
+    pub fn content_marker_count(&self) -> u32 {
+        self.content_markers
+    }
+
+    /// Appends already-recorded primitives verbatim. This is the replay path
+    /// for pre-built primitive lists (deferred modifier draws recorded
+    /// earlier, synthesized commands in tests); the marker count stays
+    /// authoritative because the batch is scanned once on the way in.
+    pub fn push_recorded(&mut self, primitives: Vec<DrawPrimitive>) {
+        self.content_markers += primitives
+            .iter()
+            .filter(|primitive| matches!(primitive, DrawPrimitive::Content))
+            .count() as u32;
+        self.primitives.extend(primitives);
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {
@@ -1528,11 +1521,6 @@ impl DrawScope for DrawScopeDefault {
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         note_recorded_primitive_count(self.size, self.primitives.len());
-        RECORDED_CONTENT_MARKERS.set(Some((
-            self.primitives.as_ptr() as usize,
-            self.primitives.len(),
-            self.content_markers,
-        )));
         self.primitives
     }
 }

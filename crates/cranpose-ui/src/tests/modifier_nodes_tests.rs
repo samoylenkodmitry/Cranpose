@@ -1187,7 +1187,7 @@ fn custom_layout_modifier_works_through_retained_chain() {
 fn draw_command_updates_on_closure_change() {
     let _app_context = crate::render_state::app_context_test_scope();
     use crate::draw::DrawCommand;
-    use cranpose_ui_graphics::{DrawPrimitive, Size};
+    use cranpose_ui_graphics::Size;
 
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -1196,18 +1196,16 @@ fn draw_command_updates_on_closure_change() {
     // Element 1: Increments executed by 1
     let executed_1 = executed.clone();
     let element_1 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
-        move |_size: Size| -> Vec<DrawPrimitive> {
+        move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             executed_1.set(executed_1.get() + 1);
-            Vec::new()
         },
     ))));
 
     // Element 2: Increments executed by 10
     let executed_2 = executed.clone();
     let element_2 = modifier_element(DrawCommandElement::new(DrawCommand::Behind(Rc::new(
-        move |_size: Size| -> Vec<DrawPrimitive> {
+        move |_scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
             executed_2.set(executed_2.get() + 10);
-            Vec::new()
         },
     ))));
 
@@ -1220,7 +1218,7 @@ fn draw_command_updates_on_closure_change() {
     {
         let node = chain.node::<DrawCommandNode>(0).unwrap();
         if let DrawCommand::Behind(ref func) = node.commands()[0] {
-            func(Size::ZERO);
+            func(&mut crate::draw::command_draw_scope(Size::ZERO));
         }
     }
     assert_eq!(executed.get(), 1);
@@ -1232,7 +1230,7 @@ fn draw_command_updates_on_closure_change() {
     // Verify node updated to new closure despite equality
     let node = chain.node::<DrawCommandNode>(0).unwrap();
     if let DrawCommand::Behind(ref func) = node.commands()[0] {
-        func(Size::ZERO);
+        func(&mut crate::draw::command_draw_scope(Size::ZERO));
     }
     assert_eq!(
         executed.get(),

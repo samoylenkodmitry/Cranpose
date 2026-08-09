@@ -186,19 +186,21 @@ mod tests {
 
     #[test]
     fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
-        let command = DrawCommand::Behind(Rc::new(|_size| {
-            vec![DrawPrimitive::RoundRect {
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 80.0,
-                    height: 40.0,
-                },
-                brush: Brush::solid(Color::BLACK),
-                radii: CornerRadii::uniform(10.0),
-                stroke: None,
-            }]
-        }));
+        let command = DrawCommand::Behind(Rc::new(
+            |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                scope.push_recorded(vec![DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    brush: Brush::solid(Color::BLACK),
+                    radii: CornerRadii::uniform(10.0),
+                    stroke: None,
+                }]);
+            },
+        ));
 
         let layer = GraphicsLayer {
             scale: 1.0,
