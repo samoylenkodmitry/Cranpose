@@ -464,11 +464,16 @@ pub(crate) enum EntryMatch {
 /// geometry (start/end/center/radius/tile mode) and stop positions hold —
 /// twinkling ring dots recolor their radial glows without ever moving them.
 fn brush_match(current: &Brush, snapshot: &Brush) -> EntryMatch {
-    if current == snapshot {
-        return EntryMatch::Exact;
-    }
+    // One walk decides Exact vs Recolor vs Mismatch. A full equality check
+    // first would re-compare geometry and stops on every recoloring entry —
+    // and a slow device recolors thousands per frame.
     let recolorable = match (current, snapshot) {
-        (Brush::Solid(_), Brush::Solid(_)) => true,
+        (Brush::Solid(now), Brush::Solid(then)) => {
+            if now == then {
+                return EntryMatch::Exact;
+            }
+            true
+        }
         (
             Brush::LinearGradient {
                 colors: c_now,
@@ -485,11 +490,19 @@ fn brush_match(current: &Brush, snapshot: &Brush) -> EntryMatch {
                 tile_mode: t_then,
             },
         ) => {
-            c_now.len() == c_then.len()
+            if c_now.len() == c_then.len()
                 && s_now == s_then
                 && start_now == start_then
                 && end_now == end_then
                 && t_now == t_then
+            {
+                if c_now == c_then {
+                    return EntryMatch::Exact;
+                }
+                true
+            } else {
+                false
+            }
         }
         (
             Brush::RadialGradient {
@@ -507,11 +520,19 @@ fn brush_match(current: &Brush, snapshot: &Brush) -> EntryMatch {
                 tile_mode: t_then,
             },
         ) => {
-            c_now.len() == c_then.len()
+            if c_now.len() == c_then.len()
                 && s_now == s_then
                 && center_now == center_then
                 && r_now == r_then
                 && t_now == t_then
+            {
+                if c_now == c_then {
+                    return EntryMatch::Exact;
+                }
+                true
+            } else {
+                false
+            }
         }
         (
             Brush::SweepGradient {
@@ -524,7 +545,15 @@ fn brush_match(current: &Brush, snapshot: &Brush) -> EntryMatch {
                 stops: s_then,
                 center: center_then,
             },
-        ) => c_now.len() == c_then.len() && s_now == s_then && center_now == center_then,
+        ) => {
+            if c_now.len() != c_then.len() || s_now != s_then || center_now != center_then {
+                false
+            } else if c_now == c_then {
+                return EntryMatch::Exact;
+            } else {
+                true
+            }
+        }
         _ => false,
     };
     if recolorable {

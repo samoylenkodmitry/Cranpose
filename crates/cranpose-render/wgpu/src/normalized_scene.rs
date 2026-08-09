@@ -1374,7 +1374,7 @@ fn partition_and_capture(
     context: &LocalPrimitiveContext<'_>,
     motion: bool,
 ) -> bool {
-    let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
+    let views = build_replay_views(run);
     let aligned = align_snapshot(&state.snapshot, &views);
     let chains = partition_chains(&state.snapshot, &aligned, &views, state.center);
     if chains.is_empty() {
@@ -1608,6 +1608,240 @@ fn locate_and_verify(
     LocateOutcome::NotFound
 }
 
+/// Builds the per-entry replay views, fanned out across the conversion
+/// workers when the run is large: the view construction is a pure map over
+/// ~17k entries, and on a watch-class core it is several milliseconds of the
+/// frame all by itself.
+#[cfg(not(target_arch = "wasm32"))]
+fn build_replay_views<'r, 'e>(
+    run: &'r [ShapeRunEntry<'e>],
+) -> Vec<Option<(SnapshotShape, &'r Brush)>>
+where
+    'e: 'r,
+{
+    let workers = crate::render::shape_convert_worker_count().max(1);
+    if workers <= 1 || run.len() < MIN_REPLAY_RUN_ENTRIES {
+        return run.iter().map(replay_entry_view).collect();
+    }
+    let mut views: Vec<Option<(SnapshotShape, &Brush)>> = vec![None; run.len()];
+    let chunk_len = run.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let mut slots_rest = &mut views[..];
+        let mut entries_rest = run;
+        while !entries_rest.is_empty() {
+            let count = chunk_len.min(entries_rest.len());
+            let (chunk_entries, rest) = entries_rest.split_at(count);
+            entries_rest = rest;
+            let (chunk_slots, rest) = std::mem::take(&mut slots_rest).split_at_mut(count);
+            slots_rest = rest;
+            let mut job = move || {
+                for (slot, entry) in chunk_slots.iter_mut().zip(chunk_entries) {
+                    *slot = replay_entry_view(entry);
+                }
+            };
+            if entries_rest.is_empty() {
+                job();
+            } else {
+                scope.spawn(job);
+            }
+        }
+    });
+    views
+}
+
+/// A segment's anchor and full-body verification result computed off the
+/// render thread before the sequential replay walk consumes it.
+#[cfg(not(target_arch = "wasm32"))]
+struct PreVerdict {
+    anchor: usize,
+    t: SegmentTransform,
+    patches: Vec<usize>,
+    failed_at: Option<usize>,
+}
+
+/// Probe-only anchor scan: the first candidate whose leading entries match
+/// under its implied transform. The expensive whole-body verification is
+/// deferred so it can run in parallel across segments.
+#[cfg(not(target_arch = "wasm32"))]
+fn probe_anchor(
+    segment: &ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    cursor: usize,
+    center: Point,
+) -> Option<(usize, SegmentTransform)> {
+    let len = segment.entries.len();
+    let max_start = views.len().checked_sub(len)?;
+    let scan_end = max_start.min(cursor.saturating_add(RESYNC_WINDOW));
+    if cursor > scan_end {
+        return None;
+    }
+    let anchor_entry = &segment.entries[0];
+    for candidate in cursor..=scan_end {
+        let Some((current, _)) = &views[candidate] else {
+            continue;
+        };
+        if !anchor_compatible(current, &anchor_entry.shape) {
+            continue;
+        }
+        let Some(t) = anchor_transform(current, &anchor_entry.shape, center) else {
+            continue;
+        };
+        let probe = ANCHOR_PROBE_ENTRIES.min(len);
+        let probe_ok = (0..probe).all(|k| {
+            views[candidate + k].as_ref().is_some_and(|(shape, brush)| {
+                !matches!(
+                    match_entry(shape, brush, &segment.entries[k], center, t),
+                    EntryMatch::Mismatch
+                )
+            })
+        });
+        if probe_ok {
+            return Some((candidate, t));
+        }
+    }
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn verify_segment_body(
+    segment: &ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    anchor: usize,
+    t: SegmentTransform,
+    center: Point,
+) -> PreVerdict {
+    let len = segment.entries.len();
+    let mut patches = Vec::new();
+    let mut failed_at = None;
+    for k in 0..len {
+        let Some((shape, brush)) = &views[anchor + k] else {
+            failed_at = Some(k);
+            break;
+        };
+        match match_entry(shape, brush, &segment.entries[k], center, t) {
+            EntryMatch::Exact => {}
+            EntryMatch::Recolor => patches.push(k),
+            EntryMatch::Mismatch => {
+                failed_at = Some(k);
+                break;
+            }
+        }
+    }
+    PreVerdict {
+        anchor,
+        t,
+        patches,
+        failed_at,
+    }
+}
+
+/// Locates and verifies every segment ahead of the sequential replay walk:
+/// a cheap serial probe pass predicts each anchor (exact in steady state,
+/// where segments sit where they sat last frame), then all body
+/// verifications — the bulk of the per-frame replay cost, ~16k `match_entry`
+/// calls on MEGA — run concurrently on the conversion workers. The walk
+/// discards any verdict its true cursor disagrees with and falls back to the
+/// sequential scan, so a wrong prediction costs time, never output.
+#[cfg(not(target_arch = "wasm32"))]
+fn pre_verify_segments(
+    segments: &[ReplaySegment],
+    views: &[Option<(SnapshotShape, &Brush)>],
+    center: Point,
+) -> Vec<Option<PreVerdict>> {
+    let mut probes: Vec<Option<(usize, SegmentTransform)>> = Vec::with_capacity(segments.len());
+    let mut cursor = 0usize;
+    for segment in segments {
+        let hit = probe_anchor(segment, views, cursor, center);
+        if let Some((candidate, _)) = hit {
+            cursor = candidate + segment.entries.len();
+        }
+        probes.push(hit);
+    }
+
+    let jobs: Vec<(usize, usize, SegmentTransform)> = probes
+        .iter()
+        .enumerate()
+        .filter_map(|(i, p)| p.map(|(candidate, t)| (i, candidate, t)))
+        .collect();
+    let mut verdicts: Vec<Option<PreVerdict>> = Vec::new();
+    verdicts.resize_with(segments.len(), || None);
+    let workers = crate::render::shape_convert_worker_count().max(1);
+    if workers <= 1 || jobs.len() <= 1 {
+        for &(i, candidate, t) in &jobs {
+            verdicts[i] = Some(verify_segment_body(&segments[i], views, candidate, t, center));
+        }
+        return verdicts;
+    }
+    let mut job_results: Vec<Option<PreVerdict>> = Vec::new();
+    job_results.resize_with(jobs.len(), || None);
+    let chunk_len = jobs.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let mut results_rest = &mut job_results[..];
+        let mut jobs_rest = &jobs[..];
+        while !jobs_rest.is_empty() {
+            let count = chunk_len.min(jobs_rest.len());
+            let (chunk_jobs, rest) = jobs_rest.split_at(count);
+            jobs_rest = rest;
+            let (chunk_results, rest) = std::mem::take(&mut results_rest).split_at_mut(count);
+            results_rest = rest;
+            let mut job = move || {
+                for (slot, &(i, candidate, t)) in chunk_results.iter_mut().zip(chunk_jobs) {
+                    *slot = Some(verify_segment_body(&segments[i], views, candidate, t, center));
+                }
+            };
+            if jobs_rest.is_empty() {
+                job();
+            } else {
+                scope.spawn(job);
+            }
+        }
+    });
+    for (&(i, _, _), result) in jobs.iter().zip(job_results) {
+        verdicts[i] = result;
+    }
+    verdicts
+}
+
+/// Turns a segment's pre-verdict into its final outcome, falling back to the
+/// sequential scan whenever the prediction no longer applies.
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_segment_outcome(
+    verdict: Option<PreVerdict>,
+    segment: &ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    cursor: usize,
+    extra_window: usize,
+    center: Point,
+) -> LocateOutcome {
+    if let Some(v) = verdict {
+        if v.anchor >= cursor {
+            match v.failed_at {
+                None => {
+                    return LocateOutcome::Match {
+                        anchor: v.anchor,
+                        t: v.t,
+                        patches: v.patches,
+                    }
+                }
+                Some(verified) if verified >= TRUSTED_PARTIAL_DEPTH => {
+                    return LocateOutcome::Partial {
+                        anchor: v.anchor,
+                        t: v.t,
+                        verified,
+                        patches: v.patches,
+                    };
+                }
+                // A shallow failure marks a false anchor; resume the
+                // sequential scan just past it, as the inline scan would.
+                Some(_) => {
+                    return locate_and_verify(segment, views, v.anchor + 1, extra_window, center)
+                }
+            }
+        }
+    }
+    locate_and_verify(segment, views, cursor, extra_window, center)
+}
+
 /// Diagnostic post-mortem of a segment miss, for the capped miss log: where
 /// the anchor scan or the verification actually gave up.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1703,7 +1937,7 @@ fn replay_run(
     context: &LocalPrimitiveContext<'_>,
     motion: bool,
 ) -> bool {
-    let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
+    let views = build_replay_views(run);
     let center = state.center;
     let center_final = Point::new(
         center.x + context.layer_bounds.x,
@@ -1719,7 +1953,8 @@ fn replay_run(
     let mut retained_entries = 0usize;
     let mut carried_entries = 0usize;
     let old_segments = std::mem::take(&mut state.segments);
-    for mut segment in old_segments {
+    let mut verdicts = pre_verify_segments(&old_segments, &views, center);
+    for (segment_index, mut segment) in old_segments.into_iter().enumerate() {
         let len = segment.entries.len();
         let Some(slot) = segment.slot else {
             // Capture failed (slot pool exhausted); the span stays dynamic.
@@ -1734,7 +1969,14 @@ fn replay_run(
             state.segments.push(segment);
             continue;
         }
-        match locate_and_verify(&segment, &views, cursor, skipped_entries, center) {
+        match resolve_segment_outcome(
+            verdicts[segment_index].take(),
+            &segment,
+            &views,
+            cursor,
+            skipped_entries,
+            center,
+        ) {
             LocateOutcome::Match { anchor, t, patches } => {
                 let bounds_now = t.apply_to_bounds(center_final, segment.bounds);
                 // The retained batch's baked clip moves with its shapes, so
