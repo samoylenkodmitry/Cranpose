@@ -941,6 +941,13 @@ fn flush_shape_run(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
+        if try_shape_replay(local_scene, run, context, motion) {
+            // The replay driver emitted the whole run itself — retained ops
+            // for stable segments, ordinary draws for the rest. Replay
+            // engages only for anchor-free contexts, so the skipped
+            // snap-anchor pass below had nothing to do anyway.
+            return;
+        }
         let entries = run.len();
         #[allow(unused_mut)]
         let mut parallel = SHAPE_RUN_TUNER.choose_parallel(entries)
@@ -1032,6 +1039,793 @@ fn flush_shape_run_parallel(
         }
     });
     run.clear();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::shape_replay::{
+    anchor_compatible, anchor_transform, anchor_transform_pinned, context_fingerprint,
+    entries_bounds, is_circle, layer_supports_replay, match_entry, rect_contains, stroke_width,
+    transforms_group, EntryMatch, PendingBrushPatch, PendingCapture, ReplayPhase, ReplaySegment,
+    SegmentTransform, ShapeReplayState, SnapshotEntry, SnapshotShape, ANCHOR_PROBE_ENTRIES,
+    MAX_RETAINED_OPS, MAX_SEGMENT_ENTRIES, MIN_REPLAY_RUN_ENTRIES, MIN_SEGMENT_ENTRIES,
+    RESYNC_WINDOW, SHAPE_REPLAY,
+};
+
+/// The replay-relevant view of one run entry: its similarity-checkable
+/// geometry and its (borrowed) brush. `None` marks shapes replay cannot
+/// carry — plain rects, non-circular round-rects, per-draw clips, non-SrcOver
+/// blends — which break segments wherever they sit.
+#[cfg(not(target_arch = "wasm32"))]
+fn replay_entry_view<'a>(entry: &ShapeRunEntry<'a>) -> Option<(SnapshotShape, &'a Brush)> {
+    if entry.clip.is_some() || entry.blend_mode != BlendMode::SrcOver {
+        return None;
+    }
+    match &entry.shape {
+        ShapeRunShape::Arc {
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+            ..
+        } => Some((
+            SnapshotShape::Arc {
+                center: *center,
+                radius: *radius,
+                inner_radius: *inner_radius,
+                start_angle: *start_angle,
+                sweep_angle: *sweep_angle,
+                stroke_width: stroke_width(stroke),
+            },
+            brush,
+        )),
+        ShapeRunShape::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => {
+            if !is_circle(*rect, *radii) {
+                return None;
+            }
+            Some((
+                SnapshotShape::Circle {
+                    center: Point::new(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5),
+                    diameter: rect.width,
+                    stroke_width: stroke_width(stroke),
+                },
+                brush,
+            ))
+        }
+        ShapeRunShape::Rect { .. } => None,
+    }
+}
+
+/// The shared rotation/scale pivot of a run: the first arc's center. Every
+/// arc must agree with it (verification enforces that); a run without arcs
+/// never engages replay.
+#[cfg(not(target_arch = "wasm32"))]
+fn detect_center(views: &[Option<(SnapshotShape, &Brush)>]) -> Option<Point> {
+    views.iter().flatten().find_map(|(shape, _)| match shape {
+        SnapshotShape::Arc { center, .. } => Some(*center),
+        _ => None,
+    })
+}
+
+/// Serially emits a span of run entries through the ordinary per-entry path.
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_entries_range(
+    local_scene: &mut CompositorScene,
+    entries: &[ShapeRunEntry<'_>],
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) {
+    for entry in entries {
+        if let Some(params) = emit_shape_run_entry(
+            entry,
+            context.layer_bounds,
+            context.local_layer,
+            context.visual_clip,
+            motion,
+        ) {
+            push_shape_params(local_scene, params);
+        }
+    }
+}
+
+/// Consults the similarity-replay state for this run. `true` means the run
+/// was fully emitted here — retained ops for replayed segments, ordinary
+/// draws for everything else — and the caller must not emit it again. `false`
+/// hands the run to the normal tuned path unchanged; snapshot bookkeeping may
+/// still have happened on the way through.
+#[cfg(not(target_arch = "wasm32"))]
+fn try_shape_replay(
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) -> bool {
+    SHAPE_REPLAY.with(|state| {
+        let mut state = state.borrow_mut();
+        try_shape_replay_inner(&mut state, local_scene, run, context, motion)
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn try_shape_replay_inner(
+    state: &mut ShapeReplayState,
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) -> bool {
+    if !state.supported || state.big_run_claimed || run.len() < MIN_REPLAY_RUN_ENTRIES {
+        return false;
+    }
+    state.big_run_claimed = true;
+
+    if context.draw_snap_anchor.is_some() || !layer_supports_replay(context.local_layer) {
+        state.retire_all();
+        return false;
+    }
+    let fingerprint = context_fingerprint(
+        context.layer_bounds,
+        context.visual_clip,
+        context.local_layer.alpha,
+        motion,
+    );
+    if state.rebuild_pending
+        || (state.phase != ReplayPhase::Idle && fingerprint != state.fingerprint)
+    {
+        state.retire_all();
+    }
+
+    match state.phase {
+        ReplayPhase::Idle => {
+            take_run_snapshot(state, run, fingerprint);
+            false
+        }
+        ReplayPhase::Snapshotted => partition_and_capture(state, local_scene, run, context, motion),
+        ReplayPhase::Active => replay_run(state, local_scene, run, context, motion),
+    }
+}
+
+/// Frame 0 of a replay cycle: clone the run so the next frame's diff can
+/// find what moves together. Stays `Idle` when the run has no arc to pin the
+/// pivot.
+#[cfg(not(target_arch = "wasm32"))]
+fn take_run_snapshot(state: &mut ShapeReplayState, run: &[ShapeRunEntry<'_>], fingerprint: u64) {
+    let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
+    let Some(center) = detect_center(&views) else {
+        return;
+    };
+    state.snapshot = views
+        .iter()
+        .map(|view| {
+            view.as_ref().map(|(shape, brush)| SnapshotEntry {
+                shape: *shape,
+                brush: (*brush).clone(),
+            })
+        })
+        .collect();
+    state.center = center;
+    state.fingerprint = fingerprint;
+    state.phase = ReplayPhase::Snapshotted;
+}
+
+/// Splits the run into maximal chains of consecutive entries that moved from
+/// the snapshot by one shared similarity transform. Chains shorter than
+/// [`MIN_SEGMENT_ENTRIES`] stay dynamic.
+#[cfg(not(target_arch = "wasm32"))]
+fn partition_chains(
+    snapshot: &[Option<SnapshotEntry>],
+    views: &[Option<(SnapshotShape, &Brush)>],
+    center: Point,
+) -> Vec<(usize, usize)> {
+    let mut chains = Vec::new();
+    let mut i = 0;
+    while i < views.len() {
+        let (Some(snap), Some((current, brush))) = (&snapshot[i], &views[i]) else {
+            i += 1;
+            continue;
+        };
+        // A chain anchor must pin rotation itself: an on-pivot circle as
+        // anchor would freeze the chain's angle at zero and fail rotating
+        // content behind it.
+        let Some((t, true)) = anchor_transform_pinned(current, &snap.shape, center) else {
+            i += 1;
+            continue;
+        };
+        if matches!(
+            match_entry(current, brush, snap, center, t),
+            EntryMatch::Mismatch
+        ) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut end = i + 1;
+        while end < views.len() {
+            let (Some(snap), Some((current, brush))) = (&snapshot[end], &views[end]) else {
+                break;
+            };
+            // Grouping is strict where verification is lenient: the entry's
+            // own implied transform must sit on the anchor's, or the pair
+            // belongs to differently-moving rings whose divergence from the
+            // capture only grows.
+            let Some((entry_t, pinned)) = anchor_transform_pinned(current, &snap.shape, center)
+            else {
+                break;
+            };
+            if !transforms_group(entry_t, pinned, t) {
+                break;
+            }
+            if matches!(
+                match_entry(current, brush, snap, center, t),
+                EntryMatch::Mismatch
+            ) {
+                break;
+            }
+            end += 1;
+        }
+        if end - start >= MIN_SEGMENT_ENTRIES {
+            // Long chains split into bounded captures so one entry going
+            // dynamic later cannot take a five-figure span with it.
+            let mut piece_start = start;
+            while piece_start < end {
+                let piece_end = (piece_start + MAX_SEGMENT_ENTRIES).min(end);
+                if piece_end - piece_start >= MIN_SEGMENT_ENTRIES {
+                    chains.push((piece_start, piece_end));
+                }
+                piece_start = piece_end;
+            }
+        }
+        i = end.max(i + 1);
+    }
+    chains
+}
+
+/// Frame 1 of a replay cycle: diff against the snapshot, partition stable
+/// chains, emit the whole run serially while recording exactly which scene
+/// shapes each chain produced, and queue those ranges for GPU capture. The
+/// run renders normally this frame; replay starts on the next.
+#[cfg(not(target_arch = "wasm32"))]
+fn partition_and_capture(
+    state: &mut ShapeReplayState,
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) -> bool {
+    if run.len() != state.snapshot.len() {
+        // The structure moved under us while bootstrapping; restart the
+        // cycle from this frame's content.
+        let fingerprint = state.fingerprint;
+        state.phase = ReplayPhase::Idle;
+        state.snapshot.clear();
+        take_run_snapshot(state, run, fingerprint);
+        return false;
+    }
+    let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
+    let chains = partition_chains(&state.snapshot, &views, state.center);
+    if chains.is_empty() {
+        let fingerprint = state.fingerprint;
+        state.phase = ReplayPhase::Idle;
+        state.snapshot.clear();
+        take_run_snapshot(state, run, fingerprint);
+        return false;
+    }
+
+    struct ChainTrack {
+        start_entry: usize,
+        end_entry: usize,
+        shape_start: usize,
+        bounds: Option<Rect>,
+        alive: bool,
+    }
+    let capture_clip = context.visual_clip;
+    let mut tracks: Vec<ChainTrack> = Vec::with_capacity(chains.len());
+    let mut active: Option<ChainTrack> = None;
+    let mut chain_cursor = 0usize;
+    for (i, entry) in run.iter().enumerate() {
+        if chain_cursor < chains.len() && chains[chain_cursor].0 == i {
+            active = Some(ChainTrack {
+                start_entry: i,
+                end_entry: chains[chain_cursor].1,
+                shape_start: local_scene.shapes.len(),
+                bounds: None,
+                alive: true,
+            });
+        }
+        let shapes_before = local_scene.shapes.len();
+        let mut emitted_rect = None;
+        if let Some(params) = emit_shape_run_entry(
+            entry,
+            context.layer_bounds,
+            context.local_layer,
+            context.visual_clip,
+            motion,
+        ) {
+            emitted_rect = Some(params.rect);
+            push_shape_params(local_scene, params);
+        }
+        if let Some(track) = &mut active {
+            if track.alive {
+                // A replayable chain entry must map to exactly one scene
+                // shape that its ambient clip does not cut — the retained
+                // batch replays shapes whole or not at all.
+                let one_shape = local_scene.shapes.len() == shapes_before + 1;
+                let clip_ok = match (capture_clip, emitted_rect) {
+                    (Some(clip), Some(rect)) => rect_contains(clip, rect),
+                    (None, Some(_)) => true,
+                    (_, None) => false,
+                };
+                if one_shape && clip_ok {
+                    let rect = emitted_rect.expect("checked above");
+                    track.bounds = union_rect(track.bounds, rect);
+                } else {
+                    track.alive = false;
+                }
+            }
+            if i + 1 == track.end_entry {
+                tracks.push(active.take().expect("active chain track"));
+                chain_cursor += 1;
+            }
+        }
+    }
+
+    state.segments.clear();
+    state.pending_captures.clear();
+    for track in tracks {
+        let Some(bounds) = track.bounds else { continue };
+        if !track.alive {
+            continue;
+        }
+        let entries: Vec<SnapshotEntry> = (track.start_entry..track.end_entry)
+            .map(|i| {
+                let (shape, brush) = views[i].as_ref().expect("chain entries are replayable");
+                SnapshotEntry {
+                    shape: *shape,
+                    brush: (*brush).clone(),
+                }
+            })
+            .collect();
+        let segment = state.segments.len();
+        state.segments.push(ReplaySegment {
+            entries,
+            bounds,
+            slot: None,
+            slot_offset: 0,
+        });
+        state.pending_captures.push(PendingCapture {
+            segment,
+            shape_start: track.shape_start,
+            shape_count: track.end_entry - track.start_entry,
+        });
+    }
+
+    if state.segments.is_empty() {
+        let fingerprint = state.fingerprint;
+        state.phase = ReplayPhase::Idle;
+        state.snapshot.clear();
+        take_run_snapshot(state, run, fingerprint);
+    } else {
+        static FIRST_CAPTURE: std::sync::Once = std::sync::Once::new();
+        FIRST_CAPTURE.call_once(|| {
+            let retained: usize = state.segments.iter().map(|s| s.entries.len()).sum();
+            log::warn!(
+                "[similarity-replay] first capture: {} segments retain {} of {} entries",
+                state.segments.len(),
+                retained,
+                run.len(),
+            );
+        });
+        state.capture_clip = capture_clip;
+        state.captured_root_scale = Some(state.root_scale);
+        state.snapshot.clear();
+        state.phase = ReplayPhase::Active;
+    }
+    run.clear();
+    true
+}
+
+/// A partial verification deeper than this is trusted as the segment's true
+/// anchor — the mismatch marks real changed content, not a false anchor —
+/// and reported for a split instead of being scanned past.
+#[cfg(not(target_arch = "wasm32"))]
+const TRUSTED_PARTIAL_DEPTH: usize = 64;
+
+#[cfg(not(target_arch = "wasm32"))]
+enum LocateOutcome {
+    /// Whole segment verified; `patches` are the recolored entry indices.
+    Match {
+        anchor: usize,
+        t: SegmentTransform,
+        patches: Vec<usize>,
+    },
+    /// The anchor is trustworthy but entry `verified` changed for real —
+    /// the segment can split around it. `patches` lie within the prefix.
+    Partial {
+        anchor: usize,
+        t: SegmentTransform,
+        verified: usize,
+        patches: Vec<usize>,
+    },
+    NotFound,
+}
+
+/// Finds a segment's anchor at or after `cursor` and verifies every entry
+/// under the anchor's transform. `extra_window` widens the scan past earlier
+/// missed segments, whose entries still sit in the run ahead of this
+/// segment's. No cap on the patch count: recolor patches are byte-exact, so
+/// even a segment recoloring every entry every frame (MEGA's twinkle field
+/// does) replays correctly, and patch bytes cost far less than re-emitting
+/// the span.
+#[cfg(not(target_arch = "wasm32"))]
+fn locate_and_verify(
+    segment: &ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    cursor: usize,
+    extra_window: usize,
+    center: Point,
+) -> LocateOutcome {
+    let len = segment.entries.len();
+    let Some(max_start) = views.len().checked_sub(len) else {
+        return LocateOutcome::NotFound;
+    };
+    let scan_end = max_start.min(cursor.saturating_add(RESYNC_WINDOW + extra_window));
+    if cursor > scan_end {
+        return LocateOutcome::NotFound;
+    }
+    let anchor_entry = &segment.entries[0];
+    for candidate in cursor..=scan_end {
+        let Some((current, _)) = &views[candidate] else {
+            continue;
+        };
+        if !anchor_compatible(current, &anchor_entry.shape) {
+            continue;
+        }
+        let Some(t) = anchor_transform(current, &anchor_entry.shape, center) else {
+            continue;
+        };
+        let probe = ANCHOR_PROBE_ENTRIES.min(len);
+        let probe_ok = (0..probe).all(|k| {
+            views[candidate + k].as_ref().is_some_and(|(shape, brush)| {
+                !matches!(
+                    match_entry(shape, brush, &segment.entries[k], center, t),
+                    EntryMatch::Mismatch
+                )
+            })
+        });
+        if !probe_ok {
+            continue;
+        }
+        let mut patches = Vec::new();
+        let mut failed_at = None;
+        for k in 0..len {
+            let Some((shape, brush)) = &views[candidate + k] else {
+                failed_at = Some(k);
+                break;
+            };
+            match match_entry(shape, brush, &segment.entries[k], center, t) {
+                EntryMatch::Exact => {}
+                EntryMatch::Recolor => patches.push(k),
+                EntryMatch::Mismatch => {
+                    failed_at = Some(k);
+                    break;
+                }
+            }
+        }
+        match failed_at {
+            None => {
+                return LocateOutcome::Match {
+                    anchor: candidate,
+                    t,
+                    patches,
+                }
+            }
+            Some(verified) if verified >= TRUSTED_PARTIAL_DEPTH => {
+                return LocateOutcome::Partial {
+                    anchor: candidate,
+                    t,
+                    verified,
+                    patches,
+                };
+            }
+            // A shallow failure looks like a false anchor; keep scanning.
+            Some(_) => continue,
+        }
+    }
+    LocateOutcome::NotFound
+}
+
+/// Diagnostic post-mortem of a segment miss, for the capped miss log: where
+/// the anchor scan or the verification actually gave up.
+#[cfg(not(target_arch = "wasm32"))]
+fn replay_miss_detail(
+    segment: &ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    cursor: usize,
+    center: Point,
+) -> String {
+    let len = segment.entries.len();
+    let Some(max_start) = views.len().checked_sub(len) else {
+        return format!("run shorter than segment ({} < {len})", views.len());
+    };
+    let scan_end = max_start.min(cursor.saturating_add(RESYNC_WINDOW));
+    let anchor = &segment.entries[0];
+    for candidate in cursor..=scan_end {
+        let Some((current, _)) = &views[candidate] else {
+            continue;
+        };
+        if !anchor_compatible(current, &anchor.shape) {
+            continue;
+        }
+        let Some(t) = anchor_transform(current, &anchor.shape, center) else {
+            continue;
+        };
+        let mut patches = 0usize;
+        for k in 0..len {
+            let Some((shape, brush)) = &views[candidate + k] else {
+                return format!("candidate at {candidate}: entry {k} not replayable (t={t:?})");
+            };
+            match match_entry(shape, brush, &segment.entries[k], center, t) {
+                EntryMatch::Exact => {}
+                EntryMatch::Recolor => patches += 1,
+                EntryMatch::Mismatch => {
+                    return format!(
+                        "candidate at {candidate}: entry {k} mismatched (t={t:?}, patches so far {patches}); current {shape:?} vs capture {:?}",
+                        segment.entries[k].shape,
+                    );
+                }
+            }
+        }
+        return format!(
+            "candidate at {candidate}: diagnostic verify passed with {patches} patches of {len} — \
+             the live scan must have failed differently (clip bounds?)"
+        );
+    }
+    "no anchor candidate in window".to_string()
+}
+
+/// Queues the recolor patches of a matched prefix and updates the segment
+/// snapshot so the next frame diffs against what the slot now holds.
+#[cfg(not(target_arch = "wasm32"))]
+fn commit_segment_patches(
+    state: &mut ShapeReplayState,
+    segment: &mut ReplaySegment,
+    views: &[Option<(SnapshotShape, &Brush)>],
+    anchor: usize,
+    patches: &[usize],
+    slot: u32,
+    layer: &GraphicsLayer,
+) {
+    state.stat_patches += patches.len() as u64;
+    for &k in patches {
+        let (_, brush) = views[anchor + k].as_ref().expect("verified entry");
+        segment.entries[k].brush = (*brush).clone();
+        state.pending_patches.push(PendingBrushPatch {
+            slot,
+            shape_index: segment.slot_offset + k as u32,
+            brush: cranpose_render_common::style_shared::apply_layer_to_brush(
+                (*brush).clone(),
+                layer,
+            ),
+        });
+    }
+}
+
+/// Frame 2+ of a replay cycle: verify each captured segment against the
+/// incoming run and replace it with one retained op; everything between
+/// segments emits normally.
+///
+/// A segment whose prefix verifies but whose entry `k` genuinely changed
+/// does not die: it splits around the changed entry, both halves keeping
+/// their ranges of the already-captured slot. The changed entry alone goes
+/// back to the normal pipeline. This is what makes the table converge on
+/// scenes with stepped movers — content that sits still for a few frames
+/// and then jumps — instead of cycling through full rebuilds that re-merge
+/// the troublemakers every time.
+#[cfg(not(target_arch = "wasm32"))]
+fn replay_run(
+    state: &mut ShapeReplayState,
+    local_scene: &mut CompositorScene,
+    run: &mut Vec<ShapeRunEntry<'_>>,
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) -> bool {
+    let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
+    let center = state.center;
+    let center_final = Point::new(
+        center.x + context.layer_bounds.x,
+        center.y + context.layer_bounds.y,
+    );
+    let capture_clip = state.capture_clip;
+    let root_scale = state.root_scale;
+    let mut cursor = 0usize;
+    // Entries of unreplayed-but-alive segments ahead of the cursor: widens
+    // later anchors' scan windows, and counts as coverage the table still
+    // expects to recover.
+    let mut skipped_entries = 0usize;
+    let mut retained_entries = 0usize;
+    let mut carried_entries = 0usize;
+    let old_segments = std::mem::take(&mut state.segments);
+    for mut segment in old_segments {
+        let len = segment.entries.len();
+        let Some(slot) = segment.slot else {
+            // Capture failed (slot pool exhausted); the span stays dynamic.
+            skipped_entries += len;
+            carried_entries += len;
+            state.segments.push(segment);
+            continue;
+        };
+        if local_scene.retained_draws.len() >= MAX_RETAINED_OPS {
+            skipped_entries += len;
+            carried_entries += len;
+            state.segments.push(segment);
+            continue;
+        }
+        match locate_and_verify(&segment, &views, cursor, skipped_entries, center) {
+            LocateOutcome::Match { anchor, t, patches } => {
+                let bounds_now = t.apply_to_bounds(center_final, segment.bounds);
+                // The retained batch's baked clip moves with its shapes, so
+                // it only stands in for the real, screen-fixed clip while
+                // the whole segment stays inside it.
+                if capture_clip.is_some_and(|clip| !rect_contains(clip, bounds_now)) {
+                    skipped_entries += len;
+                    state.drop_slot_ref(slot);
+                    continue;
+                }
+                emit_entries_range(local_scene, &run[cursor..anchor], context, motion);
+                commit_segment_patches(
+                    state,
+                    &mut segment,
+                    &views,
+                    anchor,
+                    &patches,
+                    slot,
+                    context.local_layer,
+                );
+                local_scene.push_retained_draw(crate::scene::RetainedDraw {
+                    slot,
+                    transform: t.to_similarity(center_final, root_scale),
+                    bounds: bounds_now,
+                    first_shape: segment.slot_offset,
+                    shape_count: len as u32,
+                });
+                retained_entries += len;
+                cursor = anchor + len;
+                skipped_entries = 0;
+                state.segments.push(segment);
+            }
+            LocateOutcome::Partial {
+                anchor,
+                t,
+                verified,
+                patches,
+            } => {
+                state.stat_splits += 1;
+                let b_len = len - verified - 1;
+                let a_keep = verified >= MIN_SEGMENT_ENTRIES;
+                let b_keep = b_len >= MIN_SEGMENT_ENTRIES;
+                let parent_offset = segment.slot_offset;
+                let mut b_entries = segment.entries.split_off(verified + 1);
+                segment.entries.pop();
+                match (a_keep, b_keep) {
+                    (true, true) => {
+                        // Both halves stay claimants of the shared slot.
+                        *state.slot_refs.entry(slot).or_insert(1) += 1;
+                    }
+                    (false, false) => state.drop_slot_ref(slot),
+                    _ => {}
+                }
+                if a_keep {
+                    segment.bounds = entries_bounds(&segment.entries)
+                        .translate(context.layer_bounds.x, context.layer_bounds.y);
+                    let bounds_now = t.apply_to_bounds(center_final, segment.bounds);
+                    if capture_clip.is_some_and(|clip| !rect_contains(clip, bounds_now)) {
+                        state.drop_slot_ref(slot);
+                        skipped_entries += verified;
+                    } else {
+                        emit_entries_range(local_scene, &run[cursor..anchor], context, motion);
+                        commit_segment_patches(
+                            state,
+                            &mut segment,
+                            &views,
+                            anchor,
+                            &patches,
+                            slot,
+                            context.local_layer,
+                        );
+                        local_scene.push_retained_draw(crate::scene::RetainedDraw {
+                            slot,
+                            transform: t.to_similarity(center_final, root_scale),
+                            bounds: bounds_now,
+                            first_shape: segment.slot_offset,
+                            shape_count: verified as u32,
+                        });
+                        retained_entries += verified;
+                        cursor = anchor + verified;
+                        skipped_entries = 0;
+                        state.segments.push(segment);
+                    }
+                } else {
+                    skipped_entries += verified;
+                }
+                // The changed entry itself goes dynamic for good.
+                skipped_entries += 1;
+                if b_keep {
+                    let bounds_b = entries_bounds(&b_entries)
+                        .translate(context.layer_bounds.x, context.layer_bounds.y);
+                    skipped_entries += b_entries.len();
+                    carried_entries += b_entries.len();
+                    state.segments.push(ReplaySegment {
+                        entries: std::mem::take(&mut b_entries),
+                        bounds: bounds_b,
+                        slot: Some(slot),
+                        // Offsets are capture-relative, so the sibling
+                        // starts right past the excised entry.
+                        slot_offset: parent_offset + verified as u32 + 1,
+                    });
+                } else {
+                    skipped_entries += b_len;
+                }
+            }
+            LocateOutcome::NotFound => {
+                state.stat_deaths += 1;
+                static MISS_LOGS: std::sync::atomic::AtomicU32 =
+                    std::sync::atomic::AtomicU32::new(0);
+                if MISS_LOGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 12 {
+                    log::warn!(
+                        "[similarity-replay] segment died len={} cursor={} views={} {}",
+                        len,
+                        cursor,
+                        views.len(),
+                        replay_miss_detail(&segment, &views, cursor, center),
+                    );
+                }
+                skipped_entries += len;
+                state.drop_slot_ref(slot);
+            }
+        }
+    }
+    emit_entries_range(local_scene, &run[cursor..], context, motion);
+    let covered = retained_entries + carried_entries;
+    if (covered as f32) < crate::shape_replay::MIN_COVERAGE_FRACTION * run.len() as f32
+        && state.frame.wrapping_sub(state.last_rebuild_frame)
+            >= crate::shape_replay::REBUILD_COOLDOWN_FRAMES
+    {
+        state.rebuild_pending = true;
+        state.last_rebuild_frame = state.frame;
+    }
+    static FIRST_REPLAY: std::sync::Once = std::sync::Once::new();
+    if retained_entries > 0 {
+        FIRST_REPLAY.call_once(|| {
+            log::warn!(
+                "[similarity-replay] first replayed frame: {} retained ops cover {} of {} entries",
+                local_scene.retained_draws.len(),
+                retained_entries,
+                run.len(),
+            );
+        });
+    }
+    if state.frame.is_multiple_of(300) {
+        log::warn!(
+            "[similarity-replay] frame {}: {} ops retain {}/{} entries ({} segments); lifetime deaths {} splits {} patches {}",
+            state.frame,
+            local_scene.retained_draws.len(),
+            retained_entries,
+            run.len(),
+            state.segments.len(),
+            state.stat_deaths,
+            state.stat_splits,
+            state.stat_patches,
+        );
+    }
+    run.clear();
+    true
 }
 
 /// Feeds one [`DrawRunNode`]'s primitives through the shape run, spilling any
@@ -1893,6 +2687,17 @@ pub(crate) fn build_scene_window(
                 .copied()
                 .flatten()
                 .map(DrawOpKind::Shadow),
+            // Retained batches never appear inside windowed ranges: their
+            // quads are baked in absolute device space, and a window scene is
+            // translated into its own origin. The range chunker refuses to
+            // cache across them (`draw_op_is_motion_sensitive` is true and
+            // `scene_range_can_cache_as_transparent_surface` is false), so an
+            // op reaching here would already be a bug upstream; dropping it
+            // keeps the window's coordinates sane.
+            DrawOpKind::Retained(_) => {
+                debug_assert!(false, "retained draw op inside a windowed scene range");
+                None
+            }
         };
         if let Some(kind) = kind {
             scene.draw_ops.push(DrawOp {

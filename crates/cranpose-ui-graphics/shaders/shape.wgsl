@@ -32,6 +32,32 @@ struct Uniforms {
 @group(0) @binding(0)
 var<uniform> uniforms: Uniforms;
 
+// Per-batch similarity transform: rotate by the angle whose (cos, sin) is
+// `rot` and scale by `scale`, both about `center`, all in device pixels.
+// Replayed shape batches (cached slots re-drawn under an accumulated
+// rotation/breathing transform) set a real value; every freshly converted
+// batch binds a shared identity, which is bit-exact — multiplying by 1.0 and
+// adding 0.0 leaves every coordinate untouched.
+//
+// Only the quad corners are transformed. Every SDF below evaluates in
+// rect-local space reconstructed from `uv` (see `rect_pos` in `fs_main`), and
+// uv interpolation across an affinely transformed quad reproduces that local
+// space exactly, so radii, stroke widths, arc trig and gradient params all
+// stay valid untouched. The one deliberate approximation: the smoothstep
+// anti-aliasing half-width is a capture-space half pixel, so it reads as
+// `scale` screen pixels — the breathing transforms this rides stay within a
+// few percent of 1.
+struct SimilarityTransform {
+    center: vec2<f32>,
+    rot: vec2<f32>,
+    scale: f32,
+    _pad0: f32,
+    _pad1: vec2<f32>,
+}
+
+@group(1) @binding(2)
+var<uniform> similarity: SimilarityTransform;
+
 // Vertex shader
 //
 // There is no vertex buffer: each shape is six unindexed vertices whose
@@ -61,6 +87,16 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
         case 2u: { position = shape.quad23.xy; }
         default: { position = shape.quad23.zw; }
     }
+
+    // Screen-clockwise rotation in y-down device space: matches the arc
+    // convention above (start_angle increases clockwise), so a batch replayed
+    // with rotation delta lands where freshly emitted arcs at
+    // `start_angle + delta` would.
+    let rel = position - similarity.center;
+    position = similarity.center + vec2<f32>(
+        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
+        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
+    ) * similarity.scale;
 
     // Convert from pixel coordinates to clip space (viewport_offset shifts the origin
     // so that a sub-region of the viewport maps to the full NDC range)

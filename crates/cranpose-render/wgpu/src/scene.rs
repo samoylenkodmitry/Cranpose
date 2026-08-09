@@ -87,12 +87,63 @@ pub(crate) struct ImageDraw {
     pub motion_context_animated: bool,
 }
 
+/// CPU mirror of the shader's per-batch `SimilarityTransform`: rotate by the
+/// angle whose (cos, sin) is `rot` and scale by `scale`, about `center`, in
+/// device pixels. Freshly converted batches bind [`Self::IDENTITY`] through a
+/// buffer shared renderer-wide; replayed batches bind their own value.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct SimilarityTransform {
+    pub(crate) center: [f32; 2],
+    pub(crate) rot: [f32; 2],
+    pub(crate) scale: f32,
+    _pad: [f32; 3],
+}
+
+impl SimilarityTransform {
+    pub(crate) const IDENTITY: Self = Self {
+        center: [0.0, 0.0],
+        rot: [1.0, 0.0],
+        scale: 1.0,
+        _pad: [0.0; 3],
+    };
+
+    pub(crate) fn new(center: [f32; 2], angle: f32, scale: f32) -> Self {
+        Self {
+            center,
+            rot: [angle.cos(), angle.sin()],
+            scale,
+            _pad: [0.0; 3],
+        }
+    }
+}
+
+/// One replayed shape batch: GPU slots captured from an earlier frame's
+/// converted shapes, drawn this frame under `transform`. The heavy per-shape
+/// pipeline (emit, walk, convert, upload) never sees these shapes again —
+/// the scene carries this one op where thousands of shape ops used to be.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RetainedDraw {
+    /// Renderer-side replay slot holding the retained buffers and bind group.
+    pub slot: u32,
+    pub transform: SimilarityTransform,
+    /// Screen-space bounds of the transformed batch, for visibility checks.
+    pub bounds: Rect,
+    /// First shape drawn within the slot's capture — draws sharing a slot
+    /// after a segment split cover disjoint ranges of it.
+    pub first_shape: u32,
+    /// How many shapes the retained batch draws (6 vertices each).
+    pub shape_count: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum DrawOpKind {
     Shape(usize),
     Image(usize),
     Text(usize),
     Shadow(usize),
+    /// Index into [`CompositorScene::retained_draws`].
+    Retained(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -157,6 +208,7 @@ pub(crate) struct CompositorScene {
     pub draw_ops: Vec<DrawOp>,
     pub effect_layers: Vec<EffectLayer>,
     pub backdrop_layers: Vec<BackdropLayer>,
+    pub retained_draws: Vec<RetainedDraw>,
     pub next_z: usize,
 }
 
@@ -233,6 +285,7 @@ impl CompositorScene {
                 draw_ops: buffers.draw_ops,
                 effect_layers: buffers.effect_layers,
                 backdrop_layers: buffers.backdrop_layers,
+                retained_draws: Vec::new(),
                 next_z: 0,
             };
         }
@@ -244,6 +297,7 @@ impl CompositorScene {
             draw_ops: Vec::with_capacity(hint.draw_ops),
             effect_layers: Vec::with_capacity(hint.effect_layers),
             backdrop_layers: Vec::with_capacity(hint.backdrop_layers),
+            retained_draws: Vec::new(),
             next_z: 0,
         }
     }
@@ -268,7 +322,19 @@ impl CompositorScene {
         self.draw_ops.clear();
         self.effect_layers.clear();
         self.backdrop_layers.clear();
+        self.retained_draws.clear();
         self.next_z = 0;
+    }
+
+    /// Pushes one retained-batch draw at the next z position and returns it.
+    pub fn push_retained_draw(&mut self, draw: RetainedDraw) {
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.retained_draws.push(draw);
+        self.draw_ops.push(DrawOp {
+            z_index,
+            kind: DrawOpKind::Retained(self.retained_draws.len() - 1),
+        });
     }
 
     pub fn push_shape(

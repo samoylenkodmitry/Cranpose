@@ -28,7 +28,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
+    RetainedDraw, SceneCapacityHint, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
 };
 use crate::shaders;
 use crate::surface_executor::{
@@ -1591,6 +1591,39 @@ fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
     }
 }
 
+/// A gradient brush's stop entries exactly as [`convert_shape_into_slots`]
+/// would build them, for replay recolor patches. Empty for solid brushes.
+#[cfg(not(target_arch = "wasm32"))]
+fn replay_gradient_stops(brush: &Brush) -> Vec<GradientStop> {
+    let (colors, stops) = match brush {
+        Brush::Solid(_) => return Vec::new(),
+        Brush::LinearGradient { colors, stops, .. }
+        | Brush::RadialGradient { colors, stops, .. }
+        | Brush::SweepGradient { colors, stops, .. } => (colors, stops.as_deref()),
+    };
+    let count = colors.len();
+    let explicit_stops = stops.filter(|values| values.len() == count);
+    colors
+        .iter()
+        .enumerate()
+        .map(|(index, color)| {
+            let position = explicit_stops
+                .map(|values| values[index])
+                .unwrap_or_else(|| {
+                    if count <= 1 {
+                        0.0
+                    } else {
+                        index as f32 / (count - 1) as f32
+                    }
+                });
+            GradientStop {
+                color: [color.r(), color.g(), color.b(), color.a()],
+                position: [position, 0.0, 0.0, 0.0],
+            }
+        })
+        .collect()
+}
+
 /// Converts one [`DrawShape`] into its GPU representation, writing into
 /// pre-sized slots so a batch can convert in parallel across disjoint
 /// sub-slices. `gradient_start` is the shape's global offset into the batch
@@ -1994,6 +2027,54 @@ struct GradientStop {
     position: [f32; 4],
 }
 
+/// How many replay slots the shared transform buffer holds. Each slot's
+/// transform lives at `slot * REPLAY_TRANSFORM_STRIDE`, aligned for the
+/// strictest uniform-offset requirement any backend reports.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_REPLAY_SLOTS: u32 = 128;
+#[cfg(not(target_arch = "wasm32"))]
+const REPLAY_TRANSFORM_STRIDE: u64 = 256;
+
+/// One retained replay batch: converted shape slots captured on an earlier
+/// frame, kept on the GPU and re-drawn each frame under the similarity
+/// transform staged at `transform_offset`.
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlot {
+    shape_buffer: wgpu::Buffer,
+    gradient_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    shape_count: u32,
+    /// Per-shape offsets into the gradient buffer (`shape_count + 1`
+    /// entries), so recolor patches can rewrite one shape's stop span.
+    gradient_offsets: Vec<u32>,
+}
+
+/// The renderer's registry of live replay slots. The replay cache (scene
+/// side) owns slot LIFECYCLE decisions; this store owns the GPU resources.
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlotStore {
+    slots: std::collections::HashMap<u32, ReplaySlot>,
+    transform_buffer: wgpu::Buffer,
+    free_ids: Vec<u32>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReplaySlotStore {
+    fn new(device: &wgpu::Device) -> Self {
+        let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Transform Buffer"),
+            size: MAX_REPLAY_SLOTS as u64 * REPLAY_TRANSFORM_STRIDE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            slots: std::collections::HashMap::new(),
+            transform_buffer,
+            free_ids: (0..MAX_REPLAY_SLOTS).rev().collect(),
+        }
+    }
+}
+
 struct CachedImageTexture {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
@@ -2358,6 +2439,16 @@ enum UploadTarget {
     ImageIndex,
     #[cfg(not(target_arch = "wasm32"))]
     RetainedGlyphUniform,
+    /// The shared replay-transform buffer; copies land at each slot's fixed
+    /// 256-byte-aligned offset.
+    #[cfg(not(target_arch = "wasm32"))]
+    ReplayTransform,
+    /// A replay slot's retained shape buffer (color patches land here).
+    #[cfg(not(target_arch = "wasm32"))]
+    ReplayShapeData(u32),
+    /// A replay slot's retained gradient buffer (stop recolors land here).
+    #[cfg(not(target_arch = "wasm32"))]
+    ReplayGradientData(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2470,6 +2561,7 @@ impl ShapeBatchBuffers {
     fn new(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
+        similarity_buffer: &wgpu::Buffer,
         batch_limits: ShapeBatchLimits,
     ) -> Self {
         let initial_shape_cap = batch_limits.initial_shape_capacity();
@@ -2501,6 +2593,10 @@ impl ShapeBatchBuffers {
                     binding: 1,
                     resource: gradient_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: similarity_buffer.as_entire_binding(),
+                },
             ],
         });
 
@@ -2520,6 +2616,7 @@ impl ShapeBatchBuffers {
         &mut self,
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
+        similarity_buffer: &wgpu::Buffer,
         shapes_needed: usize,
         gradients_needed: usize,
     ) {
@@ -2573,6 +2670,10 @@ impl ShapeBatchBuffers {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: self.gradient_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: similarity_buffer.as_entire_binding(),
                     },
                 ],
             });
@@ -2672,6 +2773,11 @@ pub struct GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
+    /// Shared identity binding for `@group(1) @binding(2)`: every freshly
+    /// converted shape batch draws untransformed through this one buffer.
+    identity_similarity_buffer: wgpu::Buffer,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_slots: ReplaySlotStore,
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
     glyph_atlas_pipeline: wgpu::RenderPipeline,
@@ -2903,8 +3009,39 @@ impl GpuRenderer {
                         },
                         count: None,
                     },
+                    // The similarity transform rides a dynamic offset so
+                    // retained draws sharing one captured batch can each
+                    // apply their own transform; ordinary batches pass
+                    // offset 0 into the identity buffer.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: true,
+                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
+                                SimilarityTransform,
+                            >()
+                                as u64),
+                        },
+                        count: None,
+                    },
                 ],
             });
+
+        let identity_similarity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Identity Similarity Buffer"),
+            size: std::mem::size_of::<SimilarityTransform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: true,
+        });
+        identity_similarity_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&SimilarityTransform::IDENTITY));
+        identity_similarity_buffer.unmap();
+        #[cfg(not(target_arch = "wasm32"))]
+        let replay_slot_store = ReplaySlotStore::new(&device);
 
         let pipeline = create_shape_pipeline(
             &device,
@@ -3001,8 +3138,12 @@ impl GpuRenderer {
         });
 
         #[cfg(not(target_arch = "wasm32"))]
-        let shape_buffers =
-            ShapeBatchBuffers::new(&device, &shape_bind_group_layout, shape_batch_limits);
+        let shape_buffers = ShapeBatchBuffers::new(
+            &device,
+            &shape_bind_group_layout,
+            &identity_similarity_buffer,
+            shape_batch_limits,
+        );
 
         let image_nearest_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
@@ -3072,6 +3213,9 @@ impl GpuRenderer {
             #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
+            identity_similarity_buffer,
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_slots: replay_slot_store,
             image_pipeline,
             image_pipeline_dst_out,
             glyph_atlas_pipeline,
@@ -3552,6 +3696,9 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         images,
                         texts,
                         shadow_draws,
+                        // Windowed scenes never carry retained draws — see
+                        // `build_scene_window`.
+                        &[],
                         draw_ops,
                         cursor_z,
                         event.z_index,
@@ -3635,6 +3782,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     images,
                     texts,
                     shadow_draws,
+                    &[],
                     draw_ops,
                     cursor_z,
                     z_end,
@@ -4312,6 +4460,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -4328,6 +4477,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             images,
             texts,
             shadow_draws,
+            retained_draws,
             draw_ops,
             z_start,
             z_end,
@@ -4350,6 +4500,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -4464,6 +4615,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 images,
                 texts,
                 shadow_draws,
+                retained_draws,
                 initial_load_op,
                 width,
                 height,
@@ -5325,6 +5477,12 @@ impl GpuRenderer {
                 .retained_direct_scene
                 .take()
                 .unwrap_or_else(|| CompositorScene::with_capacity(self.direct_scene_capacity));
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::shape_replay::SHAPE_REPLAY.with(|state| {
+                state
+                    .borrow_mut()
+                    .begin_frame(self.replay_supported(), root_scale)
+            });
             let collected = collect_layer_contents_reusing(
                 &graph.root,
                 text_state,
@@ -5341,6 +5499,12 @@ impl GpuRenderer {
             {
                 Some(collected)
             } else {
+                // The collected scene will not render this frame, so any
+                // capture requests recorded against its shape indices are
+                // void; the replay state re-bootstraps on the next direct
+                // frame.
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().retire_all());
                 self.retained_direct_scene = Some(collected.scene);
                 None
             }
@@ -5348,6 +5512,10 @@ impl GpuRenderer {
             None
         };
         let after_root_collect = Instant::now();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(collected) = &direct_root {
+            self.process_shape_replay(&collected.scene.shapes, root_scale);
+        }
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
@@ -5608,6 +5776,7 @@ impl GpuRenderer {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
         width: u32,
         height: u32,
@@ -5634,6 +5803,7 @@ impl GpuRenderer {
                         shapes,
                         images,
                         texts,
+                        retained_draws,
                         chunk,
                         width,
                         height,
@@ -5701,6 +5871,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: &SegmentDrawChunkPlan,
         width: u32,
         height: u32,
@@ -5730,6 +5901,7 @@ impl GpuRenderer {
                 shapes,
                 images,
                 texts,
+                retained_draws,
                 &partition.chunk,
                 partition.budget,
                 width,
@@ -5762,6 +5934,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: &SegmentDrawChunkPlan,
         budget: NativeSegmentFusionBudget,
         width: u32,
@@ -5961,6 +6134,33 @@ impl GpuRenderer {
                             });
                         }
                     }
+                    SegmentBatchPlan::Retained { start, end } => {
+                        self.stage_replay_patches(&mut staged_uploads);
+                        for (_, item) in &ordered_items[start..end] {
+                            let SegmentDrawItem::Retained(index) = item else {
+                                return Err(format!(
+                                    "retained batch contains non-retained draw item: {item:?}"
+                                ));
+                            };
+                            let retained = retained_draws.get(*index).ok_or_else(|| {
+                                format!("retained draw index {index} out of bounds")
+                            })?;
+                            if (*index as u32) < MAX_REPLAY_SLOTS
+                                && self.replay_slots.slots.contains_key(&retained.slot)
+                            {
+                                staged_uploads.stage_at(
+                                    UploadTarget::ReplayTransform,
+                                    *index as u64 * REPLAY_TRANSFORM_STRIDE,
+                                    bytemuck::bytes_of(&retained.transform),
+                                );
+                            }
+                        }
+                        if end > start {
+                            fused_batches.push(FusedSegmentBatch::Retained {
+                                item_range: start..end,
+                            });
+                        }
+                    }
                 }
             }
             let after_batch_prepare = Instant::now();
@@ -6139,6 +6339,21 @@ impl GpuRenderer {
                                 );
                             }
                         }
+                        FusedSegmentBatch::Retained { item_range } => {
+                            for (_, item) in &ordered_items[item_range.clone()] {
+                                if let SegmentDrawItem::Retained(index) = item {
+                                    if let Some(retained) = retained_draws.get(*index) {
+                                        self.draw_retained_batch(
+                                            &mut render_pass,
+                                            retained,
+                                            *index,
+                                            width,
+                                            height,
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -6186,6 +6401,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: SegmentDrawChunkPlan,
         width: u32,
         height: u32,
@@ -6202,6 +6418,7 @@ impl GpuRenderer {
             shapes,
             images,
             texts,
+            retained_draws,
             &chunk,
             width,
             height,
@@ -6539,6 +6756,86 @@ impl GpuRenderer {
                         rendered_any = true;
                         next_load_op = wgpu::LoadOp::Load;
                     }
+                    SegmentBatchPlan::Retained { start, end } => {
+                        // Reached only when native fusion declined the chunk;
+                        // retained batches exist on storage-mode native
+                        // devices, where fusion always accepts, but the arm
+                        // stays a real draw so that assumption is not load-
+                        // bearing for correctness.
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let _ = (start, end);
+                            return Err("retained shape batches are native-only".to_string());
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.stage_replay_patches(&mut staged_uploads);
+                            for (_, item) in &ordered_items[start..end] {
+                                let SegmentDrawItem::Retained(index) = item else {
+                                    return Err(format!(
+                                        "retained batch contains non-retained draw item: {item:?}"
+                                    ));
+                                };
+                                let retained = retained_draws.get(*index).ok_or_else(|| {
+                                    format!("retained draw index {index} out of bounds")
+                                })?;
+                                if (*index as u32) < MAX_REPLAY_SLOTS
+                                    && self.replay_slots.slots.contains_key(&retained.slot)
+                                {
+                                    staged_uploads.stage_at(
+                                        UploadTarget::ReplayTransform,
+                                        *index as u64 * REPLAY_TRANSFORM_STRIDE,
+                                        bytemuck::bytes_of(&retained.transform),
+                                    );
+                                }
+                            }
+                            let upload_offset = frame_encoder
+                                .allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
+                            self.flush_staged_uploads_at(
+                                frame_encoder.encoder(),
+                                &staged_uploads,
+                                upload_offset,
+                            );
+                            {
+                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("Segment Retained Pass"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: target_view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: next_load_op,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    },
+                                );
+                                for (_, item) in &ordered_items[start..end] {
+                                    if let SegmentDrawItem::Retained(index) = item {
+                                        if let Some(retained) = retained_draws.get(*index) {
+                                            self.draw_retained_batch(
+                                                &mut render_pass,
+                                                retained,
+                                                *index,
+                                                width,
+                                                height,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            pass_count = pass_count.saturating_add(1);
+                            rendered_any = true;
+                            next_load_op = wgpu::LoadOp::Load;
+                        }
+                    }
                 }
             }
             Ok(SegmentRenderOutcome {
@@ -6670,6 +6967,7 @@ impl GpuRenderer {
             self.wasm_shape_batches.push(ShapeBatchBuffers::new(
                 &self.device,
                 &self.shape_bind_group_layout,
+                &self.identity_similarity_buffer,
                 self.shape_batch_limits,
             ));
         }
@@ -6774,6 +7072,21 @@ impl GpuRenderer {
                     UploadTarget::ImageVertex => &self.image_vertex_buffer,
                     UploadTarget::ImageIndex => &self.image_index_buffer,
                     UploadTarget::RetainedGlyphUniform => &self.retained_glyph_uniform_buffer,
+                    UploadTarget::ReplayTransform => &self.replay_slots.transform_buffer,
+                    UploadTarget::ReplayShapeData(slot) => {
+                        // A slot released between staging and flush has
+                        // nothing left to patch.
+                        let Some(entry) = self.replay_slots.slots.get(&slot) else {
+                            continue;
+                        };
+                        &entry.shape_buffer
+                    }
+                    UploadTarget::ReplayGradientData(slot) => {
+                        let Some(entry) = self.replay_slots.slots.get(&slot) else {
+                            continue;
+                        };
+                        &entry.gradient_buffer
+                    }
                 };
                 encoder.copy_buffer_to_buffer(
                     &self.upload_buffer,
@@ -7466,6 +7779,7 @@ impl GpuRenderer {
             self.shape_buffers.ensure_capacity(
                 &self.device,
                 &self.shape_bind_group_layout,
+                &self.identity_similarity_buffer,
                 shape_count,
                 self.scratch_gradients.len().max(1),
             );
@@ -7490,6 +7804,7 @@ impl GpuRenderer {
                 buffers.ensure_capacity(
                     &self.device,
                     &self.shape_bind_group_layout,
+                    &self.identity_similarity_buffer,
                     shape_count,
                     self.scratch_gradients.len().max(1),
                 );
@@ -7558,6 +7873,7 @@ impl GpuRenderer {
         self.shape_buffers.ensure_capacity(
             &self.device,
             &self.shape_bind_group_layout,
+            &self.identity_similarity_buffer,
             shape_count,
             (total_gradient_stops as usize).max(1),
         );
@@ -7639,6 +7955,252 @@ impl GpuRenderer {
         ))
     }
 
+    /// Whether retained replay batches can exist on this device: they bind
+    /// unsized buffers, so they ride the storage-buffer batch mode only.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_supported(&self) -> bool {
+        // Deliberately not conditioned on free slot ids: an exhausted pool
+        // only means new captures fail (handled per capture), while flipping
+        // this bit would retire every live segment.
+        self.shape_batch_limits.storage
+    }
+
+    /// Once-per-frame replay upkeep between scene collection and encoding:
+    /// frees slots whose segments retired, then honors capture requests
+    /// against the scene they were recorded for. Collection for this frame
+    /// is done once this runs, so it also closes the replay window that
+    /// [`ShapeReplayState::begin_frame`] opened — later collections this
+    /// frame (overlays) build windowed scenes that cannot carry retained
+    /// ops.
+    ///
+    /// Ordering is what makes slot release safe: a slot queued for release
+    /// during collection is never referenced by a retained op of the same
+    /// frame (misses release before their op would have been pushed, and
+    /// rebuild frames release at flush start), so freeing it here — before
+    /// any encoding — cannot orphan a draw.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn process_shape_replay(&mut self, shapes: &[DrawShape], root_scale: f32) {
+        crate::shape_replay::SHAPE_REPLAY.with(|state| {
+            let mut state = state.borrow_mut();
+            for slot in std::mem::take(&mut state.pending_releases) {
+                self.release_replay_slot(slot);
+            }
+            for capture in std::mem::take(&mut state.pending_captures) {
+                let end = capture.shape_start + capture.shape_count;
+                let Some(slice) = shapes.get(capture.shape_start..end) else {
+                    continue;
+                };
+                let refs: Vec<&DrawShape> = slice.iter().collect();
+                let slot = self.capture_replay_slot(&refs, root_scale);
+                if let Some(segment) = state.segments.get_mut(capture.segment) {
+                    segment.slot = slot;
+                    if let Some(slot) = slot {
+                        state.slot_refs.insert(slot, 1);
+                    }
+                } else if let Some(slot) = slot {
+                    self.release_replay_slot(slot);
+                }
+            }
+            state.supported = false;
+        });
+    }
+
+    /// Stages every queued replay recolor patch. All brushes rewrite the
+    /// shape's 16-byte color slot (the solid color, or the first gradient
+    /// stop); gradient brushes additionally rewrite their stop span in the
+    /// slot's gradient buffer. Runs in the retained prepare arms so the
+    /// writes land in the same staged-upload flush that carries the frame's
+    /// transforms; draining is idempotent across arms.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_replay_patches(&self, staged_uploads: &mut StagedBufferUploads) {
+        crate::shape_replay::SHAPE_REPLAY.with(|state| {
+            let mut state = state.borrow_mut();
+            for patch in state.pending_patches.drain(..) {
+                let Some(slot) = self.replay_slots.slots.get(&patch.slot) else {
+                    continue;
+                };
+                let stops = replay_gradient_stops(&patch.brush);
+                let color = match (&patch.brush, stops.first()) {
+                    (Brush::Solid(c), _) => [c.r(), c.g(), c.b(), c.a()],
+                    (_, Some(first)) => first.color,
+                    (_, None) => continue,
+                };
+                if !stops.is_empty() {
+                    let index = patch.shape_index as usize;
+                    let (Some(start), Some(end)) = (
+                        slot.gradient_offsets.get(index),
+                        slot.gradient_offsets.get(index + 1),
+                    ) else {
+                        continue;
+                    };
+                    if (end - start) as usize != stops.len() {
+                        // The brush changed its stop count relative to the
+                        // capture; verification should have rejected this.
+                        continue;
+                    }
+                    staged_uploads.stage_at(
+                        UploadTarget::ReplayGradientData(patch.slot),
+                        *start as u64 * std::mem::size_of::<GradientStop>() as u64,
+                        bytemuck::cast_slice(&stops),
+                    );
+                }
+                staged_uploads.stage_at(
+                    UploadTarget::ReplayShapeData(patch.slot),
+                    patch.shape_index as u64 * std::mem::size_of::<ShapeData>() as u64
+                        + std::mem::offset_of!(ShapeData, color) as u64,
+                    bytemuck::bytes_of(&color),
+                );
+            }
+        });
+    }
+
+    /// Converts `shape_refs` once and retains the result on the GPU as a
+    /// replay slot. Returns the slot id the scene's retained draws reference.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn capture_replay_slot(
+        &mut self,
+        shape_refs: &[&DrawShape],
+        root_scale: f32,
+    ) -> Option<u32> {
+        if !self.shape_batch_limits.storage || shape_refs.is_empty() {
+            return None;
+        }
+        let id = self.replay_slots.free_ids.pop()?;
+        let shape_count = shape_refs.len();
+
+        let mut gradient_offsets: Vec<u32> = Vec::with_capacity(shape_count + 1);
+        let mut total_gradient_stops = 0u32;
+        gradient_offsets.push(0);
+        for shape in shape_refs {
+            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            gradient_offsets.push(total_gradient_stops);
+        }
+
+        let mut shape_data = vec![ShapeData::zeroed(); shape_count];
+        let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
+        convert_shapes_into_outputs(
+            shape_refs,
+            &gradient_offsets,
+            root_scale,
+            &mut shape_data,
+            &mut gradients,
+        );
+
+        let shape_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Shape Buffer"),
+            size: (std::mem::size_of::<ShapeData>() * shape_count) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        shape_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&shape_data));
+        shape_buffer.unmap();
+
+        let gradient_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Gradient Buffer"),
+            size: (std::mem::size_of::<GradientStop>() * gradients.len()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        gradient_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&gradients));
+        gradient_buffer.unmap();
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Replay Shape Bind Group"),
+            layout: &self.shape_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gradient_buffer.as_entire_binding(),
+                },
+                // The transform slot is selected per draw via the dynamic
+                // offset, so retained draws sharing this capture can each
+                // move independently.
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.replay_slots.transform_buffer,
+                        offset: 0,
+                        size: Some(
+                            std::num::NonZeroU64::new(
+                                std::mem::size_of::<SimilarityTransform>() as u64
+                            )
+                            .expect("similarity transform is non-empty"),
+                        ),
+                    }),
+                },
+            ],
+        });
+
+        self.replay_slots.slots.insert(
+            id,
+            ReplaySlot {
+                shape_buffer,
+                gradient_buffer,
+                bind_group,
+                shape_count: shape_count as u32,
+                gradient_offsets,
+            },
+        );
+        Some(id)
+    }
+
+    /// Frees a replay slot's GPU resources and returns its id to the pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn release_replay_slot(&mut self, id: u32) {
+        if self.replay_slots.slots.remove(&id).is_some() {
+            self.replay_slots.free_ids.push(id);
+        }
+    }
+
+    /// Draws one retained replay batch — `retained`'s shape range of its
+    /// slot's capture, under the transform staged for this draw's index (see
+    /// the retained arms of the segment paths).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_retained_batch(
+        &self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        retained: &RetainedDraw,
+        retained_index: usize,
+        width: u32,
+        height: u32,
+    ) {
+        let Some(slot) = self.replay_slots.slots.get(&retained.slot) else {
+            return;
+        };
+        if retained_index as u32 >= MAX_REPLAY_SLOTS {
+            return;
+        }
+        let first = retained.first_shape.min(slot.shape_count);
+        let last = retained
+            .first_shape
+            .saturating_add(retained.shape_count)
+            .min(slot.shape_count);
+        if first >= last {
+            return;
+        }
+        self.frame_stats.bump_shapes();
+        self.frame_stats.add_draw_calls(1);
+        render_pass.set_scissor_rect(0, 0, width, height);
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        render_pass.set_bind_group(
+            1,
+            &slot.bind_group,
+            &[retained_index as u32 * REPLAY_TRANSFORM_STRIDE as u32],
+        );
+        render_pass.draw(first * 6..last * 6, 0..1);
+    }
+
     fn draw_prepared_shapes(
         &self,
         render_pass: &mut wgpu::RenderPass<'_>,
@@ -7662,7 +8224,9 @@ impl GpuRenderer {
             &self.wasm_shape_batches[batch.shape_slot],
         );
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
-        render_pass.set_bind_group(1, &shape_buffers.bind_group, &[]);
+        // Dynamic offset 0: ordinary batches read the identity similarity
+        // transform.
+        render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
         // Six unindexed vertices per shape; `vs_main` derives the corner from
         // `vertex_index` and pulls the quad out of `ShapeData`.
         render_pass.draw(
@@ -9705,6 +10269,7 @@ enum SegmentDrawItem {
     Shadow(usize),
     Composite(usize),
     ShaderComposite(usize),
+    Retained(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9728,6 +10293,12 @@ enum SegmentBatchPlan {
         end: usize,
     },
     ShaderComposite {
+        start: usize,
+        end: usize,
+    },
+    /// Retained replay batches: each item is one bind + draw of GPU slots
+    /// captured on an earlier frame, so they never merge and cost no budget.
+    Retained {
         start: usize,
         end: usize,
     },
@@ -9791,6 +10362,9 @@ enum FusedSegmentBatch {
     },
     ShaderComposite {
         draw_range: Range<usize>,
+    },
+    Retained {
+        item_range: Range<usize>,
     },
 }
 
@@ -10174,6 +10748,17 @@ fn segment_batch_plan_at_cursor(
             }
             Some((SegmentBatchPlan::ShaderComposite { start, end }, end))
         }
+        SegmentDrawItem::Retained(_) => {
+            let mut end = start + 1;
+            while end < ordered_items.len() {
+                if matches!(ordered_items[end].1, SegmentDrawItem::Retained(_)) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            Some((SegmentBatchPlan::Retained { start, end }, end))
+        }
         SegmentDrawItem::Shadow(_) => None,
     }
 }
@@ -10218,6 +10803,7 @@ fn collect_non_effect_segment_items(
             DrawOpKind::Image(index) => SegmentDrawItem::Image(index),
             DrawOpKind::Text(index) => SegmentDrawItem::Text(index),
             DrawOpKind::Shadow(index) => SegmentDrawItem::Shadow(index),
+            DrawOpKind::Retained(index) => SegmentDrawItem::Retained(index),
         };
         Some((op.z_index, item))
     }));

@@ -19,6 +19,8 @@ mod render;
 mod scene;
 mod shader_cache;
 mod shaders;
+#[cfg(not(target_arch = "wasm32"))]
+mod shape_replay;
 mod surface_executor;
 mod surface_plan;
 mod surface_requirements;
@@ -27,6 +29,9 @@ mod test_support;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use scene::{ClickAction, HitRegion, Scene};
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::live_stats as shape_replay_live_stats;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{

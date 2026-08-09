@@ -313,6 +313,8 @@ fn draw_can_reduce_alpha(
                 *blend_mode != BlendMode::SrcOver && rects_intersect(shape.rect, rect)
             })
         }),
+        // Replayed batches are SrcOver-only by construction.
+        DrawOpKind::Retained(_) => false,
     }
 }
 
@@ -359,6 +361,10 @@ fn scene_range_has_opaque_cover_before(
                     return true;
                 }
             }
+            // A replayed batch is thousands of blended shapes; treating any
+            // of it as opaque cover would need per-shape analysis it exists
+            // to skip.
+            DrawOpKind::Retained(_) => {}
             DrawOpKind::Image(index) => {
                 if images
                     .get(index)
@@ -913,6 +919,7 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
+            &scene.retained_draws,
             &scene.draw_ops,
             z_start,
             z_end,
@@ -977,6 +984,9 @@ fn scene_range_can_cache_as_transparent_surface(
                 .is_some_and(|image| image.blend_mode == BlendMode::SrcOver),
             DrawOpKind::Text(_) => true,
             DrawOpKind::Shadow(_) => false,
+            // A replayed batch transforms every frame; a texture of it would
+            // be stale on arrival.
+            DrawOpKind::Retained(_) => false,
         }
     })
 }
@@ -1070,6 +1080,7 @@ fn draw_op_is_motion_sensitive(scene: &CompositorScene, draw_op: DrawOp) -> bool
             .get(index)
             .is_some_and(|image| image.motion_context_animated),
         DrawOpKind::Text(_) | DrawOpKind::Shadow(_) => false,
+        DrawOpKind::Retained(_) => true,
     }
 }
 
@@ -1101,6 +1112,10 @@ fn draw_op_visible_bounds(scene: &CompositorScene, draw_op: DrawOp) -> Option<Re
             .get(index)
             .and_then(|text| visible_draw_rect(text.rect, text.clip)),
         DrawOpKind::Shadow(_) => None,
+        DrawOpKind::Retained(index) => scene
+            .retained_draws
+            .get(index)
+            .and_then(|retained| visible_draw_rect(retained.bounds, None)),
     }
 }
 
@@ -1591,6 +1606,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
                 &scene.images,
                 &scene.texts,
                 &scene.shadow_draws,
+                &scene.retained_draws,
                 &scene.draw_ops,
                 cursor_z,
                 event.z_index,
@@ -1651,6 +1667,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
+            &scene.retained_draws,
             &scene.draw_ops,
             cursor_z,
             z_end,
@@ -2513,6 +2530,20 @@ fn log_direct_scene_draw_op_detail(scene: &CompositorScene, draw_op: &DrawOp) {
                 );
             }
         }
+        DrawOpKind::Retained(index) => {
+            if let Some(retained) = scene.retained_draws.get(index) {
+                log::warn!(
+                    "[wgpu-render-stage:direct-scene-cache-op] z={} kind=retained slot={} shapes={} bounds=({:.1},{:.1},{:.1},{:.1})",
+                    draw_op.z_index,
+                    retained.slot,
+                    retained.shape_count,
+                    retained.bounds.x,
+                    retained.bounds.y,
+                    retained.bounds.width,
+                    retained.bounds.height,
+                );
+            }
+        }
     }
 }
 
@@ -2539,6 +2570,7 @@ fn log_direct_scene_range_hash_diag(
             DrawOpKind::Image(_) => "I",
             DrawOpKind::Text(_) => "T",
             DrawOpKind::Shadow(_) => "H",
+            DrawOpKind::Retained(_) => "R",
         };
         entries.push_str(&format!(
             "{}{}:{:016x}",
@@ -2650,6 +2682,19 @@ fn hash_draw_op<H: Hasher>(scene: &CompositorScene, draw_op: &DrawOp, state: &mu
         DrawOpKind::Shadow(index) => {
             if let Some(shadow) = scene.shadow_draws.get(index) {
                 hash_shadow_draw(shadow, state);
+            }
+        }
+        DrawOpKind::Retained(index) => {
+            if let Some(retained) = scene.retained_draws.get(index) {
+                retained.slot.hash(state);
+                retained.first_shape.hash(state);
+                retained.shape_count.hash(state);
+                retained.transform.center[0].to_bits().hash(state);
+                retained.transform.center[1].to_bits().hash(state);
+                retained.transform.rot[0].to_bits().hash(state);
+                retained.transform.rot[1].to_bits().hash(state);
+                retained.transform.scale.to_bits().hash(state);
+                hash_rect(retained.bounds, state);
             }
         }
     }
@@ -3143,6 +3188,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
+            &scene.retained_draws,
             &scene.draw_ops,
             z_start,
             z_end,
@@ -3173,6 +3219,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
         &scene.images,
         &scene.texts,
         &scene.shadow_draws,
+        &scene.retained_draws,
         &scene.draw_ops,
         z_start,
         z_end,
@@ -3337,6 +3384,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
             &window_scene.images,
             &window_scene.texts,
             &window_scene.shadow_draws,
+            &window_scene.retained_draws,
             &window_scene.draw_ops,
             z_start,
             z_end,
@@ -3546,6 +3594,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     &local_scene.images,
                     &local_scene.texts,
                     &local_scene.shadow_draws,
+                    &local_scene.retained_draws,
                     &local_scene.draw_ops,
                     cursor_z,
                     child.z_index,
@@ -3903,6 +3952,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &local_scene.images,
                 &local_scene.texts,
                 &local_scene.shadow_draws,
+                &local_scene.retained_draws,
                 &local_scene.draw_ops,
                 cursor_z,
                 local_scene.next_z,

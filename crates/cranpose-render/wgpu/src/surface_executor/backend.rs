@@ -5,7 +5,8 @@ use crate::effect_renderer::{
 use crate::normalized_scene::CollectedLayer;
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
-    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor, TextDraw,
+    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw, ShadowDraw, SnapAnchor,
+    TextDraw,
 };
 use crate::surface_plan::{LayerSurfaceRequirements, TranslationRenderContext};
 use crate::surface_requirements::SurfaceRequirementSet;
@@ -173,6 +174,7 @@ pub(crate) trait SurfaceExecutionBackend {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -191,6 +193,7 @@ pub(crate) trait SurfaceExecutionBackend {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
