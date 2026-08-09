@@ -835,6 +835,10 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &TextSt
 pub struct DrawScopeDefault {
     size: Size,
     primitives: Vec<DrawPrimitive>,
+    /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
+    /// Consumers splitting a command around its content would otherwise have
+    /// to re-scan thousands of just-recorded primitives to learn "none".
+    content_markers: u32,
     /// `None` falls back to [`estimate_text_measurement`]. Every scope the
     /// framework builds carries the app's real measurer; a hand-built one
     /// (tests, tooling) does not have to.
@@ -874,11 +878,39 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
     });
 }
 
+thread_local! {
+    /// The content-marker note left by the most recent
+    /// [`DrawScope::into_primitives`]: the produced vector's buffer address,
+    /// its length, and how many [`DrawPrimitive::Content`] markers it holds.
+    /// The address/length pair is the identity guard — a vector that did not
+    /// come out of that exact call can never match it.
+    static RECORDED_CONTENT_MARKERS: std::cell::Cell<Option<(usize, usize, u32)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Consumes the pending content-marker note, returning it only if it
+/// describes exactly `primitives` (same buffer address and length). `None`
+/// means the vector's provenance is unknown and the caller must scan for
+/// markers itself.
+pub fn recorded_content_markers(primitives: &[DrawPrimitive]) -> Option<u32> {
+    let (ptr, len, markers) = RECORDED_CONTENT_MARKERS.take()?;
+    (ptr == primitives.as_ptr() as usize && len == primitives.len()).then_some(markers)
+}
+
+/// Discards any pending content-marker note. Consumers call this before
+/// running a draw command so a note left dangling by an unrelated recording
+/// can never be mistaken for the command's output, however the allocator
+/// reuses addresses.
+pub fn clear_recorded_content_markers() {
+    RECORDED_CONTENT_MARKERS.set(None);
+}
+
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
         Self {
             size,
             primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
+            content_markers: 0,
             text_measurer: None,
         }
     }
@@ -891,6 +923,7 @@ impl DrawScopeDefault {
         Self {
             size,
             primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
+            content_markers: 0,
             text_measurer: Some(text_measurer),
         }
     }
@@ -958,6 +991,7 @@ impl DrawScope for DrawScopeDefault {
     }
 
     fn draw_content(&mut self) {
+        self.content_markers += 1;
         self.primitives.push(DrawPrimitive::Content);
     }
 
@@ -1494,6 +1528,11 @@ impl DrawScope for DrawScopeDefault {
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
         note_recorded_primitive_count(self.size, self.primitives.len());
+        RECORDED_CONTENT_MARKERS.set(Some((
+            self.primitives.as_ptr() as usize,
+            self.primitives.len(),
+            self.content_markers,
+        )));
         self.primitives
     }
 }

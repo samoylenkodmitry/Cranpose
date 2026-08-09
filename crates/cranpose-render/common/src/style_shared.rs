@@ -3,8 +3,9 @@ use std::rc::Rc;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer,
-    Point, RoundedCornerShape, Size,
+    clear_recorded_content_markers, recorded_content_markers, BlendMode, Color, ColorFilter,
+    CompositingStrategy, CornerRadii, DrawPrimitive, GraphicsLayer, Point, RoundedCornerShape,
+    Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
@@ -219,7 +220,17 @@ pub fn primitives_for_placement(
     // scene these vectors hold thousands of primitives and are rebuilt every
     // frame. `Content` markers are rare, so the input length is the right
     // capacity.
-    let filter_content = |primitives: Vec<DrawPrimitive>| {
+    //
+    // `markers` is the recording scope's own marker count, trusted only when
+    // its identity guard matches the vector the command actually returned
+    // (see [`recorded_content_markers`]). `Some(0)` skips the marker scans
+    // below outright — on a watch-class core, re-streaming a fresh
+    // multi-thousand-primitive recording just to learn "no markers" is
+    // measurable frame time. `None` scans exactly as before.
+    let filter_content = |primitives: Vec<DrawPrimitive>, markers: Option<u32>| {
+        if markers == Some(0) {
+            return primitives;
+        }
         // The marker scan is a cheap discriminant read; a canvas that never
         // calls `draw_content()` — every game scene — keeps its vector as-is
         // instead of moving thousands of primitives through a second one.
@@ -238,13 +249,17 @@ pub fn primitives_for_placement(
         out
     };
 
-    let split_with_content = |primitives: Vec<DrawPrimitive>, placement| {
-        let Some(last_content_idx) = primitives
-            .iter()
-            .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
-        else {
+    let split_with_content = |primitives: Vec<DrawPrimitive>, placement, markers: Option<u32>| {
+        let last_content_idx = if markers == Some(0) {
+            None
+        } else {
+            primitives
+                .iter()
+                .rposition(|primitive| matches!(primitive, DrawPrimitive::Content))
+        };
+        let Some(last_content_idx) = last_content_idx else {
             return if matches!(placement, DrawPlacement::Overlay) {
-                filter_content(primitives)
+                filter_content(primitives, markers)
             } else {
                 Vec::new()
             };
@@ -270,10 +285,109 @@ pub fn primitives_for_placement(
         out
     };
 
+    // A note left dangling by some unrelated recording (one whose vector
+    // never came through here) must not survive into the reads below, however
+    // the allocator reuses addresses.
+    clear_recorded_content_markers();
     match (placement, command) {
-        (DrawPlacement::Behind, DrawCommand::Behind(func)) => filter_content(func(size)),
-        (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => filter_content(func(size)),
-        (_, DrawCommand::WithContent(func)) => split_with_content(func(size), placement),
+        (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
+            let primitives = func(size);
+            let markers = recorded_content_markers(&primitives);
+            filter_content(primitives, markers)
+        }
+        (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
+            let primitives = func(size);
+            let markers = recorded_content_markers(&primitives);
+            filter_content(primitives, markers)
+        }
+        (_, DrawCommand::WithContent(func)) => {
+            let primitives = func(size);
+            let markers = recorded_content_markers(&primitives);
+            split_with_content(primitives, placement, markers)
+        }
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
+
+    fn recorded_command(
+        record: impl Fn(&mut dyn DrawScope) + 'static,
+    ) -> Rc<dyn Fn(Size) -> Vec<DrawPrimitive>> {
+        Rc::new(move |size| {
+            let mut scope = DrawScopeDefault::new(size);
+            record(&mut scope);
+            scope.into_primitives()
+        })
+    }
+
+    fn rect_at(x: f32) -> Rect {
+        Rect {
+            x,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }
+    }
+
+    fn rect_xs(primitives: &[DrawPrimitive]) -> Vec<f32> {
+        primitives
+            .iter()
+            .map(|primitive| match primitive {
+                DrawPrimitive::Rect { rect, .. } => rect.x,
+                other => panic!("unexpected primitive {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn marker_free_recording_passes_through() {
+        let command = DrawCommand::Behind(recorded_command(|scope| {
+            scope.draw_rect_at(rect_at(1.0), Brush::solid(Color::WHITE));
+            scope.draw_rect_at(rect_at(2.0), Brush::solid(Color::WHITE));
+        }));
+        let out = primitives_for_placement(&command, DrawPlacement::Behind, Size::new(10.0, 10.0));
+        assert_eq!(rect_xs(&out), [1.0, 2.0]);
+    }
+
+    #[test]
+    fn recorded_markers_still_split_content_placements() {
+        let with_content = recorded_command(|scope| {
+            scope.draw_rect_at(rect_at(1.0), Brush::solid(Color::WHITE));
+            scope.draw_content();
+            scope.draw_rect_at(rect_at(2.0), Brush::solid(Color::WHITE));
+        });
+        let command = DrawCommand::WithContent(with_content);
+        let size = Size::new(10.0, 10.0);
+        let behind = primitives_for_placement(&command, DrawPlacement::Behind, size);
+        assert_eq!(rect_xs(&behind), [1.0]);
+        let overlay = primitives_for_placement(&command, DrawPlacement::Overlay, size);
+        assert_eq!(rect_xs(&overlay), [2.0]);
+    }
+
+    #[test]
+    fn hand_built_vectors_fall_back_to_scanning() {
+        // No recording scope, so no note exists: the marker must still be
+        // found and stripped by the scan path.
+        let command = DrawCommand::Behind(Rc::new(|_size| {
+            vec![
+                DrawPrimitive::Rect {
+                    rect: rect_at(1.0),
+                    brush: Brush::solid(Color::WHITE),
+                    stroke: None,
+                },
+                DrawPrimitive::Content,
+                DrawPrimitive::Rect {
+                    rect: rect_at(2.0),
+                    brush: Brush::solid(Color::WHITE),
+                    stroke: None,
+                },
+            ]
+        }));
+        let out = primitives_for_placement(&command, DrawPlacement::Behind, Size::new(10.0, 10.0));
+        assert_eq!(rect_xs(&out), [1.0, 2.0]);
     }
 }
