@@ -328,6 +328,23 @@ impl CompositorScene {
 
     /// Pushes one retained-batch draw at the next z position and returns it.
     pub fn push_retained_draw(&mut self, draw: RetainedDraw) {
+        if std::env::var_os("CRANPOSE_RETAINED_DIAG").is_some() {
+            eprintln!(
+                "[retained] slot={} first={} count={} center=({:.6},{:.6}) rot=({:.9},{:.9}) scale={:.9} bounds=({:.4},{:.4},{:.4},{:.4})",
+                draw.slot,
+                draw.first_shape,
+                draw.shape_count,
+                draw.transform.center[0],
+                draw.transform.center[1],
+                draw.transform.rot[0],
+                draw.transform.rot[1],
+                draw.transform.scale,
+                draw.bounds.x,
+                draw.bounds.y,
+                draw.bounds.width,
+                draw.bounds.height,
+            );
+        }
         let z_index = self.next_z;
         self.next_z += 1;
         self.retained_draws.push(draw);

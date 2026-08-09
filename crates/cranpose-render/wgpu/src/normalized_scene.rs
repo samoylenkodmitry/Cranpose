@@ -2105,11 +2105,12 @@ fn try_command_feed<'a>(
                 capture: false,
                 slot_offset,
                 range,
+                tape_range,
                 transform,
                 recolors,
                 bounds,
             } => {
-                let len = (range.1 - range.0) as usize;
+                let len = (tape_range.1 - tape_range.0) as usize;
                 let bounds_now = Rect {
                     x: bounds.x + context.layer_bounds.x,
                     y: bounds.y + context.layer_bounds.y,
@@ -2119,10 +2120,7 @@ fn try_command_feed<'a>(
                 let emitted = local_scene.retained_draws.len() < MAX_RETAINED_OPS
                     && SHAPE_REPLAY.with(|state| {
                         let mut state = state.borrow_mut();
-                        let Some(feed_slot) = state.feed_slots.get_mut(&(command, *slot))
-                        else {
-                            return None;
-                        };
+                        let feed_slot = state.feed_slots.get_mut(&(command, *slot))?;
                         if feed_slot.fingerprint != fingerprint {
                             return None;
                         }
@@ -2159,12 +2157,36 @@ fn try_command_feed<'a>(
                     })
                     .is_some();
                 if !emitted {
-                    emit_feed_range(
-                        local_scene,
-                        &run.primitives[range.0 as usize..range.1 as usize],
-                        context,
-                        motion,
-                    );
+                    if range.1 > range.0 {
+                        emit_feed_range(
+                            local_scene,
+                            &run.primitives[range.0 as usize..range.1 as usize],
+                            context,
+                            motion,
+                        );
+                    } else if let Some(primitives) =
+                        cranpose_render_common::scene_builder::materialize_command_span(
+                            command,
+                            tape_range.0 as usize,
+                            tape_range.1 as usize,
+                        )
+                    {
+                        // Bypassed span whose retained buffer went away this
+                        // frame: rebuild its primitives from the command's
+                        // surviving recording.
+                        emit_feed_range(local_scene, &primitives, context, motion);
+                    } else {
+                        static REMAT_MISS: std::sync::atomic::AtomicU32 =
+                            std::sync::atomic::AtomicU32::new(0);
+                        let n = REMAT_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if n < 8 {
+                            eprintln!(
+                                "[cranpose] WARN command feed: bypassed span for slot {} of {:?} \
+                                 could not be rematerialized",
+                                slot, command
+                            );
+                        }
+                    }
                 }
             }
         }

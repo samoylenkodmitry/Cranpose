@@ -437,7 +437,17 @@ impl DrawRunNode {
         primitives: std::rc::Rc<Vec<DrawPrimitive>>,
         replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
     ) -> Self {
-        let summary = DrawRunSummary::scan(&primitives);
+        let mut summary = DrawRunSummary::scan(&primitives);
+        // Bypassed retained spans have no primitives to scan, but they are
+        // drawable content — only shape records ever retain, never shadows.
+        if replay.as_ref().is_some_and(|frame| {
+            frame
+                .spans
+                .iter()
+                .any(|span| matches!(span, cranpose_ui_graphics::FrameSpan::Retained { .. }))
+        }) {
+            summary.has_non_shadow = true;
+        }
         Self {
             phase,
             command,

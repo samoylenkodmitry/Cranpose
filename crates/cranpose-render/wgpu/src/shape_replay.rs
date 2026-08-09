@@ -347,6 +347,7 @@ impl ShapeReplayState {
             self.pending_releases.push(slot.gpu_slot);
         }
         self.pending_feed_captures.clear();
+        cranpose_render_common::scene_builder::clear_retained_slot_confirmations();
         crate::pipeline::bump_retained_feed_generation();
     }
 }

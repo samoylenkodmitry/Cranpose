@@ -19,8 +19,7 @@ use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_render_common::style_shared::DrawPlacement;
 use cranpose_render_common::Renderer;
 use cranpose_ui_graphics::{
-    Brush, Color, CommandReplayFrame, CommandReplayState, DrawScope, DrawScopeDefault,
-    GraphicsLayer, Point, Rect,
+    Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
 };
 
 const SIZE: u32 = 408;
@@ -106,8 +105,9 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
 
 /// Records every frame once through one live `CommandReplayState`, exactly
 /// as the scene builder's verifier would, producing the graphs both render
-/// runs share.
-fn build_sequence() -> Vec<RenderGraph> {
+/// runs share. `bypass` decides per retained slot whether its records skip
+/// materialization — the production path consults renderer confirmations.
+fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
         node_id: 7,
@@ -116,11 +116,10 @@ fn build_sequence() -> Vec<RenderGraph> {
     };
     (0..FRAMES)
         .map(|frame| {
-            let mut scope = record_frame(frame);
+            let scope = record_frame(frame);
             let outcome = state.advance(scope.recorded());
             let center = state.center();
-            let finished = scope.finish();
-            let replay = CommandReplayFrame::from_outcome(center, &outcome, &finished.dropped);
+            let (finished, replay) = scope.finish_replay(center, &outcome, bypass);
             let bounds = Rect {
                 x: 0.0,
                 y: 0.0,
@@ -184,7 +183,7 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
             return;
         }
     };
-    let graphs = build_sequence();
+    let graphs = build_sequence(&mut |_| false);
     let retained_frames: usize = graphs
         .iter()
         .filter(|graph| match &graph.root.children[0] {
@@ -205,6 +204,48 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
     std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
     let fed = render_sequence(&mut renderer, &graphs);
+
+    // The fed pass confirmed captured slots exactly as production does;
+    // rebuild the same deterministic sequence with the bypass consulting
+    // those confirmations, so retained records never materialize at all,
+    // and render it against the live slots.
+    let command = DrawCommandId {
+        node_id: 7,
+        command_index: 0,
+        placement: DrawPlacement::Behind,
+    };
+    let bypassed_graphs = build_sequence(&mut |slot| {
+        cranpose_render_common::scene_builder::retained_slot_confirmed(command, slot)
+    });
+    let bypassed_primitives: usize = bypassed_graphs
+        .iter()
+        .map(|graph| match &graph.root.children[0] {
+            RenderNode::DrawRun(run) => run.primitives.len(),
+            _ => 0,
+        })
+        .sum();
+    let full_primitives: usize = graphs
+        .iter()
+        .map(|graph| match &graph.root.children[0] {
+            RenderNode::DrawRun(run) => run.primitives.len(),
+            _ => 0,
+        })
+        .sum();
+    eprintln!("primitives materialized: full {full_primitives} bypassed {bypassed_primitives}");
+    assert!(
+        bypassed_primitives < full_primitives / 2,
+        "confirmed slots should have bypassed materialization \
+         ({bypassed_primitives} of {full_primitives} still materialized)"
+    );
+    // Isolation control: the same graphs the fed pass drew, rendered again
+    // from the current renderer state. Any drift here is pass-position
+    // state (the flat detector's snapshot/capture schedule), not bypass.
+    let fed2 = render_sequence(&mut renderer, &graphs);
+    for (frame, (a, b)) in fed.iter().zip(&fed2).enumerate() {
+        let differing = a.iter().zip(b).filter(|(a, b)| a.abs_diff(**b) > 0).count();
+        eprintln!("fed-again frame {frame}: vs fed differing {differing}");
+    }
+    let bypassed = render_sequence(&mut renderer, &bypassed_graphs);
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
 
@@ -236,21 +277,44 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
                 max_y = max_y.max(y);
             }
         }
-        let _ = (min_x, min_y, max_x, max_y);
+        eprintln!(
+            "frame {frame}: differing {differing} worst {worst} \
+             region x {min_x}..{max_x} y {min_y}..{max_y}"
+        );
         if frame < 2 {
             assert_eq!(differing, 0, "frame {frame}: dynamic and capture frames are byte-exact");
         } else {
             // Retained frames deviate only at shape edges: a transformed
             // capture quad crops the AA falloff slightly differently than a
-            // freshly computed tight quad. The flat detector ships the same
-            // class of deviation (253-1195 channels on this scene); the feed
-            // currently measures ~4x that at equal accumulated rotation —
-            // characterized, bounded here, and to be root-caused before the
-            // feed becomes the default path.
+            // freshly computed tight quad. This is the envelope the flat
+            // detector has always shipped — the feed measures IDENTICAL
+            // per-frame counts on this scene (253..1195 channels of 666k,
+            // growing with accumulated rotation until a recapture resets
+            // it). Wider divergence means a real defect, like the shifted
+            // self-similar anchor pairing this test once caught.
             assert!(
-                differing < 8000 && worst < 160,
-                "frame {frame}: {differing} channels diverged (worst {worst}) — beyond the\n                 characterized edge-AA envelope"
+                differing < 2500 && worst < 160,
+                "frame {frame}: {differing} channels diverged (worst {worst}) — beyond the\n                 flat detector's edge-AA envelope"
             );
         }
     }
+
+    // Bypassing changes what the CPU materializes, never what the GPU
+    // draws: the bypassed sequence must reproduce the control sequence
+    // byte-for-byte. The control is `fed2`, not `fed` — the flat detector
+    // renders the two pre-retention frames ≤2/255 differently once feed
+    // slots live in the renderer (a pass-position artifact of the detector
+    // that predates the feed and dies with it), and both `fed2` and the
+    // bypassed pass render from that same state.
+    let mut deviated = false;
+    for (frame, (control, bypassed)) in fed2.iter().zip(&bypassed).enumerate() {
+        let differing = control
+            .iter()
+            .zip(bypassed)
+            .filter(|(a, b)| a.abs_diff(**b) > 0)
+            .count();
+        eprintln!("bypassed frame {frame}: vs control differing {differing}");
+        deviated |= differing != 0;
+    }
+    assert!(!deviated, "bypassed render deviates from the control render");
 }

@@ -1932,12 +1932,15 @@ pub(crate) fn bump_retained_feed_generation() {
 
 /// Declares to scene building that the wgpu renderer consumes retained
 /// draw-run spans by identity. wasm has no storage-buffer retained path, so
-/// it declares nothing and scene building skips verification entirely.
+/// it declares nothing and scene building skips verification entirely. With
+/// the feed flag off nothing consumes the spans either — declaring an epoch
+/// there would let bypass skip primitives no path redraws.
 fn declare_retained_feed() {
     #[cfg(not(target_arch = "wasm32"))]
-    cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(
-        RETAINED_FEED_GENERATION.with(std::cell::Cell::get),
-    ));
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(
+        crate::shape_replay::command_feed_enabled()
+            .then(|| RETAINED_FEED_GENERATION.with(std::cell::Cell::get)),
+    );
     #[cfg(target_arch = "wasm32")]
     cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
 }

@@ -619,8 +619,14 @@ pub enum FrameSpan {
         capture: bool,
         /// The span's first primitive within the slot's captured content.
         slot_offset: u32,
-        /// The span's primitives in the run's primitive vector.
+        /// The span's primitives in the run's primitive vector. EMPTY when
+        /// the span was bypassed — its records were never materialized and
+        /// the renderer draws it from the retained slot, or asks the
+        /// recorder to materialize `tape_range` on demand when it cannot.
         range: (u32, u32),
+        /// The span's records in the command's recording tape, for
+        /// emergency rematerialization of a bypassed span.
+        tape_range: (u32, u32),
         transform: RecordTransform,
         /// (span-relative primitive offset, new solid color) patches.
         recolors: Vec<(u32, Color)>,
@@ -631,77 +637,6 @@ pub enum FrameSpan {
         /// Ordinary primitives in the run's primitive vector.
         range: (u32, u32),
     },
-}
-
-impl CommandReplayFrame {
-    /// Translates a tape-space outcome into primitive space. `dropped` are
-    /// the ascending tape indices that materialized to nothing (degenerate
-    /// arcs — empty in practice): each boundary shifts left by the drops
-    /// before it. A retained span CONTAINING a drop demotes to dynamic for
-    /// the frame — its record-to-slot addressing would shift — which keeps
-    /// the translation trivially exact instead of speculatively clever.
-    /// Returns `None` when nothing is retained.
-    pub fn from_outcome(
-        center: Point,
-        outcome: &ReplayOutcome,
-        dropped: &[u32],
-    ) -> Option<Self> {
-        let ReplayOutcome::Spans(spans) = outcome else {
-            return None;
-        };
-        let drops_before = |tape_index: usize| -> u32 {
-            dropped.partition_point(|&d| (d as usize) < tape_index) as u32
-        };
-        let prim_range = |tape_start: usize, tape_end: usize| -> (u32, u32) {
-            (
-                tape_start as u32 - drops_before(tape_start),
-                tape_end as u32 - drops_before(tape_end),
-            )
-        };
-        let mut out: Vec<FrameSpan> = Vec::with_capacity(spans.len());
-        let mut any_retained = false;
-        for span in spans {
-            match span {
-                ReplaySpan::Retained {
-                    slot,
-                    capture,
-                    slot_offset,
-                    tape_start,
-                    tape_end,
-                    transform,
-                    recolors,
-                    bounds,
-                } => {
-                    let range = prim_range(*tape_start, *tape_end);
-                    let clean = drops_before(*tape_end) == drops_before(*tape_start);
-                    if clean {
-                        any_retained = true;
-                        out.push(FrameSpan::Retained {
-                            slot: *slot,
-                            capture: *capture,
-                            slot_offset: *slot_offset as u32,
-                            range,
-                            transform: *transform,
-                            recolors: recolors.clone(),
-                            bounds: *bounds,
-                        });
-                    } else if range.1 > range.0 {
-                        out.push(FrameSpan::Dynamic { range });
-                    }
-                }
-                ReplaySpan::Dynamic {
-                    tape_start,
-                    tape_end,
-                } => {
-                    let range = prim_range(*tape_start, *tape_end);
-                    if range.1 > range.0 {
-                        out.push(FrameSpan::Dynamic { range });
-                    }
-                }
-            }
-        }
-        any_retained.then_some(Self { center, spans: out })
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -957,12 +892,6 @@ impl CommandReplayState {
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
         let mut cursor = 0usize; // current-tape position covered so far
-        // How far the current tape has drifted from the capture tape, from
-        // the segments located so far. Self-similar rings make a linear
-        // scan treacherous — a shifted wrong anchor can pass any short
-        // probe — so candidates are tried by distance from the expected
-        // position, where the true anchor almost always sits.
-        let mut drift = 0isize;
         // Segments awaiting location this frame, tape order. A split pushes
         // the suffix back onto the front so it is located before the next
         // original segment.
@@ -974,20 +903,15 @@ impl CommandReplayState {
             let search_end = (cursor + RESYNC_WINDOW)
                 .min(current_views.len().saturating_sub(len - 1))
                 .max(cursor);
-            let expected_start = ((segment.tape_start as isize + drift).max(cursor as isize)
-                as usize)
-                .min(search_end.saturating_sub(1).max(cursor));
-            let candidates = (0..RESYNC_WINDOW).flat_map(|d| {
-                let after = expected_start.checked_add(d).filter(|s| *s < search_end);
-                let before = if d > 0 {
-                    expected_start
-                        .checked_sub(d)
-                        .filter(|s| *s >= cursor)
-                } else {
-                    None
-                };
-                after.into_iter().chain(before)
-            });
+            // Candidates run LEFT TO RIGHT from the cursor, never by
+            // proximity to an expected position: within a self-similar
+            // ring, every pairing shifted right of the true anchor passes
+            // probes (recolor-tolerant matching even repaints the color
+            // pattern) with a sub-tolerance angle residual — the one
+            // pairing a distance heuristic must never be allowed to reach
+            // first. The true anchor is always the LEFTMOST compatible
+            // candidate, exactly the order the flat detector proved out.
+            let candidates = cursor..search_end;
             type Located = (usize, RecordTransform, Vec<(u32, Color)>);
             let mut located: Option<Located> = None;
             // The longest cleanly matched prefix among failed commits:
@@ -1072,9 +996,19 @@ impl CommandReplayState {
                         best_prefix_len = matched;
                         best_prefix = Some((start, t, recolors));
                     }
-                    attempts += 1;
-                    if attempts >= MAX_COMMIT_ATTEMPTS {
-                        break 'search;
+                    // Only failures with a substantial matched prefix
+                    // consume the commit budget: those are genuine split
+                    // candidates, and re-verifying long spans is the cost
+                    // being bounded. A short-prefix failure is just a wrong
+                    // anchor (a dead predecessor's entries, a cross-ring
+                    // pairing) that the scan must be free to step past —
+                    // charging those burned the budget before the true
+                    // anchor and killed healthy segments.
+                    if matched >= MIN_SEGMENT_RECORDS {
+                        attempts += 1;
+                        if attempts >= MAX_COMMIT_ATTEMPTS {
+                            break 'search;
+                        }
                     }
                     continue;
                 }
@@ -1136,8 +1070,6 @@ impl CommandReplayState {
                     ),
                 }
             };
-            drift = span_start as isize - survivor.tape_start as isize;
-
             if span_start > cursor {
                 spans.push(ReplaySpan::Dynamic {
                     tape_start: cursor,

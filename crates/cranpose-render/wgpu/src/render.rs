@@ -8004,6 +8004,7 @@ impl GpuRenderer {
             for key in stale {
                 if let Some(slot) = state.feed_slots.remove(&key) {
                     state.pending_releases.push(slot.gpu_slot);
+                    cranpose_render_common::scene_builder::revoke_retained_slot(key.0, key.1);
                 }
             }
             for slot in std::mem::take(&mut state.pending_releases) {
@@ -8046,6 +8047,12 @@ impl GpuRenderer {
                 ) {
                     self.release_replay_slot(old.gpu_slot);
                 }
+                // Only now may scene building skip materializing this span:
+                // the retained buffer verifiably exists.
+                cranpose_render_common::scene_builder::confirm_retained_slot(
+                    capture.key.0,
+                    capture.key.1,
+                );
             }
             state.supported = false;
         });

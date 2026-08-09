@@ -249,6 +249,7 @@ pub fn primitives_for_placement_retained(
         recording,
         storage,
         &mut no_replay,
+        None,
     );
     (primitives, recording)
 }
@@ -269,6 +270,7 @@ pub fn primitives_for_placement_verified(
     recording: CommandRecording,
     storage: Vec<DrawPrimitive>,
     replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
+    command_id: Option<crate::graph::DrawCommandId>,
 ) -> (
     Vec<DrawPrimitive>,
     CommandRecording,
@@ -342,55 +344,62 @@ pub fn primitives_for_placement_verified(
         recording: CommandRecording,
         storage: Vec<DrawPrimitive>,
         replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
+        command: Option<crate::graph::DrawCommandId>,
     ) -> (
         FinishedRecording,
         Option<cranpose_ui_graphics::CommandReplayFrame>,
     ) {
         let mut scope = cranpose_ui::command_draw_scope_retained(size, recording, storage);
         func(&mut scope);
-        let outcome = replay
-            .as_mut()
-            .map(|state| (state.advance(scope.recorded()), state.center()));
-        if let (Some(state), Some((outcome, _))) = (replay.as_ref(), outcome.as_ref()) {
-            if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
-                if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = outcome {
-                    let (mut retained, mut dynamic) = (0usize, 0usize);
-                    for span in spans {
-                        match span {
-                            cranpose_ui_graphics::ReplaySpan::Retained { .. } => retained += 1,
-                            cranpose_ui_graphics::ReplaySpan::Dynamic {
-                                tape_start,
-                                tape_end,
-                            } => dynamic += tape_end - tape_start,
-                        }
+        let Some(state) = replay.as_mut() else {
+            return (scope.finish(), None);
+        };
+        let outcome = state.advance(scope.recorded());
+        let diag = cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG")
+            .then(|| (scope.recorded().len(), state.segments().len(), state.stats()));
+        let center = state.center();
+        // Only spans whose retained buffer the renderer has confirmed may
+        // skip materialization: everything else must exist as primitives
+        // for this frame's ordinary path. A marker-bearing recording drops
+        // its frame after the split, so it must materialize whole.
+        let markers = scope.content_marker_count();
+        let mut bypass = |slot: u32| {
+            markers == 0
+                && command
+                    .is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
+        };
+        let (finished, frame) = scope.finish_replay(center, &outcome, &mut bypass);
+        if let Some((records, segments, (deaths, splits))) = diag {
+            if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = &outcome {
+                let (mut retained, mut dynamic) = (0usize, 0usize);
+                for span in spans {
+                    match span {
+                        cranpose_ui_graphics::ReplaySpan::Retained { .. } => retained += 1,
+                        cranpose_ui_graphics::ReplaySpan::Dynamic {
+                            tape_start,
+                            tape_end,
+                        } => dynamic += tape_end - tape_start,
                     }
-                    let (deaths, splits) = state.stats();
-                    eprintln!(
-                        "[command-replay] {} records: {} retained spans, {} dynamic records; \
-                         {} segments alive, lifetime deaths {} splits {}",
-                        scope.recorded().len(),
-                        retained,
-                        dynamic,
-                        state.segments().len(),
-                        deaths,
-                        splits,
-                    );
                 }
+                eprintln!(
+                    "[command-replay] {} records: {} retained spans, {} dynamic records, \
+                     {} materialized; {} segments alive, lifetime deaths {} splits {}",
+                    records,
+                    retained,
+                    dynamic,
+                    finished.primitives.len(),
+                    segments,
+                    deaths,
+                    splits,
+                );
             }
         }
-        let finished = scope.finish();
-        let frame = outcome.and_then(|(outcome, center)| {
-            cranpose_ui_graphics::CommandReplayFrame::from_outcome(
-                center,
-                &outcome,
-                &finished.dropped,
-            )
-        });
         (finished, frame)
     }
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let (finished, frame) = record_into(func, size, recording, storage, replay);
+            let (finished, frame) =
+                record_into(func, size, recording, storage, replay, command_id);
             let frame = (finished.content_markers == 0).then_some(frame).flatten();
             (
                 filter_content(finished.primitives, finished.content_markers),
@@ -399,7 +408,8 @@ pub fn primitives_for_placement_verified(
             )
         }
         (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let (finished, frame) = record_into(func, size, recording, storage, replay);
+            let (finished, frame) =
+                record_into(func, size, recording, storage, replay, command_id);
             let frame = (finished.content_markers == 0).then_some(frame).flatten();
             (
                 filter_content(finished.primitives, finished.content_markers),
@@ -409,8 +419,8 @@ pub fn primitives_for_placement_verified(
         }
         (_, DrawCommand::WithContent(func)) => {
             // Content splitting reindexes the vector; the frame's ranges
-            // would not survive it.
-            let (finished, _) = record_into(func, size, recording, storage, replay);
+            // would not survive it. No id means no bypass either.
+            let (finished, _) = record_into(func, size, recording, storage, replay, None);
             (
                 split_with_content(finished.primitives, placement, finished.content_markers),
                 finished.recording,

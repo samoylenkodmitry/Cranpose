@@ -777,6 +777,58 @@ pub fn set_retained_feed_epoch(epoch: Option<u64>) {
     RETAINED_FEED_EPOCH.with(|cell| cell.set(epoch));
 }
 
+thread_local! {
+    static CONFIRMED_RETAINED_SLOTS: std::cell::RefCell<
+        std::collections::HashSet<(DrawCommandId, u32), cranpose_ui_graphics::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashSet::default());
+}
+
+/// The renderer's word that it holds a live retained buffer for this
+/// (command, slot) identity. Only confirmed spans may skip materialization:
+/// an unconfirmed span's primitives are the renderer's only way to draw it
+/// in the same frame.
+pub fn confirm_retained_slot(command: DrawCommandId, slot: u32) {
+    CONFIRMED_RETAINED_SLOTS.with(|set| {
+        set.borrow_mut().insert((command, slot));
+    });
+}
+
+/// The renderer released this identity's buffer (aged out, replaced):
+/// spans referencing it must materialize again.
+pub fn revoke_retained_slot(command: DrawCommandId, slot: u32) {
+    CONFIRMED_RETAINED_SLOTS.with(|set| {
+        set.borrow_mut().remove(&(command, slot));
+    });
+}
+
+/// Wholesale retire: every confirmation dies with the slots.
+pub fn clear_retained_slot_confirmations() {
+    CONFIRMED_RETAINED_SLOTS.with(|set| set.borrow_mut().clear());
+}
+
+/// Whether the renderer has confirmed a live retained buffer for this
+/// identity (readable by tests driving the recorder by hand).
+pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
+    CONFIRMED_RETAINED_SLOTS.with(|set| set.borrow().contains(&(command, slot)))
+}
+
+/// Materializes one tape range of a command's current recording: the
+/// emergency path for a renderer that bypassed a span's materialization and
+/// then could not draw it retained (context drift, op cap). The recording
+/// survives until the command records again, which is after this frame has
+/// drawn.
+pub fn materialize_command_span(
+    command: DrawCommandId,
+    tape_start: usize,
+    tape_end: usize,
+) -> Option<Vec<cranpose_ui_graphics::DrawPrimitive>> {
+    COMMAND_RECORDINGS.with(|map| {
+        let map = map.borrow();
+        let slot = map.get(&command)?;
+        slot.recording.materialize_range(tape_start, tape_end)
+    })
+}
+
 /// Called once per graph build/update. The sweep drops slots whose commands
 /// stopped recording long ago (screen navigated away); a slot's buffers only
 /// die here if no graph node shares them, so this is purely a capacity
@@ -892,17 +944,21 @@ fn draw_nodes(
             recording,
             storage,
             &mut replay_ref,
+            Some(id),
         );
+        // A bypassed span leaves no primitives behind, so emptiness alone no
+        // longer means the command drew nothing in this placement.
+        let has_replay_spans = frame.as_ref().is_some_and(|frame| !frame.spans.is_empty());
         // An empty recording with no earned capacity is what a command's
         // mismatched placement pass produces every rebuild; keeping those out
         // of the registry halves its population. An empty recording WITH
         // capacity is still published so the buffer waits for the frame this
         // command draws again.
-        if primitives.is_empty() && primitives.capacity() == 0 {
+        if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
             continue;
         }
         let shared = publish_recording(id, recording, primitives, replay);
-        if shared.is_empty() {
+        if shared.is_empty() && !has_replay_spans {
             continue;
         }
         // The recorded vector rides into the graph whole: a single canvas

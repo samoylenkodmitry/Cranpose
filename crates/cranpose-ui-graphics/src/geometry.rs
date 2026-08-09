@@ -897,6 +897,65 @@ impl CommandRecording {
         self.tape.len()
     }
 
+    /// Materializes one tape range into fresh primitives — the emergency
+    /// path for a bypassed span whose retained draw fell through. `None`
+    /// when the range does not lie within this recording (cleared buffers,
+    /// stale range).
+    pub fn materialize_range(
+        &self,
+        tape_start: usize,
+        tape_end: usize,
+    ) -> Option<Vec<DrawPrimitive>> {
+        if tape_start > tape_end || tape_end > self.tape.len() {
+            return None;
+        }
+        let (mut rects_i, mut round_rects_i, mut arcs_i, mut others_i) = (0usize, 0, 0, 0);
+        for kind in &self.tape[..tape_start] {
+            match kind {
+                RecordKind::SolidRect => rects_i += 1,
+                RecordKind::SolidRoundRect => round_rects_i += 1,
+                RecordKind::SolidArc => arcs_i += 1,
+                RecordKind::Other => others_i += 1,
+            }
+        }
+        let mut out = Vec::with_capacity(tape_end - tape_start);
+        for kind in &self.tape[tape_start..tape_end] {
+            match kind {
+                RecordKind::SolidRect => {
+                    let record = self.rects.get(rects_i)?;
+                    rects_i += 1;
+                    out.push(DrawPrimitive::Rect {
+                        rect: record.rect,
+                        brush: Brush::Solid(record.color),
+                        stroke: record.stroke,
+                    });
+                }
+                RecordKind::SolidRoundRect => {
+                    let record = self.round_rects.get(round_rects_i)?;
+                    round_rects_i += 1;
+                    out.push(DrawPrimitive::RoundRect {
+                        rect: record.rect,
+                        brush: Brush::Solid(record.color),
+                        radii: record.radii,
+                        stroke: record.stroke,
+                    });
+                }
+                RecordKind::SolidArc => {
+                    let record = self.arcs.get(arcs_i)?;
+                    arcs_i += 1;
+                    if let Some(primitive) = materialize_solid_arc(record) {
+                        out.push(primitive);
+                    }
+                }
+                RecordKind::Other => {
+                    out.push(self.others.get(others_i)?.clone());
+                    others_i += 1;
+                }
+            }
+        }
+        Some(out)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.tape.is_empty()
     }
@@ -1129,6 +1188,176 @@ impl DrawScopeDefault {
             recording: self.rec,
             dropped,
         }
+    }
+
+    /// Like [`Self::finish`], but for a verified command: a retained span
+    /// whose slot `bypass` approves is NOT materialized — its records cease
+    /// to exist as per-frame primitives, which is the entire point of
+    /// retention — and the replay frame comes back with primitive ranges
+    /// assigned during the same single tape walk. Every other span
+    /// materializes exactly as [`Self::finish`] would. `AllDynamic`
+    /// degenerates to plain `finish`.
+    pub fn finish_replay(
+        mut self,
+        center: Point,
+        outcome: &crate::record_replay::ReplayOutcome,
+        bypass: &mut dyn FnMut(u32) -> bool,
+    ) -> (FinishedRecording, Option<crate::record_replay::CommandReplayFrame>) {
+        use crate::record_replay::{CommandReplayFrame, FrameSpan, ReplayOutcome, ReplaySpan};
+        let ReplayOutcome::Spans(replay_spans) = outcome else {
+            return (self.finish(), None);
+        };
+        let tape_len = self.rec.tape.len();
+        let mut out = std::mem::take(&mut self.out);
+        out.clear();
+        let mut dropped: Vec<u32> = Vec::new();
+        let mut spans: Vec<FrameSpan> = Vec::with_capacity(replay_spans.len());
+        let mut any_retained = false;
+        {
+            let mut rects = self.rec.rects.iter();
+            let mut round_rects = self.rec.round_rects.iter();
+            let mut arcs = self.rec.arcs.iter();
+            let mut others = self.rec.others.drain(..);
+            let tape = &self.rec.tape;
+            // Materializes one contiguous tape range into `out`. Kept as a
+            // macro so the per-kind cursors stay plain locals the borrow
+            // checker can split by field.
+            macro_rules! materialize_range {
+                ($start:expr, $end:expr) => {{
+                    let prim_start = out.len() as u32;
+                    for tape_index in $start..$end {
+                        match tape[tape_index] {
+                            RecordKind::SolidRect => {
+                                let record = rects.next().expect("tape/rects in sync");
+                                out.push(DrawPrimitive::Rect {
+                                    rect: record.rect,
+                                    brush: Brush::Solid(record.color),
+                                    stroke: record.stroke,
+                                });
+                            }
+                            RecordKind::SolidRoundRect => {
+                                let record =
+                                    round_rects.next().expect("tape/round_rects in sync");
+                                out.push(DrawPrimitive::RoundRect {
+                                    rect: record.rect,
+                                    brush: Brush::Solid(record.color),
+                                    radii: record.radii,
+                                    stroke: record.stroke,
+                                });
+                            }
+                            RecordKind::SolidArc => {
+                                let record = arcs.next().expect("tape/arcs in sync");
+                                if let Some(primitive) = materialize_solid_arc(record) {
+                                    out.push(primitive);
+                                } else {
+                                    dropped.push(tape_index as u32);
+                                }
+                            }
+                            RecordKind::Other => {
+                                out.push(others.next().expect("tape/others in sync"));
+                            }
+                        }
+                    }
+                    (prim_start, out.len() as u32)
+                }};
+            }
+            for span in replay_spans {
+                match span {
+                    ReplaySpan::Dynamic {
+                        tape_start,
+                        tape_end,
+                    } => {
+                        let range = materialize_range!(*tape_start, *tape_end);
+                        if range.1 > range.0 {
+                            spans.push(FrameSpan::Dynamic { range });
+                        }
+                    }
+                    ReplaySpan::Retained {
+                        slot,
+                        capture,
+                        slot_offset,
+                        tape_start,
+                        tape_end,
+                        transform,
+                        recolors,
+                        bounds,
+                    } => {
+                        // A retained span holds solid arcs and circles by
+                        // construction; anything else in its range means
+                        // the ordinary path must draw it.
+                        let compact = tape[*tape_start..*tape_end]
+                            .iter()
+                            .all(|kind| !matches!(kind, RecordKind::Other));
+                        if compact && !*capture && bypass(*slot) {
+                            // The bypass: records advance the cursors and
+                            // are never materialized. Capture guaranteed
+                            // each record one clean shape, so no drop
+                            // tracking is needed on the way past.
+                            for kind in &tape[*tape_start..*tape_end] {
+                                match kind {
+                                    RecordKind::SolidRect => {
+                                        rects.next();
+                                    }
+                                    RecordKind::SolidRoundRect => {
+                                        round_rects.next();
+                                    }
+                                    RecordKind::SolidArc => {
+                                        arcs.next();
+                                    }
+                                    RecordKind::Other => unreachable!("checked compact"),
+                                }
+                            }
+                            any_retained = true;
+                            let position = out.len() as u32;
+                            spans.push(FrameSpan::Retained {
+                                slot: *slot,
+                                capture: false,
+                                slot_offset: *slot_offset as u32,
+                                range: (position, position),
+                                tape_range: (*tape_start as u32, *tape_end as u32),
+                                transform: *transform,
+                                recolors: recolors.clone(),
+                                bounds: *bounds,
+                            });
+                            continue;
+                        }
+                        let drops_before = dropped.len();
+                        let range = materialize_range!(*tape_start, *tape_end);
+                        if compact && dropped.len() == drops_before {
+                            any_retained = true;
+                            spans.push(FrameSpan::Retained {
+                                slot: *slot,
+                                capture: *capture,
+                                slot_offset: *slot_offset as u32,
+                                range,
+                                tape_range: (*tape_start as u32, *tape_end as u32),
+                                transform: *transform,
+                                recolors: recolors.clone(),
+                                bounds: *bounds,
+                            });
+                        } else if range.1 > range.0 {
+                            spans.push(FrameSpan::Dynamic { range });
+                        }
+                    }
+                }
+            }
+        }
+        // Deliberately NOT cleared: the typed stores must survive until the
+        // renderer has drawn this frame, so a bypassed span that cannot be
+        // drawn retained (context drift, op cap) can still be materialized
+        // on demand from the recording. The next recording's scope clears
+        // the buffers on construction anyway.
+        note_recorded_primitive_count(self.size, tape_len);
+        let frame = any_retained.then_some(CommandReplayFrame { center, spans });
+        (
+            FinishedRecording {
+                primitives: out,
+                content_markers: self.content_markers,
+                recording: self.rec,
+                dropped,
+            },
+            frame,
+        )
     }
 
     fn push_other(&mut self, primitive: DrawPrimitive) {
