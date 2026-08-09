@@ -354,7 +354,8 @@ pub fn primitives_for_placement_verified(
         let Some(state) = replay.as_mut() else {
             return (scope.finish(), None);
         };
-        let outcome = state.advance(scope.recorded());
+        let outcome =
+            state.advance_pooled(scope.recorded(), crate::scene_builder::verify_executor());
         // Span counts are taken before `finish_replay` consumes the outcome
         // (recolor patch lists move into the frame instead of being cloned
         // every frame).

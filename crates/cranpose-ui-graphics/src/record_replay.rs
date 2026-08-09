@@ -542,7 +542,7 @@ fn range_bounds(recording: &CommandRecording, views: &[Option<ReplayView>], rang
 /// snapshot's tape range. The `id` is stable for the segment's lifetime —
 /// renderer-side retained slots key on it, and it survives other segments
 /// dying.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CommandSegment {
     /// The capture identity this segment's content lives under: renderer
     /// retained slots key on the (command, slot) pair. Slot ids are
@@ -586,13 +586,22 @@ pub enum ReplaySpan {
 }
 
 /// What one frame of verification decided for a command.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ReplayOutcome {
     /// No retention this frame: materialize the whole recording.
     AllDynamic,
     /// The interleaved retained/dynamic structure of this frame, in exact
     /// tape order.
     Spans(Vec<ReplaySpan>),
+}
+
+/// Fans independent verification bodies across worker threads. `run(i)` is
+/// called exactly once for every `i in 0..jobs`, from any thread; the call
+/// returns only after every job finished (jobs borrow the caller's stack).
+/// The renderer wires its frame worker pool in through this seam so the
+/// recorder crate stays free of threading machinery.
+pub trait VerifyExecutor: Sync {
+    fn for_each(&self, jobs: usize, run: &(dyn Fn(usize) + Sync));
 }
 
 /// A command's replay verdict translated into the space its consumers see:
@@ -666,6 +675,9 @@ pub struct CommandReplayState {
     /// paying a recapture for.
     capture_coverage: f32,
     frames_since_capture: u32,
+    /// Frames the pooled fast path fully committed — diagnostics for
+    /// judging how often verification actually parallelizes.
+    optimistic_commits: u64,
 }
 
 impl Default for CommandReplayState {
@@ -681,6 +693,7 @@ impl Default for CommandReplayState {
             lifetime_splits: 0,
             capture_coverage: 0.0,
             frames_since_capture: 0,
+            optimistic_commits: 0,
         }
     }
 }
@@ -696,6 +709,11 @@ impl CommandReplayState {
         (self.lifetime_deaths, self.lifetime_splits)
     }
 
+    /// Frames the pooled fast path fully committed (0 without an executor).
+    pub fn optimistic_commits(&self) -> u64 {
+        self.optimistic_commits
+    }
+
     /// The similarity pivot all span transforms rotate and scale about.
     pub fn center(&self) -> Point {
         self.center
@@ -709,6 +727,19 @@ impl CommandReplayState {
     /// correctness never depends on the detector being right about
     /// stability — a wrong guess costs a frame of ordinary rendering.
     pub fn advance(&mut self, current: &CommandRecording) -> ReplayOutcome {
+        self.advance_pooled(current, None)
+    }
+
+    /// [`Self::advance`] with an optional executor that verification fans
+    /// its per-segment span matching across. The pooled path is exercised
+    /// only on frames where every segment commits cleanly at its first
+    /// probe-passing anchor — any other frame falls back to the serial
+    /// walk, so the outcome is identical with and without an executor.
+    pub fn advance_pooled(
+        &mut self,
+        current: &CommandRecording,
+        pool: Option<&dyn VerifyExecutor>,
+    ) -> ReplayOutcome {
         if current.tape.len() < MIN_REPLAY_COMMAND_RECORDS {
             self.retire();
             return ReplayOutcome::AllDynamic;
@@ -723,7 +754,7 @@ impl CommandReplayState {
                 ReplayOutcome::AllDynamic
             }
             CommandReplayPhase::Snapshotted => self.partition(current, center),
-            CommandReplayPhase::Captured => self.verify(current),
+            CommandReplayPhase::Captured => self.verify(current, pool),
         }
     }
 
@@ -887,8 +918,22 @@ impl CommandReplayState {
     /// that changed goes dynamic, and the suffix re-enters the location
     /// queue as its own segment — churn costs the records it touched, not
     /// the whole capture. Eroded coverage re-snapshots for the next frame.
-    fn verify(&mut self, current: &CommandRecording) -> ReplayOutcome {
+    fn verify(
+        &mut self,
+        current: &CommandRecording,
+        pool: Option<&dyn VerifyExecutor>,
+    ) -> ReplayOutcome {
         let current_views = build_views(current);
+        if let Some(pool) = pool {
+            if self.segments.len() >= 2 {
+                if let Some((spans, retained_records)) =
+                    self.verify_optimistic(current, &current_views, pool)
+                {
+                    self.optimistic_commits += 1;
+                    return self.finish_verify(current, spans, retained_records);
+                }
+            }
+        }
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
         let mut cursor = 0usize; // current-tape position covered so far
@@ -922,75 +967,32 @@ impl CommandReplayState {
             let mut best_prefix_len = 0usize;
             let mut attempts = 0usize;
             'search: for start in candidates {
-                let (Some(view), Some(snapshot_view)) = (
-                    current_views[start],
-                    self.snapshot_views[segment.tape_start],
+                let Some(t) = probe_anchor(
+                    current,
+                    &current_views,
+                    &self.snapshot,
+                    &self.snapshot_views,
+                    self.center,
+                    segment.tape_start,
+                    len,
+                    start,
                 ) else {
                     continue;
                 };
-                if !views_compatible(
-                    current,
-                    Some(view),
-                    &self.snapshot,
-                    Some(snapshot_view),
-                ) {
-                    continue;
-                }
-                let Some((t, _)) =
-                    pair_transform(current, view, &self.snapshot, snapshot_view, self.center)
-                else {
-                    continue;
-                };
-                // Cheap rejection of wrong anchors before the full span.
-                for probe in 0..ANCHOR_PROBE_RECORDS.min(len) {
-                    let (Some(view), Some(snapshot_view)) = (
-                        current_views[start + probe],
-                        self.snapshot_views[segment.tape_start + probe],
-                    ) else {
-                        continue 'search;
-                    };
-                    if match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
-                        == RecordMatch::Mismatch
-                    {
-                        continue 'search;
-                    }
-                }
                 // Committed: verify the whole span. A failure may still be a
                 // mislocated anchor (self-similar rings), so the search
                 // resumes — a bounded number of times.
-                let mut recolors: Vec<(u32, Color)> = Vec::new();
-                let mut matched = len;
-                for offset in 0..len {
-                    let entry_match = match (
-                        current_views[start + offset],
-                        self.snapshot_views[segment.tape_start + offset],
-                    ) {
-                        (Some(view), Some(snapshot_view)) => match_pair(
-                            current,
-                            view,
-                            &self.snapshot,
-                            snapshot_view,
-                            self.center,
-                            t,
-                        ),
-                        _ => RecordMatch::Mismatch,
-                    };
-                    match entry_match {
-                        RecordMatch::Exact => {}
-                        RecordMatch::Recolor => {
-                            let color = match current_views[start + offset] {
-                                Some(ReplayView::Arc(a)) => current.arcs[a].color,
-                                Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
-                                None => unreachable!("recolor requires a view"),
-                            };
-                            recolors.push((offset as u32, color));
-                        }
-                        RecordMatch::Mismatch => {
-                            matched = offset;
-                            break;
-                        }
-                    }
-                }
+                let (matched, recolors) = match_span(
+                    TypedRecords::from(current),
+                    &current_views,
+                    TypedRecords::from(&self.snapshot),
+                    &self.snapshot_views,
+                    self.center,
+                    start,
+                    segment.tape_start,
+                    len,
+                    t,
+                );
                 if matched < len {
                     if matched > best_prefix_len {
                         best_prefix_len = matched;
@@ -1098,6 +1100,17 @@ impl CommandReplayState {
         }
 
         self.segments = survivors;
+        self.finish_verify(current, spans, retained_records)
+    }
+
+    /// The verification epilogue shared by the serial and pooled paths:
+    /// coverage bookkeeping and the collapse/erosion re-snapshot decision.
+    fn finish_verify(
+        &mut self,
+        current: &CommandRecording,
+        spans: Vec<ReplaySpan>,
+        retained_records: usize,
+    ) -> ReplayOutcome {
         self.frames_since_capture += 1;
         let retained_total: usize = self
             .segments
@@ -1119,6 +1132,229 @@ impl CommandReplayState {
         }
         ReplayOutcome::Spans(spans)
     }
+
+    /// The clean-frame fast path: locates every segment serially with cheap
+    /// probes only (identical candidate order to the serial walk), then fans
+    /// the expensive full-span matching across `pool`. Returns `None` — and
+    /// changes nothing — the moment any segment lacks a probe-passing
+    /// candidate or any span fails to match whole, leaving the serial walk
+    /// to redo the frame with its split/death/attempt machinery. When it
+    /// does return spans, they are exactly what the serial walk would have
+    /// produced: a fully matching first probe-passing candidate is the
+    /// leftmost committing candidate.
+    fn verify_optimistic(
+        &self,
+        current: &CommandRecording,
+        current_views: &[Option<ReplayView>],
+        pool: &dyn VerifyExecutor,
+    ) -> Option<(Vec<ReplaySpan>, usize)> {
+        struct SpanJob {
+            start: usize,
+            seg_start: usize,
+            len: usize,
+            t: RecordTransform,
+        }
+        let mut jobs: Vec<SpanJob> = Vec::with_capacity(self.segments.len());
+        let mut cursor = 0usize;
+        for segment in &self.segments {
+            let len = segment.tape_end - segment.tape_start;
+            let search_end = (cursor + RESYNC_WINDOW)
+                .min(current_views.len().saturating_sub(len - 1))
+                .max(cursor);
+            let mut found = None;
+            for start in cursor..search_end {
+                if let Some(t) = probe_anchor(
+                    current,
+                    current_views,
+                    &self.snapshot,
+                    &self.snapshot_views,
+                    self.center,
+                    segment.tape_start,
+                    len,
+                    start,
+                ) {
+                    found = Some((start, t));
+                    break;
+                }
+            }
+            let (start, t) = found?;
+            jobs.push(SpanJob {
+                start,
+                seg_start: segment.tape_start,
+                len,
+                t,
+            });
+            cursor = start + len;
+        }
+        // A span body's commit result: matched prefix length and recolors.
+        type SpanMatch = (usize, Vec<(u32, Color)>);
+        let results: Vec<std::sync::Mutex<Option<SpanMatch>>> =
+            jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        {
+            let current = TypedRecords::from(current);
+            let snapshot = TypedRecords::from(&self.snapshot);
+            let snapshot_views = &self.snapshot_views[..];
+            let center = self.center;
+            let jobs = &jobs;
+            let results = &results;
+            pool.for_each(jobs.len(), &|i| {
+                let job = &jobs[i];
+                let outcome = match_span(
+                    current,
+                    current_views,
+                    snapshot,
+                    snapshot_views,
+                    center,
+                    job.start,
+                    job.seg_start,
+                    job.len,
+                    job.t,
+                );
+                *results[i].lock().expect("verify span job lock") = Some(outcome);
+            });
+        }
+        let mut spans: Vec<ReplaySpan> = Vec::with_capacity(jobs.len() * 2 + 1);
+        let mut retained_records = 0usize;
+        let mut cursor = 0usize;
+        for (segment, (job, result)) in self.segments.iter().zip(jobs.iter().zip(&results)) {
+            let (matched, recolors) = result
+                .lock()
+                .expect("verify span job lock")
+                .take()
+                .expect("every span job ran");
+            if matched < job.len {
+                return None;
+            }
+            if job.start > cursor {
+                spans.push(ReplaySpan::Dynamic {
+                    tape_start: cursor,
+                    tape_end: job.start,
+                });
+            }
+            retained_records += job.len;
+            spans.push(ReplaySpan::Retained {
+                slot: segment.slot,
+                capture: false,
+                slot_offset: segment.slot_offset,
+                tape_start: job.start,
+                tape_end: job.start + job.len,
+                transform: job.t,
+                recolors,
+                bounds: job.t.apply_to_bounds(self.center, segment.bounds),
+            });
+            cursor = job.start + job.len;
+        }
+        if cursor < current.tape.len() {
+            spans.push(ReplaySpan::Dynamic {
+                tape_start: cursor,
+                tape_end: current.tape.len(),
+            });
+        }
+        Some((spans, retained_records))
+    }
+}
+
+/// The cheap anchor test shared by the serial walk and the pooled fast
+/// path: view compatibility, transform derivation from the anchor pair, and
+/// [`ANCHOR_PROBE_RECORDS`] probe matches. `None` means this candidate
+/// cannot be the segment's anchor.
+#[allow(clippy::too_many_arguments)]
+fn probe_anchor(
+    current: &CommandRecording,
+    current_views: &[Option<ReplayView>],
+    snapshot: &CommandRecording,
+    snapshot_views: &[Option<ReplayView>],
+    center: Point,
+    seg_start: usize,
+    len: usize,
+    start: usize,
+) -> Option<RecordTransform> {
+    let (Some(view), Some(snapshot_view)) = (current_views[start], snapshot_views[seg_start])
+    else {
+        return None;
+    };
+    if !views_compatible(current, Some(view), snapshot, Some(snapshot_view)) {
+        return None;
+    }
+    let (t, _) = pair_transform(current, view, snapshot, snapshot_view, center)?;
+    for probe in 0..ANCHOR_PROBE_RECORDS.min(len) {
+        let (Some(view), Some(snapshot_view)) = (
+            current_views[start + probe],
+            snapshot_views[seg_start + probe],
+        ) else {
+            return None;
+        };
+        if match_pair(current, view, snapshot, snapshot_view, center, t) == RecordMatch::Mismatch {
+            return None;
+        }
+    }
+    Some(t)
+}
+
+/// The typed-record arrays a span match reads — the POD slice view of a
+/// [`CommandRecording`] that is `Sync` (the recording itself is not: its
+/// `others` vector may hold `Rc`-carrying primitives), which is what lets
+/// [`match_span`] calls cross worker threads.
+#[derive(Clone, Copy)]
+struct TypedRecords<'a> {
+    arcs: &'a [SolidArcRecord],
+    round_rects: &'a [SolidRoundRectRecord],
+}
+
+impl<'a> From<&'a CommandRecording> for TypedRecords<'a> {
+    fn from(recording: &'a CommandRecording) -> Self {
+        Self {
+            arcs: &recording.arcs,
+            round_rects: &recording.round_rects,
+        }
+    }
+}
+
+/// The full-span commit body: matches `len` records of `current` from
+/// `start` against the snapshot span at `seg_start` under `t`. Returns the
+/// cleanly matched prefix length and the recolors within that prefix. The
+/// record dispatch mirrors [`match_pair`] exactly; it operates on the typed
+/// slices so one call per segment can run on a worker thread.
+#[allow(clippy::too_many_arguments)]
+fn match_span(
+    current: TypedRecords<'_>,
+    current_views: &[Option<ReplayView>],
+    snapshot: TypedRecords<'_>,
+    snapshot_views: &[Option<ReplayView>],
+    center: Point,
+    start: usize,
+    seg_start: usize,
+    len: usize,
+    t: RecordTransform,
+) -> (usize, Vec<(u32, Color)>) {
+    let mut recolors: Vec<(u32, Color)> = Vec::new();
+    for offset in 0..len {
+        let entry_match = match (
+            current_views[start + offset],
+            snapshot_views[seg_start + offset],
+        ) {
+            (Some(ReplayView::Arc(i)), Some(ReplayView::Arc(j))) => {
+                match_arc(&current.arcs[i], &snapshot.arcs[j], center, t)
+            }
+            (Some(ReplayView::RoundRect(i)), Some(ReplayView::RoundRect(j))) => {
+                match_round_rect(&current.round_rects[i], &snapshot.round_rects[j], center, t)
+            }
+            _ => RecordMatch::Mismatch,
+        };
+        match entry_match {
+            RecordMatch::Exact => {}
+            RecordMatch::Recolor => {
+                let color = match current_views[start + offset] {
+                    Some(ReplayView::Arc(a)) => current.arcs[a].color,
+                    Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
+                    None => unreachable!("recolor requires a view"),
+                };
+                recolors.push((offset as u32, color));
+            }
+            RecordMatch::Mismatch => return (offset, recolors),
+        }
+    }
+    (len, recolors)
 }
 
 #[cfg(test)]
@@ -1549,6 +1785,89 @@ mod tests {
             ));
         }
         assert!(state.segments().is_empty());
+    }
+
+    /// A real multi-threaded executor for the equivalence test: lane 0 is
+    /// the caller, the rest are scoped threads, jobs stride across lanes —
+    /// the same distribution the renderer's frame pool uses.
+    struct ThreadedExec {
+        lanes: usize,
+    }
+
+    impl VerifyExecutor for ThreadedExec {
+        fn for_each(&self, jobs: usize, run: &(dyn Fn(usize) + Sync)) {
+            std::thread::scope(|s| {
+                for lane in 1..self.lanes {
+                    s.spawn(move || {
+                        let mut i = lane;
+                        while i < jobs {
+                            run(i);
+                            i += self.lanes;
+                        }
+                    });
+                }
+                let mut i = 0;
+                while i < jobs {
+                    run(i);
+                    i += self.lanes;
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn pooled_verification_matches_serial_exactly() {
+        let exec = ThreadedExec { lanes: 3 };
+        // Every verification path in one churning sequence: multi-ring
+        // retention under rotation, tail churn, twinkle recolors, and a
+        // mid-run sweep change that forces the optimistic pass to bail and
+        // the serial rerun to split.
+        let frame = |f: usize| -> CommandRecording {
+            let tail = [10usize, 13, 5, 8, 11, 6, 9, 12][f % 8];
+            let mut recording = ring_frame(3, 300, f, tail);
+            if f >= 3 {
+                for i in (0..recording.arcs.len()).step_by(17) {
+                    recording.arcs[i].color = if f.is_multiple_of(2) {
+                        Color::rgb(1.0, 0.5, 0.1)
+                    } else {
+                        Color::rgb(0.1, 0.5, 1.0)
+                    };
+                }
+            }
+            if f == 5 {
+                // Geometry change inside the middle ring: a genuine
+                // mismatch mid-segment.
+                recording.arcs[450].sweep_angle = 0.15;
+            }
+            recording
+        };
+        let mut serial = CommandReplayState::default();
+        let mut pooled = CommandReplayState::default();
+        for f in 0..10 {
+            let recording = frame(f);
+            let serial_outcome = serial.advance(&recording);
+            let pooled_outcome = pooled.advance_pooled(&recording, Some(&exec));
+            assert_eq!(serial_outcome, pooled_outcome, "outcome diverged at frame {f}");
+            assert_eq!(
+                serial.segments(),
+                pooled.segments(),
+                "segments diverged at frame {f}"
+            );
+            assert_eq!(serial.stats(), pooled.stats(), "stats diverged at frame {f}");
+        }
+        let (deaths, splits) = serial.stats();
+        assert!(
+            !serial.segments().is_empty() && deaths + splits > 0,
+            "sequence must exercise both retention and the mismatch path, \
+             got {deaths} deaths {splits} splits {} segments",
+            serial.segments().len()
+        );
+        assert_eq!(serial.optimistic_commits(), 0);
+        assert!(
+            pooled.optimistic_commits() >= 3,
+            "the pooled fast path must actually commit steady frames, got {}",
+            pooled.optimistic_commits()
+        );
     }
 
     #[test]

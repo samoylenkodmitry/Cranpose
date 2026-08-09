@@ -182,6 +182,23 @@ impl FrameWorkerPool {
     }
 }
 
+/// Command verification borrows the frame pool at record boundaries: jobs
+/// stride across lanes (`lane, lane + lanes, ...`) so a frame's segments
+/// spread evenly however many there are. Runs strictly during scene build,
+/// before any [`FrameWorkerPool::run`] the renderer issues — jobs never
+/// nest.
+impl cranpose_ui_graphics::VerifyExecutor for FrameWorkerPool {
+    fn for_each(&self, jobs: usize, run: &(dyn Fn(usize) + Sync)) {
+        self.run(|lane| {
+            let mut i = lane;
+            while i < jobs {
+                run(i);
+                i += self.lanes;
+            }
+        });
+    }
+}
+
 /// Below this many items the per-item work cannot amortize even a parked
 /// wake, and one core does it faster alone.
 const MIN_POOLED_ITEMS: usize = 256;

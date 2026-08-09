@@ -812,6 +812,25 @@ pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
     CONFIRMED_RETAINED_SLOTS.with(|set| set.borrow().contains(&(command, slot)))
 }
 
+thread_local! {
+    static VERIFY_EXECUTOR: std::cell::Cell<
+        Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+/// Lends the renderer's frame worker pool to command verification: while
+/// set, segment commits at a record boundary run across the pool's lanes
+/// instead of on the build thread alone. `None` (the default, and the wasm
+/// state) keeps verification serial.
+pub fn set_verify_executor(pool: Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>) {
+    VERIFY_EXECUTOR.with(|cell| cell.set(pool));
+}
+
+/// The executor lent by [`set_verify_executor`], if any.
+pub fn verify_executor() -> Option<&'static dyn cranpose_ui_graphics::VerifyExecutor> {
+    VERIFY_EXECUTOR.with(|cell| cell.get())
+}
+
 /// Materializes one tape range of a command's current recording: the
 /// emergency path for a renderer that bypassed a span's materialization and
 /// then could not draw it retained (context drift, op cap). The recording

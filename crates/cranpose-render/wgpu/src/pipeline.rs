@@ -1937,10 +1937,18 @@ pub(crate) fn bump_retained_feed_generation() {
 /// there would let bypass skip primitives no path redraws.
 fn declare_retained_feed() {
     #[cfg(not(target_arch = "wasm32"))]
-    cranpose_render_common::scene_builder::set_retained_feed_epoch(
-        crate::shape_replay::command_feed_enabled()
-            .then(|| RETAINED_FEED_GENERATION.with(std::cell::Cell::get)),
-    );
+    {
+        cranpose_render_common::scene_builder::set_retained_feed_epoch(
+            crate::shape_replay::command_feed_enabled()
+                .then(|| RETAINED_FEED_GENERATION.with(std::cell::Cell::get)),
+        );
+        cranpose_render_common::scene_builder::set_verify_executor(
+            crate::shape_replay::command_feed_enabled().then(|| {
+                crate::worker_pool::frame_pool()
+                    as &'static dyn cranpose_ui_graphics::VerifyExecutor
+            }),
+        );
+    }
     #[cfg(target_arch = "wasm32")]
     cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
 }
