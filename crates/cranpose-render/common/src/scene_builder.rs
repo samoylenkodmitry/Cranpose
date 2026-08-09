@@ -21,7 +21,7 @@ use crate::graph::{
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{primitives_for_placement, DrawPlacement};
+use crate::style_shared::{primitives_for_placement_reusing, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
@@ -62,6 +62,7 @@ pub struct GraphUpdateReport {
 }
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
+    bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
     RenderGraph {
         root: build_layer_node(root_snapshot, scale, false),
@@ -73,6 +74,7 @@ pub fn build_graph_from_applier(
     root: NodeId,
     scale: f32,
 ) -> Option<RenderGraph> {
+    bump_recording_generation();
     Some(RenderGraph {
         root: build_layer_node_from_applier(applier, root, scale, false)?,
     })
@@ -99,6 +101,7 @@ pub fn update_graph_from_applier_report(
             hit_graph_dirty: false,
         };
     }
+    bump_recording_generation();
 
     if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] dirty={dirty_nodes:?}");
@@ -731,6 +734,84 @@ fn build_layer_node_from_data(
     Some(layer)
 }
 
+/// Reusable per-command recording buffers, keyed by the command's stable
+/// identity. The graph shares each recording (`Rc`) and still holds last
+/// frame's buffer while this frame records, so each command keeps two
+/// handles: the frame-before-last's is the free one, and steady-state
+/// re-recording ping-pongs between the two with no allocation. A handle a
+/// live graph node still shares is never written through — reuse requires
+/// sole ownership, checked at acquisition.
+struct RecorderSlot {
+    generation: u64,
+    handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
+}
+
+thread_local! {
+    static COMMAND_RECORDINGS: std::cell::RefCell<
+        std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
+    static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Called once per graph build/update. The sweep drops slots whose commands
+/// stopped recording long ago (screen navigated away); a slot's buffers only
+/// die here if no graph node shares them, so this is purely a capacity
+/// release, never a correctness event. Clean-but-live commands losing their
+/// slot merely re-earn capacity if they ever re-record.
+fn bump_recording_generation() {
+    let generation = RECORDING_GENERATION.with(|cell| {
+        let next = cell.get().wrapping_add(1);
+        cell.set(next);
+        next
+    });
+    if generation.is_multiple_of(512) {
+        COMMAND_RECORDINGS.with(|map| {
+            map.borrow_mut()
+                .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
+        });
+    }
+}
+
+fn acquire_recording(id: DrawCommandId) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
+    COMMAND_RECORDINGS.with(|map| {
+        let mut map = map.borrow_mut();
+        let Some(slot) = map.get_mut(&id) else {
+            return Vec::new();
+        };
+        for handle in &mut slot.handles {
+            if handle
+                .as_ref()
+                .is_some_and(|shared| Rc::strong_count(shared) == 1)
+            {
+                let shared = handle.take().expect("checked some above");
+                return Rc::try_unwrap(shared).expect("sole owner checked above");
+            }
+        }
+        Vec::new()
+    })
+}
+
+fn publish_recording(
+    id: DrawCommandId,
+    primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
+) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
+    let shared = Rc::new(primitives);
+    COMMAND_RECORDINGS.with(|map| {
+        let mut map = map.borrow_mut();
+        let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
+        let slot = map.entry(id).or_insert(RecorderSlot {
+            generation,
+            handles: [None, None],
+        });
+        slot.generation = generation;
+        // Newest first; the displaced oldest handle drops out of the
+        // registry, and its buffer lives on only while a graph node holds it.
+        slot.handles[1] = slot.handles[0].take();
+        slot.handles[0] = Some(shared.clone());
+    });
+    shared
+}
+
 fn draw_nodes(
     node_id: NodeId,
     commands: &[DrawCommand],
@@ -740,21 +821,32 @@ fn draw_nodes(
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
     for (command_index, command) in commands.iter().enumerate() {
-        let primitives = primitives_for_placement(command, placement, size);
-        if primitives.is_empty() {
+        let id = DrawCommandId {
+            node_id,
+            command_index: command_index as u32,
+            placement,
+        };
+        let storage = acquire_recording(id);
+        let primitives = primitives_for_placement_reusing(command, placement, size, storage);
+        // An empty recording with no earned capacity is what a command's
+        // mismatched placement pass produces every rebuild; keeping those out
+        // of the registry halves its population. An empty recording WITH
+        // capacity is still published so the buffer waits for the frame this
+        // command draws again.
+        if primitives.is_empty() && primitives.capacity() == 0 {
+            continue;
+        }
+        let shared = publish_recording(id, primitives);
+        if shared.is_empty() {
             continue;
         }
         // The recorded vector rides into the graph whole: a single canvas
         // command can carry thousands of primitives, and wrapping each in its
         // own node moved every one of them an extra time each frame.
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
             phase,
-            Some(DrawCommandId {
-                node_id,
-                command_index: command_index as u32,
-                placement,
-            }),
-            primitives,
+            Some(id),
+            shared,
         )));
     }
     nodes
@@ -1091,7 +1183,9 @@ mod tests {
         LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
         ScrollState, Size, Spacer, Text, TextStyle,
     };
-    use cranpose_ui_graphics::{Brush, DrawPrimitive, DrawScopeDefault, GraphicsLayer, RenderEffect};
+    use cranpose_ui_graphics::{
+        Brush, DrawPrimitive, DrawScope as _, DrawScopeDefault, GraphicsLayer, RenderEffect,
+    };
 
     use super::*;
 
@@ -2363,6 +2457,90 @@ mod tests {
 
         assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
         assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
+    }
+
+    /// The recording registry's whole contract: a command re-recording on a
+    /// rebuild reuses the buffer of a recording the graph has let go of, and
+    /// never writes through one anything else still shares.
+    #[test]
+    fn command_recordings_reuse_buffers_across_rebuilds() {
+        let snapshot = || BuildNodeSnapshot {
+            node_id: 7001,
+            placement: Point::default(),
+            size: Size {
+                width: 40.0,
+                height: 20.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![DrawCommand::Behind(Rc::new(
+                |scope: &mut DrawScopeDefault| {
+                    scope.draw_rect_at(
+                        Rect {
+                            x: 1.0,
+                            y: 2.0,
+                            width: 8.0,
+                            height: 6.0,
+                        },
+                        Brush::solid(Color::WHITE),
+                    );
+                },
+            ))],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            text_pan: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        fn run_of(layer: &LayerNode) -> &DrawRunNode {
+            let RenderNode::DrawRun(run) = &layer.children[0] else {
+                panic!("expected draw run");
+            };
+            run
+        }
+
+        let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_a = run_of(&graph_a).primitives.as_ptr();
+
+        // Graph A is still alive, so its buffer must not be lent out.
+        let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_b = run_of(&graph_b).primitives.as_ptr();
+        assert_ne!(
+            ptr_a, ptr_b,
+            "a buffer a live graph shares must never be recorded into"
+        );
+        assert_eq!(
+            run_of(&graph_a).primitives,
+            run_of(&graph_b).primitives,
+            "re-recording must reproduce the recording"
+        );
+
+        // With graph A gone, its buffer is the registry's to lend again. The
+        // registry still holds a handle, so the allocator cannot have
+        // recycled this address: pointer equality here is reuse, not luck.
+        drop(graph_a);
+        let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
+        assert_eq!(
+            run_of(&graph_c).primitives.as_ptr(),
+            ptr_a,
+            "the released buffer must be reused for the next recording"
+        );
+
+        // A recording shared outside the graph (renderer caches, tests)
+        // keeps its buffer out of circulation even after the node drops.
+        let held = std::rc::Rc::clone(&run_of(&graph_c).primitives);
+        drop(graph_c);
+        let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_d = run_of(&graph_d).primitives.as_ptr();
+        assert_ne!(ptr_d, held.as_ptr());
+        assert_ne!(ptr_d, run_of(&graph_b).primitives.as_ptr());
     }
 
     #[test]

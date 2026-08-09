@@ -1970,7 +1970,7 @@ fn collect_draw_run<'a>(
     shape_run: &mut Vec<ShapeRunEntry<'a>>,
     context: &LocalPrimitiveContext<'_>,
 ) {
-    for primitive in &run.primitives {
+    for primitive in run.primitives.iter() {
         if let Some(entry) = ShapeRunEntry::new(primitive, None) {
             shape_run.push(entry);
             continue;

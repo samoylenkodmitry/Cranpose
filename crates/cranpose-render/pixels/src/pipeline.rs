@@ -1036,7 +1036,7 @@ fn render_graph_draw_run(
 ) {
     let rect = context.layer_bounds.raster_rect();
     let counts_before = scene_counts(scene);
-    for primitive in &run.primitives {
+    for primitive in run.primitives.iter() {
         push_draw_primitive(
             primitive,
             rect,

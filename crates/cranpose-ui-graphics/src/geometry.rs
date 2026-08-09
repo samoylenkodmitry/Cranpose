@@ -902,6 +902,25 @@ impl DrawScopeDefault {
         }
     }
 
+    /// Like [`with_text_measurer`](Self::with_text_measurer), but records
+    /// into storage the caller already owns. This is the retained-recording
+    /// path: a command that re-records every frame keeps one buffer whose
+    /// capacity was earned on earlier frames, instead of walking a fresh
+    /// vector through the whole doubling schedule again.
+    pub fn with_text_measurer_reusing(
+        size: Size,
+        text_measurer: Rc<dyn DrawTextMeasurer>,
+        mut storage: Vec<DrawPrimitive>,
+    ) -> Self {
+        storage.clear();
+        Self {
+            size,
+            primitives: storage,
+            content_markers: 0,
+            text_measurer: Some(text_measurer),
+        }
+    }
+
     /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
     /// Command consumers split placements around the count instead of
     /// re-scanning thousands of just-recorded primitives to learn "none".

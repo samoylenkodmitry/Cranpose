@@ -389,7 +389,12 @@ pub struct DrawRunNode {
     /// Which draw command recorded these primitives. `None` only for runs
     /// with no per-command provenance (hand-built tests).
     pub command: Option<DrawCommandId>,
-    pub primitives: Vec<DrawPrimitive>,
+    /// Shared, not owned: the recording registry keyed by [`DrawCommandId`]
+    /// keeps a handle to the same buffer, so its capacity survives this
+    /// node being dropped on the next rebuild and the command re-records
+    /// into it instead of growing a fresh vector. Nothing mutates a run's
+    /// primitives after construction, which is what makes sharing sound.
+    pub primitives: std::rc::Rc<Vec<DrawPrimitive>>,
     /// Content facts consumers keep asking per frame, answered once at
     /// construction. Surface planning used to rescan every primitive of
     /// every run per frame to learn "does it contain text?" — for a
@@ -407,6 +412,14 @@ impl DrawRunNode {
         phase: PrimitivePhase,
         command: Option<DrawCommandId>,
         primitives: Vec<DrawPrimitive>,
+    ) -> Self {
+        Self::for_command_shared(phase, command, std::rc::Rc::new(primitives))
+    }
+
+    pub fn for_command_shared(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
     ) -> Self {
         let summary = DrawRunSummary::scan(&primitives);
         Self {

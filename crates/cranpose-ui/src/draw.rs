@@ -24,6 +24,13 @@ pub fn command_draw_scope(size: Size) -> DrawScopeDefault {
     DrawScopeDefault::with_text_measurer(size, AppContextTextMeasurer::shared())
 }
 
+/// [`command_draw_scope`] recording into storage the consumer already owns —
+/// the retained-recorder path where a command's buffer keeps its capacity
+/// across frames.
+pub fn command_draw_scope_reusing(size: Size, storage: Vec<DrawPrimitive>) -> DrawScopeDefault {
+    DrawScopeDefault::with_text_measurer_reusing(size, AppContextTextMeasurer::shared(), storage)
+}
+
 #[derive(Default, Clone)]
 pub struct DrawCacheBuilder {
     behind: Vec<DrawCommandFn>,

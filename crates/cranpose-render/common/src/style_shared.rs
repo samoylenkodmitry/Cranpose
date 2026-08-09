@@ -214,6 +214,19 @@ pub fn primitives_for_placement(
     placement: DrawPlacement,
     size: Size,
 ) -> Vec<DrawPrimitive> {
+    primitives_for_placement_reusing(command, placement, size, Vec::new())
+}
+
+/// [`primitives_for_placement`] recording into `storage` the caller retains
+/// between frames. A command that re-records every frame keeps one buffer
+/// whose capacity was earned on earlier frames; only the rare marker-bearing
+/// recording pays for a second output vector.
+pub fn primitives_for_placement_reusing(
+    command: &DrawCommand,
+    placement: DrawPlacement,
+    size: Size,
+    storage: Vec<DrawPrimitive>,
+) -> Vec<DrawPrimitive> {
     // `markers` is the recording scope's own count of `Content` markers,
     // maintained while the command records (`draw_content()` calls and pushed
     // batches both keep it current), so it is authoritative: zero means the
@@ -277,7 +290,7 @@ pub fn primitives_for_placement(
     // The command records into a scope this consumer owns, so the marker
     // count travels with the recording instead of through a side channel.
     let record = |func: &DrawCommandFn| {
-        let mut scope = cranpose_ui::command_draw_scope(size);
+        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage);
         func(&mut scope);
         let markers = scope.content_marker_count();
         (scope.into_primitives(), markers)
@@ -350,6 +363,26 @@ mod tests {
         assert_eq!(rect_xs(&behind), [1.0]);
         let overlay = primitives_for_placement(&command, DrawPlacement::Overlay, size);
         assert_eq!(rect_xs(&overlay), [2.0]);
+    }
+
+    /// Recording into a previously used buffer must be indistinguishable
+    /// from recording into a fresh one — for every placement, including the
+    /// marker-splitting paths.
+    #[test]
+    fn reused_storage_records_identically_to_fresh() {
+        let command = DrawCommand::WithContent(recorded_command(|scope| {
+            scope.draw_rect_at(rect_at(1.0), Brush::solid(Color::WHITE));
+            scope.draw_content();
+            scope.draw_rect_at(rect_at(2.0), Brush::solid(Color::WHITE));
+        }));
+        let size = Size::new(10.0, 10.0);
+        for placement in [DrawPlacement::Behind, DrawPlacement::Overlay] {
+            let fresh = primitives_for_placement(&command, placement, size);
+            // Junk in the reused buffer must not leak into the recording.
+            let dirty = vec![DrawPrimitive::Content; 8];
+            let reused = primitives_for_placement_reusing(&command, placement, size, dirty);
+            assert_eq!(fresh, reused);
+        }
     }
 
     #[test]

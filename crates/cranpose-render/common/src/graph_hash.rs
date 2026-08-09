@@ -102,7 +102,7 @@ fn hash_layer_content<H: Hasher>(
                     PrimitivePhase::AfterChildren => 1u8.hash(state),
                 }
                 run.primitives.len().hash(state);
-                for primitive in &run.primitives {
+                for primitive in run.primitives.iter() {
                     primitive.render_hash().hash(state);
                 }
             }
