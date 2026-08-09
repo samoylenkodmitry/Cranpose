@@ -7989,6 +7989,23 @@ impl GpuRenderer {
     fn process_shape_replay(&mut self, shapes: &[DrawShape], root_scale: f32) {
         crate::shape_replay::SHAPE_REPLAY.with(|state| {
             let mut state = state.borrow_mut();
+            // Identity-fed slots whose spans stopped arriving age out first,
+            // so their buffers are free before this frame's captures ask.
+            let frame = state.frame;
+            let stale: Vec<_> = state
+                .feed_slots
+                .iter()
+                .filter(|(_, slot)| {
+                    frame.wrapping_sub(slot.last_referenced)
+                        > crate::shape_replay::FEED_SLOT_IDLE_FRAMES
+                })
+                .map(|(key, _)| *key)
+                .collect();
+            for key in stale {
+                if let Some(slot) = state.feed_slots.remove(&key) {
+                    state.pending_releases.push(slot.gpu_slot);
+                }
+            }
             for slot in std::mem::take(&mut state.pending_releases) {
                 self.release_replay_slot(slot);
             }
@@ -8006,6 +8023,28 @@ impl GpuRenderer {
                     }
                 } else if let Some(slot) = slot {
                     self.release_replay_slot(slot);
+                }
+            }
+            for capture in std::mem::take(&mut state.pending_feed_captures) {
+                let end = capture.shape_start + capture.shape_count;
+                let Some(slice) = shapes.get(capture.shape_start..end) else {
+                    continue;
+                };
+                let refs: Vec<&DrawShape> = slice.iter().collect();
+                let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
+                    continue;
+                };
+                // A recaptured identity replaces its old buffers whole.
+                if let Some(old) = state.feed_slots.insert(
+                    capture.key,
+                    crate::shape_replay::FeedSlot {
+                        gpu_slot,
+                        fingerprint: capture.fingerprint,
+                        capture_clip: capture.capture_clip,
+                        last_referenced: frame,
+                    },
+                ) {
+                    self.release_replay_slot(old.gpu_slot);
                 }
             }
             state.supported = false;

@@ -1970,6 +1970,12 @@ fn collect_draw_run<'a>(
     shape_run: &mut Vec<ShapeRunEntry<'a>>,
     context: &LocalPrimitiveContext<'_>,
 ) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let (Some(frame), Some(command)) = (run.replay.as_deref(), run.command) {
+        if try_command_feed(local_scene, run, frame, command, shape_run, context) {
+            return;
+        }
+    }
     for primitive in run.primitives.iter() {
         if let Some(entry) = ShapeRunEntry::new(primitive, None) {
             shape_run.push(entry);
@@ -1977,6 +1983,220 @@ fn collect_draw_run<'a>(
         }
         flush_shape_run(local_scene, shape_run, context);
         push_loose_draw_primitive(local_scene, primitive, context);
+    }
+}
+
+/// Draws a run from its verified replay frame: retained spans as
+/// [`crate::scene::RetainedDraw`]s referencing identity-keyed slots, dynamic
+/// spans through the ordinary emit path, in exact span order. `true` means
+/// the run was fully emitted here. `false` leaves the run to the ordinary
+/// path — the feed is opt-in, unsupported contexts fall back wholesale, and
+/// a fallen-back frame costs exactly one ordinarily-drawn frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn try_command_feed<'a>(
+    local_scene: &mut CompositorScene,
+    run: &'a DrawRunNode,
+    frame: &cranpose_ui_graphics::CommandReplayFrame,
+    command: cranpose_render_common::graph::DrawCommandId,
+    shape_run: &mut Vec<ShapeRunEntry<'a>>,
+    context: &LocalPrimitiveContext<'_>,
+) -> bool {
+    use crate::shape_replay::{command_feed_enabled, PendingBrushPatch, PendingFeedCapture};
+    if !command_feed_enabled() {
+        return false;
+    }
+    let supported = SHAPE_REPLAY.with(|state| state.borrow().supported);
+    if !supported
+        || context.draw_snap_anchor.is_some()
+        || !layer_supports_replay(context.local_layer)
+    {
+        return false;
+    }
+    // The feed owns retention for scenes it serves; a live flat-detector
+    // table would be a second retention system fighting over slots.
+    SHAPE_REPLAY.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.phase != ReplayPhase::Idle {
+            state.retire_all();
+        }
+    });
+    let motion = context.motion_context_animated || context.content_offset_translation;
+    let fingerprint = context_fingerprint(
+        context.layer_bounds,
+        context.visual_clip,
+        context.local_layer.alpha,
+        motion,
+    );
+    // Entries accumulated from earlier nodes flush first: span emission
+    // below must land after them to keep z order exact.
+    flush_shape_run(local_scene, shape_run, context);
+    let center_final = Point::new(
+        frame.center.x + context.layer_bounds.x,
+        frame.center.y + context.layer_bounds.y,
+    );
+    let (root_scale, frame_now) =
+        SHAPE_REPLAY.with(|state| (state.borrow().root_scale, state.borrow().frame));
+    for span in &frame.spans {
+        match span {
+            cranpose_ui_graphics::FrameSpan::Dynamic { range } => {
+                emit_feed_range(
+                    local_scene,
+                    &run.primitives[range.0 as usize..range.1 as usize],
+                    context,
+                    motion,
+                );
+            }
+            cranpose_ui_graphics::FrameSpan::Retained {
+                slot,
+                capture: true,
+                range,
+                ..
+            } => {
+                // The capture frame: emit ordinarily, and when every record
+                // produced exactly one uncut shape, ask the renderer to
+                // retain the shape range under this span's identity.
+                let shape_start = local_scene.shapes.len();
+                let primitives = &run.primitives[range.0 as usize..range.1 as usize];
+                let mut clean = !primitives.is_empty();
+                for primitive in primitives {
+                    let before = local_scene.shapes.len();
+                    let mut emitted_rect = None;
+                    if let Some(entry) = ShapeRunEntry::new(primitive, None) {
+                        if let Some(params) = emit_shape_run_entry(
+                            &entry,
+                            context.layer_bounds,
+                            context.local_layer,
+                            context.visual_clip,
+                            motion,
+                        ) {
+                            emitted_rect = Some(params.rect);
+                            push_shape_params(local_scene, params);
+                        }
+                    } else {
+                        push_loose_draw_primitive(local_scene, primitive, context);
+                    }
+                    let one_shape = local_scene.shapes.len() == before + 1;
+                    let clip_ok = match (context.visual_clip, emitted_rect) {
+                        (Some(clip), Some(rect)) => rect_contains(clip, rect),
+                        (None, Some(_)) => true,
+                        (_, None) => false,
+                    };
+                    if !(one_shape && clip_ok) {
+                        clean = false;
+                    }
+                }
+                if clean {
+                    SHAPE_REPLAY.with(|state| {
+                        state
+                            .borrow_mut()
+                            .pending_feed_captures
+                            .push(PendingFeedCapture {
+                                key: (command, *slot),
+                                shape_start,
+                                shape_count: primitives.len(),
+                                fingerprint,
+                                capture_clip: context.visual_clip,
+                            });
+                    });
+                }
+            }
+            cranpose_ui_graphics::FrameSpan::Retained {
+                slot,
+                capture: false,
+                slot_offset,
+                range,
+                transform,
+                recolors,
+                bounds,
+            } => {
+                let len = (range.1 - range.0) as usize;
+                let bounds_now = Rect {
+                    x: bounds.x + context.layer_bounds.x,
+                    y: bounds.y + context.layer_bounds.y,
+                    width: bounds.width,
+                    height: bounds.height,
+                };
+                let emitted = local_scene.retained_draws.len() < MAX_RETAINED_OPS
+                    && SHAPE_REPLAY.with(|state| {
+                        let mut state = state.borrow_mut();
+                        let Some(feed_slot) = state.feed_slots.get_mut(&(command, *slot))
+                        else {
+                            return None;
+                        };
+                        if feed_slot.fingerprint != fingerprint {
+                            return None;
+                        }
+                        if feed_slot
+                            .capture_clip
+                            .is_some_and(|clip| !rect_contains(clip, bounds_now))
+                        {
+                            return None;
+                        }
+                        feed_slot.last_referenced = frame_now;
+                        let gpu_slot = feed_slot.gpu_slot;
+                        for (offset, color) in recolors {
+                            state.pending_patches.push(PendingBrushPatch {
+                                slot: gpu_slot,
+                                shape_index: *slot_offset + offset,
+                                brush: Brush::Solid(*color),
+                            });
+                        }
+                        state.stat_patches += recolors.len() as u64;
+                        Some(gpu_slot)
+                    })
+                    .map(|gpu_slot| {
+                        local_scene.push_retained_draw(crate::scene::RetainedDraw {
+                            slot: gpu_slot,
+                            transform: SegmentTransform {
+                                scale: transform.scale,
+                                angle: transform.angle,
+                            }
+                            .to_similarity(center_final, root_scale),
+                            bounds: bounds_now,
+                            first_shape: *slot_offset,
+                            shape_count: len as u32,
+                        });
+                    })
+                    .is_some();
+                if !emitted {
+                    emit_feed_range(
+                        local_scene,
+                        &run.primitives[range.0 as usize..range.1 as usize],
+                        context,
+                        motion,
+                    );
+                }
+            }
+        }
+    }
+    true
+}
+
+/// The ordinary path for one span of a fed run: shape entries convert in
+/// place, non-shape primitives spill loose, exactly as the unfed run loop
+/// does. Kept away from [`flush_shape_run`] so span emission can never
+/// re-enter the flat detector.
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_feed_range(
+    local_scene: &mut CompositorScene,
+    primitives: &[DrawPrimitive],
+    context: &LocalPrimitiveContext<'_>,
+    motion: bool,
+) {
+    for primitive in primitives {
+        if let Some(entry) = ShapeRunEntry::new(primitive, None) {
+            if let Some(params) = emit_shape_run_entry(
+                &entry,
+                context.layer_bounds,
+                context.local_layer,
+                context.visual_clip,
+                motion,
+            ) {
+                push_shape_params(local_scene, params);
+            }
+        } else {
+            push_loose_draw_primitive(local_scene, primitive, context);
+        }
     }
 }
 

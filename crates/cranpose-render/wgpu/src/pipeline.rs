@@ -1922,6 +1922,14 @@ thread_local! {
     static RETAINED_FEED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// Moves the retained feed to a fresh epoch after the renderer dropped its
+/// identity-fed slots wholesale; the next scene build restarts every
+/// command's verification state.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn bump_retained_feed_generation() {
+    RETAINED_FEED_GENERATION.with(|cell| cell.set(cell.get().wrapping_add(1)));
+}
+
 /// Declares to scene building that the wgpu renderer consumes retained
 /// draw-run spans by identity. wasm has no storage-buffer retained path, so
 /// it declares nothing and scene building skips verification entirely.

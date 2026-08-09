@@ -132,6 +132,37 @@ pub(crate) struct PendingBrushPatch {
     pub brush: Brush,
 }
 
+/// Renderer slot state for one identity-fed capture, keyed by the
+/// (command, slot) pair the scene builder's verifier stamped on the span.
+/// Unlike the flat detector's segments, liveness is driven by the graph:
+/// spans stop referencing a key and the slot ages out.
+pub(crate) struct FeedSlot {
+    pub gpu_slot: u32,
+    /// Emission context at capture; a differing context falls back to
+    /// ordinary drawing (the captured shapes bake the old context in).
+    pub fingerprint: u64,
+    /// The ambient clip the capture was emitted under; replay must keep the
+    /// transformed span inside it (the baked clip moves with the shapes).
+    pub capture_clip: Option<Rect>,
+    /// Frame that last drew from this slot, for aging out.
+    pub last_referenced: u64,
+}
+
+/// A capture request from the identity feed: the shape range this frame's
+/// ordinary emission pushed for one capture-marked span.
+pub(crate) struct PendingFeedCapture {
+    pub key: (cranpose_render_common::graph::DrawCommandId, u32),
+    pub shape_start: usize,
+    pub shape_count: usize,
+    pub fingerprint: u64,
+    pub capture_clip: Option<Rect>,
+}
+
+/// Frames a feed slot may go unreferenced before its buffers are released.
+/// Long enough to ride out a recapture cycle, short enough that a vanished
+/// command frees its slots within a couple of seconds.
+pub(crate) const FEED_SLOT_IDLE_FRAMES: u64 = 120;
+
 /// Where the detector is in its snapshot → partition → replay cycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum ReplayPhase {
@@ -190,6 +221,15 @@ pub(crate) struct ShapeReplayState {
     pub pending_captures: Vec<PendingCapture>,
     pub pending_patches: Vec<PendingBrushPatch>,
     pub pending_releases: Vec<u32>,
+    /// Identity-fed retained slots (see [`FeedSlot`]) and their capture
+    /// queue, driven by [`CommandReplayFrame`]s the graph carries instead
+    /// of flush-time similarity detection.
+    pub feed_slots: std::collections::HashMap<
+        (cranpose_render_common::graph::DrawCommandId, u32),
+        FeedSlot,
+        cranpose_ui_graphics::FxBuildHasher,
+    >,
+    pub pending_feed_captures: Vec<PendingFeedCapture>,
 }
 
 thread_local! {
@@ -203,6 +243,25 @@ thread_local! {
 /// per frame is noise.
 pub(crate) fn replay_enabled() -> bool {
     std::env::var("CRANPOSE_SIMILARITY_REPLAY").as_deref() != Ok("0")
+}
+
+/// Opt-in switch for the identity feed while it runs alongside the flat
+/// detector: `CRANPOSE_COMMAND_FEED=1` makes runs carrying a replay frame
+/// draw from identity-keyed slots; anything else leaves the flat detector
+/// in charge. Flips to default-on (and then the flag dies with the flat
+/// detector) once parity is proven on the game.
+pub(crate) fn command_feed_enabled() -> bool {
+    std::env::var("CRANPOSE_COMMAND_FEED").as_deref() == Ok("1")
+}
+
+/// Test/diagnostic view of the identity feed on this thread: live feed
+/// slots and lifetime patch count.
+#[doc(hidden)]
+pub fn feed_live_stats() -> (usize, u64) {
+    SHAPE_REPLAY.with(|state| {
+        let state = state.borrow();
+        (state.feed_slots.len(), state.stat_patches)
+    })
 }
 
 /// Test/diagnostic view of the live replay state on this thread: segments
@@ -263,6 +322,7 @@ impl ShapeReplayState {
     pub(crate) fn begin_frame(&mut self, supported: bool, root_scale: f32) {
         self.frame = self.frame.wrapping_add(1);
         self.big_run_claimed = false;
+        let feed_scale_changed = !self.feed_slots.is_empty() && self.root_scale != root_scale;
         self.root_scale = root_scale;
         self.supported = supported && replay_enabled();
         let scale_changed = self
@@ -274,6 +334,20 @@ impl ShapeReplayState {
         {
             self.retire_all();
         }
+        if (!self.supported && !self.feed_slots.is_empty()) || feed_scale_changed {
+            self.retire_feed();
+        }
+    }
+
+    /// Releases every identity-fed slot and moves the feed to a fresh
+    /// epoch, so scene building restarts each command's verification
+    /// instead of referencing buffers that no longer exist.
+    pub(crate) fn retire_feed(&mut self) {
+        for (_, slot) in self.feed_slots.drain() {
+            self.pending_releases.push(slot.gpu_slot);
+        }
+        self.pending_feed_captures.clear();
+        crate::pipeline::bump_retained_feed_generation();
     }
 }
 
