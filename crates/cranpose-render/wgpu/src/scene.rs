@@ -156,7 +156,11 @@ pub(crate) struct SimilarityTransform {
     pub(crate) center: [f32; 2],
     pub(crate) rot: [f32; 2],
     pub(crate) scale: f32,
-    _pad: [f32; 3],
+    /// 1.0 makes the storage-mode shader read shape colors from the slot's
+    /// retained paint buffer instead of `ShapeData.color`; 0.0 (identity,
+    /// every fresh batch) keeps the in-record color.
+    paint_select: f32,
+    _pad: [f32; 2],
 }
 
 impl SimilarityTransform {
@@ -164,7 +168,8 @@ impl SimilarityTransform {
         center: [0.0, 0.0],
         rot: [1.0, 0.0],
         scale: 1.0,
-        _pad: [0.0; 3],
+        paint_select: 0.0,
+        _pad: [0.0; 2],
     };
 
     pub(crate) fn new(center: [f32; 2], angle: f32, scale: f32) -> Self {
@@ -172,8 +177,18 @@ impl SimilarityTransform {
             center,
             rot: [angle.cos(), angle.sin()],
             scale,
-            _pad: [0.0; 3],
+            paint_select: 0.0,
+            _pad: [0.0; 2],
         }
+    }
+
+    /// This transform with the retained paint buffer selected. Staged for
+    /// replay draws only — recolor patches rewrite the slot's paint buffer,
+    /// so its colors are live where the captured `ShapeData` ones are stale.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_retained_paint(mut self) -> Self {
+        self.paint_select = 1.0;
+        self
     }
 }
 

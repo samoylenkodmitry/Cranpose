@@ -47,11 +47,18 @@ var<uniform> uniforms: Uniforms;
 // anti-aliasing half-width is a capture-space half pixel, so it reads as
 // `scale` screen pixels — the breathing transforms this rides stay within a
 // few percent of 1.
+// `paint_select` = 1.0 makes the vertex stage read each shape's color from
+// the retained paint buffer instead of `ShapeData.color`. Replayed batches
+// set it (their recolors land in the slot's paint buffer; the captured
+// ShapeData is immutable); every fresh batch leaves it 0.0. Only the
+// storage-mode source rewrite declares the paint array and reads the flag —
+// in this base text the field is inert padding, which keeps the uniform
+// variant valid for WebGL.
 struct SimilarityTransform {
     center: vec2<f32>,
     rot: vec2<f32>,
     scale: f32,
-    _pad0: f32,
+    paint_select: f32,
     _pad1: vec2<f32>,
 }
 

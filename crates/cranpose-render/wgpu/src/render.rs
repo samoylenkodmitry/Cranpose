@@ -1272,7 +1272,20 @@ fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
                 )
                 .replace(
                     "var<uniform> gradient_stops: array<GradientStop, 256>;",
-                    "var<storage, read> gradient_stops: array<GradientStop>;",
+                    // Also inject the retained-paint array here: one mutable
+                    // color per shape, read when `similarity.paint_select`
+                    // is set, so recolor patches upload 16-byte colors
+                    // instead of whole ShapeData records. The base text
+                    // never declares it — uniform-mode devices cannot bind
+                    // storage and never host retained slots.
+                    "var<storage, read> gradient_stops: array<GradientStop>;\n\n\
+                     @group(1) @binding(3)\n\
+                     var<storage, read> paint: array<vec4<f32>>;",
+                )
+                .replace(
+                    "output.color = shape.color;",
+                    "output.color = \
+                     select(shape.color, paint[shape_idx], similarity.paint_select > 0.5);",
                 ),
         );
     }
@@ -2038,21 +2051,28 @@ const REPLAY_TRANSFORM_STRIDE: u64 = 256;
 /// One retained replay batch: converted shape slots captured on an earlier
 /// frame, kept on the GPU and re-drawn each frame under the similarity
 /// transform staged at `transform_offset`.
+///
+/// The immutable `ShapeData` buffer holds no handle here: nothing addresses
+/// it after capture, and `bind_group` keeps it alive.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlot {
-    shape_buffer: wgpu::Buffer,
     gradient_buffer: wgpu::Buffer,
+    /// One `vec4<f32>` color per shape — the mutable paint the shader reads
+    /// under `paint_select`, split out so recolor patches upload 16 bytes
+    /// per shape while the 160-byte `ShapeData` stays immutable on the GPU
+    /// from capture to release.
+    paint_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     shape_count: u32,
     /// Per-shape offsets into the gradient buffer (`shape_count + 1`
     /// entries), so recolor patches can rewrite one shape's stop span.
     gradient_offsets: Vec<u32>,
-    /// CPU mirrors of the retained buffers. Recolor patches apply here
+    /// CPU mirrors of the mutable buffers. Recolor patches apply here
     /// first and upload as one contiguous span per buffer per frame —
     /// MEGA's twinkle field recolors ~1.7k dots a frame, and that many
     /// individual copy commands stall a mobile GPU for longer than the
     /// spans' extra bytes ever could.
-    shape_mirror: Vec<ShapeData>,
+    paint_mirror: Vec<[f32; 4]>,
     gradient_mirror: Vec<GradientStop>,
 }
 
@@ -2450,9 +2470,9 @@ enum UploadTarget {
     /// 256-byte-aligned offset.
     #[cfg(not(target_arch = "wasm32"))]
     ReplayTransform,
-    /// A replay slot's retained shape buffer (color patches land here).
+    /// A replay slot's retained paint buffer (color patches land here).
     #[cfg(not(target_arch = "wasm32"))]
-    ReplayShapeData(u32),
+    ReplayPaintData(u32),
     /// A replay slot's retained gradient buffer (stop recolors land here).
     #[cfg(not(target_arch = "wasm32"))]
     ReplayGradientData(u32),
@@ -2564,13 +2584,52 @@ impl StagedBufferUploads {
     }
 }
 
+/// The fresh-batch entry list for the shape bind group layout: the batch's
+/// own data buffers, the shared identity similarity buffer, and — storage
+/// mode only, where the layout carries the paint entry — the renderer-wide
+/// dummy paint buffer (fresh draws leave `paint_select` at 0.0).
+fn shape_batch_bind_group_entries<'a>(
+    shape_buffer: &'a wgpu::Buffer,
+    gradient_buffer: &'a wgpu::Buffer,
+    similarity_buffer: &'a wgpu::Buffer,
+    paint_buffer: Option<&'a wgpu::Buffer>,
+) -> Vec<wgpu::BindGroupEntry<'a>> {
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: shape_buffer.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: gradient_buffer.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: similarity_buffer.as_entire_binding(),
+        },
+    ];
+    if let Some(paint_buffer) = paint_buffer {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 3,
+            resource: paint_buffer.as_entire_binding(),
+        });
+    }
+    entries
+}
+
 impl ShapeBatchBuffers {
     fn new(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
         similarity_buffer: &wgpu::Buffer,
+        paint_buffer: Option<&wgpu::Buffer>,
         batch_limits: ShapeBatchLimits,
     ) -> Self {
+        debug_assert_eq!(
+            paint_buffer.is_some(),
+            batch_limits.storage,
+            "the paint binding exists exactly when the layout is in storage mode"
+        );
         let initial_shape_cap = batch_limits.initial_shape_capacity();
         let initial_gradient_cap = batch_limits.initial_gradient_capacity();
 
@@ -2591,20 +2650,12 @@ impl ShapeBatchBuffers {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shape Bind Group"),
             layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: shape_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gradient_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: similarity_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &shape_batch_bind_group_entries(
+                &shape_buffer,
+                &gradient_buffer,
+                similarity_buffer,
+                paint_buffer,
+            ),
         });
 
         Self {
@@ -2624,6 +2675,7 @@ impl ShapeBatchBuffers {
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
         similarity_buffer: &wgpu::Buffer,
+        paint_buffer: Option<&wgpu::Buffer>,
         shapes_needed: usize,
         gradients_needed: usize,
     ) {
@@ -2669,20 +2721,12 @@ impl ShapeBatchBuffers {
             self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Shape Bind Group"),
                 layout: bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.shape_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.gradient_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: similarity_buffer.as_entire_binding(),
-                    },
-                ],
+                entries: &shape_batch_bind_group_entries(
+                    &self.shape_buffer,
+                    &self.gradient_buffer,
+                    similarity_buffer,
+                    paint_buffer,
+                ),
             });
         }
     }
@@ -2780,6 +2824,9 @@ pub struct GpuRenderer {
     #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
+    /// `Some` exactly in storage mode: the 16-byte stand-in every fresh
+    /// batch binds at the paint entry (see `shape_batch_bind_group_entries`).
+    dummy_paint_buffer: Option<wgpu::Buffer>,
     /// Shared identity binding for `@group(1) @binding(2)`: every freshly
     /// converted shape batch draws untransformed through this one buffer.
     identity_similarity_buffer: wgpu::Buffer,
@@ -2878,10 +2925,10 @@ pub struct GpuRenderer {
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
-/// instrument: dirty-span coalescing uploads whole `ShapeData` records
-/// between the lowest and highest patched index of each slot, so `bytes`
-/// versus `ideal_bytes` (patched colors alone) is exactly the cost of
-/// mutable paint living inside immutable geometry.
+/// instrument: recolors upload 16-byte paint records (plus gradient stop
+/// spans), coalesced per slot between the lowest and highest patched
+/// index, so `bytes` versus `ideal_bytes` (patched colors alone) is just
+/// the untouched records inside each coalesced span.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct ReplayUploadStats {
@@ -3055,48 +3102,65 @@ impl GpuRenderer {
         // mode is gated on `max_storage_buffers_per_shader_stage`, which GL
         // backends report as the minimum across stages, so a device that
         // cannot read storage from the vertex stage falls back to uniforms.)
+        let mut shape_bind_group_layout_entries = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: shape_batch_limits.data_binding_type(),
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: shape_batch_limits.data_binding_type(),
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // The similarity transform rides a dynamic offset so
+            // retained draws sharing one captured batch can each
+            // apply their own transform; ordinary batches pass
+            // offset 0 into the identity buffer.
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<SimilarityTransform>() as u64,
+                    ),
+                },
+                count: None,
+            },
+        ];
+        // Retained-slot paint colors, read by the vertex stage under
+        // `paint_select` (see `shape_shader_source`). Storage mode only:
+        // the uniform-variant shader never declares the array, and
+        // uniform-mode devices never host retained slots, so their layout
+        // stays exactly the three-entry one the uniform pipeline expects.
+        if shape_batch_limits.storage {
+            shape_bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            });
+        }
         let shape_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Shape Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: shape_batch_limits.data_binding_type(),
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: shape_batch_limits.data_binding_type(),
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // The similarity transform rides a dynamic offset so
-                    // retained draws sharing one captured batch can each
-                    // apply their own transform; ordinary batches pass
-                    // offset 0 into the identity buffer.
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: true,
-                            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
-                                SimilarityTransform,
-                            >()
-                                as u64),
-                        },
-                        count: None,
-                    },
-                ],
+                entries: &shape_bind_group_layout_entries,
             });
 
         let identity_similarity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -3110,6 +3174,19 @@ impl GpuRenderer {
             .get_mapped_range_mut()
             .copy_from_slice(bytemuck::bytes_of(&SimilarityTransform::IDENTITY));
         identity_similarity_buffer.unmap();
+
+        // Fresh-batch bind groups need a resource at the paint binding even
+        // though their draws leave `paint_select` at 0.0 and never use the
+        // value; one minimal buffer (a single never-read vec4) serves every
+        // batch. Uniform-mode layouts have no paint entry, so none exists.
+        let dummy_paint_buffer = shape_batch_limits.storage.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Paint Buffer"),
+                size: std::mem::size_of::<[f32; 4]>() as u64,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        });
         #[cfg(not(target_arch = "wasm32"))]
         let replay_slot_store = ReplaySlotStore::new(&device);
 
@@ -3212,6 +3289,7 @@ impl GpuRenderer {
             &device,
             &shape_bind_group_layout,
             &identity_similarity_buffer,
+            dummy_paint_buffer.as_ref(),
             shape_batch_limits,
         );
 
@@ -3283,6 +3361,7 @@ impl GpuRenderer {
             #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
+            dummy_paint_buffer,
             identity_similarity_buffer,
             #[cfg(not(target_arch = "wasm32"))]
             replay_slots: replay_slot_store,
@@ -6220,10 +6299,11 @@ impl GpuRenderer {
                             if (*index as u32) < MAX_REPLAY_SLOTS
                                 && self.replay_slots.slots.contains_key(&retained.slot)
                             {
+                                let transform = retained.transform.with_retained_paint();
                                 staged_uploads.stage_at(
                                     UploadTarget::ReplayTransform,
                                     *index as u64 * REPLAY_TRANSFORM_STRIDE,
-                                    bytemuck::bytes_of(&retained.transform),
+                                    bytemuck::bytes_of(&transform),
                                 );
                             }
                         }
@@ -6854,10 +6934,11 @@ impl GpuRenderer {
                                 if (*index as u32) < MAX_REPLAY_SLOTS
                                     && self.replay_slots.slots.contains_key(&retained.slot)
                                 {
+                                    let transform = retained.transform.with_retained_paint();
                                     staged_uploads.stage_at(
                                         UploadTarget::ReplayTransform,
                                         *index as u64 * REPLAY_TRANSFORM_STRIDE,
-                                        bytemuck::bytes_of(&retained.transform),
+                                        bytemuck::bytes_of(&transform),
                                     );
                                 }
                             }
@@ -7040,6 +7121,7 @@ impl GpuRenderer {
                 &self.device,
                 &self.shape_bind_group_layout,
                 &self.identity_similarity_buffer,
+                self.dummy_paint_buffer.as_ref(),
                 self.shape_batch_limits,
             ));
         }
@@ -7145,13 +7227,13 @@ impl GpuRenderer {
                     UploadTarget::ImageIndex => &self.image_index_buffer,
                     UploadTarget::RetainedGlyphUniform => &self.retained_glyph_uniform_buffer,
                     UploadTarget::ReplayTransform => &self.replay_slots.transform_buffer,
-                    UploadTarget::ReplayShapeData(slot) => {
+                    UploadTarget::ReplayPaintData(slot) => {
                         // A slot released between staging and flush has
                         // nothing left to patch.
                         let Some(entry) = self.replay_slots.slots.get(&slot) else {
                             continue;
                         };
-                        &entry.shape_buffer
+                        &entry.paint_buffer
                     }
                     UploadTarget::ReplayGradientData(slot) => {
                         let Some(entry) = self.replay_slots.slots.get(&slot) else {
@@ -7852,6 +7934,7 @@ impl GpuRenderer {
                 &self.device,
                 &self.shape_bind_group_layout,
                 &self.identity_similarity_buffer,
+                self.dummy_paint_buffer.as_ref(),
                 shape_count,
                 self.scratch_gradients.len().max(1),
             );
@@ -7877,6 +7960,7 @@ impl GpuRenderer {
                     &self.device,
                     &self.shape_bind_group_layout,
                     &self.identity_similarity_buffer,
+                    self.dummy_paint_buffer.as_ref(),
                     shape_count,
                     self.scratch_gradients.len().max(1),
                 );
@@ -7946,6 +8030,7 @@ impl GpuRenderer {
             &self.device,
             &self.shape_bind_group_layout,
             &self.identity_similarity_buffer,
+            self.dummy_paint_buffer.as_ref(),
             shape_count,
             (total_gradient_stops as usize).max(1),
         );
@@ -8124,11 +8209,14 @@ impl GpuRenderer {
     }
 
     /// Stages every queued replay recolor patch. All brushes rewrite the
-    /// shape's 16-byte color slot (the solid color, or the first gradient
-    /// stop); gradient brushes additionally rewrite their stop span in the
-    /// slot's gradient buffer. Runs in the retained prepare arms so the
-    /// writes land in the same staged-upload flush that carries the frame's
-    /// transforms; draining is idempotent across arms.
+    /// shape's 16-byte record in the slot's paint buffer (the solid color,
+    /// or the first gradient stop — what `ShapeData.color` carried at
+    /// capture); gradient brushes additionally rewrite their stop span in
+    /// the slot's gradient buffer. The captured `ShapeData` itself is
+    /// immutable, so a recolored frame uploads colors, not geometry. Runs
+    /// in the retained prepare arms so the writes land in the same
+    /// staged-upload flush that carries the frame's transforms; draining is
+    /// idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
         let patches = crate::shape_replay::SHAPE_REPLAY
@@ -8145,14 +8233,14 @@ impl GpuRenderer {
         // longer than the spans' untouched bytes ever cost.
         #[derive(Clone, Copy)]
         struct DirtySpan {
-            shape_min: u32,
-            shape_max: u32,
+            paint_min: u32,
+            paint_max: u32,
             stop_min: u32,
             stop_max: u32,
         }
         const CLEAN: DirtySpan = DirtySpan {
-            shape_min: u32::MAX,
-            shape_max: 0,
+            paint_min: u32::MAX,
+            paint_max: 0,
             stop_min: u32::MAX,
             stop_max: 0,
         };
@@ -8194,12 +8282,12 @@ impl GpuRenderer {
                 span.stop_min = span.stop_min.min(start);
                 span.stop_max = span.stop_max.max(end - 1);
             }
-            let Some(shape) = slot.shape_mirror.get_mut(index) else {
+            let Some(paint) = slot.paint_mirror.get_mut(index) else {
                 continue;
             };
-            shape.color = color;
-            span.shape_min = span.shape_min.min(patch.shape_index);
-            span.shape_max = span.shape_max.max(patch.shape_index);
+            *paint = color;
+            span.paint_min = span.paint_min.min(patch.shape_index);
+            span.paint_max = span.paint_max.max(patch.shape_index);
         }
 
         let mut uploaded_records = 0u64;
@@ -8209,14 +8297,14 @@ impl GpuRenderer {
             let Some(slot) = self.replay_slots.slots.get(&slot_id) else {
                 continue;
             };
-            if span.shape_min <= span.shape_max {
-                let range = span.shape_min as usize..span.shape_max as usize + 1;
+            if span.paint_min <= span.paint_max {
+                let range = span.paint_min as usize..span.paint_max as usize + 1;
                 uploaded_records += range.len() as u64;
-                uploaded_bytes += (range.len() * std::mem::size_of::<ShapeData>()) as u64;
+                uploaded_bytes += (range.len() * std::mem::size_of::<[f32; 4]>()) as u64;
                 staged_uploads.stage_at(
-                    UploadTarget::ReplayShapeData(slot_id),
-                    range.start as u64 * std::mem::size_of::<ShapeData>() as u64,
-                    bytemuck::cast_slice(&slot.shape_mirror[range]),
+                    UploadTarget::ReplayPaintData(slot_id),
+                    range.start as u64 * std::mem::size_of::<[f32; 4]>() as u64,
+                    bytemuck::cast_slice(&slot.paint_mirror[range]),
                 );
             }
             if span.stop_min <= span.stop_max {
@@ -8229,8 +8317,9 @@ impl GpuRenderer {
                 );
             }
         }
-        // A patched color is one 16-byte vec4: what a paint buffer split
-        // (tofable P0) would upload instead of the coalesced spans.
+        // A patched color is one 16-byte vec4; the staged bytes exceed this
+        // only by the untouched records inside each coalesced span (and by
+        // gradient-stop rewrites, which carry real data either way).
         let ideal_bytes = patches.len() as u64 * 16;
         self.replay_upload_stats.note_frame(
             patches.len() as u64,
@@ -8308,6 +8397,21 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::cast_slice(&gradients));
         gradient_buffer.unmap();
 
+        // Seed the mutable paint from the converted colors, so an unpatched
+        // replay renders bit-identically to the capture frame.
+        let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
+        let paint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Paint Buffer"),
+            size: (std::mem::size_of::<[f32; 4]>() * shape_count) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        paint_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&paint));
+        paint_buffer.unmap();
+
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Replay Shape Bind Group"),
             layout: &self.shape_bind_group_layout,
@@ -8336,18 +8440,22 @@ impl GpuRenderer {
                         ),
                     }),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: paint_buffer.as_entire_binding(),
+                },
             ],
         });
 
         self.replay_slots.slots.insert(
             id,
             ReplaySlot {
-                shape_buffer,
                 gradient_buffer,
+                paint_buffer,
                 bind_group,
                 shape_count: shape_count as u32,
                 gradient_offsets,
-                shape_mirror: shape_data,
+                paint_mirror: paint,
                 gradient_mirror: gradients,
             },
         );
@@ -16443,6 +16551,14 @@ mod tests {
             !source.contains("var<uniform> gradient_stops"),
             "the uniform gradient declaration must be fully replaced"
         );
+        assert!(
+            source.contains("var<storage, read> paint: array<vec4<f32>>;"),
+            "storage-mode shader must declare the retained paint array"
+        );
+        assert!(
+            source.contains("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)"),
+            "storage-mode shader must read paint under the paint_select flag"
+        );
 
         // The storage variant is what native devices actually compile; it
         // must be valid WGSL, not just textually plausible.
@@ -16454,6 +16570,32 @@ mod tests {
         )
         .validate(&module)
         .expect("storage-mode shape shader must validate for WebGPU");
+    }
+
+    #[test]
+    fn uniform_shape_shader_keeps_the_in_record_color_and_no_paint_binding() {
+        // The base text serves WebGL-class uniform devices, which can bind
+        // no storage buffers: the paint array and its select must exist only
+        // in the storage-mode rewrite.
+        for source in [
+            Cow::Borrowed(shaders::SHADER),
+            shape_shader_source(ShapeBatchLimits::desktop()),
+        ] {
+            assert!(
+                !source.contains("paint: array"),
+                "the uniform variant must not declare a paint array"
+            );
+            assert!(
+                source.contains("output.color = shape.color;"),
+                "the uniform variant must read the color from ShapeData \
+                 (this literal is also what `shape_shader_source` rewrites)"
+            );
+            assert!(
+                source.contains("paint_select: f32"),
+                "SimilarityTransform must name the flag field in both \
+                 variants; the Rust mirror is Pod and uploads raw bytes"
+            );
+        }
     }
 
     #[test]
