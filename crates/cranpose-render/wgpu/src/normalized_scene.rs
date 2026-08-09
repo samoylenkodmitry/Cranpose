@@ -1182,6 +1182,18 @@ fn try_shape_replay_inner(
         state.retire_all();
     }
 
+    if state.phase != ReplayPhase::Active && state.frame.is_multiple_of(300) && state.frame > 0 {
+        // A healthy bootstrap finishes in two frames; seeing this line at
+        // all means capture keeps failing, and silence would hide it.
+        log::warn!(
+            "[similarity-replay] bootstrap stalled at frame {}: phase {:?}, run {} entries, snapshot {}",
+            state.frame,
+            state.phase,
+            run.len(),
+            state.snapshot.len(),
+        );
+    }
+
     match state.phase {
         ReplayPhase::Idle => {
             take_run_snapshot(state, run, fingerprint);
@@ -1215,19 +1227,80 @@ fn take_run_snapshot(state: &mut ShapeReplayState, run: &[ShapeRunEntry<'_>], fi
     state.phase = ReplayPhase::Snapshotted;
 }
 
+/// Pairs current-run entries with snapshot entries, tolerating bounded
+/// insertions and deletions. At 60 fps consecutive frames usually carry the
+/// same entry list, but a slow device steps the simulation far enough per
+/// frame that entities spawn and die between EVERY frame pair — a strict
+/// equal-length lockstep never bootstraps exactly where replay is needed
+/// most. Pairing is structural only; the partition's transform-consistency
+/// check is what decides whether a pair actually moved together, so a wrong
+/// pairing costs a chain, never a wrong capture.
+#[cfg(not(target_arch = "wasm32"))]
+fn align_snapshot(
+    snapshot: &[Option<SnapshotEntry>],
+    views: &[Option<(SnapshotShape, &Brush)>],
+) -> Vec<Option<usize>> {
+    const RESYNC_SPAN: usize = 48;
+    const MAX_RESYNC_EVENTS: usize = 512;
+    let pair = |i: usize, j: usize| -> bool {
+        match (&views[i], &snapshot[j]) {
+            (Some((shape, _)), Some(snap)) => anchor_compatible(shape, &snap.shape),
+            (None, None) => true,
+            _ => false,
+        }
+    };
+    let mut aligned = vec![None; views.len()];
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut events = 0usize;
+    while i < views.len() && j < snapshot.len() {
+        if pair(i, j) {
+            aligned[i] = Some(j);
+            i += 1;
+            j += 1;
+            continue;
+        }
+        events += 1;
+        if events > MAX_RESYNC_EVENTS {
+            // This is not churn, the structure is gone; an empty alignment
+            // makes the caller restart from a fresh snapshot.
+            return vec![None; views.len()];
+        }
+        let mut resynced = false;
+        'search: for total in 1..=RESYNC_SPAN {
+            for di in 0..=total {
+                let dj = total - di;
+                if i + di < views.len() && j + dj < snapshot.len() && pair(i + di, j + dj) {
+                    i += di;
+                    j += dj;
+                    resynced = true;
+                    break 'search;
+                }
+            }
+        }
+        if !resynced {
+            i += 1;
+            j += 1;
+        }
+    }
+    aligned
+}
+
 /// Splits the run into maximal chains of consecutive entries that moved from
 /// the snapshot by one shared similarity transform. Chains shorter than
 /// [`MIN_SEGMENT_ENTRIES`] stay dynamic.
 #[cfg(not(target_arch = "wasm32"))]
 fn partition_chains(
     snapshot: &[Option<SnapshotEntry>],
+    aligned: &[Option<usize>],
     views: &[Option<(SnapshotShape, &Brush)>],
     center: Point,
 ) -> Vec<(usize, usize)> {
     let mut chains = Vec::new();
     let mut i = 0;
     while i < views.len() {
-        let (Some(snap), Some((current, brush))) = (&snapshot[i], &views[i]) else {
+        let (Some(snap), Some((current, brush))) =
+            (aligned[i].and_then(|j| snapshot[j].as_ref()), &views[i])
+        else {
             i += 1;
             continue;
         };
@@ -1248,7 +1321,9 @@ fn partition_chains(
         let start = i;
         let mut end = i + 1;
         while end < views.len() {
-            let (Some(snap), Some((current, brush))) = (&snapshot[end], &views[end]) else {
+            let (Some(snap), Some((current, brush))) =
+                (aligned[end].and_then(|j| snapshot[j].as_ref()), &views[end])
+            else {
                 break;
             };
             // Grouping is strict where verification is lenient: the entry's
@@ -1299,17 +1374,9 @@ fn partition_and_capture(
     context: &LocalPrimitiveContext<'_>,
     motion: bool,
 ) -> bool {
-    if run.len() != state.snapshot.len() {
-        // The structure moved under us while bootstrapping; restart the
-        // cycle from this frame's content.
-        let fingerprint = state.fingerprint;
-        state.phase = ReplayPhase::Idle;
-        state.snapshot.clear();
-        take_run_snapshot(state, run, fingerprint);
-        return false;
-    }
     let views: Vec<Option<(SnapshotShape, &Brush)>> = run.iter().map(replay_entry_view).collect();
-    let chains = partition_chains(&state.snapshot, &views, state.center);
+    let aligned = align_snapshot(&state.snapshot, &views);
+    let chains = partition_chains(&state.snapshot, &aligned, &views, state.center);
     if chains.is_empty() {
         let fingerprint = state.fingerprint;
         state.phase = ReplayPhase::Idle;

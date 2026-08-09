@@ -63,10 +63,12 @@ fn mega_like_graph(frame: usize) -> RenderGraph {
         brush: Brush::solid(Color(0.02, 0.02, 0.05, 1.0)),
         stroke: None,
     }];
-    // Movers ahead of the rings: they shift every frame, and one more
-    // appears mid-sequence so every later segment has to re-locate its
-    // anchor at a new offset.
-    for m in 0..(2 + usize::from(frame >= 4)) {
+    // Movers ahead of the rings: their POSITIONS shift every frame and their
+    // COUNT changes every frame. On a slow device the simulation steps far
+    // enough between frames that no two consecutive frames carry the same
+    // entry list — the bootstrap must align around the churn or it never
+    // engages exactly where replay matters most.
+    for m in 0..(2 + frame % 3) {
         let x = 30.0 + frame as f32 * 7.0 + m as f32 * 15.0;
         children.push(DrawPrimitive::RoundRect {
             rect: Rect {
@@ -80,11 +82,14 @@ fn mega_like_graph(frame: usize) -> RenderGraph {
             stroke: None,
         });
     }
-    for (radius, band, speed) in [
+    for (ring, (radius, band, speed)) in [
         (150.0, 10.0, 0.013),
         (120.0, 9.0, -0.008),
         (90.0, 8.0, 0.019),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         arc_ring(
             &mut children,
             radius * breathing,
@@ -92,6 +97,27 @@ fn mega_like_graph(frame: usize) -> RenderGraph {
             speed * frame as f32,
             420,
         );
+        if ring == 1 {
+            // A spark burst wedged between rings: count and positions both
+            // change every frame, the way particle churn lands mid-run
+            // between distant simulation steps. Alignment has to resync
+            // across it so the ring behind still forms a chain.
+            for s in 0..(30 + (frame * 13) % 25) {
+                let a = s as f32 * 0.7 + frame as f32 * 0.31;
+                let r = 60.0 + ((s * 17 + frame * 29) % 90) as f32;
+                children.push(DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: CENTER + a.cos() * r - 2.5,
+                        y: CENTER + a.sin() * r - 2.5,
+                        width: 5.0,
+                        height: 5.0,
+                    },
+                    brush: Brush::solid(Color(1.0, 0.6, 0.2, 0.8)),
+                    radii: cranpose_ui_graphics::CornerRadii::uniform(2.5),
+                    stroke: None,
+                });
+            }
+        }
     }
     // Twinkle dots: static geometry, colors stepping per frame — the recolor
     // patch path.
