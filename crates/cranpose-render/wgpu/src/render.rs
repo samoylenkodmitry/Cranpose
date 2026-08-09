@@ -2047,6 +2047,13 @@ struct ReplaySlot {
     /// Per-shape offsets into the gradient buffer (`shape_count + 1`
     /// entries), so recolor patches can rewrite one shape's stop span.
     gradient_offsets: Vec<u32>,
+    /// CPU mirrors of the retained buffers. Recolor patches apply here
+    /// first and upload as one contiguous span per buffer per frame —
+    /// MEGA's twinkle field recolors ~1.7k dots a frame, and that many
+    /// individual copy commands stall a mobile GPU for longer than the
+    /// spans' extra bytes ever could.
+    shape_mirror: Vec<ShapeData>,
+    gradient_mirror: Vec<GradientStop>,
 }
 
 /// The renderer's registry of live replay slots. The replay cache (scene
@@ -8012,46 +8019,94 @@ impl GpuRenderer {
     /// writes land in the same staged-upload flush that carries the frame's
     /// transforms; draining is idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
-    fn stage_replay_patches(&self, staged_uploads: &mut StagedBufferUploads) {
-        crate::shape_replay::SHAPE_REPLAY.with(|state| {
-            let mut state = state.borrow_mut();
-            for patch in state.pending_patches.drain(..) {
-                let Some(slot) = self.replay_slots.slots.get(&patch.slot) else {
+    fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
+        let patches = crate::shape_replay::SHAPE_REPLAY
+            .with(|state| std::mem::take(&mut state.borrow_mut().pending_patches));
+        if patches.is_empty() {
+            return;
+        }
+
+        // Patches land in the slot's CPU mirror and upload as one contiguous
+        // span per buffer per slot. Uploading each patch individually would
+        // record one copy command per patch, and MEGA's twinkle field recolors
+        // ~1.7k dots a frame — that many commands stall a mobile GPU for
+        // longer than the spans' untouched bytes ever cost.
+        #[derive(Clone, Copy)]
+        struct DirtySpan {
+            shape_min: u32,
+            shape_max: u32,
+            stop_min: u32,
+            stop_max: u32,
+        }
+        const CLEAN: DirtySpan = DirtySpan {
+            shape_min: u32::MAX,
+            shape_max: 0,
+            stop_min: u32::MAX,
+            stop_max: 0,
+        };
+        let mut dirty: std::collections::HashMap<u32, DirtySpan> = std::collections::HashMap::new();
+
+        for patch in &patches {
+            let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
+                continue;
+            };
+            let stops = replay_gradient_stops(&patch.brush);
+            let color = match (&patch.brush, stops.first()) {
+                (Brush::Solid(c), _) => [c.r(), c.g(), c.b(), c.a()],
+                (_, Some(first)) => first.color,
+                (_, None) => continue,
+            };
+            let index = patch.shape_index as usize;
+            let span = dirty.entry(patch.slot).or_insert(CLEAN);
+            if !stops.is_empty() {
+                let (Some(&start), Some(&end)) = (
+                    slot.gradient_offsets.get(index),
+                    slot.gradient_offsets.get(index + 1),
+                ) else {
                     continue;
                 };
-                let stops = replay_gradient_stops(&patch.brush);
-                let color = match (&patch.brush, stops.first()) {
-                    (Brush::Solid(c), _) => [c.r(), c.g(), c.b(), c.a()],
-                    (_, Some(first)) => first.color,
-                    (_, None) => continue,
-                };
-                if !stops.is_empty() {
-                    let index = patch.shape_index as usize;
-                    let (Some(start), Some(end)) = (
-                        slot.gradient_offsets.get(index),
-                        slot.gradient_offsets.get(index + 1),
-                    ) else {
-                        continue;
-                    };
-                    if (end - start) as usize != stops.len() {
-                        // The brush changed its stop count relative to the
-                        // capture; verification should have rejected this.
-                        continue;
-                    }
-                    staged_uploads.stage_at(
-                        UploadTarget::ReplayGradientData(patch.slot),
-                        *start as u64 * std::mem::size_of::<GradientStop>() as u64,
-                        bytemuck::cast_slice(&stops),
-                    );
+                if (end - start) as usize != stops.len() {
+                    // The brush changed its stop count relative to the
+                    // capture; verification should have rejected this.
+                    continue;
                 }
+                let Some(mirror) = slot.gradient_mirror.get_mut(start as usize..end as usize)
+                else {
+                    continue;
+                };
+                mirror.copy_from_slice(&stops);
+                span.stop_min = span.stop_min.min(start);
+                span.stop_max = span.stop_max.max(end - 1);
+            }
+            let Some(shape) = slot.shape_mirror.get_mut(index) else {
+                continue;
+            };
+            shape.color = color;
+            span.shape_min = span.shape_min.min(patch.shape_index);
+            span.shape_max = span.shape_max.max(patch.shape_index);
+        }
+
+        for (slot_id, span) in dirty {
+            let Some(slot) = self.replay_slots.slots.get(&slot_id) else {
+                continue;
+            };
+            if span.shape_min <= span.shape_max {
+                let range = span.shape_min as usize..span.shape_max as usize + 1;
                 staged_uploads.stage_at(
-                    UploadTarget::ReplayShapeData(patch.slot),
-                    patch.shape_index as u64 * std::mem::size_of::<ShapeData>() as u64
-                        + std::mem::offset_of!(ShapeData, color) as u64,
-                    bytemuck::bytes_of(&color),
+                    UploadTarget::ReplayShapeData(slot_id),
+                    range.start as u64 * std::mem::size_of::<ShapeData>() as u64,
+                    bytemuck::cast_slice(&slot.shape_mirror[range]),
                 );
             }
-        });
+            if span.stop_min <= span.stop_max {
+                let range = span.stop_min as usize..span.stop_max as usize + 1;
+                staged_uploads.stage_at(
+                    UploadTarget::ReplayGradientData(slot_id),
+                    range.start as u64 * std::mem::size_of::<GradientStop>() as u64,
+                    bytemuck::cast_slice(&slot.gradient_mirror[range]),
+                );
+            }
+        }
     }
 
     /// Converts `shape_refs` once and retains the result on the GPU as a
@@ -8149,6 +8204,8 @@ impl GpuRenderer {
                 bind_group,
                 shape_count: shape_count as u32,
                 gradient_offsets,
+                shape_mirror: shape_data,
+                gradient_mirror: gradients,
             },
         );
         Some(id)
