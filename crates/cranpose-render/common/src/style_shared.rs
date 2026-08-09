@@ -204,7 +204,7 @@ pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DrawPlacement {
     Behind,
     Overlay,

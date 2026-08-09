@@ -10,6 +10,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
 
 use crate::raster_cache::LayerRasterCacheHashes;
+use crate::style_shared::DrawPlacement;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectiveTransform {
@@ -367,9 +368,27 @@ pub enum RenderNode {
     Layer(Box<LayerNode>),
 }
 
+/// Stable identity of the draw command a run was recorded from: the layout
+/// node owning the command, the command's index in that node's command list,
+/// and which placement pass produced this run (a `WithContent` command emits
+/// one run per placement, so the pair alone is not unique). Rendering does
+/// not read it yet; it is the key under which retained recording state lives
+/// as retention moves up to the draw-command recorder, and it must survive
+/// recording, graph construction, normalized-scene creation, and renderer
+/// cache lookup unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DrawCommandId {
+    pub node_id: NodeId,
+    pub command_index: u32,
+    pub placement: DrawPlacement,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DrawRunNode {
     pub phase: PrimitivePhase,
+    /// Which draw command recorded these primitives. `None` only for runs
+    /// with no per-command provenance (hand-built tests).
+    pub command: Option<DrawCommandId>,
     pub primitives: Vec<DrawPrimitive>,
     /// Content facts consumers keep asking per frame, answered once at
     /// construction. Surface planning used to rescan every primitive of
@@ -381,9 +400,18 @@ pub struct DrawRunNode {
 
 impl DrawRunNode {
     pub fn new(phase: PrimitivePhase, primitives: Vec<DrawPrimitive>) -> Self {
+        Self::for_command(phase, None, primitives)
+    }
+
+    pub fn for_command(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: Vec<DrawPrimitive>,
+    ) -> Self {
         let summary = DrawRunSummary::scan(&primitives);
         Self {
             phase,
+            command,
             primitives,
             summary,
         }

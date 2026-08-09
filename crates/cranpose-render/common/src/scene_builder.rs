@@ -15,8 +15,9 @@ use cranpose_ui_graphics::{
 };
 
 use crate::graph::{
-    CachePolicy, DrawRunNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
-    PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
+    PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    TextPrimitiveNode,
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
@@ -325,6 +326,7 @@ fn build_layer_node_internal(
         inherited_translated_content_context || translated_content_context;
 
     let mut children = draw_nodes(
+        node_id,
         &draw_commands,
         DrawPlacement::Behind,
         size,
@@ -365,6 +367,7 @@ fn build_layer_node_internal(
         children.push(RenderNode::Layer(Box::new(child_layer)));
     }
     children.extend(draw_nodes(
+        node_id,
         &draw_commands,
         DrawPlacement::Overlay,
         size,
@@ -634,6 +637,7 @@ fn build_layer_node_from_data(
     });
 
     let mut render_children = draw_nodes(
+        node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Behind,
         layout_state.size,
@@ -682,6 +686,7 @@ fn build_layer_node_from_data(
         render_children.push(RenderNode::Layer(Box::new(child_layer)));
     }
     render_children.extend(draw_nodes(
+        node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Overlay,
         layout_state.size,
@@ -727,13 +732,14 @@ fn build_layer_node_from_data(
 }
 
 fn draw_nodes(
+    node_id: NodeId,
     commands: &[DrawCommand],
     placement: DrawPlacement,
     size: Size,
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
-    for command in commands {
+    for (command_index, command) in commands.iter().enumerate() {
         let primitives = primitives_for_placement(command, placement, size);
         if primitives.is_empty() {
             continue;
@@ -741,7 +747,15 @@ fn draw_nodes(
         // The recorded vector rides into the graph whole: a single canvas
         // command can carry thousands of primitives, and wrapping each in its
         // own node moved every one of them an extra time each frame.
-        nodes.push(RenderNode::DrawRun(DrawRunNode::new(phase, primitives)));
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
+            phase,
+            Some(DrawCommandId {
+                node_id,
+                command_index: command_index as u32,
+                placement,
+            }),
+            primitives,
+        )));
     }
     nodes
 }
