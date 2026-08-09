@@ -371,6 +371,69 @@ pub enum RenderNode {
 pub struct DrawRunNode {
     pub phase: PrimitivePhase,
     pub primitives: Vec<DrawPrimitive>,
+    /// Content facts consumers keep asking per frame, answered once at
+    /// construction. Surface planning used to rescan every primitive of
+    /// every run per frame to learn "does it contain text?" — for a
+    /// 17k-primitive game canvas with no text, that was two full walks per
+    /// frame that could never early-exit.
+    pub summary: DrawRunSummary,
+}
+
+impl DrawRunNode {
+    pub fn new(phase: PrimitivePhase, primitives: Vec<DrawPrimitive>) -> Self {
+        let summary = DrawRunSummary::scan(&primitives);
+        Self {
+            phase,
+            primitives,
+            summary,
+        }
+    }
+}
+
+/// One-pass discriminant census of a draw run, recursing through `Blend`
+/// wrappers the same way the per-primitive predicates it replaces did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawRunSummary {
+    /// Any `Text` primitive, including inside `Blend` — glyph masks want
+    /// rigid snapping.
+    pub has_text: bool,
+    pub has_shadow: bool,
+    /// Any primitive besides `Shadow` (direct drawable content).
+    pub has_non_shadow: bool,
+    /// Any `Image` or `Text`, including inside `Blend` — content that
+    /// resamples badly on a fractionally offset surface.
+    pub has_pixel_sensitive: bool,
+}
+
+impl DrawRunSummary {
+    pub fn scan(primitives: &[DrawPrimitive]) -> Self {
+        fn unwrap_blend(mut primitive: &DrawPrimitive) -> &DrawPrimitive {
+            while let DrawPrimitive::Blend { primitive: inner, .. } = primitive {
+                primitive = inner;
+            }
+            primitive
+        }
+        let mut summary = Self::default();
+        for primitive in primitives {
+            // Shadow classification looks at the outer discriminant only,
+            // text and pixel sensitivity see through `Blend` — exactly the
+            // split the per-primitive predicates this replaces made.
+            if matches!(primitive, DrawPrimitive::Shadow(_)) {
+                summary.has_shadow = true;
+                continue;
+            }
+            summary.has_non_shadow = true;
+            match unwrap_blend(primitive) {
+                DrawPrimitive::Text(_) => {
+                    summary.has_text = true;
+                    summary.has_pixel_sensitive = true;
+                }
+                DrawPrimitive::Image { .. } => summary.has_pixel_sensitive = true,
+                _ => {}
+            }
+        }
+        summary
+    }
 }
 
 #[derive(Clone)]

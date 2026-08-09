@@ -160,10 +160,10 @@ fn mega_like_graph(frame: usize) -> RenderGraph {
         cache_policy: CachePolicy::None,
         cache_hashes: LayerRasterCacheHashes::default(),
         cache_hashes_valid: false,
-        children: vec![RenderNode::DrawRun(DrawRunNode {
-            phase: PrimitivePhase::BeforeChildren,
-            primitives: children,
-        })],
+        children: vec![RenderNode::DrawRun(DrawRunNode::new(
+            PrimitivePhase::BeforeChildren,
+            children,
+        ))],
     })
 }
 

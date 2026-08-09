@@ -741,7 +741,7 @@ fn draw_nodes(
         // The recorded vector rides into the graph whole: a single canvas
         // command can carry thousands of primitives, and wrapping each in its
         // own node moved every one of them an extra time each frame.
-        nodes.push(RenderNode::DrawRun(DrawRunNode { phase, primitives }));
+        nodes.push(RenderNode::DrawRun(DrawRunNode::new(phase, primitives)));
     }
     nodes
 }
