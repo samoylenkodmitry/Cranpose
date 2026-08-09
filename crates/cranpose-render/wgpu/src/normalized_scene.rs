@@ -1619,7 +1619,15 @@ fn pre_verify_segments(
         &jobs,
         &mut job_results,
         2,
-        |&(i, candidate, t)| Some(verify_segment_body(&segments[i], views, candidate, t, center)),
+        |&(i, candidate, t)| {
+            Some(verify_segment_body(
+                &segments[i],
+                views,
+                candidate,
+                t,
+                center,
+            ))
+        },
     );
     for (&(i, _, _), result) in jobs.iter().zip(job_results) {
         verdicts[i] = result;
@@ -2036,6 +2044,7 @@ fn try_command_feed<'a>(
     );
     let (root_scale, frame_now) =
         SHAPE_REPLAY.with(|state| (state.borrow().root_scale, state.borrow().frame));
+    let mut stat_frame_patches = 0u64;
     let (mut stat_retained, mut stat_fallback, mut stat_remat, mut stat_captures) =
         (0usize, 0usize, 0usize, 0usize);
     for span in &frame.spans {
@@ -2121,44 +2130,46 @@ fn try_command_feed<'a>(
                     height: bounds.height,
                 };
                 let emitted = local_scene.retained_draws.len() < MAX_RETAINED_OPS
-                    && SHAPE_REPLAY.with(|state| {
-                        let mut state = state.borrow_mut();
-                        let feed_slot = state.feed_slots.get_mut(&(command, *slot))?;
-                        if feed_slot.fingerprint != fingerprint {
-                            return None;
-                        }
-                        if feed_slot
-                            .capture_clip
-                            .is_some_and(|clip| !rect_contains(clip, bounds_now))
-                        {
-                            return None;
-                        }
-                        feed_slot.last_referenced = frame_now;
-                        let gpu_slot = feed_slot.gpu_slot;
-                        for (offset, color) in recolors {
-                            state.pending_patches.push(PendingBrushPatch {
-                                slot: gpu_slot,
-                                shape_index: *slot_offset + offset,
-                                brush: Brush::Solid(*color),
-                            });
-                        }
-                        state.stat_patches += recolors.len() as u64;
-                        Some(gpu_slot)
-                    })
-                    .map(|gpu_slot| {
-                        local_scene.push_retained_draw(crate::scene::RetainedDraw {
-                            slot: gpu_slot,
-                            transform: SegmentTransform {
-                                scale: transform.scale,
-                                angle: transform.angle,
+                    && SHAPE_REPLAY
+                        .with(|state| {
+                            let mut state = state.borrow_mut();
+                            let feed_slot = state.feed_slots.get_mut(&(command, *slot))?;
+                            if feed_slot.fingerprint != fingerprint {
+                                return None;
                             }
-                            .to_similarity(center_final, root_scale),
-                            bounds: bounds_now,
-                            first_shape: *slot_offset,
-                            shape_count: len as u32,
-                        });
-                    })
-                    .is_some();
+                            if feed_slot
+                                .capture_clip
+                                .is_some_and(|clip| !rect_contains(clip, bounds_now))
+                            {
+                                return None;
+                            }
+                            feed_slot.last_referenced = frame_now;
+                            let gpu_slot = feed_slot.gpu_slot;
+                            for (offset, color) in recolors {
+                                state.pending_patches.push(PendingBrushPatch {
+                                    slot: gpu_slot,
+                                    shape_index: *slot_offset + offset,
+                                    brush: Brush::Solid(*color),
+                                });
+                            }
+                            state.stat_patches += recolors.len() as u64;
+                            stat_frame_patches += recolors.len() as u64;
+                            Some(gpu_slot)
+                        })
+                        .map(|gpu_slot| {
+                            local_scene.push_retained_draw(crate::scene::RetainedDraw {
+                                slot: gpu_slot,
+                                transform: SegmentTransform {
+                                    scale: transform.scale,
+                                    angle: transform.angle,
+                                }
+                                .to_similarity(center_final, root_scale),
+                                bounds: bounds_now,
+                                first_shape: *slot_offset,
+                                shape_count: len as u32,
+                            });
+                        })
+                        .is_some();
                 if emitted {
                     stat_retained += 1;
                 } else {
@@ -2202,13 +2213,14 @@ fn try_command_feed<'a>(
     if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
         log::warn!(
             "[command-feed] frame {}: {} spans -> {} retained, {} fallback ({} remat), \
-             {} captures queued; scene {} shapes {} retained ops",
+             {} captures queued, {} recolor patches; scene {} shapes {} retained ops",
             frame_now,
             frame.spans.len(),
             stat_retained,
             stat_fallback,
             stat_remat,
             stat_captures,
+            stat_frame_patches,
             local_scene.shapes.len(),
             local_scene.retained_draws.len(),
         );

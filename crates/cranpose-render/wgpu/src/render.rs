@@ -2873,6 +2873,58 @@ pub struct GpuRenderer {
     frame_count: u64,
     gpu_stats_enabled: bool,
     warning_state: RendererWarningState,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_upload_stats: ReplayUploadStats,
+}
+
+/// Running totals for retained-slot patch uploads, the paint-bandwidth
+/// instrument: dirty-span coalescing uploads whole `ShapeData` records
+/// between the lowest and highest patched index of each slot, so `bytes`
+/// versus `ideal_bytes` (patched colors alone) is exactly the cost of
+/// mutable paint living inside immutable geometry.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ReplayUploadStats {
+    frames: u64,
+    patches: u64,
+    slots: u64,
+    records: u64,
+    bytes: u64,
+    ideal_bytes: u64,
+    max_frame_bytes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReplayUploadStats {
+    /// One aggregate line roughly every 5-10 s of patched frames: cheap
+    /// enough to stay on unconditionally, which matters because the watch
+    /// cannot take setprop-backed diag flags — its logcat is the only
+    /// channel, and a measurement window must catch several lines.
+    const REPORT_FRAMES: u64 = 256;
+
+    fn note_frame(&mut self, patches: u64, slots: u64, records: u64, bytes: u64, ideal: u64) {
+        self.frames += 1;
+        self.patches += patches;
+        self.slots += slots;
+        self.records += records;
+        self.bytes += bytes;
+        self.ideal_bytes += ideal;
+        self.max_frame_bytes = self.max_frame_bytes.max(bytes);
+        if self.frames >= Self::REPORT_FRAMES {
+            log::info!(
+                "[replay-upload] {} patched frames: avg {:.1} KB/frame (max {:.1} KB), \
+                 color-only would be {:.1} KB/frame; avg {} patches over {} records in {} slots",
+                self.frames,
+                self.bytes as f64 / self.frames as f64 / 1024.0,
+                self.max_frame_bytes as f64 / 1024.0,
+                self.ideal_bytes as f64 / self.frames as f64 / 1024.0,
+                self.patches / self.frames,
+                self.records / self.frames,
+                self.slots / self.frames,
+            );
+            *self = Self::default();
+        }
+    }
 }
 
 fn image_sampler_descriptor(sampling: ImageSampling) -> wgpu::SamplerDescriptor<'static> {
@@ -3321,6 +3373,8 @@ impl GpuRenderer {
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
             warning_state: RendererWarningState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_upload_stats: ReplayUploadStats::default(),
         }
     }
 
@@ -8136,12 +8190,17 @@ impl GpuRenderer {
             span.shape_max = span.shape_max.max(patch.shape_index);
         }
 
+        let mut uploaded_records = 0u64;
+        let mut uploaded_bytes = 0u64;
+        let slots_touched = dirty.len() as u64;
         for (slot_id, span) in dirty {
             let Some(slot) = self.replay_slots.slots.get(&slot_id) else {
                 continue;
             };
             if span.shape_min <= span.shape_max {
                 let range = span.shape_min as usize..span.shape_max as usize + 1;
+                uploaded_records += range.len() as u64;
+                uploaded_bytes += (range.len() * std::mem::size_of::<ShapeData>()) as u64;
                 staged_uploads.stage_at(
                     UploadTarget::ReplayShapeData(slot_id),
                     range.start as u64 * std::mem::size_of::<ShapeData>() as u64,
@@ -8150,12 +8209,34 @@ impl GpuRenderer {
             }
             if span.stop_min <= span.stop_max {
                 let range = span.stop_min as usize..span.stop_max as usize + 1;
+                uploaded_bytes += (range.len() * std::mem::size_of::<GradientStop>()) as u64;
                 staged_uploads.stage_at(
                     UploadTarget::ReplayGradientData(slot_id),
                     range.start as u64 * std::mem::size_of::<GradientStop>() as u64,
                     bytemuck::cast_slice(&slot.gradient_mirror[range]),
                 );
             }
+        }
+        // A patched color is one 16-byte vec4: what a paint buffer split
+        // (tofable P0) would upload instead of the coalesced spans.
+        let ideal_bytes = patches.len() as u64 * 16;
+        self.replay_upload_stats.note_frame(
+            patches.len() as u64,
+            slots_touched,
+            uploaded_records,
+            uploaded_bytes,
+            ideal_bytes,
+        );
+        if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
+            log::info!(
+                "[replay-upload] frame: {} patches -> {} records / {:.1} KB staged \
+                 across {} slots (color-only {:.1} KB)",
+                patches.len(),
+                uploaded_records,
+                uploaded_bytes as f64 / 1024.0,
+                slots_touched,
+                ideal_bytes as f64 / 1024.0,
+            );
         }
     }
 
