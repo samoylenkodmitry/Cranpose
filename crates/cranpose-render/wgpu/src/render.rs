@@ -2896,10 +2896,13 @@ struct ReplayUploadStats {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReplayUploadStats {
-    /// One aggregate line roughly every 5-10 s of patched frames: cheap
+    /// One aggregate line roughly every 5-10 s of retained frames: cheap
     /// enough to stay on unconditionally, which matters because the watch
     /// cannot take setprop-backed diag flags — its logcat is the only
-    /// channel, and a measurement window must catch several lines.
+    /// channel, and a measurement window must catch several lines. Counts
+    /// every drain call (patched or not) so a target with zero paint
+    /// traffic still reports an affirmative zero instead of silence.
+    /// warn level: the platform loggers filter info on desktop.
     const REPORT_FRAMES: u64 = 256;
 
     fn note_frame(&mut self, patches: u64, slots: u64, records: u64, bytes: u64, ideal: u64) {
@@ -2911,8 +2914,8 @@ impl ReplayUploadStats {
         self.ideal_bytes += ideal;
         self.max_frame_bytes = self.max_frame_bytes.max(bytes);
         if self.frames >= Self::REPORT_FRAMES {
-            log::info!(
-                "[replay-upload] {} patched frames: avg {:.1} KB/frame (max {:.1} KB), \
+            log::warn!(
+                "[replay-upload] {} retained frames: avg {:.1} KB/frame (max {:.1} KB), \
                  color-only would be {:.1} KB/frame; avg {} patches over {} records in {} slots",
                 self.frames,
                 self.bytes as f64 / self.frames as f64 / 1024.0,
@@ -8123,6 +8126,7 @@ impl GpuRenderer {
         let patches = crate::shape_replay::SHAPE_REPLAY
             .with(|state| std::mem::take(&mut state.borrow_mut().pending_patches));
         if patches.is_empty() {
+            self.replay_upload_stats.note_frame(0, 0, 0, 0, 0);
             return;
         }
 
@@ -8228,7 +8232,7 @@ impl GpuRenderer {
             ideal_bytes,
         );
         if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
-            log::info!(
+            log::warn!(
                 "[replay-upload] frame: {} patches -> {} records / {:.1} KB staged \
                  across {} slots (color-only {:.1} KB)",
                 patches.len(),
