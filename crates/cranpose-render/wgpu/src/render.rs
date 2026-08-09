@@ -1990,7 +1990,10 @@ fn convert_shapes_into_outputs(
         let mut ring_count = 0usize;
         let mut other_quad = 0.0f64;
         let mut other_count = 0usize;
-        for shape in shape_refs {
+        // Largest non-arc quads: (area, index) so the tail of the diag can
+        // name what the aggregate "other" fill actually is.
+        let mut top_other: Vec<(f64, usize)> = Vec::new();
+        for (index, shape) in shape_refs.iter().enumerate() {
             let area = quad_area(shape.quad);
             if let Some(arc) = shape.arc {
                 arc_quad += area;
@@ -2005,6 +2008,7 @@ fn convert_shapes_into_outputs(
             } else {
                 other_quad += area;
                 other_count += 1;
+                top_other.push((area, index));
             }
         }
         let scale2 = (root_scale as f64) * (root_scale as f64);
@@ -2014,6 +2018,36 @@ fn convert_shapes_into_outputs(
             arc_band * scale2,
             other_quad * scale2,
         );
+        top_other.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for &(area, index) in top_other.iter().take(4) {
+            let shape = shape_refs[index];
+            let brush = match &shape.brush {
+                cranpose_ui_graphics::Brush::Solid(color) => format!("solid a={:.2}", color.3),
+                cranpose_ui_graphics::Brush::LinearGradient { colors, .. } => {
+                    format!("linear n={}", colors.len())
+                }
+                cranpose_ui_graphics::Brush::RadialGradient { colors, .. } => {
+                    format!("radial n={}", colors.len())
+                }
+                cranpose_ui_graphics::Brush::SweepGradient { colors, .. } => {
+                    format!("sweep n={}", colors.len())
+                }
+            };
+            eprintln!(
+                "[quad-area]   top other: {:.0}px {}x{} at ({:.0},{:.0}) {} shape={} stroke={} clip={} blend={:?} z={}",
+                area * scale2,
+                shape.rect.width.round(),
+                shape.rect.height.round(),
+                shape.rect.x,
+                shape.rect.y,
+                brush,
+                shape.shape.is_some(),
+                shape.stroke.is_some(),
+                shape.clip.is_some(),
+                shape.blend_mode,
+                shape.z_index,
+            );
+        }
     }
     #[cfg(target_arch = "wasm32")]
     let parallel = false;
@@ -2252,16 +2286,26 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
         return None;
     }
-    let [x, y, w, h] = shape.rect;
+    let [_, _, w, h] = shape.rect;
     if !(w > 0.0 && h > 0.0) {
         return None;
     }
-    // Exact compare, tolerance zero: the mesh is clipped to this box, so the
-    // quad must BE the box bitwise or the mesh could rasterize pixels
-    // today's quad does not (the tight arc AABB crops alpha≈0.5 pixels at
-    // the tangent points — a mesh without the identical crop would add
-    // them).
-    if shape.quad01 != [x, y, x + w, y] || shape.quad23 != [x, y + h, x + w, y + h] {
+    // The quad must be an axis-aligned box, tolerance zero: the mesh is
+    // clipped to the quad's own corners, so as long as the quad IS a box its
+    // rasterized pixel set equals the mesh clip region and the tight-AABB
+    // tangent-point crop is reproduced exactly. (Comparing against `rect`
+    // instead is an over-tight gate: under a non-dyadic root scale
+    // `(x + w) * s` differs from `x * s + w * s` by an ulp and every arc
+    // fell back to passthrough — observed on the Huawei at scale 2.75.)
+    let [left, top, right, _] = shape.quad01;
+    let [bl_x, bottom, br_x, br_y] = shape.quad23;
+    let axis_aligned = shape.quad01[3] == top
+        && bl_x == left
+        && br_x == right
+        && br_y == bottom
+        && left < right
+        && top < bottom;
+    if !axis_aligned {
         return None;
     }
     let center = [shape.arc_params[0], shape.arc_params[1]];
@@ -17161,7 +17205,11 @@ mod tests {
             (20.0, 60.0, 4.5, 1.9, StrokeCap::Butt),
         ];
         for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
-            for root_scale in [1.0f32, 2.0] {
+            // 2.75 is deliberately non-dyadic: quad corners and rect then
+            // disagree by an ulp, which the axis-aligned gate must tolerate
+            // (an equality-with-rect gate silently failed every arc on the
+            // Huawei at scale 2.75).
+            for root_scale in [1.0f32, 2.0, 2.75] {
                 let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
                 assert!(!arc.is_degenerate(), "case {case} must be drawable");
                 let converted = converted_arc_shape(arc, root_scale);
@@ -17182,14 +17230,19 @@ mod tests {
                     })
                     .collect();
 
-                let [rx, ry, rw, rh] = converted.rect;
+                // Sample the QUAD box, not `rect`: legacy rasterizes the
+                // quad, the mesh clips to the quad, and at non-dyadic root
+                // scales the two boxes differ by an ulp.
+                let [qx, qy, ..] = converted.quad01;
+                let [_, _, qr, qb] = converted.quad23;
+                let (rw, rh) = (qr - qx, qb - qy);
                 let cap_bits = (converted.stroke_params[1].max(0.0) as u32 >> 2) & 3;
                 let step = (rw.max(rh) / 400.0).clamp(0.25, 2.0);
                 let mut band_points = 0usize;
-                let mut y = ry;
-                while y <= ry + rh {
-                    let mut x = rx;
-                    while x <= rx + rw {
+                let mut y = qy;
+                while y <= qb {
+                    let mut x = qx;
+                    while x <= qr {
                         let dist = sdf_arc_band_reference(
                             [x, y],
                             [converted.arc_params[0], converted.arc_params[1]],
