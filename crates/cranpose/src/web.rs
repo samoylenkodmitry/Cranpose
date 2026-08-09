@@ -452,8 +452,9 @@ pub async fn run(
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
-                app_mut.set_cursor(logical.x, logical.y);
-                app_mut.pointer_pressed();
+                let event_time = app_mut.realtime_pointer_event_time(None);
+                app_mut.set_cursor_at_event_time(logical.x, logical.y, event_time);
+                app_mut.pointer_pressed_at_event_time(event_time);
                 request_frame();
             }
         }) as Box<dyn FnMut(_)>);
@@ -475,7 +476,8 @@ pub async fn run(
                 app_mut.set_pointer_source(web_pointer_source(&event));
                 // Touch lift-off positions must not become velocity samples
                 // (see AppShell::pointer_released_at_position).
-                app_mut.pointer_released_at_position(logical.x, logical.y);
+                let event_time = app_mut.realtime_pointer_event_time(None);
+                app_mut.pointer_released_at_position_event_time(logical.x, logical.y, event_time);
                 request_frame();
             }
             let _ = pointer_canvas.release_pointer_capture(event.pointer_id());

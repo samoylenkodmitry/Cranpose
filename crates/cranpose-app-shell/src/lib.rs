@@ -152,6 +152,15 @@ where
     frame_scheduler: FrameScheduler,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Platform and animation-clock timestamps for one pointer sample.
+pub struct PointerEventTime {
+    /// Timestamp supplied by the platform, in its millisecond clock domain.
+    pub platform_time_ms: Option<i64>,
+    /// Timestamp in the animation frame-clock domain.
+    pub animation_time_nanos: u64,
+}
+
 fn update_stage_telemetry_threshold_ms() -> Option<f64> {
     static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
     *THRESHOLD_MS.get_or_init(|| {
@@ -782,6 +791,24 @@ where
             .unwrap_or_default()
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64
+    }
+
+    /// Timestamp a live input sample against the current animation clock.
+    pub fn realtime_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
+        PointerEventTime {
+            platform_time_ms,
+            animation_time_nanos: self
+                .frame_time_nanos_at(Instant::now())
+                .max(self.last_frame_time_nanos),
+        }
+    }
+
+    /// Timestamp deterministic input at the most recently processed frame.
+    pub fn exact_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
+        PointerEventTime {
+            platform_time_ms,
+            animation_time_nanos: self.last_frame_time_nanos,
+        }
     }
 
     pub fn update_after_frame_interval(

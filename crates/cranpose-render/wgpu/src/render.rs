@@ -33,12 +33,13 @@ use crate::shaders;
 use crate::surface_executor::{
     apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
     axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
+    canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
     composite_surface_to_view as execute_composite_surface_to_view, device_pixel_bounds_for_rect,
     offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
     render_layer_surface as execute_render_layer_surface,
     render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
     scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
-    translation_stable_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
+    translation_stable_anchored_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
     SurfaceExecutionBackend,
 };
 #[cfg(test)]
@@ -384,7 +385,7 @@ impl CachedShadowComposite {
             blend_mode: BlendMode::SrcOver,
             dest_viewport: self.dest_viewport,
             source_viewport: None,
-            sample_mode: CompositeSampleMode::Linear,
+            sample_mode: CompositeSampleMode::Nearest,
         }
     }
 }
@@ -538,7 +539,7 @@ fn direct_shader_composite_viewport(
         return None;
     }
     match sample_mode {
-        CompositeSampleMode::Linear => Some(viewport),
+        CompositeSampleMode::Linear | CompositeSampleMode::Nearest => Some(viewport),
         CompositeSampleMode::Box4
             if shader_composite_preserves_source_pixel_grid(viewport, source_size) =>
         {
@@ -634,15 +635,19 @@ fn text_raster_geometry_for_draw(
         .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
         .unwrap_or_default();
     let logical_rect = text_draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = text_draw
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    // Clips are resolved in scene space from their own layer ancestry. A draw
+    // item's raster snap must never move a fixed ancestor clip.
+    let clip = text_draw.clip;
     let mut raster_rect = Rect {
         x: logical_rect.x * root_scale,
         y: logical_rect.y * root_scale,
         width: logical_rect.width * root_scale,
         height: logical_rect.height * root_scale,
     };
+    if text_draw.snap_anchor.is_some() {
+        raster_rect.x = canonicalize_device_coordinate(raster_rect.x);
+        raster_rect.y = canonicalize_device_coordinate(raster_rect.y);
+    }
     if static_text_motion {
         raster_rect.x = raster_rect.x.round();
         raster_rect.y = raster_rect.y.round();
@@ -733,9 +738,7 @@ fn shape_draw_is_visible_in_viewport(
         .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
         .unwrap_or_default();
     let rect = quad_bounds(translate_quad(shape.quad, snap_delta));
-    let clip = shape
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let clip = shape.clip;
     draw_rect_is_visible_in_viewport(rect, clip, viewport, root_scale)
 }
 
@@ -913,11 +916,10 @@ fn text_draws_for_ordered_range<'a>(
     }))
 }
 
-/// Shadow geometry is hashed in device pixels quantized to 1/16 px so that
-/// rigid translations (scrolling) reuse the cached blurred raster. Reusing a
-/// raster across device subpixel phases shifts the blurred shadow by less than
-/// one device pixel, which is imperceptible, while re-rendering the blur every
-/// scroll frame on fractional-scale displays is a frame-budget killer.
+/// Shadow geometry is hashed in device pixels quantized to 1/16 px so rigid
+/// translations reuse the cached blurred raster. The cached surface is
+/// composited one-to-one with texel-exact sampling; translation may not change
+/// either the blur or its sampling phase.
 const SHADOW_CACHE_DEVICE_QUANT: f32 = 16.0;
 
 fn hash_shadow_device_offset<H: Hasher>(value: f32, origin: f32, root_scale: f32, state: &mut H) {
@@ -1033,6 +1035,14 @@ fn shape_shadow_bounds(shapes: &[(DrawShape, BlendMode)]) -> Option<Rect> {
         })
 }
 
+fn shared_shape_shadow_snap_anchor(shapes: &[(DrawShape, BlendMode)]) -> Option<SnapAnchor> {
+    let anchor = shapes.first()?.0.snap_anchor?;
+    shapes
+        .iter()
+        .all(|(shape, _)| shape.snap_anchor == Some(anchor))
+        .then_some(anchor)
+}
+
 fn shadow_draw_bounds(shadow: &ShadowDraw) -> Option<Rect> {
     shadow
         .shapes
@@ -1126,9 +1136,13 @@ fn shape_shadow_surface_plan(
     processing_scissor?;
     let visible_device_bounds =
         device_pixel_bounds_for_rect(visible_blur_bounds, width, height, root_scale)?;
-    let source_device_bounds =
-        translation_stable_device_pixel_bounds(source_blur_bounds, root_scale, max_texture_dim)
-            .unwrap_or(visible_device_bounds);
+    let source_device_bounds = translation_stable_anchored_device_pixel_bounds(
+        source_blur_bounds,
+        shared_shape_shadow_snap_anchor(shapes),
+        root_scale,
+        max_texture_dim,
+    )
+    .unwrap_or(visible_device_bounds);
 
     Some(ShapeShadowSurfacePlan {
         source_device_bounds,
@@ -4813,6 +4827,7 @@ impl GpuRenderer {
                             .root
                             .clip_rect()
                             .map(|clip| quad_bounds(graph.root.transform_to_parent.map_rect(clip))),
+                        snap_anchor: None,
                         effect: backdrop.clone(),
                         z_index: 0,
                     },
@@ -6645,7 +6660,7 @@ impl GpuRenderer {
                             rounded_mask,
                             BlendMode::SrcOver,
                             dest_viewport,
-                            CompositeSampleMode::Linear,
+                            CompositeSampleMode::Nearest,
                         );
                 }
                 frame_encoder.record_pass();
@@ -6743,7 +6758,7 @@ impl GpuRenderer {
                     rounded_mask,
                     BlendMode::SrcOver,
                     dest_viewport,
-                    CompositeSampleMode::Linear,
+                    CompositeSampleMode::Nearest,
                 );
         }
         frame_encoder.record_pass();
@@ -6789,17 +6804,48 @@ impl GpuRenderer {
                 .unwrap_or_default();
             let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
             let quad = translate_quad(shape.quad, snap_delta);
-            let clip = shape
-                .clip
-                .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+            let clip = shape.clip;
+            let canonicalize = shape.snap_anchor.is_some();
+            let device_local_rect = if canonicalize {
+                canonicalized_scaled_rect(local_rect, root_scale)
+            } else {
+                Rect {
+                    x: local_rect.x * root_scale,
+                    y: local_rect.y * root_scale,
+                    width: local_rect.width * root_scale,
+                    height: local_rect.height * root_scale,
+                }
+            };
+            let device_quad = if canonicalize {
+                canonicalized_scaled_quad(quad, root_scale)
+            } else {
+                scaled_quad(quad, root_scale)
+            };
+            let canonicalize_brush_coordinate = |value| {
+                if canonicalize {
+                    canonicalize_device_coordinate(value)
+                } else {
+                    value
+                }
+            };
 
             // Clip rect (scaled to physical pixels)
             let clip_rect = if let Some(clip) = clip {
+                let device_clip = if canonicalize {
+                    canonicalized_scaled_rect(clip, root_scale)
+                } else {
+                    Rect {
+                        x: clip.x * root_scale,
+                        y: clip.y * root_scale,
+                        width: clip.width * root_scale,
+                        height: clip.height * root_scale,
+                    }
+                };
                 [
-                    clip.x * root_scale,
-                    clip.y * root_scale,
-                    clip.width * root_scale,
-                    clip.height * root_scale,
+                    device_clip.x,
+                    device_clip.y,
+                    device_clip.width,
+                    device_clip.height,
                 ]
             } else {
                 [0.0, 0.0, 0.0, 0.0]
@@ -6842,26 +6888,26 @@ impl GpuRenderer {
                 } => {
                     let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
                     gradient_params = [
-                        resolve_gradient_point(
-                            local_rect.x * root_scale,
-                            local_rect.width * root_scale,
+                        canonicalize_brush_coordinate(resolve_gradient_point(
+                            device_local_rect.x,
+                            device_local_rect.width,
                             start.x * root_scale,
-                        ),
-                        resolve_gradient_point(
-                            local_rect.y * root_scale,
-                            local_rect.height * root_scale,
+                        )),
+                        canonicalize_brush_coordinate(resolve_gradient_point(
+                            device_local_rect.y,
+                            device_local_rect.height,
                             start.y * root_scale,
-                        ),
-                        resolve_gradient_point(
-                            local_rect.x * root_scale,
-                            local_rect.width * root_scale,
+                        )),
+                        canonicalize_brush_coordinate(resolve_gradient_point(
+                            device_local_rect.x,
+                            device_local_rect.width,
                             end.x * root_scale,
-                        ),
-                        resolve_gradient_point(
-                            local_rect.y * root_scale,
-                            local_rect.height * root_scale,
+                        )),
+                        canonicalize_brush_coordinate(resolve_gradient_point(
+                            device_local_rect.y,
+                            device_local_rect.height,
                             end.y * root_scale,
-                        ),
+                        )),
                     ];
                     (1u32, start_idx, count, gradient_tile_mode_value(*tile_mode))
                 }
@@ -6874,8 +6920,8 @@ impl GpuRenderer {
                 } => {
                     let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
                     gradient_params = [
-                        local_rect.x * root_scale + center.x * root_scale,
-                        local_rect.y * root_scale + center.y * root_scale,
+                        canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                        canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
                         (radius * root_scale).max(f32::EPSILON),
                         0.0,
                     ];
@@ -6888,8 +6934,8 @@ impl GpuRenderer {
                 } => {
                     let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
                     gradient_params = [
-                        local_rect.x * root_scale + center.x * root_scale,
-                        local_rect.y * root_scale + center.y * root_scale,
+                        canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                        canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
                         0.0,
                         0.0,
                     ];
@@ -6915,10 +6961,10 @@ impl GpuRenderer {
             };
 
             let device_rect = [
-                local_rect.x * root_scale,
-                local_rect.y * root_scale,
-                local_rect.width * root_scale,
-                local_rect.height * root_scale,
+                device_local_rect.x,
+                device_local_rect.y,
+                device_local_rect.width,
+                device_local_rect.height,
             ];
 
             self.scratch_shape_data.push(ShapeData {
@@ -6945,12 +6991,7 @@ impl GpuRenderer {
                 }
             };
 
-            let vertices = [
-                [quad[0][0] * root_scale, quad[0][1] * root_scale],
-                [quad[1][0] * root_scale, quad[1][1] * root_scale],
-                [quad[2][0] * root_scale, quad[2][1] * root_scale],
-                [quad[3][0] * root_scale, quad[3][1] * root_scale],
-            ];
+            let vertices = device_quad;
 
             self.scratch_vertices.extend_from_slice(&[
                 Vertex {
@@ -7406,9 +7447,7 @@ impl GpuRenderer {
             color_filter: image_draw.color_filter,
             sampling: image_draw.sampling,
             z_index: image_draw.z_index,
-            clip: image_draw
-                .clip
-                .map(|clip| clip.translate(snap_delta.x, snap_delta.y)),
+            clip: image_draw.clip,
             blend_mode: image_draw.blend_mode,
             src_rect: image_draw.src_rect,
             motion_context_animated: image_draw.motion_context_animated,
@@ -7423,24 +7462,14 @@ impl GpuRenderer {
         let Some(uv_rect) = image_uv_rect(&image_draw.image, image_draw.src_rect) else {
             return Ok(());
         };
-        let device_quad = nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or([
-            [
-                adjusted_image.quad[0][0] * root_scale,
-                adjusted_image.quad[0][1] * root_scale,
-            ],
-            [
-                adjusted_image.quad[1][0] * root_scale,
-                adjusted_image.quad[1][1] * root_scale,
-            ],
-            [
-                adjusted_image.quad[2][0] * root_scale,
-                adjusted_image.quad[2][1] * root_scale,
-            ],
-            [
-                adjusted_image.quad[3][0] * root_scale,
-                adjusted_image.quad[3][1] * root_scale,
-            ],
-        ]);
+        let device_quad =
+            nearest_image_device_quad(&adjusted_image, root_scale).unwrap_or_else(|| {
+                if adjusted_image.snap_anchor.is_some() {
+                    canonicalized_scaled_quad(adjusted_image.quad, root_scale)
+                } else {
+                    scaled_quad(adjusted_image.quad, root_scale)
+                }
+            });
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -9744,10 +9773,10 @@ pub(crate) fn scissor_rect_for_rect(
     width: u32,
     height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
-    let mut left = rect.x * root_scale;
-    let mut top = rect.y * root_scale;
-    let mut right = (rect.x + rect.width) * root_scale;
-    let mut bottom = (rect.y + rect.height) * root_scale;
+    let mut left = canonicalize_device_coordinate(rect.x * root_scale);
+    let mut top = canonicalize_device_coordinate(rect.y * root_scale);
+    let mut right = canonicalize_device_coordinate((rect.x + rect.width) * root_scale);
+    let mut bottom = canonicalize_device_coordinate((rect.y + rect.height) * root_scale);
 
     left = left.max(0.0).min(width as f32).floor();
     top = top.max(0.0).min(height as f32).floor();
@@ -10654,6 +10683,74 @@ mod tests {
     }
 
     #[test]
+    fn translated_static_text_moves_one_device_pixel_at_half_pixel_phase() {
+        let root_scale = 1.25;
+        let mut base = test_text_draw(
+            Rect {
+                x: 14.0,
+                y: 276.0,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        base.snap_anchor = Some(SnapAnchor::rigid(Point::new(0.0, 127.600_006)));
+
+        let mut scrolled = test_text_draw(
+            Rect {
+                x: 14.0,
+                y: 275.2,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        scrolled.snap_anchor = Some(SnapAnchor::rigid(Point::new(0.0, 126.799_99)));
+
+        let (_, base_raster, _, _, _) =
+            text_raster_geometry_for_draw(&base, root_scale).expect("base text geometry");
+        let (_, scrolled_raster, _, _, _) =
+            text_raster_geometry_for_draw(&scrolled, root_scale).expect("scrolled text geometry");
+
+        assert_eq!(
+            base_raster.y - scrolled_raster.y,
+            1.0,
+            "one physical pixel of rigid scrolling must move static text by one raster pixel"
+        );
+    }
+
+    #[test]
+    fn translated_text_snap_does_not_move_its_fixed_ancestor_clip() {
+        let root_scale = 1.25;
+        let fixed_clip = Rect {
+            x: 8.0,
+            y: 20.0,
+            width: 300.0,
+            height: 680.0,
+        };
+        let mut draw = test_text_draw(
+            Rect {
+                x: 14.0,
+                y: 276.0,
+                width: 220.0,
+                height: 24.0,
+            },
+            TextMotion::Static,
+        );
+        draw.snap_anchor = Some(SnapAnchor::rigid(Point::new(0.0, 127.4)));
+        draw.clip = Some(fixed_clip);
+
+        let (_, _, clip, _, _) =
+            text_raster_geometry_for_draw(&draw, root_scale).expect("clipped text geometry");
+
+        assert_eq!(
+            clip,
+            Some(fixed_clip),
+            "content pixel snapping must not translate a fixed ancestor clip"
+        );
+    }
+
+    #[test]
     fn clipped_static_multiline_text_raster_source_limits_visible_line_window() {
         let rect = Rect {
             x: 8.0,
@@ -10890,6 +10987,7 @@ mod tests {
                 height: 10.0,
             },
             clip: None,
+            snap_anchor: None,
             effect: RenderEffect::blur(2.0),
             z_index,
         }
@@ -11979,6 +12077,7 @@ mod tests {
             },
             dest_quad: rect_to_quad(rect),
             snap_anchor: None,
+            composite_snap_origin: None,
             backdrop_rect: rect,
             visual_clip: None,
             surface_clip: None,
@@ -12286,6 +12385,7 @@ mod tests {
                 height: 80.0,
             },
             clip: None,
+            snap_anchor: None,
             effect: RenderEffect::blur(6.0),
             z_index: 1,
         });
@@ -13427,6 +13527,42 @@ mod tests {
         assert_eq!(
             collected.child_layers[0].snap_anchor, expected_anchor,
             "active translated leaf surface should keep the content-origin snap phase"
+        );
+    }
+
+    #[test]
+    fn translated_content_assigns_motion_anchor_to_rotated_child_surface() {
+        let mut child = snapped_text_leaf(false, false);
+        child.graphics_layer.rotation_z = 5.0;
+        child.transform_to_parent =
+            cranpose_render_common::layer_transform::layer_transform_to_parent(
+                child.local_bounds,
+                Point::new(108.0, 3.0),
+                &child.graphics_layer,
+            );
+        child.recompute_raster_cache_hashes();
+        let mut root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 180.0,
+            },
+            vec![RenderNode::Layer(Box::new(child))],
+        );
+        root.translated_content_context = true;
+        root.translated_content_offset = Point::new(0.0, -80.8);
+        root.recompute_raster_cache_hashes();
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(
+            collected.child_layers[0].snap_anchor.is_some(),
+            "a projective child still translates rigidly with its scrolling parent"
         );
     }
 

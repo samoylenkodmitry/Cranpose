@@ -44,6 +44,8 @@ pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
+    /// Transform pivot in the parent scene's logical coordinate space.
+    pub(crate) composite_snap_origin: Option<Point>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) visual_clip: Option<Rect>,
     pub(crate) surface_clip: Option<Rect>,
@@ -56,6 +58,8 @@ pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
+    /// Transform pivot in the parent scene's logical coordinate space.
+    pub(crate) composite_snap_origin: Option<Point>,
     pub(crate) backdrop_rect: Rect,
     pub(crate) surface_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
@@ -532,6 +536,27 @@ fn rigid_snap_anchor(layer_bounds: Rect, layer: &GraphicsLayer) -> Option<SnapAn
     Some(SnapAnchor::rigid(Point::new(mapped.x, mapped.y)))
 }
 
+fn axis_aligned_composite_snap_origin(layer: &LayerNode, layer_offset: Point) -> Option<Point> {
+    let graphics_layer = &layer.graphics_layer;
+    if graphics_layer.rotation_x.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE
+        || graphics_layer.rotation_y.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE
+        || graphics_layer.rotation_z.abs() > NORMALIZED_SCENE_AFFINE_TOLERANCE
+    {
+        return None;
+    }
+
+    let local_bounds = layer.local_bounds;
+    let local_origin = Point::new(
+        local_bounds.x + local_bounds.width * graphics_layer.transform_origin.pivot_fraction_x,
+        local_bounds.y + local_bounds.height * graphics_layer.transform_origin.pivot_fraction_y,
+    );
+    let mapped = layer.transform_to_parent.map_point(local_origin);
+    Some(Point::new(
+        mapped.x + layer_offset.x,
+        mapped.y + layer_offset.y,
+    ))
+}
+
 fn surface_composite_needs_rigid_snap(
     requirements: LayerSurfaceRequirements,
     translated_content_context: bool,
@@ -551,6 +576,7 @@ struct SceneCounts {
     texts: usize,
     shadow_draws: usize,
     effect_layers: usize,
+    backdrop_layers: usize,
 }
 
 fn scene_counts(scene: &CompositorScene) -> SceneCounts {
@@ -560,6 +586,7 @@ fn scene_counts(scene: &CompositorScene) -> SceneCounts {
         texts: scene.texts.len(),
         shadow_draws: scene.shadow_draws.len(),
         effect_layers: scene.effect_layers.len(),
+        backdrop_layers: scene.backdrop_layers.len(),
     }
 }
 
@@ -590,6 +617,9 @@ fn assign_snap_anchor_since(
         }
     }
     for layer in &mut scene.effect_layers[counts.effect_layers..] {
+        layer.snap_anchor = Some(snap_anchor);
+    }
+    for layer in &mut scene.backdrop_layers[counts.backdrop_layers..] {
         layer.snap_anchor = Some(snap_anchor);
     }
 }
@@ -684,6 +714,7 @@ pub(crate) fn resolved_child_surface_composite(
         logical_rect: child.logical_rect,
         dest_quad: child.dest_quad,
         snap_anchor: child.snap_anchor,
+        composite_snap_origin: child.composite_snap_origin,
         backdrop_rect: child.backdrop_rect,
         surface_clip: child.surface_clip,
         shadow_draws: child.shadow_draws.clone(),
@@ -979,25 +1010,37 @@ fn collect_layer_contents_into<'a>(
                     child_bounds,
                     child_shadow_clip,
                 );
-                let child_snap_anchor = translated_snap_anchor.or_else(|| {
-                    let child_surface_needs_snap = surface_composite_needs_rigid_snap(
-                        child_requirements,
-                        effective_translated_content_context,
-                        translation_context.surface_capture_active,
-                    );
-                    if effective_translated_content_context || child_surface_needs_snap {
-                        let child_isolation =
-                            effective_layer_isolation(&child_layer.graphics_layer);
-                        let child_content_layer = layer_for_content(
-                            &child_layer.graphics_layer,
-                            child_isolation.as_ref(),
+                let child_composite_snap_origin = if child_requirements
+                    .surface_requirements
+                    .contains(SurfaceRequirement::NonTranslationTransform)
+                {
+                    axis_aligned_composite_snap_origin(child_layer, layer_offset)
+                } else {
+                    None
+                };
+                let child_snap_anchor = if child_composite_snap_origin.is_some() {
+                    None
+                } else {
+                    translated_snap_anchor.or_else(|| {
+                        let child_surface_needs_snap = surface_composite_needs_rigid_snap(
+                            child_requirements,
+                            effective_translated_content_context,
+                            translation_context.surface_capture_active,
                         );
-                        let child_local_layer = local_content_layer(&child_content_layer);
-                        rigid_snap_anchor(child_bounds, &child_local_layer)
-                    } else {
-                        None
-                    }
-                });
+                        if effective_translated_content_context || child_surface_needs_snap {
+                            let child_isolation =
+                                effective_layer_isolation(&child_layer.graphics_layer);
+                            let child_content_layer = layer_for_content(
+                                &child_layer.graphics_layer,
+                                child_isolation.as_ref(),
+                            );
+                            let child_local_layer = local_content_layer(&child_content_layer);
+                            rigid_snap_anchor(child_bounds, &child_local_layer)
+                        } else {
+                            None
+                        }
+                    })
+                };
                 let child_to_parent =
                     child_layer
                         .transform_to_parent
@@ -1031,6 +1074,7 @@ fn collect_layer_contents_into<'a>(
                         layer_offset,
                     ),
                     snap_anchor: child_snap_anchor,
+                    composite_snap_origin: child_composite_snap_origin,
                     backdrop_rect: quad_bounds(translate_quad(
                         child_layer
                             .transform_to_parent
@@ -1255,6 +1299,40 @@ impl TranslateBy for Rect {
     }
 }
 
+impl TranslateBy for SnapAnchor {
+    fn translate_by(&mut self, delta: Point) {
+        self.origin.x += delta.x;
+        self.origin.y += delta.y;
+    }
+}
+
+impl TranslateBy for Point {
+    fn translate_by(&mut self, delta: Point) {
+        self.x += delta.x;
+        self.y += delta.y;
+    }
+}
+
+impl TranslateBy for ChildLayerComposite<'_> {
+    fn translate_by(&mut self, delta: Point) {
+        for point in &mut self.dest_quad {
+            point[0] += delta.x;
+            point[1] += delta.y;
+        }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
+        }
+        if let Some(origin) = self.composite_snap_origin.as_mut() {
+            origin.translate_by(delta);
+        }
+        self.backdrop_rect.translate_by(delta);
+        if let Some(clip) = self.visual_clip.as_mut() {
+            clip.translate_by(delta);
+        }
+        self.shadow_draws.translate_by(delta);
+    }
+}
+
 impl TranslateBy for DrawShape {
     fn translate_by(&mut self, delta: Point) {
         self.rect.translate_by(delta);
@@ -1265,6 +1343,9 @@ impl TranslateBy for DrawShape {
         }
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
+        }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
         }
     }
 }
@@ -1280,6 +1361,9 @@ impl TranslateBy for ImageDraw {
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
         }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
+        }
     }
 }
 
@@ -1288,6 +1372,9 @@ impl TranslateBy for TextDraw {
         self.rect.translate_by(delta);
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
+        }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
         }
     }
 }
@@ -1312,6 +1399,9 @@ impl TranslateBy for EffectLayer {
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
         }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
+        }
     }
 }
 
@@ -1320,6 +1410,9 @@ impl TranslateBy for BackdropLayer {
         self.rect.translate_by(delta);
         if let Some(clip) = self.clip.as_mut() {
             clip.translate_by(delta);
+        }
+        if let Some(anchor) = self.snap_anchor.as_mut() {
+            anchor.translate_by(delta);
         }
     }
 }

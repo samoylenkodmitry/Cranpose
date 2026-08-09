@@ -1136,6 +1136,7 @@ use std::cell::RefCell;
 // The handler closure is cached to ensure the same closure (and press_position state) is returned
 
 pub struct ClickableNode {
+    on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
     state: NodeState,
     /// Shared press position for drag detection (per-node state, accessible by handler closure)
@@ -1156,9 +1157,15 @@ impl ClickableNode {
     }
 
     pub fn with_handler(on_click: Rc<dyn Fn(Point)>) -> Self {
+        Self::with_handlers(None, on_click)
+    }
+
+    pub fn with_handlers(on_press: Option<Rc<dyn Fn(Point)>>, on_click: Rc<dyn Fn(Point)>) -> Self {
         let press_position = Rc::new(RefCell::new(None));
-        let cached_handler = Self::create_handler(on_click.clone(), press_position.clone());
+        let cached_handler =
+            Self::create_handler(on_press.clone(), on_click.clone(), press_position.clone());
         Self {
+            on_press,
             on_click,
             state: NodeState::new(),
             press_position,
@@ -1167,7 +1174,8 @@ impl ClickableNode {
     }
 
     fn create_handler(
-        handler: Rc<dyn Fn(Point)>,
+        on_press: Option<Rc<dyn Fn(Point)>>,
+        on_click: Rc<dyn Fn(Point)>,
         press_position: Rc<RefCell<Option<Point>>>,
     ) -> Rc<dyn Fn(PointerEvent)> {
         Rc::new(move |event: PointerEvent| {
@@ -1191,6 +1199,9 @@ impl ClickableNode {
                         x: event.global_position.x,
                         y: event.global_position.y,
                     });
+                    if let Some(on_press) = on_press.as_ref() {
+                        on_press(event.position);
+                    }
                 }
                 PointerEventKind::Move => {
                     // Move events are tracked via press_position for drag detection
@@ -1215,7 +1226,7 @@ impl ClickableNode {
                     *press_position.borrow_mut() = None;
 
                     if should_click {
-                        handler(Point {
+                        on_click(Point {
                             x: event.position.x,
                             y: event.position.y,
                         });
@@ -1288,18 +1299,30 @@ impl PointerInputNode for ClickableNode {
 /// Element that creates and updates clickable nodes.
 #[derive(Clone)]
 pub struct ClickableElement {
+    on_press: Option<Rc<dyn Fn(Point)>>,
     on_click: Rc<dyn Fn(Point)>,
 }
 
 impl ClickableElement {
     pub fn new(on_click: impl Fn(Point) + 'static) -> Self {
         Self {
+            on_press: None,
             on_click: Rc::new(on_click),
         }
     }
 
     pub fn with_handler(on_click: Rc<dyn Fn(Point)>) -> Self {
-        Self { on_click }
+        Self {
+            on_press: None,
+            on_click,
+        }
+    }
+
+    pub fn with_handlers(on_press: Rc<dyn Fn(Point)>, on_click: Rc<dyn Fn(Point)>) -> Self {
+        Self {
+            on_press: Some(on_press),
+            on_click,
+        }
     }
 }
 
@@ -1331,7 +1354,7 @@ impl ModifierNodeElement for ClickableElement {
     type Node = ClickableNode;
 
     fn create(&self) -> Self::Node {
-        ClickableNode::with_handler(self.on_click.clone())
+        ClickableNode::with_handlers(self.on_press.clone(), self.on_click.clone())
     }
 
     // Note: key() is deliberately NOT implemented (returns None by default)
@@ -1342,10 +1365,14 @@ impl ModifierNodeElement for ClickableElement {
     fn update(&self, node: &mut Self::Node) {
         // Update the handler - the cached_handler needs to be recreated
         // with the new on_click while preserving press_position
+        node.on_press = self.on_press.clone();
         node.on_click = self.on_click.clone();
         // Recreate the cached handler with the same press_position but new click handler
-        node.cached_handler =
-            ClickableNode::create_handler(node.on_click.clone(), node.press_position.clone());
+        node.cached_handler = ClickableNode::create_handler(
+            node.on_press.clone(),
+            node.on_click.clone(),
+            node.press_position.clone(),
+        );
     }
 
     fn capabilities(&self) -> NodeCapabilities {

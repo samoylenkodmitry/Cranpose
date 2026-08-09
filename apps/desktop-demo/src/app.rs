@@ -13,8 +13,8 @@ use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions, BoxSpec, Brush,
     Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, IntrinsicSize,
-    LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec, Size,
-    Spacer, Text, TextStyle, VerticalAlignment,
+    LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec,
+    ScrollState, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -41,7 +41,10 @@ use images::images_tab;
 use interactive_anim::InteractiveAnimTab;
 use lazy_list::lazy_list_example;
 use liquid_ui::LiquidUiTab;
-pub use liquid_ui::{LiquidReferenceFixture, LiquidReferenceFixtureCase};
+pub use liquid_ui::{
+    set_tab_swipe_reference_page, LiquidReferenceFixture, LiquidReferenceFixtureCase,
+    LIQUID_SCROLL_VIEWPORT_TAG, TAB_SWIPE_REFERENCE_STAGE_HEIGHT, TAB_SWIPE_REFERENCE_STAGE_WIDTH,
+};
 use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
@@ -67,6 +70,7 @@ thread_local! {
     pub static TEST_RECURSIVE_LAYOUT_DEPTH_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
     pub static TEST_LAZY_LIST_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };
     pub static TEST_LIQUID_SELECTED_TAB_STATE: RefCell<Option<MutableState<usize>>> = const { RefCell::new(None) };
+    pub static TEST_LIQUID_SCROLL_STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]

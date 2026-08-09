@@ -124,6 +124,10 @@ pub struct PointerEvent {
     /// samples arrive back-to-back and delivery-time stamping makes computed
     /// velocities wildly wrong.
     pub time_ms: Option<i64>,
+    /// Timestamp in the animation frame-clock domain at input dispatch.
+    /// Unlike `time_ms`, this has the same origin as frame callbacks and can
+    /// anchor input-driven animations without a wall/platform clock conversion.
+    pub animation_time_nanos: Option<u64>,
     /// Multiplicative zoom factor for [`PointerEventKind::Zoom`] events
     /// (`> 1.0` zooms in, `< 1.0` zooms out). `1.0` for all other events.
     pub zoom_delta: f32,
@@ -154,6 +158,7 @@ impl PointerEvent {
             scroll_delta: Point { x: 0.0, y: 0.0 },
             buttons: PointerButtons::NONE,
             time_ms: None,
+            animation_time_nanos: None,
             zoom_delta: 1.0,
             source: PointerSource::Unknown,
             consumed: Rc::new(Cell::new(false)),
@@ -181,6 +186,12 @@ impl PointerEvent {
     /// Set the platform timestamp (milliseconds) for this event.
     pub fn with_time_ms(mut self, time_ms: Option<i64>) -> Self {
         self.time_ms = time_ms;
+        self
+    }
+
+    /// Set the timestamp in the animation frame-clock domain.
+    pub fn with_animation_time_nanos(mut self, time_nanos: u64) -> Self {
+        self.animation_time_nanos = Some(time_nanos);
         self
     }
 
@@ -223,6 +234,7 @@ impl PointerEvent {
             scroll_delta: self.scroll_delta,
             buttons: self.buttons,
             time_ms: self.time_ms,
+            animation_time_nanos: self.animation_time_nanos,
             zoom_delta: self.zoom_delta,
             source: self.source,
             consumed: self.consumed.clone(),
@@ -270,11 +282,15 @@ mod tests {
 
     #[test]
     fn pointer_event_copy_with_local_position_preserves_consumption_state() {
-        let event = PointerEvent::new(PointerEventKind::Down, point(4.0, 5.0), point(4.0, 5.0));
+        let event = PointerEvent::new(PointerEventKind::Down, point(4.0, 5.0), point(4.0, 5.0))
+            .with_time_ms(Some(123))
+            .with_animation_time_nanos(456_000_000);
         let local = event.copy_with_local_position(point(1.0, 1.0));
 
         assert_eq!(local.position, point(1.0, 1.0));
         assert_eq!(local.global_position, event.global_position);
+        assert_eq!(local.time_ms, Some(123));
+        assert_eq!(local.animation_time_nanos, Some(456_000_000));
         assert!(!local.is_consumed());
 
         event.consume();

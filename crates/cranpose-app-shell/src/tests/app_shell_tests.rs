@@ -1113,6 +1113,35 @@ fn app_shell_idle_updates_do_not_advance_presented_frame_stats() {
 }
 
 #[test]
+fn pointer_event_clock_supports_realtime_and_exact_sampling() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    shell.update_at_frame_time_nanos(120_000_000);
+    assert_eq!(
+        shell.exact_pointer_event_time(Some(17)),
+        PointerEventTime {
+            platform_time_ms: Some(17),
+            animation_time_nanos: 120_000_000,
+        }
+    );
+
+    let realtime = shell.realtime_pointer_event_time(Some(18));
+    assert_eq!(realtime.platform_time_ms, Some(18));
+    assert!(realtime.animation_time_nanos >= 120_000_000);
+
+    shell.update_after_exact_interval(Duration::from_millis(8));
+    assert_eq!(
+        shell.exact_pointer_event_time(None).animation_time_nanos,
+        128_000_000
+    );
+}
+
+#[test]
 fn two_app_shells_do_not_share_text_measurers() {
     let _guard = test_guard();
     reset_public_render_state_for_test();
@@ -7733,6 +7762,13 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+type PointerTimeSample = (PointerEventKind, Option<i64>, Option<u64>);
+
+thread_local! {
+    static POINTER_TIME_PROBE: RefCell<Option<Rc<RefCell<Vec<PointerTimeSample>>>>> =
+        const { RefCell::new(None) };
+}
+
 /// A probe that records the `PointerSource` of every pointer-down it receives,
 /// exposing it via a thread-local so the test can assert what the shell stamped.
 fn app_shell_pointer_source_probe() {
@@ -7763,6 +7799,81 @@ fn app_shell_pointer_source_probe() {
         BoxSpec::default(),
         || {},
     );
+}
+
+fn app_shell_pointer_time_probe() {
+    let captured = Rc::new(RefCell::new(Vec::new()));
+    POINTER_TIME_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .pointer_input((), move |scope: PointerInputScope| {
+                let captured = Rc::clone(&captured);
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                captured.borrow_mut().push((
+                                    event.kind,
+                                    event.time_ms,
+                                    event.animation_time_nanos,
+                                ));
+                                event.consume();
+                            }
+                        })
+                        .await;
+                }
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn shell_preserves_resolved_pointer_timestamps_during_dispatch() {
+    let _guard = test_guard();
+    POINTER_TIME_PROBE.with(|slot| slot.borrow_mut().take());
+
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        app_shell_pointer_time_probe,
+    );
+    shell.set_buffer_size(200, 200);
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    let captured = POINTER_TIME_PROBE
+        .with(|slot| slot.borrow().as_ref().map(Rc::clone))
+        .expect("probe should expose captured samples");
+    assert!(shell.set_cursor_at_event_time(
+        50.0,
+        50.0,
+        PointerEventTime {
+            platform_time_ms: Some(10),
+            animation_time_nanos: 100,
+        },
+    ));
+    assert!(shell.pointer_pressed_at_event_time(PointerEventTime {
+        platform_time_ms: Some(11),
+        animation_time_nanos: 110,
+    }));
+    assert!(shell.pointer_released_at_position_event_time(
+        51.0,
+        52.0,
+        PointerEventTime {
+            platform_time_ms: Some(12),
+            animation_time_nanos: 120,
+        },
+    ));
+
+    let samples = captured.borrow();
+    assert!(samples.contains(&(PointerEventKind::Down, Some(11), Some(110))));
+    assert!(samples.contains(&(PointerEventKind::Up, Some(12), Some(120))));
 }
 
 #[test]

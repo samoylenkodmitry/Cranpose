@@ -86,6 +86,40 @@ pub struct RobotScreenshot {
     pub pixels: Vec<u8>,
 }
 
+/// Input or fixture mutation performed at one exact-clock timeline step.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RobotTimelineAction {
+    /// Move the primary mouse pointer in logical pixels.
+    MoveTo {
+        /// Horizontal position in logical pixels.
+        x: f32,
+        /// Vertical position in logical pixels.
+        y: f32,
+    },
+    /// Press the primary mouse button at the current pointer position.
+    MouseDown,
+    /// Release the primary mouse button at the current pointer position.
+    MouseUp,
+    /// Invoke a configured application robot hook.
+    InvokeAppHook {
+        /// Configured hook name.
+        name: String,
+        /// Hook argument payload.
+        argument: String,
+    },
+}
+
+/// One wall-time-independent input step in an atomic robot timeline.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RobotTimelineStep {
+    /// Exact animation-clock advance before applying this step's actions.
+    pub advance_ms: f32,
+    /// Ordered input and fixture actions at the resulting clock instant.
+    pub actions: Vec<RobotTimelineAction>,
+    /// Whether to capture a screenshot after actions and UI work are drained.
+    pub capture: bool,
+}
+
 /// Robot command for controlling the application
 #[derive(Debug)]
 pub(crate) enum RobotCommand {
@@ -168,6 +202,11 @@ pub(crate) enum RobotCommand {
         /// pending input (starting e.g. a release-triggered transition)
         /// without advancing the clock.
         steps: Vec<(f32, bool)>,
+    },
+    /// Atomically advance an exact clock, inject ordered input, and capture.
+    CaptureInteractionKeyframes {
+        scale: f32,
+        steps: Vec<RobotTimelineStep>,
     },
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
@@ -921,6 +960,31 @@ impl Robot {
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Run an input timeline atomically against the exact animation clock.
+    ///
+    /// Unlike separate `mouse_move` and [`Self::capture_keyframes`] calls,
+    /// the free-running desktop loop cannot insert wall-clock frames between
+    /// steps. Pointer event timestamps, physics integration, and captures all
+    /// observe the same deterministic clock.
+    pub fn capture_interaction_keyframes(
+        &self,
+        scale: f32,
+        steps: &[RobotTimelineStep],
+    ) -> Result<Vec<RobotScreenshot>, String> {
+        self.tx
+            .send(RobotCommand::CaptureInteractionKeyframes {
+                scale,
+                steps: steps.to_vec(),
+            })
+            .map_err(|e| format!("Failed to send interaction capture command: {e}"))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Screenshots(shots)) => Ok(shots),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {e}")),
         }
     }
 

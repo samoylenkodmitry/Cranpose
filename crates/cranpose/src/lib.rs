@@ -245,7 +245,9 @@ mod web_services;
     feature = "robot",
     feature = "renderer-wgpu"
 ))]
-pub use robot::{Robot, RobotScreenshot, SemanticElement, SemanticRect};
+pub use robot::{
+    Robot, RobotScreenshot, RobotTimelineAction, RobotTimelineStep, SemanticElement, SemanticRect,
+};
 
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
