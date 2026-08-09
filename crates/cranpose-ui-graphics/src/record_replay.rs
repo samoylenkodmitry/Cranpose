@@ -544,7 +544,14 @@ fn range_bounds(recording: &CommandRecording, views: &[Option<ReplayView>], rang
 /// dying.
 #[derive(Clone, Debug)]
 pub struct CommandSegment {
-    pub id: u32,
+    /// The capture identity this segment's content lives under: renderer
+    /// retained slots key on the (command, slot) pair. Slot ids are
+    /// allocated at partition, whose emission carries the capture content;
+    /// split pieces inherit the parent's slot and address into it, so a
+    /// split never needs a recapture.
+    pub slot: u32,
+    /// This segment's first record within the slot's captured content.
+    pub slot_offset: usize,
     pub tape_start: usize,
     pub tape_end: usize,
     /// Loose logical bounds at capture.
@@ -555,10 +562,20 @@ pub struct CommandSegment {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReplaySpan {
     /// The retained segment moved by `transform`; `recolors` are
-    /// (segment-relative record offset, new color) patches.
+    /// (span-relative record offset, new color) patches.
     Retained {
-        /// The stable [`CommandSegment::id`].
-        segment: u32,
+        /// The capture identity ([`CommandSegment::slot`]).
+        slot: u32,
+        /// True only on partition frames, where the snapshot IS the current
+        /// frame: this span's records are the slot's capture content and
+        /// `transform` is identity. Every later frame's transform is motion
+        /// since exactly that content — never double-applied.
+        capture: bool,
+        /// The span's first record within the slot's captured content.
+        slot_offset: usize,
+        /// Where the span sits in the CURRENT frame's tape.
+        tape_start: usize,
+        tape_end: usize,
         transform: RecordTransform,
         recolors: Vec<(u32, Color)>,
         /// Segment capture bounds under this frame's transform.
@@ -576,6 +593,115 @@ pub enum ReplayOutcome {
     /// The interleaved retained/dynamic structure of this frame, in exact
     /// tape order.
     Spans(Vec<ReplaySpan>),
+}
+
+/// A command's replay verdict translated into the space its consumers see:
+/// spans address the run's materialized primitive vector, not the record
+/// tape. This is what rides the render graph next to the primitives.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandReplayFrame {
+    /// The similarity pivot every span transform rotates and scales about.
+    pub center: Point,
+    /// Interleaved retained/dynamic structure in exact z order.
+    pub spans: Vec<FrameSpan>,
+}
+
+/// One primitive-space span of a [`CommandReplayFrame`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrameSpan {
+    Retained {
+        /// The capture identity; renderer retained slots key on the
+        /// (command, slot) pair.
+        slot: u32,
+        /// True only when `range` holds the slot's full capture content
+        /// (partition frames, transform identity): retain it under the
+        /// slot's identity.
+        capture: bool,
+        /// The span's first primitive within the slot's captured content.
+        slot_offset: u32,
+        /// The span's primitives in the run's primitive vector.
+        range: (u32, u32),
+        transform: RecordTransform,
+        /// (span-relative primitive offset, new solid color) patches.
+        recolors: Vec<(u32, Color)>,
+        /// Capture bounds under this frame's transform.
+        bounds: Rect,
+    },
+    Dynamic {
+        /// Ordinary primitives in the run's primitive vector.
+        range: (u32, u32),
+    },
+}
+
+impl CommandReplayFrame {
+    /// Translates a tape-space outcome into primitive space. `dropped` are
+    /// the ascending tape indices that materialized to nothing (degenerate
+    /// arcs — empty in practice): each boundary shifts left by the drops
+    /// before it. A retained span CONTAINING a drop demotes to dynamic for
+    /// the frame — its record-to-slot addressing would shift — which keeps
+    /// the translation trivially exact instead of speculatively clever.
+    /// Returns `None` when nothing is retained.
+    pub fn from_outcome(
+        center: Point,
+        outcome: &ReplayOutcome,
+        dropped: &[u32],
+    ) -> Option<Self> {
+        let ReplayOutcome::Spans(spans) = outcome else {
+            return None;
+        };
+        let drops_before = |tape_index: usize| -> u32 {
+            dropped.partition_point(|&d| (d as usize) < tape_index) as u32
+        };
+        let prim_range = |tape_start: usize, tape_end: usize| -> (u32, u32) {
+            (
+                tape_start as u32 - drops_before(tape_start),
+                tape_end as u32 - drops_before(tape_end),
+            )
+        };
+        let mut out: Vec<FrameSpan> = Vec::with_capacity(spans.len());
+        let mut any_retained = false;
+        for span in spans {
+            match span {
+                ReplaySpan::Retained {
+                    slot,
+                    capture,
+                    slot_offset,
+                    tape_start,
+                    tape_end,
+                    transform,
+                    recolors,
+                    bounds,
+                } => {
+                    let range = prim_range(*tape_start, *tape_end);
+                    let clean = drops_before(*tape_end) == drops_before(*tape_start);
+                    if clean {
+                        any_retained = true;
+                        out.push(FrameSpan::Retained {
+                            slot: *slot,
+                            capture: *capture,
+                            slot_offset: *slot_offset as u32,
+                            range,
+                            transform: *transform,
+                            recolors: recolors.clone(),
+                            bounds: *bounds,
+                        });
+                    } else if range.1 > range.0 {
+                        out.push(FrameSpan::Dynamic { range });
+                    }
+                }
+                ReplaySpan::Dynamic {
+                    tape_start,
+                    tape_end,
+                } => {
+                    let range = prim_range(*tape_start, *tape_end);
+                    if range.1 > range.0 {
+                        out.push(FrameSpan::Dynamic { range });
+                    }
+                }
+            }
+        }
+        any_retained.then_some(Self { center, spans: out })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -596,7 +722,7 @@ pub struct CommandReplayState {
     snapshot: CommandRecording,
     snapshot_views: Vec<Option<ReplayView>>,
     segments: Vec<CommandSegment>,
-    next_segment_id: u32,
+    next_slot_id: u32,
     lifetime_deaths: u64,
     lifetime_splits: u64,
     /// Fraction of the tape the capture covered when it was taken. Dead
@@ -615,7 +741,7 @@ impl Default for CommandReplayState {
             snapshot: CommandRecording::default(),
             snapshot_views: Vec::new(),
             segments: Vec::new(),
-            next_segment_id: 0,
+            next_slot_id: 0,
             lifetime_deaths: 0,
             lifetime_splits: 0,
             capture_coverage: 0.0,
@@ -633,6 +759,11 @@ impl CommandReplayState {
     /// for judging how churn interacts with retention.
     pub fn stats(&self) -> (u64, u64) {
         (self.lifetime_deaths, self.lifetime_splits)
+    }
+
+    /// The similarity pivot all span transforms rotate and scale about.
+    pub fn center(&self) -> Point {
+        self.center
     }
 
     /// Advances the state machine with this frame's recording and returns
@@ -656,10 +787,7 @@ impl CommandReplayState {
                 self.take_snapshot(current, center);
                 ReplayOutcome::AllDynamic
             }
-            CommandReplayPhase::Snapshotted => {
-                self.partition(current, center);
-                ReplayOutcome::AllDynamic
-            }
+            CommandReplayPhase::Snapshotted => self.partition(current, center),
             CommandReplayPhase::Captured => self.verify(current),
         }
     }
@@ -682,8 +810,11 @@ impl CommandReplayState {
     /// Splits the recording into maximal chains of consecutive entries that
     /// moved from the snapshot by one shared similarity transform, then
     /// re-snapshots at the current values so verification always compares
-    /// against the capture frame.
-    fn partition(&mut self, current: &CommandRecording, center: Point) {
+    /// against the capture frame. The returned spans carry the capture
+    /// content itself (`capture: true`, identity transform): the snapshot
+    /// IS this frame, so what the renderer retains equals what later
+    /// transforms move.
+    fn partition(&mut self, current: &CommandRecording, center: Point) -> ReplayOutcome {
         let current_views = build_views(current);
         let aligned = align_recordings(
             current,
@@ -753,7 +884,7 @@ impl CommandReplayState {
 
         if chains.is_empty() {
             self.take_snapshot(current, center);
-            return;
+            return ReplayOutcome::AllDynamic;
         }
         // Re-snapshot at current values: chain ranges are current-tape
         // ranges, which the fresh snapshot preserves verbatim.
@@ -761,10 +892,11 @@ impl CommandReplayState {
         self.segments = chains
             .into_iter()
             .map(|range| {
-                let id = self.next_segment_id;
-                self.next_segment_id += 1;
+                let slot = self.next_slot_id;
+                self.next_slot_id += 1;
                 CommandSegment {
-                    id,
+                    slot,
+                    slot_offset: 0,
                     tape_start: range.0,
                     tape_end: range.1,
                     bounds: range_bounds(&self.snapshot, &self.snapshot_views, range),
@@ -779,6 +911,35 @@ impl CommandReplayState {
         self.capture_coverage = covered as f32 / current.tape.len().max(1) as f32;
         self.frames_since_capture = 0;
         self.phase = CommandReplayPhase::Captured;
+
+        let mut spans: Vec<ReplaySpan> = Vec::with_capacity(self.segments.len() * 2 + 1);
+        let mut cursor = 0usize;
+        for segment in &self.segments {
+            if segment.tape_start > cursor {
+                spans.push(ReplaySpan::Dynamic {
+                    tape_start: cursor,
+                    tape_end: segment.tape_start,
+                });
+            }
+            spans.push(ReplaySpan::Retained {
+                slot: segment.slot,
+                capture: true,
+                slot_offset: 0,
+                tape_start: segment.tape_start,
+                tape_end: segment.tape_end,
+                transform: RecordTransform::IDENTITY,
+                recolors: Vec::new(),
+                bounds: segment.bounds,
+            });
+            cursor = segment.tape_end;
+        }
+        if cursor < current.tape.len() {
+            spans.push(ReplaySpan::Dynamic {
+                tape_start: cursor,
+                tape_end: current.tape.len(),
+            });
+        }
+        ReplayOutcome::Spans(spans)
     }
 
     /// Verifies this frame's recording against the capture. Each segment
@@ -939,10 +1100,12 @@ impl CommandReplayState {
                     if segment.tape_end > suffix_start
                         && segment.tape_end - suffix_start >= MIN_SEGMENT_RECORDS
                     {
-                        let id = self.next_segment_id;
-                        self.next_segment_id += 1;
+                        // The suffix addresses the SAME captured content,
+                        // just deeper in: no recapture, only an offset.
                         pending.push_front(CommandSegment {
-                            id,
+                            slot: segment.slot,
+                            slot_offset: segment.slot_offset
+                                + (suffix_start - segment.tape_start),
                             tape_start: suffix_start,
                             tape_end: segment.tape_end,
                             bounds: range_bounds(
@@ -959,12 +1122,11 @@ impl CommandReplayState {
             let survivor = if span_len == len {
                 segment
             } else {
-                // The prefix is a new capture identity: its geometry range
-                // differs from the segment it came from.
-                let id = self.next_segment_id;
-                self.next_segment_id += 1;
+                // The prefix keeps its capture identity — it addresses the
+                // same slot content from the same offset, just shorter.
                 CommandSegment {
-                    id,
+                    slot: segment.slot,
+                    slot_offset: segment.slot_offset,
                     tape_start: segment.tape_start,
                     tape_end: segment.tape_start + span_len,
                     bounds: range_bounds(
@@ -984,7 +1146,11 @@ impl CommandReplayState {
             }
             retained_records += span_len;
             spans.push(ReplaySpan::Retained {
-                segment: survivor.id,
+                slot: survivor.slot,
+                capture: false,
+                slot_offset: survivor.slot_offset,
+                tape_start: span_start,
+                tape_end: span_start + span_len,
                 transform: t,
                 recolors,
                 bounds: t.apply_to_bounds(self.center, survivor.bounds),
@@ -1233,10 +1399,18 @@ mod tests {
             state.advance(&ring_frame(3, 300, 0, 10)),
             ReplayOutcome::AllDynamic
         ));
-        assert!(matches!(
-            state.advance(&ring_frame(3, 300, 1, 10)),
-            ReplayOutcome::AllDynamic
-        ));
+        // The partition frame itself emits the capture: snapshot == current,
+        // so every span is capture:true under an identity transform.
+        let ReplayOutcome::Spans(capture_spans) = state.advance(&ring_frame(3, 300, 1, 10))
+        else {
+            panic!("partition frame should emit the capture");
+        };
+        assert!(capture_spans.iter().all(|span| match span {
+            ReplaySpan::Retained {
+                capture, transform, ..
+            } => *capture && *transform == RecordTransform::IDENTITY,
+            ReplaySpan::Dynamic { .. } => true,
+        }));
         assert!(!state.segments().is_empty(), "partition found the rings");
 
         let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(3, 300, 2, 10)) else {
@@ -1352,11 +1526,26 @@ mod tests {
                 _ => None,
             })
             .sum();
-        let retained = spans
+        let retained: Vec<(u32, usize, bool)> = spans
             .iter()
-            .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
-            .count();
-        assert_eq!(retained, 2, "prefix and suffix both retain: {spans:?}");
+            .filter_map(|span| match span {
+                ReplaySpan::Retained {
+                    slot,
+                    slot_offset,
+                    capture,
+                    ..
+                } => Some((*slot, *slot_offset, *capture)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(retained.len(), 2, "prefix and suffix both retain: {spans:?}");
+        // Both pieces address the SAME captured slot — a split never
+        // recaptures, it re-addresses: the suffix starts one record past
+        // the prefix within the capture.
+        assert_eq!(retained[0].0, retained[1].0);
+        assert_eq!(retained[0].1, 0);
+        assert_eq!(retained[1].1, 451);
+        assert!(retained.iter().all(|(_, _, capture)| !capture));
         assert_eq!(dynamic, 1, "only the changed record goes dynamic");
         assert_eq!(state.stats(), (0, 1), "one split, no deaths");
 

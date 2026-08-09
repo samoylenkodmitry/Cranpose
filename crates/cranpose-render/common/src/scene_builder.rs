@@ -749,8 +749,12 @@ struct RecorderSlot {
     /// so unlike `handles` these need no sharing discipline.
     recording: cranpose_ui_graphics::CommandRecording,
     /// Per-command similarity verification state: the retained snapshot and
-    /// its segments. Advances every time the command re-records.
+    /// its segments. Advances every time the command re-records while a
+    /// retained feed is active.
     replay: cranpose_ui_graphics::CommandReplayState,
+    /// The feed epoch `replay` was built under; `None` before the first
+    /// verified recording. See [`set_retained_feed_epoch`].
+    replay_epoch: Option<u64>,
 }
 
 thread_local! {
@@ -758,6 +762,19 @@ thread_local! {
         std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
     > = std::cell::RefCell::new(std::collections::HashMap::default());
     static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RETAINED_FEED_EPOCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Declares that the renderer consuming graphs built on this thread retains
+/// draw-run spans by identity, so scene building should verify command
+/// recordings and attach [`cranpose_ui_graphics::CommandReplayFrame`]s to
+/// the runs it builds. The epoch names the renderer's retained-slot
+/// universe: bumping it (device loss, scale change — anything that dropped
+/// slots wholesale) resets every command's verification state, so no frame
+/// ever references a slot from a dead universe. Renderers that draw every
+/// primitive (pixels) never call this and never pay for verification.
+pub fn set_retained_feed_epoch(epoch: Option<u64>) {
+    RETAINED_FEED_EPOCH.with(|cell| cell.set(epoch));
 }
 
 /// Called once per graph build/update. The sweep drops slots whose commands
@@ -784,19 +801,29 @@ fn acquire_recording(
 ) -> (
     cranpose_ui_graphics::CommandRecording,
     Vec<cranpose_ui_graphics::DrawPrimitive>,
-    cranpose_ui_graphics::CommandReplayState,
+    Option<cranpose_ui_graphics::CommandReplayState>,
 ) {
+    let feed_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(slot) = map.get_mut(&id) else {
             return (
                 cranpose_ui_graphics::CommandRecording::default(),
                 Vec::new(),
-                cranpose_ui_graphics::CommandReplayState::default(),
+                feed_epoch.map(|_| cranpose_ui_graphics::CommandReplayState::default()),
             );
         };
         let recording = std::mem::take(&mut slot.recording);
-        let replay = std::mem::take(&mut slot.replay);
+        // A state from another slot universe (renderer dropped its retained
+        // slots wholesale) restarts from scratch — its slot ids reference
+        // buffers that no longer exist.
+        let replay = feed_epoch.map(|epoch| {
+            if slot.replay_epoch == Some(epoch) {
+                std::mem::take(&mut slot.replay)
+            } else {
+                cranpose_ui_graphics::CommandReplayState::default()
+            }
+        });
         for handle in &mut slot.handles {
             if handle
                 .as_ref()
@@ -815,7 +842,7 @@ fn publish_recording(
     id: DrawCommandId,
     recording: cranpose_ui_graphics::CommandRecording,
     primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
-    replay: cranpose_ui_graphics::CommandReplayState,
+    replay: Option<cranpose_ui_graphics::CommandReplayState>,
 ) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
     let shared = Rc::new(primitives);
     COMMAND_RECORDINGS.with(|map| {
@@ -826,10 +853,14 @@ fn publish_recording(
             handles: [None, None],
             recording: cranpose_ui_graphics::CommandRecording::default(),
             replay: cranpose_ui_graphics::CommandReplayState::default(),
+            replay_epoch: None,
         });
         slot.generation = generation;
         slot.recording = recording;
-        slot.replay = replay;
+        if let Some(replay) = replay {
+            slot.replay = replay;
+            slot.replay_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
+        }
         // Newest first; the displaced oldest handle drops out of the
         // registry, and its buffer lives on only while a graph node holds it.
         slot.handles[1] = slot.handles[0].take();
@@ -853,13 +884,14 @@ fn draw_nodes(
             placement,
         };
         let (recording, storage, mut replay) = acquire_recording(id);
-        let (primitives, recording) = primitives_for_placement_verified(
+        let mut replay_ref = replay.as_mut();
+        let (primitives, recording, frame) = primitives_for_placement_verified(
             command,
             placement,
             size,
             recording,
             storage,
-            &mut Some(&mut replay),
+            &mut replay_ref,
         );
         // An empty recording with no earned capacity is what a command's
         // mismatched placement pass produces every rebuild; keeping those out
@@ -876,10 +908,11 @@ fn draw_nodes(
         // The recorded vector rides into the graph whole: a single canvas
         // command can carry thousands of primitives, and wrapping each in its
         // own node moved every one of them an extra time each frame.
-        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_shared(
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
             phase,
             Some(id),
             shared,
+            frame.map(Box::new),
         )));
     }
     nodes

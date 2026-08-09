@@ -917,6 +917,11 @@ pub struct FinishedRecording {
     pub primitives: Vec<DrawPrimitive>,
     pub content_markers: u32,
     pub recording: CommandRecording,
+    /// Tape indices that materialized to nothing (degenerate arcs), in
+    /// ascending order — empty in practice. Consumers translating tape
+    /// ranges into primitive ranges subtract the drops before each
+    /// boundary.
+    pub dropped: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -1077,12 +1082,13 @@ impl DrawScopeDefault {
         let mut out = std::mem::take(&mut self.out);
         out.clear();
         out.reserve(self.rec.tape.len());
+        let mut dropped: Vec<u32> = Vec::new();
         {
             let mut rects = self.rec.rects.iter();
             let mut round_rects = self.rec.round_rects.iter();
             let mut arcs = self.rec.arcs.iter();
             let mut others = self.rec.others.drain(..);
-            for kind in &self.rec.tape {
+            for (tape_index, kind) in self.rec.tape.iter().enumerate() {
                 match kind {
                     RecordKind::SolidRect => {
                         let record = rects.next().expect("tape/rects in sync");
@@ -1105,6 +1111,8 @@ impl DrawScopeDefault {
                         let record = arcs.next().expect("tape/arcs in sync");
                         if let Some(primitive) = materialize_solid_arc(record) {
                             out.push(primitive);
+                        } else {
+                            dropped.push(tape_index as u32);
                         }
                     }
                     RecordKind::Other => {
@@ -1119,6 +1127,7 @@ impl DrawScopeDefault {
             primitives: out,
             content_markers: self.content_markers,
             recording: self.rec,
+            dropped,
         }
     }
 

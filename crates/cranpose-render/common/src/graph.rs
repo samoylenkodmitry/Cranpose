@@ -401,6 +401,13 @@ pub struct DrawRunNode {
     /// 17k-primitive game canvas with no text, that was two full walks per
     /// frame that could never early-exit.
     pub summary: DrawRunSummary,
+    /// The command's verified retained/dynamic span structure for the frame
+    /// this node was built, in primitive space. A renderer that retains by
+    /// identity draws the run span by span — retained spans from slots
+    /// keyed (command, slot), dynamic spans from `primitives` — instead of
+    /// walking the whole vector. `None` means no verification ran or
+    /// nothing was retained: the run is all ordinary primitives.
+    pub replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
 }
 
 impl DrawRunNode {
@@ -421,12 +428,22 @@ impl DrawRunNode {
         command: Option<DrawCommandId>,
         primitives: std::rc::Rc<Vec<DrawPrimitive>>,
     ) -> Self {
+        Self::for_command_replayed(phase, command, primitives, None)
+    }
+
+    pub fn for_command_replayed(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
+        replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
+    ) -> Self {
         let summary = DrawRunSummary::scan(&primitives);
         Self {
             phase,
             command,
             primitives,
             summary,
+            replay,
         }
     }
 }

@@ -162,6 +162,7 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
 }
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
+    declare_retained_feed();
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
     collect_hits_from_graph(
         &graph.root,
@@ -1912,6 +1913,27 @@ fn resolve_text_horizontal_offset(
     }
 }
 
+// The retained-slot universe graphs built by this crate feed into. Bumped
+// whenever the renderer drops retained slots wholesale (device loss, scale
+// change); scene building resets per-command verification state when the
+// epoch moves, so no graph references slots from a dead universe.
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static RETAINED_FEED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Declares to scene building that the wgpu renderer consumes retained
+/// draw-run spans by identity. wasm has no storage-buffer retained path, so
+/// it declares nothing and scene building skips verification entirely.
+fn declare_retained_feed() {
+    #[cfg(not(target_arch = "wasm32"))]
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(
+        RETAINED_FEED_GENERATION.with(std::cell::Cell::get),
+    ));
+    #[cfg(target_arch = "wasm32")]
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
+}
+
 /// Renders the scene by traversing the LayoutNode tree directly via Applier.
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
@@ -1919,6 +1941,7 @@ pub(crate) fn render_from_applier(
     scene: &mut Scene,
     scale: f32,
 ) {
+    declare_retained_feed();
     let Some(graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
     else {
@@ -1941,6 +1964,7 @@ pub(crate) fn update_from_applier(
     dirty_nodes: &[NodeId],
     refresh_hits: bool,
 ) {
+    declare_retained_feed();
     let Some(update_report) = scene.graph.as_mut().map(|graph| {
         cranpose_render_common::scene_builder::update_graph_from_applier_report(
             applier,
