@@ -20,7 +20,7 @@
 //! of magnitude larger.
 
 use crate::geometry::{
-    CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord,
+    CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord, TapeRef,
 };
 use crate::{Color, CornerRadii};
 
@@ -113,7 +113,11 @@ impl RecordTransform {
 /// Whether an entry's own implied transform is tightly consistent with a
 /// chain's anchor transform. `pinned` marks transforms whose angle is
 /// meaningful — an on-pivot circle pins no rotation and joins any chain.
-pub fn transforms_group(entry: RecordTransform, entry_pinned: bool, anchor: RecordTransform) -> bool {
+pub fn transforms_group(
+    entry: RecordTransform,
+    entry_pinned: bool,
+    anchor: RecordTransform,
+) -> bool {
     use std::f32::consts::TAU;
     if (entry.scale - anchor.scale).abs() > GROUP_SCALE_EPS * anchor.scale.abs().max(1.0) {
         return false;
@@ -329,45 +333,31 @@ enum ReplayView {
     RoundRect(usize),
 }
 
-/// Flattens a recording's tape into per-entry replay views plus per-kind
-/// indices, so alignment and verification can address records directly.
-fn build_views(recording: &CommandRecording) -> Vec<Option<ReplayView>> {
-    let mut arc_idx = 0usize;
-    let mut rr_idx = 0usize;
-    let mut rect_idx = 0usize;
-    let mut other_idx = 0usize;
-    recording
-        .tape
-        .iter()
-        .map(|kind| match kind {
-            RecordKind::SolidArc => {
-                let view = ReplayView::Arc(arc_idx);
-                arc_idx += 1;
-                Some(view)
-            }
-            RecordKind::SolidRoundRect => {
-                let view = ReplayView::RoundRect(rr_idx);
-                rr_idx += 1;
-                // Non-circular round rects cannot survive rotation about an
-                // external pivot; they stay dynamic.
-                if circle_view(&recording.round_rects[rr_idx - 1]).is_some() {
-                    Some(view)
-                } else {
-                    None
-                }
-            }
-            RecordKind::SolidRect => {
-                rect_idx += 1;
-                let _ = rect_idx;
-                None
-            }
-            RecordKind::Other => {
-                other_idx += 1;
-                let _ = other_idx;
-                None
-            }
-        })
-        .collect()
+/// The replay-checkable view of tape entry `i`, decoded on the fly from the
+/// tagged tape: `None` for entries replay cannot carry (plain rects,
+/// ordinary primitives, non-circular round rects). This is THE eligibility
+/// rule — both the `&CommandRecording` form and the [`TypedRecords`] form
+/// delegate here, so they cannot drift.
+fn view_at_slices(
+    tape: &[TapeRef],
+    round_rects: &[SolidRoundRectRecord],
+    i: usize,
+) -> Option<ReplayView> {
+    let entry = tape[i];
+    match entry.kind() {
+        RecordKind::SolidArc => Some(ReplayView::Arc(entry.index())),
+        // Non-circular round rects cannot survive rotation about an
+        // external pivot; they stay dynamic.
+        RecordKind::SolidRoundRect => circle_view(&round_rects[entry.index()])
+            .is_some()
+            .then_some(ReplayView::RoundRect(entry.index())),
+        RecordKind::SolidRect | RecordKind::Other => None,
+    }
+}
+
+/// [`view_at_slices`] over a whole recording.
+fn view_at(recording: &CommandRecording, i: usize) -> Option<ReplayView> {
+    view_at_slices(&recording.tape, &recording.round_rects, i)
 }
 
 /// The shared rotation/scale pivot of a recording: the first arc's center.
@@ -402,19 +392,16 @@ fn views_compatible(
 /// structural only; transform-consistency during verification decides
 /// whether a pair actually moved together, so a wrong pairing costs a
 /// segment, never a wrong capture.
-fn align_recordings(
-    current: &CommandRecording,
-    current_views: &[Option<ReplayView>],
-    retained: &CommandRecording,
-    retained_views: &[Option<ReplayView>],
-) -> Vec<Option<usize>> {
+fn align_recordings(current: &CommandRecording, retained: &CommandRecording) -> Vec<Option<usize>> {
     let pair = |i: usize, j: usize| -> bool {
-        views_compatible(current, current_views[i], retained, retained_views[j])
+        views_compatible(current, view_at(current, i), retained, view_at(retained, j))
     };
-    let mut aligned = vec![None; current_views.len()];
+    let current_len = current.tape.len();
+    let retained_len = retained.tape.len();
+    let mut aligned = vec![None; current_len];
     let (mut i, mut j) = (0usize, 0usize);
     let mut events = 0usize;
-    while i < current_views.len() && j < retained_views.len() {
+    while i < current_len && j < retained_len {
         if pair(i, j) {
             aligned[i] = Some(j);
             i += 1;
@@ -425,14 +412,13 @@ fn align_recordings(
         if events > MAX_RESYNC_EVENTS {
             // Not churn — the structure is gone. An empty alignment makes
             // the caller restart from a fresh snapshot.
-            return vec![None; current_views.len()];
+            return vec![None; current_len];
         }
         let mut resynced = false;
         'search: for total in 1..=RESYNC_SPAN {
             for di in 0..=total {
                 let dj = total - di;
-                if i + di < current_views.len() && j + dj < retained_views.len() && pair(i + di, j + dj)
-                {
+                if i + di < current_len && j + dj < retained_len && pair(i + di, j + dj) {
                     i += di;
                     j += dj;
                     resynced = true;
@@ -491,22 +477,22 @@ fn match_pair(
 
 /// Loose logical bounds of a retained tape range: shapes bound by their full
 /// outer circle. Visibility culling only needs containment.
-fn range_bounds(recording: &CommandRecording, views: &[Option<ReplayView>], range: (usize, usize)) -> Rect {
+fn range_bounds(recording: &CommandRecording, range: (usize, usize)) -> Rect {
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
-    for view in views[range.0..range.1].iter().flatten() {
+    for view in (range.0..range.1).filter_map(|i| view_at(recording, i)) {
         let (center, reach) = match view {
             ReplayView::Arc(i) => {
-                let arc = &recording.arcs[*i];
+                let arc = &recording.arcs[i];
                 (
                     arc.center,
                     arc.radius + arc.stroke.map(|stroke| stroke.width).unwrap_or(0.0),
                 )
             }
             ReplayView::RoundRect(i) => {
-                let record = &recording.round_rects[*i];
+                let record = &recording.round_rects[i];
                 let Some((center, diameter)) = circle_view(record) else {
                     continue;
                 };
@@ -687,7 +673,6 @@ pub struct CommandReplayState {
     phase: CommandReplayPhase,
     center: Point,
     snapshot: CommandRecording,
-    snapshot_views: Vec<Option<ReplayView>>,
     segments: Vec<CommandSegment>,
     next_slot_id: u32,
     lifetime_deaths: u64,
@@ -709,7 +694,6 @@ impl Default for CommandReplayState {
             phase: CommandReplayPhase::Idle,
             center: Point::new(0.0, 0.0),
             snapshot: CommandRecording::default(),
-            snapshot_views: Vec::new(),
             segments: Vec::new(),
             next_slot_id: 0,
             lifetime_deaths: 0,
@@ -784,13 +768,11 @@ impl CommandReplayState {
     fn retire(&mut self) {
         self.phase = CommandReplayPhase::Idle;
         self.snapshot = CommandRecording::default();
-        self.snapshot_views.clear();
         self.segments.clear();
     }
 
     fn take_snapshot(&mut self, current: &CommandRecording, center: Point) {
         self.snapshot = current.clone();
-        self.snapshot_views = build_views(&self.snapshot);
         self.center = center;
         self.segments.clear();
         self.phase = CommandReplayPhase::Snapshotted;
@@ -804,19 +786,13 @@ impl CommandReplayState {
     /// IS this frame, so what the renderer retains equals what later
     /// transforms move.
     fn partition(&mut self, current: &CommandRecording, center: Point) -> ReplayOutcome {
-        let current_views = build_views(current);
-        let aligned = align_recordings(
-            current,
-            &current_views,
-            &self.snapshot,
-            &self.snapshot_views,
-        );
+        let aligned = align_recordings(current, &self.snapshot);
         let mut chains: Vec<(usize, usize)> = Vec::new();
         let mut i = 0;
-        while i < current_views.len() {
+        while i < current.tape.len() {
             let (Some(view), Some(snapshot_view)) = (
-                current_views[i],
-                aligned[i].and_then(|j| self.snapshot_views[j]),
+                view_at(current, i),
+                aligned[i].and_then(|j| view_at(&self.snapshot, j)),
             ) else {
                 i += 1;
                 continue;
@@ -836,10 +812,10 @@ impl CommandReplayState {
             }
             let start = i;
             let mut end = i + 1;
-            while end < current_views.len() {
+            while end < current.tape.len() {
                 let (Some(view), Some(snapshot_view)) = (
-                    current_views[end],
-                    aligned[end].and_then(|j| self.snapshot_views[j]),
+                    view_at(current, end),
+                    aligned[end].and_then(|j| view_at(&self.snapshot, j)),
                 ) else {
                     break;
                 };
@@ -888,7 +864,7 @@ impl CommandReplayState {
                     slot_offset: 0,
                     tape_start: range.0,
                     tape_end: range.1,
-                    bounds: range_bounds(&self.snapshot, &self.snapshot_views, range),
+                    bounds: range_bounds(&self.snapshot, range),
                 }
             })
             .collect();
@@ -946,12 +922,9 @@ impl CommandReplayState {
         current: &CommandRecording,
         pool: Option<&dyn VerifyExecutor>,
     ) -> ReplayOutcome {
-        let current_views = build_views(current);
         if let Some(pool) = pool {
             if self.segments.len() >= 2 {
-                if let Some((spans, retained_records)) =
-                    self.verify_optimistic(current, &current_views, pool)
-                {
+                if let Some((spans, retained_records)) = self.verify_optimistic(current, pool) {
                     self.optimistic_commits += 1;
                     return self.finish_verify(current, spans, retained_records);
                 }
@@ -959,7 +932,8 @@ impl CommandReplayState {
         }
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
-        let mut cursor = 0usize; // current-tape position covered so far
+        // Current-tape position covered so far.
+        let mut cursor = 0usize;
         // Segments awaiting location this frame, tape order. A split pushes
         // the suffix back onto the front so it is located before the next
         // original segment.
@@ -969,7 +943,7 @@ impl CommandReplayState {
         while let Some(segment) = pending.pop_front() {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
-                .min(current_views.len().saturating_sub(len - 1))
+                .min(current.tape.len().saturating_sub(len - 1))
                 .max(cursor);
             // Candidates run LEFT TO RIGHT from the cursor, never by
             // proximity to an expected position: within a self-similar
@@ -992,9 +966,7 @@ impl CommandReplayState {
             'search: for start in candidates {
                 let Some(t) = probe_anchor(
                     current,
-                    &current_views,
                     &self.snapshot,
-                    &self.snapshot_views,
                     self.center,
                     segment.tape_start,
                     len,
@@ -1007,9 +979,7 @@ impl CommandReplayState {
                 // resumes — a bounded number of times.
                 let (matched, recolors) = match_span(
                     TypedRecords::from(current),
-                    &current_views,
                     TypedRecords::from(&self.snapshot),
-                    &self.snapshot_views,
                     self.center,
                     start,
                     segment.tape_start,
@@ -1063,15 +1033,10 @@ impl CommandReplayState {
                         // just deeper in: no recapture, only an offset.
                         pending.push_front(CommandSegment {
                             slot: segment.slot,
-                            slot_offset: segment.slot_offset
-                                + (suffix_start - segment.tape_start),
+                            slot_offset: segment.slot_offset + (suffix_start - segment.tape_start),
                             tape_start: suffix_start,
                             tape_end: segment.tape_end,
-                            bounds: range_bounds(
-                                &self.snapshot,
-                                &self.snapshot_views,
-                                (suffix_start, segment.tape_end),
-                            ),
+                            bounds: range_bounds(&self.snapshot, (suffix_start, segment.tape_end)),
                         });
                     }
                     self.lifetime_splits += 1;
@@ -1090,7 +1055,6 @@ impl CommandReplayState {
                     tape_end: segment.tape_start + span_len,
                     bounds: range_bounds(
                         &self.snapshot,
-                        &self.snapshot_views,
                         (segment.tape_start, segment.tape_start + span_len),
                     ),
                 }
@@ -1168,7 +1132,6 @@ impl CommandReplayState {
     fn verify_optimistic(
         &self,
         current: &CommandRecording,
-        current_views: &[Option<ReplayView>],
         pool: &dyn VerifyExecutor,
     ) -> Option<(Vec<ReplaySpan>, usize)> {
         struct SpanJob {
@@ -1182,15 +1145,13 @@ impl CommandReplayState {
         for segment in &self.segments {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
-                .min(current_views.len().saturating_sub(len - 1))
+                .min(current.tape.len().saturating_sub(len - 1))
                 .max(cursor);
             let mut found = None;
             for start in cursor..search_end {
                 if let Some(t) = probe_anchor(
                     current,
-                    current_views,
                     &self.snapshot,
-                    &self.snapshot_views,
                     self.center,
                     segment.tape_start,
                     len,
@@ -1216,7 +1177,6 @@ impl CommandReplayState {
         {
             let current = TypedRecords::from(current);
             let snapshot = TypedRecords::from(&self.snapshot);
-            let snapshot_views = &self.snapshot_views[..];
             let center = self.center;
             let jobs = &jobs;
             let results = &results;
@@ -1224,9 +1184,7 @@ impl CommandReplayState {
                 let job = &jobs[i];
                 let outcome = match_span(
                     current,
-                    current_views,
                     snapshot,
-                    snapshot_views,
                     center,
                     job.start,
                     job.seg_start,
@@ -1281,18 +1239,15 @@ impl CommandReplayState {
 /// path: view compatibility, transform derivation from the anchor pair, and
 /// [`ANCHOR_PROBE_RECORDS`] probe matches. `None` means this candidate
 /// cannot be the segment's anchor.
-#[allow(clippy::too_many_arguments)]
 fn probe_anchor(
     current: &CommandRecording,
-    current_views: &[Option<ReplayView>],
     snapshot: &CommandRecording,
-    snapshot_views: &[Option<ReplayView>],
     center: Point,
     seg_start: usize,
     len: usize,
     start: usize,
 ) -> Option<RecordTransform> {
-    let (Some(view), Some(snapshot_view)) = (current_views[start], snapshot_views[seg_start])
+    let (Some(view), Some(snapshot_view)) = (view_at(current, start), view_at(snapshot, seg_start))
     else {
         return None;
     };
@@ -1302,8 +1257,8 @@ fn probe_anchor(
     let (t, _) = pair_transform(current, view, snapshot, snapshot_view, center)?;
     for probe in 0..ANCHOR_PROBE_RECORDS.min(len) {
         let (Some(view), Some(snapshot_view)) = (
-            current_views[start + probe],
-            snapshot_views[seg_start + probe],
+            view_at(current, start + probe),
+            view_at(snapshot, seg_start + probe),
         ) else {
             return None;
         };
@@ -1320,6 +1275,7 @@ fn probe_anchor(
 /// [`match_span`] calls cross worker threads.
 #[derive(Clone, Copy)]
 struct TypedRecords<'a> {
+    tape: &'a [TapeRef],
     arcs: &'a [SolidArcRecord],
     round_rects: &'a [SolidRoundRectRecord],
 }
@@ -1327,9 +1283,19 @@ struct TypedRecords<'a> {
 impl<'a> From<&'a CommandRecording> for TypedRecords<'a> {
     fn from(recording: &'a CommandRecording) -> Self {
         Self {
+            tape: &recording.tape,
             arcs: &recording.arcs,
             round_rects: &recording.round_rects,
         }
+    }
+}
+
+impl TypedRecords<'_> {
+    /// [`view_at`] over the POD slices, for worker-thread span matching —
+    /// the same [`view_at_slices`] implementation, so eligibility cannot
+    /// drift between the two forms.
+    fn view_at(&self, i: usize) -> Option<ReplayView> {
+        view_at_slices(self.tape, self.round_rects, i)
     }
 }
 
@@ -1338,12 +1304,9 @@ impl<'a> From<&'a CommandRecording> for TypedRecords<'a> {
 /// cleanly matched prefix length and the recolors within that prefix. The
 /// record dispatch mirrors [`match_pair`] exactly; it operates on the typed
 /// slices so one call per segment can run on a worker thread.
-#[allow(clippy::too_many_arguments)]
 fn match_span(
     current: TypedRecords<'_>,
-    current_views: &[Option<ReplayView>],
     snapshot: TypedRecords<'_>,
-    snapshot_views: &[Option<ReplayView>],
     center: Point,
     start: usize,
     seg_start: usize,
@@ -1353,8 +1316,8 @@ fn match_span(
     let mut recolors: Vec<(u32, Color)> = Vec::new();
     for offset in 0..len {
         let entry_match = match (
-            current_views[start + offset],
-            snapshot_views[seg_start + offset],
+            current.view_at(start + offset),
+            snapshot.view_at(seg_start + offset),
         ) {
             (Some(ReplayView::Arc(i)), Some(ReplayView::Arc(j))) => {
                 match_arc(&current.arcs[i], &snapshot.arcs[j], center, t)
@@ -1367,7 +1330,7 @@ fn match_span(
         match entry_match {
             RecordMatch::Exact => {}
             RecordMatch::Recolor => {
-                let color = match current_views[start + offset] {
+                let color = match current.view_at(start + offset) {
                     Some(ReplayView::Arc(a)) => current.arcs[a].color,
                     Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
                     None => unreachable!("recolor requires a view"),
@@ -1481,7 +1444,10 @@ mod tests {
         let mut retained = arc(60.0, 0.0, Color::WHITE);
         retained.stroke = Some(Stroke::new(5.0));
         let current = moved_arc(&retained, t);
-        assert_eq!(match_arc(&current, &retained, CENTER, t), RecordMatch::Exact);
+        assert_eq!(
+            match_arc(&current, &retained, CENTER, t),
+            RecordMatch::Exact
+        );
 
         // An unscaled stroke under a scaling segment is a real change: 2%
         // of 5px is well past the noise tolerance.
@@ -1503,9 +1469,12 @@ mod tests {
         let (c_then, d_then) = circle_view(&retained).expect("circle");
         let c_now = t.apply(CENTER, c_then);
         let current = circle(c_now.x, c_now.y, d_then * t.scale, Color::WHITE);
-        let (derived, pinned) =
-            circle_anchor_transform_pinned(circle_view(&current).unwrap(), (c_then, d_then), CENTER)
-                .expect("derivable");
+        let (derived, pinned) = circle_anchor_transform_pinned(
+            circle_view(&current).unwrap(),
+            (c_then, d_then),
+            CENTER,
+        )
+        .expect("derivable");
         assert!(pinned, "an off-pivot circle pins rotation");
         assert!((derived.angle - t.angle).abs() < 1e-4);
         assert_eq!(
@@ -1592,8 +1561,7 @@ mod tests {
         ));
         // The partition frame itself emits the capture: snapshot == current,
         // so every span is capture:true under an identity transform.
-        let ReplayOutcome::Spans(capture_spans) = state.advance(&ring_frame(3, 300, 1, 10))
-        else {
+        let ReplayOutcome::Spans(capture_spans) = state.advance(&ring_frame(3, 300, 1, 10)) else {
             panic!("partition frame should emit the capture");
         };
         assert!(capture_spans.iter().all(|span| match span {
@@ -1729,7 +1697,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(retained.len(), 2, "prefix and suffix both retain: {spans:?}");
+        assert_eq!(
+            retained.len(),
+            2,
+            "prefix and suffix both retain: {spans:?}"
+        );
         // Both pieces address the SAME captured slot — a split never
         // recaptures, it re-addresses: the suffix starts one record past
         // the prefix within the capture.
@@ -1870,13 +1842,20 @@ mod tests {
             let recording = frame(f);
             let serial_outcome = serial.advance(&recording);
             let pooled_outcome = pooled.advance_pooled(&recording, Some(&exec));
-            assert_eq!(serial_outcome, pooled_outcome, "outcome diverged at frame {f}");
+            assert_eq!(
+                serial_outcome, pooled_outcome,
+                "outcome diverged at frame {f}"
+            );
             assert_eq!(
                 serial.segments(),
                 pooled.segments(),
                 "segments diverged at frame {f}"
             );
-            assert_eq!(serial.stats(), pooled.stats(), "stats diverged at frame {f}");
+            assert_eq!(
+                serial.stats(),
+                pooled.stats(),
+                "stats diverged at frame {f}"
+            );
         }
         let (deaths, splits) = serial.stats();
         assert!(

@@ -842,6 +842,36 @@ pub(crate) enum RecordKind {
     Other,
 }
 
+/// Tagged reference to one recorded draw: kind in the top 2 bits, index into
+/// that kind's typed store in the low 30. Four bytes per entry buys direct
+/// dispatch everywhere a tape range is consumed — no per-kind cursor walks,
+/// no per-frame view tables (sol P4a).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TapeRef(u32);
+
+impl TapeRef {
+    const KIND_SHIFT: u32 = 30;
+    const INDEX_MASK: u32 = (1 << Self::KIND_SHIFT) - 1;
+
+    pub(crate) fn new(kind: RecordKind, index: usize) -> Self {
+        debug_assert!(index < (1usize << Self::KIND_SHIFT));
+        Self(((kind as u32) << Self::KIND_SHIFT) | index as u32)
+    }
+
+    pub(crate) fn kind(self) -> RecordKind {
+        match self.0 >> Self::KIND_SHIFT {
+            0 => RecordKind::SolidRect,
+            1 => RecordKind::SolidRoundRect,
+            2 => RecordKind::SolidArc,
+            _ => RecordKind::Other,
+        }
+    }
+
+    pub(crate) fn index(self) -> usize {
+        (self.0 & Self::INDEX_MASK) as usize
+    }
+}
+
 /// A solid `SrcOver` rect, recorded as raw values.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SolidRectRecord {
@@ -879,12 +909,16 @@ pub struct SolidArcRecord {
 /// for the common solid shapes (no `Brush` destructor branch, roughly half
 /// the bytes of the `DrawPrimitive` they materialize into) and ordinary
 /// primitives for everything else, with `tape` preserving global order. The
-/// index a tape entry implies into its per-kind store is the stable compact
-/// handle for the rare resource-bearing entries (`others` holds gradients,
-/// images, text, blends, and content markers whole).
+/// index each tape entry carries into its per-kind store is the stable
+/// compact handle for the rare resource-bearing entries (`others` holds
+/// gradients, images, text, blends, and content markers whole).
 #[derive(Clone, Debug, Default)]
 pub struct CommandRecording {
-    pub(crate) tape: Vec<RecordKind>,
+    /// INVARIANT: per-store indices appear on the tape in strictly
+    /// increasing order (0, 1, 2, ... per kind) — recording appends only.
+    /// Sequential consumers (`finish`'s `others.drain(..)`) rely on it;
+    /// random-access consumers use the index directly.
+    pub(crate) tape: Vec<TapeRef>,
     pub(crate) rects: Vec<SolidRectRecord>,
     pub(crate) round_rects: Vec<SolidRoundRectRecord>,
     pub(crate) arcs: Vec<SolidArcRecord>,
@@ -909,21 +943,11 @@ impl CommandRecording {
         if tape_start > tape_end || tape_end > self.tape.len() {
             return None;
         }
-        let (mut rects_i, mut round_rects_i, mut arcs_i, mut others_i) = (0usize, 0, 0, 0);
-        for kind in &self.tape[..tape_start] {
-            match kind {
-                RecordKind::SolidRect => rects_i += 1,
-                RecordKind::SolidRoundRect => round_rects_i += 1,
-                RecordKind::SolidArc => arcs_i += 1,
-                RecordKind::Other => others_i += 1,
-            }
-        }
         let mut out = Vec::with_capacity(tape_end - tape_start);
-        for kind in &self.tape[tape_start..tape_end] {
-            match kind {
+        for entry in &self.tape[tape_start..tape_end] {
+            match entry.kind() {
                 RecordKind::SolidRect => {
-                    let record = self.rects.get(rects_i)?;
-                    rects_i += 1;
+                    let record = self.rects.get(entry.index())?;
                     out.push(DrawPrimitive::Rect {
                         rect: record.rect,
                         brush: Brush::Solid(record.color),
@@ -931,8 +955,7 @@ impl CommandRecording {
                     });
                 }
                 RecordKind::SolidRoundRect => {
-                    let record = self.round_rects.get(round_rects_i)?;
-                    round_rects_i += 1;
+                    let record = self.round_rects.get(entry.index())?;
                     out.push(DrawPrimitive::RoundRect {
                         rect: record.rect,
                         brush: Brush::Solid(record.color),
@@ -941,15 +964,13 @@ impl CommandRecording {
                     });
                 }
                 RecordKind::SolidArc => {
-                    let record = self.arcs.get(arcs_i)?;
-                    arcs_i += 1;
+                    let record = self.arcs.get(entry.index())?;
                     if let Some(primitive) = materialize_solid_arc(record) {
                         out.push(primitive);
                     }
                 }
                 RecordKind::Other => {
-                    out.push(self.others.get(others_i)?.clone());
-                    others_i += 1;
+                    out.push(self.others.get(entry.index())?.clone());
                 }
             }
         }
@@ -1043,7 +1064,6 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
     });
 }
 
-
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
         Self::with_recording(size, None, CommandRecording::default(), Vec::new())
@@ -1122,9 +1142,10 @@ impl DrawScopeDefault {
             .iter()
             .filter(|primitive| matches!(primitive, DrawPrimitive::Content))
             .count() as u32;
+        let base = self.rec.others.len();
         self.rec
             .tape
-            .extend(std::iter::repeat_n(RecordKind::Other, primitives.len()));
+            .extend((0..primitives.len()).map(|i| TapeRef::new(RecordKind::Other, base + i)));
         self.rec.others.extend(primitives);
     }
 
@@ -1151,14 +1172,14 @@ impl DrawScopeDefault {
         out.reserve(self.rec.tape.len());
         let mut dropped: Vec<u32> = Vec::new();
         {
-            let mut rects = self.rec.rects.iter();
-            let mut round_rects = self.rec.round_rects.iter();
-            let mut arcs = self.rec.arcs.iter();
+            // `others` moves out via drain; the increasing-index invariant
+            // on the tape makes tape order equal drain order. Copy stores
+            // are addressed directly by the entry's index.
             let mut others = self.rec.others.drain(..);
-            for (tape_index, kind) in self.rec.tape.iter().enumerate() {
-                match kind {
+            for (tape_index, entry) in self.rec.tape.iter().enumerate() {
+                match entry.kind() {
                     RecordKind::SolidRect => {
-                        let record = rects.next().expect("tape/rects in sync");
+                        let record = &self.rec.rects[entry.index()];
                         out.push(DrawPrimitive::Rect {
                             rect: record.rect,
                             brush: Brush::Solid(record.color),
@@ -1166,7 +1187,7 @@ impl DrawScopeDefault {
                         });
                     }
                     RecordKind::SolidRoundRect => {
-                        let record = round_rects.next().expect("tape/round_rects in sync");
+                        let record = &self.rec.round_rects[entry.index()];
                         out.push(DrawPrimitive::RoundRect {
                             rect: record.rect,
                             brush: Brush::Solid(record.color),
@@ -1175,7 +1196,7 @@ impl DrawScopeDefault {
                         });
                     }
                     RecordKind::SolidArc => {
-                        let record = arcs.next().expect("tape/arcs in sync");
+                        let record = &self.rec.arcs[entry.index()];
                         if let Some(primitive) = materialize_solid_arc(record) {
                             out.push(primitive);
                         } else {
@@ -1210,7 +1231,10 @@ impl DrawScopeDefault {
         center: Point,
         outcome: crate::record_replay::ReplayOutcome,
         bypass: &mut dyn FnMut(u32) -> bool,
-    ) -> (FinishedRecording, Option<crate::record_replay::CommandReplayFrame>) {
+    ) -> (
+        FinishedRecording,
+        Option<crate::record_replay::CommandReplayFrame>,
+    ) {
         use crate::record_replay::{CommandReplayFrame, FrameSpan, ReplayOutcome, ReplaySpan};
         let ReplayOutcome::Spans(replay_spans) = outcome else {
             return (self.finish(), None);
@@ -1222,21 +1246,26 @@ impl DrawScopeDefault {
         let mut spans: Vec<FrameSpan> = Vec::with_capacity(replay_spans.len());
         let mut any_retained = false;
         {
-            let mut rects = self.rec.rects.iter();
-            let mut round_rects = self.rec.round_rects.iter();
-            let mut arcs = self.rec.arcs.iter();
+            // `others` moves out via drain (tape order equals drain order by
+            // the increasing-index invariant); Copy stores are addressed
+            // directly by each entry's index, so a bypassed span costs
+            // nothing to step past.
             let mut others = self.rec.others.drain(..);
             let tape = &self.rec.tape;
+            let rects = &self.rec.rects;
+            let round_rects = &self.rec.round_rects;
+            let arcs = &self.rec.arcs;
             // Materializes one contiguous tape range into `out`. Kept as a
-            // macro so the per-kind cursors stay plain locals the borrow
-            // checker can split by field.
+            // macro so `out`, `dropped`, and the `others` cursor stay plain
+            // locals the borrow checker can split by field.
             macro_rules! materialize_range {
                 ($start:expr, $end:expr) => {{
                     let prim_start = out.len() as u32;
                     for tape_index in $start..$end {
-                        match tape[tape_index] {
+                        let entry = tape[tape_index];
+                        match entry.kind() {
                             RecordKind::SolidRect => {
-                                let record = rects.next().expect("tape/rects in sync");
+                                let record = &rects[entry.index()];
                                 out.push(DrawPrimitive::Rect {
                                     rect: record.rect,
                                     brush: Brush::Solid(record.color),
@@ -1244,8 +1273,7 @@ impl DrawScopeDefault {
                                 });
                             }
                             RecordKind::SolidRoundRect => {
-                                let record =
-                                    round_rects.next().expect("tape/round_rects in sync");
+                                let record = &round_rects[entry.index()];
                                 out.push(DrawPrimitive::RoundRect {
                                     rect: record.rect,
                                     brush: Brush::Solid(record.color),
@@ -1254,7 +1282,7 @@ impl DrawScopeDefault {
                                 });
                             }
                             RecordKind::SolidArc => {
-                                let record = arcs.next().expect("tape/arcs in sync");
+                                let record = &arcs[entry.index()];
                                 if let Some(primitive) = materialize_solid_arc(record) {
                                     out.push(primitive);
                                 } else {
@@ -1295,26 +1323,13 @@ impl DrawScopeDefault {
                         // the ordinary path must draw it.
                         let compact = tape[tape_start..tape_end]
                             .iter()
-                            .all(|kind| !matches!(kind, RecordKind::Other));
+                            .all(|entry| entry.kind() != RecordKind::Other);
                         if compact && !capture && bypass(slot) {
-                            // The bypass: records advance the cursors and
-                            // are never materialized. Capture guaranteed
-                            // each record one clean shape, so no drop
-                            // tracking is needed on the way past.
-                            for kind in &tape[tape_start..tape_end] {
-                                match kind {
-                                    RecordKind::SolidRect => {
-                                        rects.next();
-                                    }
-                                    RecordKind::SolidRoundRect => {
-                                        round_rects.next();
-                                    }
-                                    RecordKind::SolidArc => {
-                                        arcs.next();
-                                    }
-                                    RecordKind::Other => unreachable!("checked compact"),
-                                }
-                            }
+                            // The bypass: the records are never materialized
+                            // — direct indexing leaves nothing to advance.
+                            // Capture guaranteed each record one clean
+                            // shape, so no drop tracking is needed on the
+                            // way past.
                             any_retained = true;
                             let position = out.len() as u32;
                             spans.push(FrameSpan::Retained {
@@ -1377,7 +1392,8 @@ impl DrawScopeDefault {
     }
 
     fn push_other(&mut self, primitive: DrawPrimitive) {
-        self.rec.tape.push(RecordKind::Other);
+        let idx = self.rec.others.len();
+        self.rec.tape.push(TapeRef::new(RecordKind::Other, idx));
         self.rec.others.push(primitive);
     }
 
@@ -1395,14 +1411,13 @@ impl DrawScopeDefault {
                 brush: Brush::Solid(color),
                 stroke,
             } => {
-                self.rec.tape.push(RecordKind::SolidRect);
-                self.rec
-                    .rects
-                    .push(SolidRectRecord {
-                        rect,
-                        color,
-                        stroke,
-                    });
+                let idx = self.rec.rects.len();
+                self.rec.tape.push(TapeRef::new(RecordKind::SolidRect, idx));
+                self.rec.rects.push(SolidRectRecord {
+                    rect,
+                    color,
+                    stroke,
+                });
             }
             DrawPrimitive::RoundRect {
                 rect,
@@ -1410,7 +1425,10 @@ impl DrawScopeDefault {
                 radii,
                 stroke,
             } => {
-                self.rec.tape.push(RecordKind::SolidRoundRect);
+                let idx = self.rec.round_rects.len();
+                self.rec
+                    .tape
+                    .push(TapeRef::new(RecordKind::SolidRoundRect, idx));
                 self.rec.round_rects.push(SolidRoundRectRecord {
                     rect,
                     radii,
@@ -1445,7 +1463,8 @@ impl DrawScopeDefault {
         // (see [`materialize_solid_arc`]), producing identical output.
         if blend_mode == BlendMode::SrcOver {
             if let Brush::Solid(color) = brush {
-                self.rec.tape.push(RecordKind::SolidArc);
+                let idx = self.rec.arcs.len();
+                self.rec.tape.push(TapeRef::new(RecordKind::SolidArc, idx));
                 self.rec.arcs.push(SolidArcRecord {
                     center,
                     radius,
