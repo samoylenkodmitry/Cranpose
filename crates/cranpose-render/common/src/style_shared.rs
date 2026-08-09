@@ -355,21 +355,10 @@ pub fn primitives_for_placement_verified(
             return (scope.finish(), None);
         };
         let outcome = state.advance(scope.recorded());
-        let diag = cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG")
-            .then(|| (scope.recorded().len(), state.segments().len(), state.stats()));
-        let center = state.center();
-        // Only spans whose retained buffer the renderer has confirmed may
-        // skip materialization: everything else must exist as primitives
-        // for this frame's ordinary path. A marker-bearing recording drops
-        // its frame after the split, so it must materialize whole.
-        let markers = scope.content_marker_count();
-        let mut bypass = |slot: u32| {
-            markers == 0
-                && command
-                    .is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
-        };
-        let (finished, frame) = scope.finish_replay(center, &outcome, &mut bypass);
-        if let Some((records, segments, (deaths, splits))) = diag {
+        // Span counts are taken before `finish_replay` consumes the outcome
+        // (recolor patch lists move into the frame instead of being cloned
+        // every frame).
+        let diag = if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
             if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = &outcome {
                 let (mut retained, mut dynamic) = (0usize, 0usize);
                 for span in spans {
@@ -381,18 +370,43 @@ pub fn primitives_for_placement_verified(
                         } => dynamic += tape_end - tape_start,
                     }
                 }
-                log::warn!(
-                    "[command-replay] {} records: {} retained spans, {} dynamic records, \
-                     {} materialized; {} segments alive, lifetime deaths {} splits {}",
-                    records,
+                Some((
+                    scope.recorded().len(),
                     retained,
                     dynamic,
-                    finished.primitives.len(),
-                    segments,
-                    deaths,
-                    splits,
-                );
+                    state.segments().len(),
+                    state.stats(),
+                ))
+            } else {
+                None
             }
+        } else {
+            None
+        };
+        let center = state.center();
+        // Only spans whose retained buffer the renderer has confirmed may
+        // skip materialization: everything else must exist as primitives
+        // for this frame's ordinary path. A marker-bearing recording drops
+        // its frame after the split, so it must materialize whole.
+        let markers = scope.content_marker_count();
+        let mut bypass = |slot: u32| {
+            markers == 0
+                && command
+                    .is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
+        };
+        let (finished, frame) = scope.finish_replay(center, outcome, &mut bypass);
+        if let Some((records, retained, dynamic, segments, (deaths, splits))) = diag {
+            log::warn!(
+                "[command-replay] {} records: {} retained spans, {} dynamic records, \
+                 {} materialized; {} segments alive, lifetime deaths {} splits {}",
+                records,
+                retained,
+                dynamic,
+                finished.primitives.len(),
+                segments,
+                deaths,
+                splits,
+            );
         }
         (finished, frame)
     }

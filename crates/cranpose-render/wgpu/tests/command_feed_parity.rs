@@ -119,7 +119,7 @@ fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
             let scope = record_frame(frame);
             let outcome = state.advance(scope.recorded());
             let center = state.center();
-            let (finished, replay) = scope.finish_replay(center, &outcome, bypass);
+            let (finished, replay) = scope.finish_replay(center, outcome, bypass);
             let bounds = Rect {
                 x: 0.0,
                 y: 0.0,

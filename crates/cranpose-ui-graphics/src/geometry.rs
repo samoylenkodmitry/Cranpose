@@ -1200,7 +1200,7 @@ impl DrawScopeDefault {
     pub fn finish_replay(
         mut self,
         center: Point,
-        outcome: &crate::record_replay::ReplayOutcome,
+        outcome: crate::record_replay::ReplayOutcome,
         bypass: &mut dyn FnMut(u32) -> bool,
     ) -> (FinishedRecording, Option<crate::record_replay::CommandReplayFrame>) {
         use crate::record_replay::{CommandReplayFrame, FrameSpan, ReplayOutcome, ReplaySpan};
@@ -1267,7 +1267,7 @@ impl DrawScopeDefault {
                         tape_start,
                         tape_end,
                     } => {
-                        let range = materialize_range!(*tape_start, *tape_end);
+                        let range = materialize_range!(tape_start, tape_end);
                         if range.1 > range.0 {
                             spans.push(FrameSpan::Dynamic { range });
                         }
@@ -1285,15 +1285,15 @@ impl DrawScopeDefault {
                         // A retained span holds solid arcs and circles by
                         // construction; anything else in its range means
                         // the ordinary path must draw it.
-                        let compact = tape[*tape_start..*tape_end]
+                        let compact = tape[tape_start..tape_end]
                             .iter()
                             .all(|kind| !matches!(kind, RecordKind::Other));
-                        if compact && !*capture && bypass(*slot) {
+                        if compact && !capture && bypass(slot) {
                             // The bypass: records advance the cursors and
                             // are never materialized. Capture guaranteed
                             // each record one clean shape, so no drop
                             // tracking is needed on the way past.
-                            for kind in &tape[*tape_start..*tape_end] {
+                            for kind in &tape[tape_start..tape_end] {
                                 match kind {
                                     RecordKind::SolidRect => {
                                         rects.next();
@@ -1310,30 +1310,30 @@ impl DrawScopeDefault {
                             any_retained = true;
                             let position = out.len() as u32;
                             spans.push(FrameSpan::Retained {
-                                slot: *slot,
+                                slot,
                                 capture: false,
-                                slot_offset: *slot_offset as u32,
+                                slot_offset: slot_offset as u32,
                                 range: (position, position),
-                                tape_range: (*tape_start as u32, *tape_end as u32),
-                                transform: *transform,
-                                recolors: recolors.clone(),
-                                bounds: *bounds,
+                                tape_range: (tape_start as u32, tape_end as u32),
+                                transform,
+                                recolors,
+                                bounds,
                             });
                             continue;
                         }
                         let drops_before = dropped.len();
-                        let range = materialize_range!(*tape_start, *tape_end);
+                        let range = materialize_range!(tape_start, tape_end);
                         if compact && dropped.len() == drops_before {
                             any_retained = true;
                             spans.push(FrameSpan::Retained {
-                                slot: *slot,
-                                capture: *capture,
-                                slot_offset: *slot_offset as u32,
+                                slot,
+                                capture,
+                                slot_offset: slot_offset as u32,
                                 range,
-                                tape_range: (*tape_start as u32, *tape_end as u32),
-                                transform: *transform,
-                                recolors: recolors.clone(),
-                                bounds: *bounds,
+                                tape_range: (tape_start as u32, tape_end as u32),
+                                transform,
+                                recolors,
+                                bounds,
                             });
                         } else if range.1 > range.0 {
                             spans.push(FrameSpan::Dynamic { range });
