@@ -835,7 +835,7 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &TextSt
 /// draw order across the per-kind stores.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
-enum RecordKind {
+pub(crate) enum RecordKind {
     SolidRect,
     SolidRoundRect,
     SolidArc,
@@ -882,13 +882,13 @@ pub struct SolidArcRecord {
 /// index a tape entry implies into its per-kind store is the stable compact
 /// handle for the rare resource-bearing entries (`others` holds gradients,
 /// images, text, blends, and content markers whole).
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CommandRecording {
-    tape: Vec<RecordKind>,
-    rects: Vec<SolidRectRecord>,
-    round_rects: Vec<SolidRoundRectRecord>,
-    arcs: Vec<SolidArcRecord>,
-    others: Vec<DrawPrimitive>,
+    pub(crate) tape: Vec<RecordKind>,
+    pub(crate) rects: Vec<SolidRectRecord>,
+    pub(crate) round_rects: Vec<SolidRoundRectRecord>,
+    pub(crate) arcs: Vec<SolidArcRecord>,
+    pub(crate) others: Vec<DrawPrimitive>,
 }
 
 impl CommandRecording {
@@ -1024,6 +1024,12 @@ impl DrawScopeDefault {
     /// re-scanning thousands of just-recorded primitives to learn "none".
     pub fn content_marker_count(&self) -> u32 {
         self.content_markers
+    }
+
+    /// The compact recording as recorded so far. Retention verification
+    /// reads this before materialization decides what to skip.
+    pub fn recorded(&self) -> &CommandRecording {
+        &self.rec
     }
 
     /// Appends already-recorded primitives verbatim. This is the replay path

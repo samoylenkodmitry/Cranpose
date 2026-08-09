@@ -19,8 +19,10 @@
 //! the game's own per-frame float noise, and a real content change is orders
 //! of magnitude larger.
 
-use crate::geometry::{Point, Rect, SolidArcRecord, SolidRoundRectRecord};
-use crate::CornerRadii;
+use crate::geometry::{
+    CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord,
+};
+use crate::{Color, CornerRadii};
 
 /// Relative tolerance for similarity verification.
 const REL_EPS: f32 = 2e-3;
@@ -281,6 +283,636 @@ pub fn match_round_rect(
     }
 }
 
+/// Below this many entries a stable stretch is not worth a retained group.
+/// Mirrors the flat-list detector.
+pub const MIN_SEGMENT_RECORDS: usize = 128;
+/// Chains longer than this split into multiple groups, bounding the blast
+/// radius of any one entry going dynamic later.
+pub const MAX_SEGMENT_RECORDS: usize = 2048;
+/// Below this many records a command is not worth watching at all.
+pub const MIN_REPLAY_COMMAND_RECORDS: usize = 512;
+/// Structural-resync search span when entity churn inserts/removes entries
+/// between frames. Mirrors the flat-list detector's bounded resync.
+const RESYNC_SPAN: usize = 48;
+const MAX_RESYNC_EVENTS: usize = 512;
+/// How far past its expected position a segment anchor may drift when the
+/// dynamic spans between segments change length.
+const RESYNC_WINDOW: usize = 1024;
+/// Entries probed under a candidate anchor transform before committing to a
+/// full-segment verification.
+const ANCHOR_PROBE_RECORDS: usize = 4;
+/// Full-span verifications a segment may commit to per frame. Self-similar
+/// rings can pass the probe from a wrong anchor (every entry shares the
+/// candidate's radius and angle step), so one failed commitment must not
+/// abandon the search — but unbounded re-verification of 2048-entry spans
+/// must not either.
+const MAX_COMMIT_ATTEMPTS: usize = 4;
+/// When live coverage sinks below this fraction of the retained records,
+/// re-partition from scratch.
+const MIN_COVERAGE_FRACTION: f32 = 0.5;
+
+/// The similarity-checkable view of one tape entry: which typed store it
+/// lives in and its index there. `None` marks entries replay cannot carry
+/// (plain rects, ordinary primitives) — they break segments wherever they
+/// sit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReplayView {
+    Arc(usize),
+    RoundRect(usize),
+}
+
+/// Flattens a recording's tape into per-entry replay views plus per-kind
+/// indices, so alignment and verification can address records directly.
+fn build_views(recording: &CommandRecording) -> Vec<Option<ReplayView>> {
+    let mut arc_idx = 0usize;
+    let mut rr_idx = 0usize;
+    let mut rect_idx = 0usize;
+    let mut other_idx = 0usize;
+    recording
+        .tape
+        .iter()
+        .map(|kind| match kind {
+            RecordKind::SolidArc => {
+                let view = ReplayView::Arc(arc_idx);
+                arc_idx += 1;
+                Some(view)
+            }
+            RecordKind::SolidRoundRect => {
+                let view = ReplayView::RoundRect(rr_idx);
+                rr_idx += 1;
+                // Non-circular round rects cannot survive rotation about an
+                // external pivot; they stay dynamic.
+                if circle_view(&recording.round_rects[rr_idx - 1]).is_some() {
+                    Some(view)
+                } else {
+                    None
+                }
+            }
+            RecordKind::SolidRect => {
+                rect_idx += 1;
+                let _ = rect_idx;
+                None
+            }
+            RecordKind::Other => {
+                other_idx += 1;
+                let _ = other_idx;
+                None
+            }
+        })
+        .collect()
+}
+
+/// The shared rotation/scale pivot of a recording: the first arc's center.
+fn detect_center(recording: &CommandRecording) -> Option<Point> {
+    recording.arcs.first().map(|arc| arc.center)
+}
+
+/// Similarity-invariant compatibility of a current entry with a retained
+/// one, for structural pairing under churn. Colors excluded by design.
+fn views_compatible(
+    current: &CommandRecording,
+    current_view: Option<ReplayView>,
+    retained: &CommandRecording,
+    retained_view: Option<ReplayView>,
+) -> bool {
+    match (current_view, retained_view) {
+        (Some(ReplayView::Arc(i)), Some(ReplayView::Arc(j))) => {
+            arcs_anchor_compatible(&current.arcs[i], &retained.arcs[j])
+        }
+        (Some(ReplayView::RoundRect(i)), Some(ReplayView::RoundRect(j))) => {
+            let now = current.round_rects[i].stroke.is_some();
+            let then = retained.round_rects[j].stroke.is_some();
+            now == then
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// Pairs current tape entries with retained tape entries, tolerating bounded
+/// insertions and deletions (entity churn between frames). Pairing is
+/// structural only; transform-consistency during verification decides
+/// whether a pair actually moved together, so a wrong pairing costs a
+/// segment, never a wrong capture.
+fn align_recordings(
+    current: &CommandRecording,
+    current_views: &[Option<ReplayView>],
+    retained: &CommandRecording,
+    retained_views: &[Option<ReplayView>],
+) -> Vec<Option<usize>> {
+    let pair = |i: usize, j: usize| -> bool {
+        views_compatible(current, current_views[i], retained, retained_views[j])
+    };
+    let mut aligned = vec![None; current_views.len()];
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut events = 0usize;
+    while i < current_views.len() && j < retained_views.len() {
+        if pair(i, j) {
+            aligned[i] = Some(j);
+            i += 1;
+            j += 1;
+            continue;
+        }
+        events += 1;
+        if events > MAX_RESYNC_EVENTS {
+            // Not churn — the structure is gone. An empty alignment makes
+            // the caller restart from a fresh snapshot.
+            return vec![None; current_views.len()];
+        }
+        let mut resynced = false;
+        'search: for total in 1..=RESYNC_SPAN {
+            for di in 0..=total {
+                let dj = total - di;
+                if i + di < current_views.len() && j + dj < retained_views.len() && pair(i + di, j + dj)
+                {
+                    i += di;
+                    j += dj;
+                    resynced = true;
+                    break 'search;
+                }
+            }
+        }
+        if !resynced {
+            i += 1;
+            j += 1;
+        }
+    }
+    aligned
+}
+
+/// Derives the pair's implied transform, with pinnedness.
+fn pair_transform(
+    current: &CommandRecording,
+    current_view: ReplayView,
+    retained: &CommandRecording,
+    retained_view: ReplayView,
+    center: Point,
+) -> Option<(RecordTransform, bool)> {
+    match (current_view, retained_view) {
+        (ReplayView::Arc(i), ReplayView::Arc(j)) => {
+            arc_anchor_transform(&current.arcs[i], &retained.arcs[j]).map(|t| (t, true))
+        }
+        (ReplayView::RoundRect(i), ReplayView::RoundRect(j)) => {
+            let now = circle_view(&current.round_rects[i])?;
+            let then = circle_view(&retained.round_rects[j])?;
+            circle_anchor_transform_pinned(now, then, center)
+        }
+        _ => None,
+    }
+}
+
+/// Verifies one aligned pair under a segment transform.
+fn match_pair(
+    current: &CommandRecording,
+    current_view: ReplayView,
+    retained: &CommandRecording,
+    retained_view: ReplayView,
+    center: Point,
+    t: RecordTransform,
+) -> RecordMatch {
+    match (current_view, retained_view) {
+        (ReplayView::Arc(i), ReplayView::Arc(j)) => {
+            match_arc(&current.arcs[i], &retained.arcs[j], center, t)
+        }
+        (ReplayView::RoundRect(i), ReplayView::RoundRect(j)) => {
+            match_round_rect(&current.round_rects[i], &retained.round_rects[j], center, t)
+        }
+        _ => RecordMatch::Mismatch,
+    }
+}
+
+/// Loose logical bounds of a retained tape range: shapes bound by their full
+/// outer circle. Visibility culling only needs containment.
+fn range_bounds(recording: &CommandRecording, views: &[Option<ReplayView>], range: (usize, usize)) -> Rect {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for view in views[range.0..range.1].iter().flatten() {
+        let (center, reach) = match view {
+            ReplayView::Arc(i) => {
+                let arc = &recording.arcs[*i];
+                (
+                    arc.center,
+                    arc.radius + arc.stroke.map(|stroke| stroke.width).unwrap_or(0.0),
+                )
+            }
+            ReplayView::RoundRect(i) => {
+                let record = &recording.round_rects[*i];
+                let Some((center, diameter)) = circle_view(record) else {
+                    continue;
+                };
+                (
+                    center,
+                    diameter * 0.5 + record.stroke.map(|stroke| stroke.width).unwrap_or(0.0),
+                )
+            }
+        };
+        let reach = reach + 2.0;
+        min_x = min_x.min(center.x - reach);
+        min_y = min_y.min(center.y - reach);
+        max_x = max_x.max(center.x + reach);
+        max_y = max_y.max(center.y + reach);
+    }
+    if min_x > max_x {
+        return Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+    Rect {
+        x: min_x,
+        y: min_y,
+        width: max_x - min_x,
+        height: max_y - min_y,
+    }
+}
+
+/// One retained stretch of a command's recording, addressed by the retained
+/// snapshot's tape range. The `id` is stable for the segment's lifetime —
+/// renderer-side retained slots key on it, and it survives other segments
+/// dying.
+#[derive(Clone, Debug)]
+pub struct CommandSegment {
+    pub id: u32,
+    pub tape_start: usize,
+    pub tape_end: usize,
+    /// Loose logical bounds at capture.
+    pub bounds: Rect,
+}
+
+/// One span of this frame's recording, in tape order.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReplaySpan {
+    /// The retained segment moved by `transform`; `recolors` are
+    /// (segment-relative record offset, new color) patches.
+    Retained {
+        /// The stable [`CommandSegment::id`].
+        segment: u32,
+        transform: RecordTransform,
+        recolors: Vec<(u32, Color)>,
+        /// Segment capture bounds under this frame's transform.
+        bounds: Rect,
+    },
+    /// Materialize these current-tape entries through the ordinary path.
+    Dynamic { tape_start: usize, tape_end: usize },
+}
+
+/// What one frame of verification decided for a command.
+#[derive(Debug)]
+pub enum ReplayOutcome {
+    /// No retention this frame: materialize the whole recording.
+    AllDynamic,
+    /// The interleaved retained/dynamic structure of this frame, in exact
+    /// tape order.
+    Spans(Vec<ReplaySpan>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommandReplayPhase {
+    Idle,
+    Snapshotted,
+    Captured,
+}
+
+/// Per-command replay state: the retained snapshot (previous stable form of
+/// the recording) and the segments carved out of it. This is the double
+/// buffer sol's plan sanctions — previous and current forms coexist only
+/// for comparison.
+#[derive(Debug)]
+pub struct CommandReplayState {
+    phase: CommandReplayPhase,
+    center: Point,
+    snapshot: CommandRecording,
+    snapshot_views: Vec<Option<ReplayView>>,
+    segments: Vec<CommandSegment>,
+    next_segment_id: u32,
+}
+
+impl Default for CommandReplayState {
+    fn default() -> Self {
+        Self {
+            phase: CommandReplayPhase::Idle,
+            center: Point::new(0.0, 0.0),
+            snapshot: CommandRecording::default(),
+            snapshot_views: Vec::new(),
+            segments: Vec::new(),
+            next_segment_id: 0,
+        }
+    }
+}
+
+impl CommandReplayState {
+    pub fn segments(&self) -> &[CommandSegment] {
+        &self.segments
+    }
+
+    /// Advances the state machine with this frame's recording and returns
+    /// what the frame can retain. Phases mirror the flat-list detector:
+    /// snapshot on the first sighting, partition into
+    /// transform-consistent chains on the second, verify per entry from the
+    /// third on. A structural collapse or coverage erosion re-snapshots;
+    /// correctness never depends on the detector being right about
+    /// stability — a wrong guess costs a frame of ordinary rendering.
+    pub fn advance(&mut self, current: &CommandRecording) -> ReplayOutcome {
+        if current.tape.len() < MIN_REPLAY_COMMAND_RECORDS {
+            self.retire();
+            return ReplayOutcome::AllDynamic;
+        }
+        let Some(center) = detect_center(current) else {
+            self.retire();
+            return ReplayOutcome::AllDynamic;
+        };
+        match self.phase {
+            CommandReplayPhase::Idle => {
+                self.take_snapshot(current, center);
+                ReplayOutcome::AllDynamic
+            }
+            CommandReplayPhase::Snapshotted => {
+                self.partition(current, center);
+                ReplayOutcome::AllDynamic
+            }
+            CommandReplayPhase::Captured => self.verify(current),
+        }
+    }
+
+    fn retire(&mut self) {
+        self.phase = CommandReplayPhase::Idle;
+        self.snapshot = CommandRecording::default();
+        self.snapshot_views.clear();
+        self.segments.clear();
+    }
+
+    fn take_snapshot(&mut self, current: &CommandRecording, center: Point) {
+        self.snapshot = current.clone();
+        self.snapshot_views = build_views(&self.snapshot);
+        self.center = center;
+        self.segments.clear();
+        self.phase = CommandReplayPhase::Snapshotted;
+    }
+
+    /// Splits the recording into maximal chains of consecutive entries that
+    /// moved from the snapshot by one shared similarity transform, then
+    /// re-snapshots at the current values so verification always compares
+    /// against the capture frame.
+    fn partition(&mut self, current: &CommandRecording, center: Point) {
+        let current_views = build_views(current);
+        let aligned = align_recordings(
+            current,
+            &current_views,
+            &self.snapshot,
+            &self.snapshot_views,
+        );
+        let mut chains: Vec<(usize, usize)> = Vec::new();
+        let mut i = 0;
+        while i < current_views.len() {
+            let (Some(view), Some(snapshot_view)) = (
+                current_views[i],
+                aligned[i].and_then(|j| self.snapshot_views[j]),
+            ) else {
+                i += 1;
+                continue;
+            };
+            // A chain anchor must pin rotation itself.
+            let Some((t, true)) =
+                pair_transform(current, view, &self.snapshot, snapshot_view, self.center)
+            else {
+                i += 1;
+                continue;
+            };
+            if match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
+                == RecordMatch::Mismatch
+            {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            let mut end = i + 1;
+            while end < current_views.len() {
+                let (Some(view), Some(snapshot_view)) = (
+                    current_views[end],
+                    aligned[end].and_then(|j| self.snapshot_views[j]),
+                ) else {
+                    break;
+                };
+                let Some((entry_t, pinned)) =
+                    pair_transform(current, view, &self.snapshot, snapshot_view, self.center)
+                else {
+                    break;
+                };
+                if !transforms_group(entry_t, pinned, t) {
+                    break;
+                }
+                if match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
+                    == RecordMatch::Mismatch
+                {
+                    break;
+                }
+                end += 1;
+            }
+            if end - start >= MIN_SEGMENT_RECORDS {
+                let mut piece_start = start;
+                while piece_start < end {
+                    let piece_end = (piece_start + MAX_SEGMENT_RECORDS).min(end);
+                    if piece_end - piece_start >= MIN_SEGMENT_RECORDS {
+                        chains.push((piece_start, piece_end));
+                    }
+                    piece_start = piece_end;
+                }
+            }
+            i = end.max(i + 1);
+        }
+
+        if chains.is_empty() {
+            self.take_snapshot(current, center);
+            return;
+        }
+        // Re-snapshot at current values: chain ranges are current-tape
+        // ranges, which the fresh snapshot preserves verbatim.
+        self.take_snapshot(current, center);
+        self.segments = chains
+            .into_iter()
+            .map(|range| {
+                let id = self.next_segment_id;
+                self.next_segment_id += 1;
+                CommandSegment {
+                    id,
+                    tape_start: range.0,
+                    tape_end: range.1,
+                    bounds: range_bounds(&self.snapshot, &self.snapshot_views, range),
+                }
+            })
+            .collect();
+        self.phase = CommandReplayPhase::Captured;
+    }
+
+    /// Verifies this frame's recording against the capture. Each segment
+    /// re-locates its anchor by searching forward from the cursor within
+    /// [`RESYNC_WINDOW`] — dynamic spans between segments change length
+    /// freely — probing a few entries under each candidate transform before
+    /// committing to a full-span verification (a wrong candidate from a
+    /// different ring fails the probe on its radii). A mismatching segment
+    /// dies whole for this frame (splits are a later refinement); eroded
+    /// coverage re-snapshots for the next frame.
+    fn verify(&mut self, current: &CommandRecording) -> ReplayOutcome {
+        let current_views = build_views(current);
+        let mut spans: Vec<ReplaySpan> = Vec::new();
+        let mut retained_records = 0usize;
+        let mut dead_segments: Vec<usize> = Vec::new();
+        let mut cursor = 0usize; // current-tape position covered so far
+        // How far the current tape has drifted from the capture tape, from
+        // the segments located so far. Self-similar rings make a linear
+        // scan treacherous — a shifted wrong anchor can pass any short
+        // probe — so candidates are tried by distance from the expected
+        // position, where the true anchor almost always sits.
+        let mut drift = 0isize;
+        for (segment_index, segment) in self.segments.iter().enumerate() {
+            let len = segment.tape_end - segment.tape_start;
+            let search_end = (cursor + RESYNC_WINDOW)
+                .min(current_views.len().saturating_sub(len - 1))
+                .max(cursor);
+            let expected_start = ((segment.tape_start as isize + drift).max(cursor as isize)
+                as usize)
+                .min(search_end.saturating_sub(1).max(cursor));
+            let candidates = (0..RESYNC_WINDOW).flat_map(|d| {
+                let after = expected_start.checked_add(d).filter(|s| *s < search_end);
+                let before = if d > 0 {
+                    expected_start
+                        .checked_sub(d)
+                        .filter(|s| *s >= cursor)
+                } else {
+                    None
+                };
+                after.into_iter().chain(before)
+            });
+            type Located = (usize, RecordTransform, Vec<(u32, Color)>);
+            let mut located: Option<Located> = None;
+            let mut attempts = 0usize;
+            'search: for start in candidates {
+                let (Some(view), Some(snapshot_view)) = (
+                    current_views[start],
+                    self.snapshot_views[segment.tape_start],
+                ) else {
+                    continue;
+                };
+                if !views_compatible(
+                    current,
+                    Some(view),
+                    &self.snapshot,
+                    Some(snapshot_view),
+                ) {
+                    continue;
+                }
+                let Some((t, _)) =
+                    pair_transform(current, view, &self.snapshot, snapshot_view, self.center)
+                else {
+                    continue;
+                };
+                // Cheap rejection of wrong anchors before the full span.
+                for probe in 0..ANCHOR_PROBE_RECORDS.min(len) {
+                    let (Some(view), Some(snapshot_view)) = (
+                        current_views[start + probe],
+                        self.snapshot_views[segment.tape_start + probe],
+                    ) else {
+                        continue 'search;
+                    };
+                    if match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
+                        == RecordMatch::Mismatch
+                    {
+                        continue 'search;
+                    }
+                }
+                // Committed: verify the whole span. A failure may still be a
+                // mislocated anchor (self-similar rings), so the search
+                // resumes — a bounded number of times.
+                let mut recolors: Vec<(u32, Color)> = Vec::new();
+                let mut failed = false;
+                for offset in 0..len {
+                    let (Some(view), Some(snapshot_view)) = (
+                        current_views[start + offset],
+                        self.snapshot_views[segment.tape_start + offset],
+                    ) else {
+                        failed = true;
+                        break;
+                    };
+                    match match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
+                    {
+                        RecordMatch::Exact => {}
+                        RecordMatch::Recolor => {
+                            let color = match view {
+                                ReplayView::Arc(a) => current.arcs[a].color,
+                                ReplayView::RoundRect(r) => current.round_rects[r].color,
+                            };
+                            recolors.push((offset as u32, color));
+                        }
+                        RecordMatch::Mismatch => {
+                            failed = true;
+                            break;
+                        }
+                    }
+                }
+                if failed {
+                    attempts += 1;
+                    if attempts >= MAX_COMMIT_ATTEMPTS {
+                        break 'search;
+                    }
+                    continue;
+                }
+                located = Some((start, t, recolors));
+                break;
+            }
+            let Some((span_start, t, recolors)) = located else {
+                dead_segments.push(segment_index);
+                continue;
+            };
+            drift = span_start as isize - segment.tape_start as isize;
+
+            if span_start > cursor {
+                spans.push(ReplaySpan::Dynamic {
+                    tape_start: cursor,
+                    tape_end: span_start,
+                });
+            }
+            retained_records += len;
+            spans.push(ReplaySpan::Retained {
+                segment: segment.id,
+                transform: t,
+                recolors,
+                bounds: t.apply_to_bounds(self.center, segment.bounds),
+            });
+            cursor = span_start + len;
+        }
+        if cursor < current.tape.len() {
+            spans.push(ReplaySpan::Dynamic {
+                tape_start: cursor,
+                tape_end: current.tape.len(),
+            });
+        }
+
+        for segment_index in dead_segments.into_iter().rev() {
+            self.segments.remove(segment_index);
+        }
+        let retained_total: usize = self
+            .segments
+            .iter()
+            .map(|segment| segment.tape_end - segment.tape_start)
+            .sum();
+        if retained_records == 0
+            || (retained_total as f32) < MIN_COVERAGE_FRACTION * current.tape.len() as f32
+        {
+            // Erosion: re-snapshot so the next two frames re-partition.
+            let center = self.center;
+            self.take_snapshot(current, center);
+            if retained_records == 0 {
+                return ReplayOutcome::AllDynamic;
+            }
+        }
+        ReplayOutcome::Spans(spans)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +1081,156 @@ mod tests {
             angle: 0.0,
         };
         assert!(transforms_group(unpinned, false, anchor));
+    }
+
+    use crate::geometry::{DrawScopeDefault, Size};
+    use crate::{Brush, DrawScope as _};
+
+    /// Records one MEGA-shaped frame: `rings` rings of `per_ring` arcs, each
+    /// ring rotated by its own step × `frame`, breathing scale applied to
+    /// every radius, plus `tail` dynamic circles whose count varies.
+    fn ring_frame(rings: usize, per_ring: usize, frame: usize, tail: usize) -> CommandRecording {
+        let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
+        let scale = 0.9994f32.powi(frame as i32);
+        for ring in 0..rings {
+            let step = 0.01 + ring as f32 * 0.005;
+            let rotation = step * frame as f32;
+            let radius = (60.0 + ring as f32 * 30.0) * scale;
+            for slot in 0..per_ring {
+                let start = slot as f32 * (std::f32::consts::TAU / per_ring as f32) + rotation;
+                scope.draw_annular_sector(
+                    Brush::solid(Color::WHITE),
+                    CENTER,
+                    radius * 0.8,
+                    radius,
+                    start,
+                    0.02,
+                );
+            }
+        }
+        for i in 0..tail {
+            // Dynamic entities: different positions every frame.
+            let x = 40.0 + (frame * 17 + i * 31) as f32 % 300.0;
+            scope.draw_circle(Brush::solid(Color::RED), Point::new(x, 50.0), 3.0);
+        }
+        scope.recorded().clone()
+    }
+
+    #[test]
+    fn ring_scene_reaches_retention_by_the_third_frame() {
+        let mut state = CommandReplayState::default();
+        assert!(matches!(
+            state.advance(&ring_frame(3, 300, 0, 10)),
+            ReplayOutcome::AllDynamic
+        ));
+        assert!(matches!(
+            state.advance(&ring_frame(3, 300, 1, 10)),
+            ReplayOutcome::AllDynamic
+        ));
+        assert!(!state.segments().is_empty(), "partition found the rings");
+
+        let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(3, 300, 2, 10)) else {
+            panic!("third frame should retain");
+        };
+        let retained: usize = spans
+            .iter()
+            .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
+            .count();
+        assert!(retained >= 3, "each ring retains, got {spans:?}");
+        // The tail circles are dynamic.
+        assert!(spans
+            .iter()
+            .any(|span| matches!(span, ReplaySpan::Dynamic { .. })));
+        // Retained spans carry the per-ring rotations, not a shared one.
+        let transforms: Vec<RecordTransform> = spans
+            .iter()
+            .filter_map(|span| match span {
+                ReplaySpan::Retained { transform, .. } => Some(*transform),
+                _ => None,
+            })
+            .collect();
+        assert!(transforms.windows(2).any(|w| w[0].angle != w[1].angle));
+    }
+
+    #[test]
+    fn entity_churn_between_frames_still_retains_rings() {
+        let mut state = CommandReplayState::default();
+        state.advance(&ring_frame(2, 400, 0, 8));
+        state.advance(&ring_frame(2, 400, 1, 13)); // tail length changed
+        let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(2, 400, 2, 5)) else {
+            panic!("churned tail must not break ring retention");
+        };
+        let retained_records: usize = spans
+            .iter()
+            .filter_map(|span| match span {
+                ReplaySpan::Retained { .. } => Some(1),
+                _ => None,
+            })
+            .sum();
+        assert!(retained_records >= 2);
+    }
+
+    #[test]
+    fn recolors_are_patches_not_mismatches() {
+        let recolored_frame = |frame: usize| {
+            let mut recording = ring_frame(1, 600, frame, 0);
+            // Twinkle: 40 dots change color every frame, geometry untouched.
+            for i in (0..recording.arcs.len()).step_by(15) {
+                recording.arcs[i].color = if frame.is_multiple_of(2) {
+                    Color::rgb(1.0, 0.5, 0.1)
+                } else {
+                    Color::rgb(0.1, 0.5, 1.0)
+                };
+            }
+            recording
+        };
+        let mut state = CommandReplayState::default();
+        state.advance(&recolored_frame(0));
+        state.advance(&recolored_frame(1));
+        let ReplayOutcome::Spans(spans) = state.advance(&recolored_frame(2)) else {
+            panic!("twinkles must not break retention");
+        };
+        let recolor_count: usize = spans
+            .iter()
+            .filter_map(|span| match span {
+                ReplaySpan::Retained { recolors, .. } => Some(recolors.len()),
+                _ => None,
+            })
+            .sum();
+        assert!(recolor_count >= 30, "twinkles surface as patches");
+    }
+
+    #[test]
+    fn geometry_change_kills_only_its_segment() {
+        let mut state = CommandReplayState::default();
+        state.advance(&ring_frame(3, 300, 0, 0));
+        state.advance(&ring_frame(3, 300, 1, 0));
+        let mut broken = ring_frame(3, 300, 2, 0);
+        // A brick hit: one entry in the middle ring changes sweep.
+        broken.arcs[450].sweep_angle *= 3.0;
+        let ReplayOutcome::Spans(spans) = state.advance(&broken) else {
+            panic!("one changed entry must not drop the whole command");
+        };
+        let retained: usize = spans
+            .iter()
+            .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
+            .count();
+        assert!(
+            retained >= 2,
+            "the untouched rings keep retaining, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn small_commands_are_not_watched() {
+        let mut state = CommandReplayState::default();
+        for frame in 0..4 {
+            assert!(matches!(
+                state.advance(&ring_frame(1, 40, frame, 0)),
+                ReplayOutcome::AllDynamic
+            ));
+        }
+        assert!(state.segments().is_empty());
     }
 
     #[test]
