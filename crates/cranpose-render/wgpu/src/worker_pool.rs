@@ -157,6 +157,29 @@ impl FrameWorkerPool {
             }
         });
     }
+
+    /// `out` becomes `input.iter().map(f).collect()`, fanned out like
+    /// [`FrameWorkerPool::map_into`] but writing straight into the vec's
+    /// spare capacity — a watch-scale run's output buffer never pays a
+    /// placeholder-fill pass that the map immediately overwrites.
+    pub(crate) fn map_fill<I, O, F>(&self, input: &[I], out: &mut Vec<O>, f: F)
+    where
+        I: Sync,
+        O: Send,
+        F: Fn(&I) -> O + Sync,
+    {
+        use std::mem::MaybeUninit;
+        out.clear();
+        out.reserve(input.len());
+        let spare = &mut out.spare_capacity_mut()[..input.len()];
+        self.map_into(input, spare, |item| MaybeUninit::new(f(item)));
+        // SAFETY: `map_into` wrote every slot of `spare` — the serial branch
+        // zips the full range and the lane chunks partition `0..len` — so the
+        // first `input.len()` elements are initialized. If `f` panics this
+        // line is never reached: the vec stays empty and already-written
+        // slots leak rather than drop uninitialized memory.
+        unsafe { out.set_len(input.len()) };
+    }
 }
 
 /// Below this many items the per-item work cannot amortize even a parked
@@ -249,5 +272,20 @@ mod tests {
         let mut output = vec![0u32; 10];
         pool.map_into(&input, &mut output, |value| value + 7);
         assert_eq!(output, (7..17).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn map_fill_matches_map_into_and_reuses_capacity() {
+        let pool = FrameWorkerPool::new(4);
+        let input: Vec<u64> = (0..10_000).collect();
+        let mut out: Vec<String> = Vec::new();
+        pool.map_fill(&input, &mut out, |value| format!("{value}"));
+        assert_eq!(out.len(), input.len());
+        assert!(out.iter().enumerate().all(|(i, v)| *v == format!("{i}")));
+        let capacity = out.capacity();
+        pool.map_fill(&input[..500], &mut out, |value| format!("{value}"));
+        assert_eq!(out.len(), 500);
+        assert_eq!(out.capacity(), capacity, "refill must not shed capacity");
+        assert!(out.iter().enumerate().all(|(i, v)| *v == format!("{i}")));
     }
 }

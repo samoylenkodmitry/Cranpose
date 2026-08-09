@@ -1004,9 +1004,7 @@ fn flush_shape_run_parallel(
     let visual_clip = context.visual_clip;
     SHAPE_RUN_SCRATCH.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
-        scratch.clear();
-        scratch.resize_with(run.len(), || None);
-        crate::worker_pool::frame_pool().map_into(run, &mut scratch, |entry| {
+        crate::worker_pool::frame_pool().map_fill(run, &mut scratch, |entry| {
             emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion)
         });
         for slot in scratch.iter_mut() {
@@ -1596,8 +1594,8 @@ fn build_replay_views<'r, 'e>(
 where
     'e: 'r,
 {
-    let mut views: Vec<Option<(SnapshotShape, &Brush)>> = vec![None; run.len()];
-    crate::worker_pool::frame_pool().map_into(run, &mut views, replay_entry_view);
+    let mut views: Vec<Option<(SnapshotShape, &Brush)>> = Vec::new();
+    crate::worker_pool::frame_pool().map_fill(run, &mut views, replay_entry_view);
     views
 }
 
@@ -2299,8 +2297,19 @@ fn collect_layer_contents_into<'a>(
     // Consecutive plain shape draws accumulate here and emit as one batch
     // instead of one bookkept scene push at a time. Anything else (text,
     // images, child layers) flushes the run first so z order is exactly what
-    // the per-primitive path would have produced.
-    let mut shape_run: Vec<ShapeRunEntry<'_>> = Vec::new();
+    // the per-primitive path would have produced. Capacity is an upper bound
+    // on any run this layer can produce, so a watch-scale run never pays the
+    // doubling-realloc ladder mid-collection.
+    let shape_run_bound: usize = layer
+        .children
+        .iter()
+        .map(|child| match child {
+            RenderNode::DrawRun(run) => run.primitives.len(),
+            RenderNode::Primitive(_) => 1,
+            _ => 0,
+        })
+        .sum();
+    let mut shape_run: Vec<ShapeRunEntry<'_>> = Vec::with_capacity(shape_run_bound);
 
     for child in &layer.children {
         match child {
