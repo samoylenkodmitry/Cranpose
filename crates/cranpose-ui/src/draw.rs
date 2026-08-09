@@ -31,6 +31,18 @@ pub fn command_draw_scope_reusing(size: Size, storage: Vec<DrawPrimitive>) -> Dr
     DrawScopeDefault::with_text_measurer_reusing(size, AppContextTextMeasurer::shared(), storage)
 }
 
+/// The full retained form of [`command_draw_scope`]: the compact recording
+/// buffers and the materialization target both come back to the caller via
+/// [`DrawScopeDefault::finish`], so a command re-recording every frame
+/// allocates nothing in the steady state.
+pub fn command_draw_scope_retained(
+    size: Size,
+    recording: cranpose_ui_graphics::CommandRecording,
+    out: Vec<DrawPrimitive>,
+) -> DrawScopeDefault {
+    DrawScopeDefault::with_recording(size, Some(AppContextTextMeasurer::shared()), recording, out)
+}
+
 #[derive(Default, Clone)]
 pub struct DrawCacheBuilder {
     behind: Vec<DrawCommandFn>,

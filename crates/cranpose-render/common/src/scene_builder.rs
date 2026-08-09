@@ -21,7 +21,7 @@ use crate::graph::{
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{primitives_for_placement_reusing, DrawPlacement};
+use crate::style_shared::{primitives_for_placement_retained, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
@@ -744,6 +744,10 @@ fn build_layer_node_from_data(
 struct RecorderSlot {
     generation: u64,
     handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
+    /// The command's compact recording buffers (tape + typed stores). Sole
+    /// owner is always the registry or the in-flight scope, never the graph,
+    /// so unlike `handles` these need no sharing discipline.
+    recording: cranpose_ui_graphics::CommandRecording,
 }
 
 thread_local! {
@@ -772,38 +776,48 @@ fn bump_recording_generation() {
     }
 }
 
-fn acquire_recording(id: DrawCommandId) -> Vec<cranpose_ui_graphics::DrawPrimitive> {
+fn acquire_recording(
+    id: DrawCommandId,
+) -> (
+    cranpose_ui_graphics::CommandRecording,
+    Vec<cranpose_ui_graphics::DrawPrimitive>,
+) {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(slot) = map.get_mut(&id) else {
-            return Vec::new();
+            return (cranpose_ui_graphics::CommandRecording::default(), Vec::new());
         };
+        let recording = std::mem::take(&mut slot.recording);
         for handle in &mut slot.handles {
             if handle
                 .as_ref()
                 .is_some_and(|shared| Rc::strong_count(shared) == 1)
             {
                 let shared = handle.take().expect("checked some above");
-                return Rc::try_unwrap(shared).expect("sole owner checked above");
+                let storage = Rc::try_unwrap(shared).expect("sole owner checked above");
+                return (recording, storage);
             }
         }
-        Vec::new()
+        (recording, Vec::new())
     })
 }
 
 fn publish_recording(
     id: DrawCommandId,
+    recording: cranpose_ui_graphics::CommandRecording,
     primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
 ) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
     let shared = Rc::new(primitives);
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
-        let slot = map.entry(id).or_insert(RecorderSlot {
+        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
             generation,
             handles: [None, None],
+            recording: cranpose_ui_graphics::CommandRecording::default(),
         });
         slot.generation = generation;
+        slot.recording = recording;
         // Newest first; the displaced oldest handle drops out of the
         // registry, and its buffer lives on only while a graph node holds it.
         slot.handles[1] = slot.handles[0].take();
@@ -826,8 +840,9 @@ fn draw_nodes(
             command_index: command_index as u32,
             placement,
         };
-        let storage = acquire_recording(id);
-        let primitives = primitives_for_placement_reusing(command, placement, size, storage);
+        let (recording, storage) = acquire_recording(id);
+        let (primitives, recording) =
+            primitives_for_placement_retained(command, placement, size, recording, storage);
         // An empty recording with no earned capacity is what a command's
         // mismatched placement pass produces every rebuild; keeping those out
         // of the registry halves its population. An empty recording WITH
@@ -836,7 +851,7 @@ fn draw_nodes(
         if primitives.is_empty() && primitives.capacity() == 0 {
             continue;
         }
-        let shared = publish_recording(id, primitives);
+        let shared = publish_recording(id, recording, primitives);
         if shared.is_empty() {
             continue;
         }

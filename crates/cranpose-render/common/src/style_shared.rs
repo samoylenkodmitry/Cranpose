@@ -3,8 +3,8 @@ use std::rc::Rc;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{Brush, DrawCommand, DrawCommandFn, LayoutNodeData, ModifierNodeSlices};
 use cranpose_ui_graphics::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, CornerRadii, DrawPrimitive, DrawScope as _,
-    GraphicsLayer, Point, RoundedCornerShape, Size,
+    BlendMode, Color, ColorFilter, CommandRecording, CompositingStrategy, CornerRadii,
+    DrawPrimitive, FinishedRecording, GraphicsLayer, Point, RoundedCornerShape, Size,
 };
 
 use crate::layer_transform::{layer_scale_x, layer_scale_y, layer_uniform_scale};
@@ -227,6 +227,20 @@ pub fn primitives_for_placement_reusing(
     size: Size,
     storage: Vec<DrawPrimitive>,
 ) -> Vec<DrawPrimitive> {
+    primitives_for_placement_retained(command, placement, size, CommandRecording::default(), storage)
+        .0
+}
+
+/// The full retained form: the compact recording buffers come from and
+/// return to the caller alongside the materialized primitives, so a command
+/// re-recording every frame allocates nothing in the steady state.
+pub fn primitives_for_placement_retained(
+    command: &DrawCommand,
+    placement: DrawPlacement,
+    size: Size,
+    recording: CommandRecording,
+    storage: Vec<DrawPrimitive>,
+) -> (Vec<DrawPrimitive>, CommandRecording) {
     // `markers` is the recording scope's own count of `Content` markers,
     // maintained while the command records (`draw_content()` calls and pushed
     // batches both keep it current), so it is authoritative: zero means the
@@ -289,26 +303,39 @@ pub fn primitives_for_placement_reusing(
 
     // The command records into a scope this consumer owns, so the marker
     // count travels with the recording instead of through a side channel.
-    let record = |func: &DrawCommandFn| {
-        let mut scope = cranpose_ui::command_draw_scope_reusing(size, storage);
+    fn record_into(
+        func: &DrawCommandFn,
+        size: Size,
+        recording: CommandRecording,
+        storage: Vec<DrawPrimitive>,
+    ) -> FinishedRecording {
+        let mut scope = cranpose_ui::command_draw_scope_retained(size, recording, storage);
         func(&mut scope);
-        let markers = scope.content_marker_count();
-        (scope.into_primitives(), markers)
-    };
+        scope.finish()
+    }
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let (primitives, markers) = record(func);
-            filter_content(primitives, markers)
+            let finished = record_into(func, size, recording, storage);
+            (
+                filter_content(finished.primitives, finished.content_markers),
+                finished.recording,
+            )
         }
         (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let (primitives, markers) = record(func);
-            filter_content(primitives, markers)
+            let finished = record_into(func, size, recording, storage);
+            (
+                filter_content(finished.primitives, finished.content_markers),
+                finished.recording,
+            )
         }
         (_, DrawCommand::WithContent(func)) => {
-            let (primitives, markers) = record(func);
-            split_with_content(primitives, placement, markers)
+            let finished = record_into(func, size, recording, storage);
+            (
+                split_with_content(finished.primitives, placement, finished.content_markers),
+                finished.recording,
+            )
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), recording),
     }
 }
 

@@ -831,10 +831,94 @@ pub fn align_text_block(rect: Rect, measurement: TextMeasurement, style: &TextSt
     Point::new(x, y)
 }
 
+/// Which typed store holds one recorded draw. The tape preserves the exact
+/// draw order across the per-kind stores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum RecordKind {
+    SolidRect,
+    SolidRoundRect,
+    SolidArc,
+    Other,
+}
+
+/// A solid `SrcOver` rect, recorded as raw values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidRectRecord {
+    pub rect: Rect,
+    pub color: Color,
+    pub stroke: Option<Stroke>,
+}
+
+/// A solid `SrcOver` rounded rect (also the lowering of `draw_circle`),
+/// recorded as raw values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidRoundRectRecord {
+    pub rect: Rect,
+    pub radii: CornerRadii,
+    pub color: Color,
+    pub stroke: Option<Stroke>,
+}
+
+/// A solid `SrcOver` arc, recorded as the RAW draw parameters — before
+/// band resolution, tight-bounds trigonometry, or the degeneracy check,
+/// all of which happen at materialization. Retention verification must be
+/// able to compare what the app said, ahead of everything deriving from it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SolidArcRecord {
+    pub center: Point,
+    pub radius: f32,
+    pub start_angle: f32,
+    pub sweep_angle: f32,
+    pub inner_radius: f32,
+    pub color: Color,
+    pub stroke: Option<Stroke>,
+}
+
+/// One draw command's recording in compact typed form: pure-numeric records
+/// for the common solid shapes (no `Brush` destructor branch, roughly half
+/// the bytes of the `DrawPrimitive` they materialize into) and ordinary
+/// primitives for everything else, with `tape` preserving global order. The
+/// index a tape entry implies into its per-kind store is the stable compact
+/// handle for the rare resource-bearing entries (`others` holds gradients,
+/// images, text, blends, and content markers whole).
+#[derive(Debug, Default)]
+pub struct CommandRecording {
+    tape: Vec<RecordKind>,
+    rects: Vec<SolidRectRecord>,
+    round_rects: Vec<SolidRoundRectRecord>,
+    arcs: Vec<SolidArcRecord>,
+    others: Vec<DrawPrimitive>,
+}
+
+impl CommandRecording {
+    fn clear(&mut self) {
+        self.tape.clear();
+        self.rects.clear();
+        self.round_rects.clear();
+        self.arcs.clear();
+        self.others.clear();
+    }
+}
+
+/// What [`DrawScopeDefault::finish`] hands back: the materialized primitives,
+/// the marker count that travels with them, and the recording buffers so a
+/// retaining caller can lend them to the same command's next recording.
+pub struct FinishedRecording {
+    pub primitives: Vec<DrawPrimitive>,
+    pub content_markers: u32,
+    pub recording: CommandRecording,
+}
+
 #[derive(Default)]
 pub struct DrawScopeDefault {
     size: Size,
-    primitives: Vec<DrawPrimitive>,
+    /// The compact recording every draw call writes into; materialized into
+    /// `out` once, when the scope finishes.
+    rec: CommandRecording,
+    /// Materialization target, owned by the consumer across frames (see
+    /// [`Self::with_recording`]); untouched until [`Self::finish`].
+    out: Vec<DrawPrimitive>,
     /// How many [`DrawPrimitive::Content`] markers this scope has recorded.
     /// Consumers splitting a command around its content would otherwise have
     /// to re-scan thousands of just-recorded primitives to learn "none".
@@ -881,12 +965,7 @@ fn note_recorded_primitive_count(size: Size, count: usize) {
 
 impl DrawScopeDefault {
     pub fn new(size: Size) -> Self {
-        Self {
-            size,
-            primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
-            content_markers: 0,
-            text_measurer: None,
-        }
+        Self::with_recording(size, None, CommandRecording::default(), Vec::new())
     }
 
     /// A scope that measures text with the app's fonts.
@@ -894,12 +973,12 @@ impl DrawScopeDefault {
     /// The framework calls this for every draw closure it runs; `new` exists
     /// for callers that never draw text.
     pub fn with_text_measurer(size: Size, text_measurer: Rc<dyn DrawTextMeasurer>) -> Self {
-        Self {
+        Self::with_recording(
             size,
-            primitives: Vec::with_capacity(recorded_primitive_capacity(size)),
-            content_markers: 0,
-            text_measurer: Some(text_measurer),
-        }
+            Some(text_measurer),
+            CommandRecording::default(),
+            Vec::new(),
+        )
     }
 
     /// Like [`with_text_measurer`](Self::with_text_measurer), but records
@@ -910,14 +989,33 @@ impl DrawScopeDefault {
     pub fn with_text_measurer_reusing(
         size: Size,
         text_measurer: Rc<dyn DrawTextMeasurer>,
-        mut storage: Vec<DrawPrimitive>,
+        storage: Vec<DrawPrimitive>,
     ) -> Self {
-        storage.clear();
+        Self::with_recording(
+            size,
+            Some(text_measurer),
+            CommandRecording::default(),
+            storage,
+        )
+    }
+
+    /// The full retained-recording form: compact recording buffers AND the
+    /// materialization target both come from the caller, so a command that
+    /// re-records every frame allocates nothing in the steady state.
+    pub fn with_recording(
+        size: Size,
+        text_measurer: Option<Rc<dyn DrawTextMeasurer>>,
+        mut recording: CommandRecording,
+        out: Vec<DrawPrimitive>,
+    ) -> Self {
+        recording.clear();
+        recording.tape.reserve(recorded_primitive_capacity(size));
         Self {
             size,
-            primitives: storage,
+            rec: recording,
+            out,
             content_markers: 0,
-            text_measurer: Some(text_measurer),
+            text_measurer,
         }
     }
 
@@ -937,17 +1035,109 @@ impl DrawScopeDefault {
             .iter()
             .filter(|primitive| matches!(primitive, DrawPrimitive::Content))
             .count() as u32;
-        self.primitives.extend(primitives);
+        self.rec
+            .tape
+            .extend(std::iter::repeat_n(RecordKind::Other, primitives.len()));
+        self.rec.others.extend(primitives);
+    }
+
+    /// Materializes the recording into the `out` storage and hands both
+    /// back, plus the compact buffers for the caller to retain. This — not
+    /// recording — is where solid records become `DrawPrimitive`s and where
+    /// arc bands, tight bounds, and the degeneracy drop happen, so the
+    /// output is exactly what recording used to produce directly.
+    pub fn finish(mut self) -> FinishedRecording {
+        let mut out = std::mem::take(&mut self.out);
+        out.clear();
+        out.reserve(self.rec.tape.len());
+        {
+            let mut rects = self.rec.rects.iter();
+            let mut round_rects = self.rec.round_rects.iter();
+            let mut arcs = self.rec.arcs.iter();
+            let mut others = self.rec.others.drain(..);
+            for kind in &self.rec.tape {
+                match kind {
+                    RecordKind::SolidRect => {
+                        let record = rects.next().expect("tape/rects in sync");
+                        out.push(DrawPrimitive::Rect {
+                            rect: record.rect,
+                            brush: Brush::Solid(record.color),
+                            stroke: record.stroke,
+                        });
+                    }
+                    RecordKind::SolidRoundRect => {
+                        let record = round_rects.next().expect("tape/round_rects in sync");
+                        out.push(DrawPrimitive::RoundRect {
+                            rect: record.rect,
+                            brush: Brush::Solid(record.color),
+                            radii: record.radii,
+                            stroke: record.stroke,
+                        });
+                    }
+                    RecordKind::SolidArc => {
+                        let record = arcs.next().expect("tape/arcs in sync");
+                        if let Some(primitive) = materialize_solid_arc(record) {
+                            out.push(primitive);
+                        }
+                    }
+                    RecordKind::Other => {
+                        out.push(others.next().expect("tape/others in sync"));
+                    }
+                }
+            }
+        }
+        self.rec.clear();
+        note_recorded_primitive_count(self.size, out.len());
+        FinishedRecording {
+            primitives: out,
+            content_markers: self.content_markers,
+            recording: self.rec,
+        }
+    }
+
+    fn push_other(&mut self, primitive: DrawPrimitive) {
+        self.rec.tape.push(RecordKind::Other);
+        self.rec.others.push(primitive);
     }
 
     fn push_blended_primitive(&mut self, primitive: DrawPrimitive, blend_mode: BlendMode) {
-        if blend_mode == BlendMode::SrcOver {
-            self.primitives.push(primitive);
-        } else {
-            self.primitives.push(DrawPrimitive::Blend {
+        if blend_mode != BlendMode::SrcOver {
+            self.push_other(DrawPrimitive::Blend {
                 primitive: Box::new(primitive),
                 blend_mode,
             });
+            return;
+        }
+        match primitive {
+            DrawPrimitive::Rect {
+                rect,
+                brush: Brush::Solid(color),
+                stroke,
+            } => {
+                self.rec.tape.push(RecordKind::SolidRect);
+                self.rec
+                    .rects
+                    .push(SolidRectRecord {
+                        rect,
+                        color,
+                        stroke,
+                    });
+            }
+            DrawPrimitive::RoundRect {
+                rect,
+                brush: Brush::Solid(color),
+                radii,
+                stroke,
+            } => {
+                self.rec.tape.push(RecordKind::SolidRoundRect);
+                self.rec.round_rects.push(SolidRoundRectRecord {
+                    rect,
+                    radii,
+                    color,
+                    stroke,
+                });
+            }
+            other => self.push_other(other),
         }
     }
 
@@ -969,6 +1159,24 @@ impl DrawScopeDefault {
         inner_radius: f32,
         blend_mode: BlendMode,
     ) {
+        // The common case records raw parameters only; band resolution,
+        // tight bounds, and the degeneracy drop run at materialization
+        // (see [`materialize_solid_arc`]), producing identical output.
+        if blend_mode == BlendMode::SrcOver {
+            if let Brush::Solid(color) = brush {
+                self.rec.tape.push(RecordKind::SolidArc);
+                self.rec.arcs.push(SolidArcRecord {
+                    center,
+                    radius,
+                    start_angle,
+                    sweep_angle,
+                    inner_radius,
+                    color,
+                    stroke,
+                });
+                return;
+            }
+        }
         let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
         let geometry = ArcGeometry::new(
             center,
@@ -997,6 +1205,35 @@ impl DrawScopeDefault {
     }
 }
 
+/// The deferred half of the solid-arc fast path: exactly the lowering
+/// [`DrawScopeDefault::push_arc`] applies to every other arc, run when the
+/// recording materializes instead of when the app draws. `None` is the
+/// degenerate drop.
+fn materialize_solid_arc(record: &SolidArcRecord) -> Option<DrawPrimitive> {
+    let (band_inner, band_outer, cap) = arc_band(record.radius, record.inner_radius, record.stroke);
+    let geometry = ArcGeometry::new(
+        record.center,
+        band_inner,
+        band_outer,
+        record.start_angle,
+        record.sweep_angle,
+        cap,
+    );
+    if geometry.is_degenerate() {
+        return None;
+    }
+    Some(DrawPrimitive::Arc {
+        rect: geometry.bounds(),
+        brush: Brush::Solid(record.color),
+        center: record.center,
+        radius: record.radius,
+        start_angle: record.start_angle,
+        sweep_angle: record.sweep_angle,
+        stroke: record.stroke,
+        inner_radius: record.inner_radius,
+    })
+}
+
 impl DrawScope for DrawScopeDefault {
     fn size(&self) -> Size {
         self.size
@@ -1004,7 +1241,7 @@ impl DrawScope for DrawScopeDefault {
 
     fn draw_content(&mut self) {
         self.content_markers += 1;
-        self.primitives.push(DrawPrimitive::Content);
+        self.push_other(DrawPrimitive::Content);
     }
 
     fn draw_rect(&mut self, brush: Brush) {
@@ -1487,7 +1724,7 @@ impl DrawScope for DrawScopeDefault {
             return;
         };
 
-        self.primitives.push(DrawPrimitive::Image {
+        self.push_other(DrawPrimitive::Image {
             rect: Rect {
                 x: origin.x,
                 y: origin.y,
@@ -1529,18 +1766,16 @@ impl DrawScope for DrawScopeDefault {
         if !origin.x.is_finite() || !origin.y.is_finite() {
             return;
         }
-        self.primitives
-            .push(DrawPrimitive::Text(Box::new(TextPrimitive {
-                rect: Rect::from_origin_size(origin, measurement.size),
-                text: shared_text_str(text),
-                style: style.clone(),
-                color,
-            })));
+        self.push_other(DrawPrimitive::Text(Box::new(TextPrimitive {
+            rect: Rect::from_origin_size(origin, measurement.size),
+            text: shared_text_str(text),
+            style: style.clone(),
+            color,
+        })));
     }
 
     fn into_primitives(self) -> Vec<DrawPrimitive> {
-        note_recorded_primitive_count(self.size, self.primitives.len());
-        self.primitives
+        self.finish().primitives
     }
 }
 
@@ -1561,6 +1796,149 @@ fn solid_fill_color(brush: &Brush) -> Option<Color> {
 mod tests {
     use super::*;
     use crate::{Color, FontStyle, FontWeight, ImageBitmap, RenderEffect};
+
+    /// The compact recorder routes solid `SrcOver` shapes through typed
+    /// records and everything else through ordinary primitives; the tape
+    /// must reassemble the exact sequence recording used to produce
+    /// directly, arc lowering and degeneracy drops included.
+    #[test]
+    fn compact_recording_materializes_in_recorded_order() {
+        let size = Size::new(100.0, 100.0);
+        let solid = Brush::solid(Color::WHITE);
+        let gradient = Brush::vertical_gradient(vec![Color::RED, Color::BLUE], 0.0, 100.0);
+        let center = Point::new(50.0, 50.0);
+        let stroke = Stroke::new(4.0);
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let batch = vec![
+            DrawPrimitive::Content,
+            DrawPrimitive::Rect {
+                rect,
+                brush: solid.clone(),
+                stroke: None,
+            },
+        ];
+
+        // Interleave every routing path.
+        let record = |scope: &mut DrawScopeDefault| {
+            scope.draw_rect_at(rect, solid.clone());
+            scope.draw_arc(solid.clone(), center, 30.0, 0.5, 1.5, stroke);
+            scope.draw_rect_at(rect, gradient.clone());
+            scope.draw_circle(solid.clone(), center, 12.0);
+            scope.draw_arc(solid.clone(), center, 30.0, 0.5, 0.0, stroke); // degenerate: dropped
+            scope.draw_rect_at_blend(rect, solid.clone(), BlendMode::Plus);
+            scope.draw_content();
+            scope.draw_annular_sector(gradient.clone(), center, 10.0, 20.0, 0.0, 2.0);
+            scope.push_recorded(batch.clone());
+        };
+
+        let mut compact = DrawScopeDefault::new(size);
+        record(&mut compact);
+        let finished = compact.finish();
+
+        // The expected sequence, built through the primitives the ordinary
+        // lowering produces (the non-solid arc still takes that path, so it
+        // serves as its own reference for the solid one's geometry).
+        let arc_via_ordinary = |brush: Brush, radius: f32, start: f32, sweep: f32| {
+            let mut scope = DrawScopeDefault::new(size);
+            scope.draw_arc(brush, center, radius, start, sweep, stroke);
+            scope.into_primitives().remove(0)
+        };
+        let expected = vec![
+            DrawPrimitive::Rect {
+                rect,
+                brush: solid.clone(),
+                stroke: None,
+            },
+            arc_via_ordinary(solid.clone(), 30.0, 0.5, 1.5),
+            DrawPrimitive::Rect {
+                rect,
+                brush: gradient.clone(),
+                stroke: None,
+            },
+            DrawPrimitive::RoundRect {
+                rect: Rect {
+                    x: center.x - 12.0,
+                    y: center.y - 12.0,
+                    width: 24.0,
+                    height: 24.0,
+                },
+                brush: solid.clone(),
+                radii: CornerRadii::uniform(12.0),
+                stroke: None,
+            },
+            DrawPrimitive::Blend {
+                primitive: Box::new(DrawPrimitive::Rect {
+                    rect,
+                    brush: solid.clone(),
+                    stroke: None,
+                }),
+                blend_mode: BlendMode::Plus,
+            },
+            DrawPrimitive::Content,
+            {
+                let mut scope = DrawScopeDefault::new(size);
+                scope.draw_annular_sector(gradient.clone(), center, 10.0, 20.0, 0.0, 2.0);
+                scope.into_primitives().remove(0)
+            },
+            DrawPrimitive::Content,
+            DrawPrimitive::Rect {
+                rect,
+                brush: solid.clone(),
+                stroke: None,
+            },
+        ];
+        assert_eq!(finished.primitives, expected);
+        assert_eq!(finished.content_markers, 2);
+    }
+
+    /// A recording that reuses another command's buffers (junk capacity in
+    /// every store) must be byte-identical to one recorded fresh.
+    #[test]
+    fn reused_recording_buffers_record_identically_to_fresh() {
+        let size = Size::new(64.0, 64.0);
+        let record = |scope: &mut DrawScopeDefault| {
+            scope.draw_circle(Brush::solid(Color::RED), Point::new(32.0, 32.0), 10.0);
+            scope.draw_arc(
+                Brush::solid(Color::BLUE),
+                Point::new(32.0, 32.0),
+                20.0,
+                0.0,
+                3.0,
+                Stroke::new(2.0),
+            );
+        };
+
+        let mut fresh = DrawScopeDefault::new(size);
+        record(&mut fresh);
+        let fresh = fresh.finish();
+
+        // Dirty the buffers with an unrelated recording first.
+        let mut dirty = DrawScopeDefault::new(size);
+        dirty.draw_rect(Brush::solid(Color::BLACK));
+        dirty.draw_content();
+        dirty.draw_arc(
+            Brush::solid(Color::WHITE),
+            Point::new(1.0, 1.0),
+            5.0,
+            1.0,
+            1.0,
+            Stroke::new(1.0),
+        );
+        let dirty = dirty.finish();
+
+        let mut reused =
+            DrawScopeDefault::with_recording(size, None, dirty.recording, dirty.primitives);
+        record(&mut reused);
+        let reused = reused.finish();
+
+        assert_eq!(fresh.primitives, reused.primitives);
+        assert_eq!(fresh.content_markers, reused.content_markers);
+    }
 
     #[test]
     fn redrawing_the_same_text_shares_one_str_allocation() {

@@ -60,8 +60,8 @@ pub use bring_into_view::{
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{
-    command_draw_scope, command_draw_scope_reusing, execute_draw_commands, DrawCacheBuilder,
-    DrawCommand, DrawCommandFn,
+    command_draw_scope, command_draw_scope_retained, command_draw_scope_reusing,
+    execute_draw_commands, DrawCacheBuilder, DrawCommand, DrawCommandFn,
 };
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
