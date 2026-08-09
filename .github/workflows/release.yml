@@ -181,7 +181,10 @@ jobs:
 
       - name: Build APK
         working-directory: apps/android-demo/android
-        run: ./gradlew :app:assembleRelease -PrustFastRelease=false
+        # The self-hosted runner is shared across release jobs. A single-use
+        # daemon inherits this step's toolchain environment instead of attaching
+        # to an unrelated Gradle daemon with stale process state.
+        run: ./gradlew --no-daemon :app:assembleRelease -PrustFastRelease=false
 
       - name: Attach to release
         uses: softprops/action-gh-release@v3
