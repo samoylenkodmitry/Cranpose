@@ -26,9 +26,7 @@ use cranpose_render_common::primitive_emit::{
     arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
     round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_ui_graphics::{
-    BlendMode, Brush, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke,
-};
+use cranpose_ui_graphics::{BlendMode, Brush, DrawPrimitive, GraphicsLayer, Point, Rect};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -703,109 +701,7 @@ struct LocalPrimitiveContext<'a> {
     text_snap_anchor: Option<SnapAnchor>,
 }
 
-/// The shape payload of one run entry, extracted from its [`DrawPrimitive`]
-/// when the run is collected. The small fields are copied and the brush is
-/// borrowed, so the entry holds no `Rc`-bearing enum variant and the whole
-/// run is `Send` — which is what lets [`flush_shape_run`] fan the emit math
-/// out across threads on hardware where that wins.
-enum ShapeRunShape<'a> {
-    Rect {
-        rect: Rect,
-        brush: &'a Brush,
-        stroke: Option<Stroke>,
-    },
-    RoundRect {
-        rect: Rect,
-        brush: &'a Brush,
-        radii: CornerRadii,
-        stroke: Option<Stroke>,
-    },
-    Arc {
-        rect: Rect,
-        brush: &'a Brush,
-        center: Point,
-        radius: f32,
-        start_angle: f32,
-        sweep_angle: f32,
-        stroke: Option<Stroke>,
-        inner_radius: f32,
-    },
-}
-
-/// One accumulated draw in a shape run: the extracted shape, its blend mode
-/// (single-level `Blend` wrappers resolve here), and the per-draw clip its
-/// graph node carried (`None` for every [`DrawRunNode`] draw — a run node
-/// records a whole canvas command, which never clips per primitive).
-struct ShapeRunEntry<'a> {
-    shape: ShapeRunShape<'a>,
-    blend_mode: BlendMode,
-    clip: Option<Rect>,
-}
-
-/// Extracts the run-entry view of a primitive a shape run can carry: the
-/// plain shape variants and a single-level blend of one. Everything else
-/// (text, images, shadows, content markers, nested blends) returns `None`,
-/// flushes the run and takes the ordinary per-primitive path.
-fn shape_run_view(primitive: &DrawPrimitive) -> Option<(ShapeRunShape<'_>, BlendMode)> {
-    let (primitive, blend_mode) = match primitive {
-        DrawPrimitive::Blend {
-            primitive,
-            blend_mode,
-        } => (primitive.as_ref(), *blend_mode),
-        other => (other, BlendMode::SrcOver),
-    };
-    match primitive {
-        DrawPrimitive::Rect {
-            rect,
-            brush,
-            stroke,
-        } => Some((
-            ShapeRunShape::Rect {
-                rect: *rect,
-                brush,
-                stroke: *stroke,
-            },
-            blend_mode,
-        )),
-        DrawPrimitive::RoundRect {
-            rect,
-            brush,
-            radii,
-            stroke,
-        } => Some((
-            ShapeRunShape::RoundRect {
-                rect: *rect,
-                brush,
-                radii: *radii,
-                stroke: *stroke,
-            },
-            blend_mode,
-        )),
-        DrawPrimitive::Arc {
-            rect,
-            brush,
-            center,
-            radius,
-            start_angle,
-            sweep_angle,
-            stroke,
-            inner_radius,
-        } => Some((
-            ShapeRunShape::Arc {
-                rect: *rect,
-                brush,
-                center: *center,
-                radius: *radius,
-                start_angle: *start_angle,
-                sweep_angle: *sweep_angle,
-                stroke: *stroke,
-                inner_radius: *inner_radius,
-            },
-            blend_mode,
-        )),
-        _ => None,
-    }
-}
+use crate::run_entry::ShapeRunEntry;
 
 /// Runs the shared per-variant emit math for one run entry, returning the
 /// shape params instead of touching the scene. `None` means the draw resolved
@@ -828,38 +724,38 @@ fn emit_shape_run_entry(
     if entry.clip.is_some() && clip.is_none() {
         return None;
     }
-    match entry.shape {
-        ShapeRunShape::Rect {
+    match entry.primitive() {
+        DrawPrimitive::Rect {
             rect,
             brush,
             stroke,
         } => rect_shape_params(
-            rect,
+            *rect,
             brush,
-            stroke,
+            *stroke,
             layer_bounds,
             layer,
             clip,
             entry.blend_mode,
             motion_context_animated,
         ),
-        ShapeRunShape::RoundRect {
+        DrawPrimitive::RoundRect {
             rect,
             brush,
             radii,
             stroke,
         } => round_rect_shape_params(
-            rect,
+            *rect,
             brush,
-            radii,
-            stroke,
+            *radii,
+            *stroke,
             layer_bounds,
             layer,
             clip,
             entry.blend_mode,
             motion_context_animated,
         ),
-        ShapeRunShape::Arc {
+        DrawPrimitive::Arc {
             rect,
             brush,
             center,
@@ -869,20 +765,22 @@ fn emit_shape_run_entry(
             stroke,
             inner_radius,
         } => arc_shape_params(
-            rect,
+            *rect,
             brush,
-            center,
-            radius,
-            start_angle,
-            sweep_angle,
-            stroke,
-            inner_radius,
+            *center,
+            *radius,
+            *start_angle,
+            *sweep_angle,
+            *stroke,
+            *inner_radius,
             layer_bounds,
             layer,
             clip,
             entry.blend_mode,
             motion_context_animated,
         ),
+        // ShapeRunEntry::new admits no other variant.
+        _ => unreachable!("shape run entries only hold shape primitives"),
     }
 }
 
@@ -1035,8 +933,8 @@ fn replay_entry_view<'a>(entry: &ShapeRunEntry<'a>) -> Option<(SnapshotShape, &'
     if entry.clip.is_some() || entry.blend_mode != BlendMode::SrcOver {
         return None;
     }
-    match &entry.shape {
-        ShapeRunShape::Arc {
+    match entry.primitive() {
+        DrawPrimitive::Arc {
             brush,
             center,
             radius,
@@ -1056,7 +954,7 @@ fn replay_entry_view<'a>(entry: &ShapeRunEntry<'a>) -> Option<(SnapshotShape, &'
             },
             brush,
         )),
-        ShapeRunShape::RoundRect {
+        DrawPrimitive::RoundRect {
             rect,
             brush,
             radii,
@@ -1074,7 +972,7 @@ fn replay_entry_view<'a>(entry: &ShapeRunEntry<'a>) -> Option<(SnapshotShape, &'
                 brush,
             ))
         }
-        ShapeRunShape::Rect { .. } => None,
+        _ => None,
     }
 }
 
@@ -2073,12 +1971,8 @@ fn collect_draw_run<'a>(
     context: &LocalPrimitiveContext<'_>,
 ) {
     for primitive in &run.primitives {
-        if let Some((shape, blend_mode)) = shape_run_view(primitive) {
-            shape_run.push(ShapeRunEntry {
-                shape,
-                blend_mode,
-                clip: None,
-            });
+        if let Some(entry) = ShapeRunEntry::new(primitive, None) {
+            shape_run.push(entry);
             continue;
         }
         flush_shape_run(local_scene, shape_run, context);
@@ -2316,12 +2210,8 @@ fn collect_layer_contents_into<'a>(
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
                     if let PrimitiveNode::Draw(draw) = &primitive.node {
-                        if let Some((shape, blend_mode)) = shape_run_view(&draw.primitive) {
-                            shape_run.push(ShapeRunEntry {
-                                shape,
-                                blend_mode,
-                                clip: draw.clip,
-                            });
+                        if let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip) {
+                            shape_run.push(entry);
                             continue;
                         }
                     }
@@ -2501,12 +2391,8 @@ fn collect_layer_contents_into<'a>(
         match child {
             RenderNode::Primitive(primitive) => {
                 if let PrimitiveNode::Draw(draw) = &primitive.node {
-                    if let Some((shape, blend_mode)) = shape_run_view(&draw.primitive) {
-                        shape_run.push(ShapeRunEntry {
-                            shape,
-                            blend_mode,
-                            clip: draw.clip,
-                        });
+                    if let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip) {
+                        shape_run.push(entry);
                         continue;
                     }
                 }

@@ -1364,6 +1364,13 @@ fn workspace_ffi_boundaries_are_explicit() {
         // whose invariants the pool's completion barrier enforces; the crate
         // root denies unsafe code and opts this one module back in by name.
         "crates/cranpose-render/wgpu/src/worker_pool.rs",
+        // The shape-run entry borrows its DrawPrimitive, whose TYPE is !Sync
+        // (the Text variant holds Rc) even though the constructor only ever
+        // admits the Sync-payload shape variants. The module is kept tiny so
+        // the constructor invariant and the two manual Send/Sync impls stay
+        // on one screen; the crate root denies unsafe code and opts this one
+        // module back in by name.
+        "crates/cranpose-render/wgpu/src/run_entry.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

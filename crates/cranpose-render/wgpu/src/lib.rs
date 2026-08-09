@@ -16,6 +16,7 @@ mod normalized_scene;
 mod offscreen;
 mod pipeline;
 mod render;
+mod run_entry;
 mod scene;
 mod shader_cache;
 mod shaders;
