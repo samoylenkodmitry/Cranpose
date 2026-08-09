@@ -2173,6 +2173,11 @@ struct ReplaySlot {
     /// vertex budget overflowed — those slots replay through the legacy
     /// six-vertices-per-shape path.
     mesh: Option<ReplaySlotMesh>,
+    /// Which capture created this slot's buffers, from the store's global
+    /// monotone counter. Retained bundle keys carry it so a slot id that is
+    /// released and recaptured — new bind group, new buffers, same id — can
+    /// never be drawn through a bundle recorded against the old capture.
+    capture_epoch: u64,
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
@@ -2620,6 +2625,10 @@ struct ReplaySlotStore {
     slots: std::collections::HashMap<u32, ReplaySlot, cranpose_ui_graphics::FxBuildHasher>,
     transform_buffer: wgpu::Buffer,
     free_ids: Vec<u32>,
+    /// Global capture counter feeding [`ReplaySlot::capture_epoch`]: bumped
+    /// on every capture, never reused, so an epoch identifies one capture's
+    /// buffers for the renderer's whole lifetime.
+    next_capture_epoch: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2635,7 +2644,163 @@ impl ReplaySlotStore {
             slots: std::collections::HashMap::default(),
             transform_buffer,
             free_ids: (0..MAX_REPLAY_SLOTS).rev().collect(),
+            next_capture_epoch: 1,
         }
+    }
+}
+
+/// Kill switch for cached retained render bundles, mirroring
+/// `command_feed_enabled`: default ON, `CRANPOSE_RETAINED_BUNDLES=0` (or the
+/// `debug.cranpose.retained_bundles` property on Android) drops the fused
+/// retained arms back to direct per-op encoding, so a device A/B needs no
+/// rebuild. Read per partition — the parity harness flips it between passes.
+#[cfg(not(target_arch = "wasm32"))]
+fn retained_bundles_enabled() -> bool {
+    std::env::var("CRANPOSE_RETAINED_BUNDLES").as_deref() != Ok("0")
+}
+
+/// Everything that decides the commands one retained op contributes to a
+/// cached bundle. Equal op keys imply identical encoded commands:
+/// `capture_epoch` pins the slot's bind group and buffers to one capture,
+/// `has_mesh` pins the pipeline and vertex-buffer choice, `first..last` is
+/// the clamped draw range, and `retained_index` is the dynamic transform
+/// offset. Transforms and paints are NOT here — they are data-buffer
+/// contents the bundle reads at execution.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RetainedBundleOpKey {
+    slot: u32,
+    /// The slot's capture epoch at key time, `None` while the slot is absent
+    /// from the store (the op encodes nothing). Epochs are globally unique
+    /// per capture, so a recaptured slot reusing its id can never satisfy a
+    /// key recorded against the previous capture's buffers.
+    capture_epoch: Option<u64>,
+    first: u32,
+    last: u32,
+    retained_index: u32,
+    has_mesh: bool,
+}
+
+/// Key of one maximal consecutive retained stretch: the op keys in draw
+/// order. Any reorder, count change, range change, recapture, or slot
+/// release changes the key and forces a rebuild.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct RetainedBundleKey {
+    ops: Vec<RetainedBundleOpKey>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct RetainedBundleCacheEntry<B> {
+    bundle: B,
+    last_used_frame: u64,
+}
+
+/// Cache of encoded render bundles for retained stretches, generic over the
+/// bundle payload so the reuse/invalidation/eviction logic is unit-testable
+/// without a GPU. The full [`RetainedBundleKey`] is the map key — a fresh
+/// key can only ever build a fresh bundle, never alias a stale one.
+///
+/// The surface format and the group-0 uniform bind group are deliberately
+/// not part of the key: both are fixed for a `GpuRenderer`'s lifetime (a
+/// surface reconfigure builds a new renderer, and with it an empty cache).
+#[cfg(not(target_arch = "wasm32"))]
+struct RetainedBundleCacheImpl<B> {
+    entries: HashMap<RetainedBundleKey, RetainedBundleCacheEntry<B>>,
+    frame: u64,
+    rebuilds: u64,
+    cached_executes: u64,
+    window_rebuilds: u64,
+    window_executes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type RetainedBundleCache = RetainedBundleCacheImpl<wgpu::RenderBundle>;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<B> RetainedBundleCacheImpl<B> {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::default(),
+            frame: 0,
+            rebuilds: 0,
+            cached_executes: 0,
+            window_rebuilds: 0,
+            window_executes: 0,
+        }
+    }
+
+    /// True when a bundle for `key` is cached; marks it used this frame and
+    /// counts a cached execute.
+    fn hit(&mut self, key: &RetainedBundleKey) -> bool {
+        let frame = self.frame;
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                entry.last_used_frame = frame;
+                self.cached_executes += 1;
+                self.window_executes += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Stores a freshly built bundle, counting a rebuild.
+    fn insert(&mut self, key: RetainedBundleKey, bundle: B) {
+        self.rebuilds += 1;
+        self.window_rebuilds += 1;
+        self.entries.insert(
+            key,
+            RetainedBundleCacheEntry {
+                bundle,
+                last_used_frame: self.frame,
+            },
+        );
+    }
+
+    fn get(&self, key: &RetainedBundleKey) -> Option<&B> {
+        self.entries.get(key).map(|entry| &entry.bundle)
+    }
+
+    /// Drops every cached bundle. Called whenever a replay slot is released:
+    /// the key compare already makes stale entries unreachable (their epochs
+    /// can never recur), so this only releases the dropped capture's GPU
+    /// resources promptly instead of one frame later via eviction.
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Frame boundary: evicts entries the frame did not use — a bundle
+    /// holds references on its slot's buffers, so unused entries must not
+    /// accumulate — and emits the rate-limited rebuild/execute telemetry.
+    fn end_frame(&mut self) {
+        let frame = self.frame;
+        self.entries
+            .retain(|_, entry| entry.last_used_frame >= frame);
+        self.frame = self.frame.wrapping_add(1);
+        // Always-on at a cadence that cannot spam; every perf window (120
+        // frames) under the replay diagnostics flag so short A/B runs see
+        // the counts. log::warn because log::info is invisible on the
+        // desktop console.
+        let due = self.frame.is_multiple_of(1024)
+            || (cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG")
+                && self.frame.is_multiple_of(120));
+        if due && self.window_rebuilds + self.window_executes > 0 {
+            log::warn!(
+                "[retained-bundles] {} stretches, {} rebuilds, {} cached executes ({} live bundles)",
+                self.window_rebuilds + self.window_executes,
+                self.window_rebuilds,
+                self.window_executes,
+                self.entries.len(),
+            );
+            self.window_rebuilds = 0;
+            self.window_executes = 0;
+        }
+    }
+
+    /// Lifetime (rebuilds, cached executes) for tests and diagnostics.
+    fn stats(&self) -> (u64, u64) {
+        (self.rebuilds, self.cached_executes)
     }
 }
 
@@ -3464,6 +3629,10 @@ pub struct GpuRenderer {
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
+    /// Cached render bundles for maximal consecutive retained stretches in
+    /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_bundle_cache: RetainedBundleCache,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -4019,6 +4188,8 @@ impl GpuRenderer {
             warning_state: RendererWarningState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_upload_stats: ReplayUploadStats::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_bundle_cache: RetainedBundleCache::new(),
         }
     }
 
@@ -5836,6 +6007,8 @@ impl GpuRenderer {
             .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
 
         self.layer_surface_cache.finish_frame(&self.frame_stats);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.retained_bundle_cache.end_frame();
 
         self.frame_stats.offscreen_pool_size.set(
             self.effect_renderer
@@ -6954,6 +7127,8 @@ impl GpuRenderer {
             self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
             let after_upload = Instant::now();
 
+            let use_retained_bundles = retained_bundles_enabled();
+            let mut retained_encode_ms = 0.0_f64;
             {
                 let mut render_pass =
                     frame_encoder
@@ -7046,19 +7221,37 @@ impl GpuRenderer {
                             }
                         }
                         FusedSegmentBatch::Retained { item_range } => {
-                            for (_, item) in &ordered_items[item_range.clone()] {
-                                if let SegmentDrawItem::Retained(index) = item {
-                                    if let Some(retained) = retained_draws.get(*index) {
-                                        self.draw_retained_batch(
-                                            &mut render_pass,
-                                            retained,
-                                            *index,
-                                            width,
-                                            height,
-                                        );
+                            // Each Retained arm is one MAXIMAL consecutive
+                            // retained stretch — the planner groups adjacent
+                            // retained items into a single batch — so caching
+                            // per arm never flattens across the dynamic
+                            // batches interleaved at their z positions.
+                            let retained_start = Instant::now();
+                            if use_retained_bundles {
+                                self.draw_retained_stretch_bundled(
+                                    &mut render_pass,
+                                    ordered_items,
+                                    retained_draws,
+                                    item_range.clone(),
+                                    width,
+                                    height,
+                                );
+                            } else {
+                                for (_, item) in &ordered_items[item_range.clone()] {
+                                    if let SegmentDrawItem::Retained(index) = item {
+                                        if let Some(retained) = retained_draws.get(*index) {
+                                            self.draw_retained_batch(
+                                                &mut render_pass,
+                                                retained,
+                                                *index,
+                                                width,
+                                                height,
+                                            );
+                                        }
                                     }
                                 }
                             }
+                            retained_encode_ms += instant_ms(retained_start, Instant::now());
                         }
                     }
                 }
@@ -7066,7 +7259,7 @@ impl GpuRenderer {
             let after_pass = Instant::now();
             if let Some(total_ms) = should_log_wgpu_render_stage(partition_start, after_pass) {
                 log::warn!(
-                    "[wgpu-render-stage:fused-segment] total_ms={total_ms:.2} shape_refs_ms={:.2} shape_prepare_ms={:.2} batch_prepare_ms={:.2} composite_prepare_ms={:.2} upload_ms={:.2} pass_ms={:.2} batches={} shapes={} image_cmds={} glyph_cmds={} staged_bytes={}",
+                    "[wgpu-render-stage:fused-segment] total_ms={total_ms:.2} shape_refs_ms={:.2} shape_prepare_ms={:.2} batch_prepare_ms={:.2} composite_prepare_ms={:.2} upload_ms={:.2} pass_ms={:.2} retained_encode_ms={retained_encode_ms:.3} batches={} shapes={} image_cmds={} glyph_cmds={} staged_bytes={}",
                     instant_ms(partition_start, after_shape_refs),
                     instant_ms(after_shape_refs, after_shape_prepare),
                     instant_ms(after_shape_prepare, after_batch_prepare),
@@ -7467,7 +7660,9 @@ impl GpuRenderer {
                         // retained batches exist on storage-mode native
                         // devices, where fusion always accepts, but the arm
                         // stays a real draw so that assumption is not load-
-                        // bearing for correctness.
+                        // bearing for correctness. Deliberately direct encode
+                        // — retained bundle caching lives in the fused path
+                        // only; this fallback stays the simple reference.
                         #[cfg(target_arch = "wasm32")]
                         {
                             let _ = (start, end);
@@ -9054,6 +9249,8 @@ impl GpuRenderer {
             ],
         });
 
+        let capture_epoch = self.replay_slots.next_capture_epoch;
+        self.replay_slots.next_capture_epoch += 1;
         self.replay_slots.slots.insert(
             id,
             ReplaySlot {
@@ -9065,6 +9262,7 @@ impl GpuRenderer {
                 paint_mirror: paint,
                 gradient_mirror: gradients,
                 mesh,
+                capture_epoch,
             },
         );
         Some(id)
@@ -9075,6 +9273,12 @@ impl GpuRenderer {
     pub(crate) fn release_replay_slot(&mut self, id: u32) {
         if self.replay_slots.slots.remove(&id).is_some() {
             self.replay_slots.free_ids.push(id);
+            // A cached bundle keeps references on the slot buffers it binds.
+            // The epoch in each key already makes entries for this capture
+            // unreachable — releases are rare (churn, retire_feed), so drop
+            // the whole cache and free those references now rather than one
+            // frame later through eviction.
+            self.retained_bundle_cache.clear();
         }
     }
 
@@ -9146,6 +9350,162 @@ impl GpuRenderer {
             }
             None => render_pass.draw(first * 6..last * 6, 0..1),
         }
+    }
+
+    /// Key of the retained stretch at `item_range`: one op key per resolved
+    /// retained item, in draw order, carrying exactly the state that decides
+    /// the commands [`Self::draw_retained_batch`] would encode for it —
+    /// clamped range, dynamic-offset index, mesh-vs-quad pipeline choice,
+    /// and the slot's capture epoch (`None` while the slot is absent, when
+    /// the op draws nothing on the direct path too).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_bundle_key(
+        &self,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        retained_draws: &[RetainedDraw],
+        item_range: Range<usize>,
+    ) -> RetainedBundleKey {
+        let mut ops = Vec::with_capacity(item_range.len());
+        for (_, item) in &ordered_items[item_range] {
+            let SegmentDrawItem::Retained(index) = item else {
+                continue;
+            };
+            let Some(retained) = retained_draws.get(*index) else {
+                continue;
+            };
+            let slot = self.replay_slots.slots.get(&retained.slot);
+            let (first, last) = match slot {
+                Some(slot) => (
+                    retained.first_shape.min(slot.shape_count),
+                    retained
+                        .first_shape
+                        .saturating_add(retained.shape_count)
+                        .min(slot.shape_count),
+                ),
+                None => (
+                    retained.first_shape,
+                    retained.first_shape.saturating_add(retained.shape_count),
+                ),
+            };
+            ops.push(RetainedBundleOpKey {
+                slot: retained.slot,
+                capture_epoch: slot.map(|slot| slot.capture_epoch),
+                first,
+                last,
+                retained_index: *index as u32,
+                has_mesh: slot.is_some_and(|slot| slot.mesh.is_some())
+                    && self.mesh_pipeline.is_some(),
+            });
+        }
+        RetainedBundleKey { ops }
+    }
+
+    /// Encodes `key`'s stretch into a render bundle: the IDENTICAL command
+    /// sequence [`Self::draw_retained_batch`] issues on the pass, minus the
+    /// scissor reset (bundles cannot set scissor; the caller sets the same
+    /// full-target scissor on the pass before executing). Must only be
+    /// called with a key built this frame, so every op with an epoch still
+    /// resolves to its slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_retained_bundle(&self, key: &RetainedBundleKey) -> wgpu::RenderBundle {
+        let mut encoder =
+            self.device
+                .create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                    label: Some("Retained Stretch Bundle"),
+                    // Every fused-pass target — the swapchain, screenshot
+                    // textures, pooled layer surfaces — is created with the
+                    // renderer's one surface format.
+                    color_formats: &[Some(self.surface_format)],
+                    depth_stencil: None,
+                    sample_count: 1,
+                    multiview: None,
+                });
+        for op in &key.ops {
+            if op.capture_epoch.is_none()
+                || op.retained_index >= MAX_REPLAY_SLOTS
+                || op.first >= op.last
+            {
+                continue;
+            }
+            let Some(slot) = self.replay_slots.slots.get(&op.slot) else {
+                continue;
+            };
+            let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+            match &mesh {
+                Some((_, mesh_pipeline)) => encoder.set_pipeline(mesh_pipeline),
+                None => encoder.set_pipeline(&self.pipeline),
+            }
+            encoder.set_bind_group(0, &self.uniform_bind_group, &[]);
+            encoder.set_bind_group(
+                1,
+                &slot.bind_group,
+                &[op.retained_index * REPLAY_TRANSFORM_STRIDE as u32],
+            );
+            match mesh {
+                Some((mesh, _)) => {
+                    encoder.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    encoder.draw(
+                        mesh.vertex_prefix[op.first as usize]..mesh.vertex_prefix[op.last as usize],
+                        0..1,
+                    );
+                }
+                None => encoder.draw(op.first * 6..op.last * 6, 0..1),
+            }
+        }
+        encoder.finish(&wgpu::RenderBundleDescriptor {
+            label: Some("Retained Stretch Bundle"),
+        })
+    }
+
+    /// Draws one maximal consecutive retained stretch through the bundle
+    /// cache: key the stretch, rebuild on any mismatch (recapture, reorder,
+    /// range or count change, slot release), then execute the cached bundle.
+    /// Replays byte-identical commands to the per-op direct path.
+    /// `stage_replay_patches` and the per-frame transform staging stay in
+    /// the prepare arms, untouched — bundles bind buffers whose contents are
+    /// read at execution.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_retained_stretch_bundled(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        retained_draws: &[RetainedDraw],
+        item_range: Range<usize>,
+        width: u32,
+        height: u32,
+    ) {
+        let key = self.retained_bundle_key(ordered_items, retained_draws, item_range);
+        if !self.retained_bundle_cache.hit(&key) {
+            let bundle = self.build_retained_bundle(&key);
+            self.retained_bundle_cache.insert(key.clone(), bundle);
+        }
+        // Mirror the direct path's per-op stats for every op the bundle
+        // draws, so bundling is invisible to the frame counters.
+        for op in &key.ops {
+            if op.capture_epoch.is_some()
+                && op.retained_index < MAX_REPLAY_SLOTS
+                && op.first < op.last
+            {
+                self.frame_stats.bump_shapes();
+                self.frame_stats.add_draw_calls(1);
+            }
+        }
+        // Bundles inherit the pass scissor: set the same full-target rect
+        // the direct path sets before every retained draw. Executing the
+        // bundle then resets pipeline/bind/vertex state, which is harmless —
+        // every following fused arm re-binds its own.
+        render_pass.set_scissor_rect(0, 0, width, height);
+        if let Some(bundle) = self.retained_bundle_cache.get(&key) {
+            render_pass.execute_bundles(std::iter::once(bundle));
+        }
+    }
+
+    /// Test/diagnostic view of the retained bundle cache: lifetime
+    /// (rebuilds, cached executes).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn retained_bundle_stats(&self) -> (u64, u64) {
+        self.retained_bundle_cache.stats()
     }
 
     fn draw_prepared_shapes(
@@ -18545,5 +18905,103 @@ mod tests {
             max_shadow_z,
             min_content_z
         );
+    }
+
+    /// One retained bundle op key with the fields the invalidation tests
+    /// vary; the rest stay representative constants.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bundle_op(slot: u32, epoch: Option<u64>, first: u32, last: u32) -> RetainedBundleOpKey {
+        RetainedBundleOpKey {
+            slot,
+            capture_epoch: epoch,
+            first,
+            last,
+            retained_index: slot,
+            has_mesh: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bundle_key(ops: &[RetainedBundleOpKey]) -> RetainedBundleKey {
+        RetainedBundleKey { ops: ops.to_vec() }
+    }
+
+    /// The same stretch on consecutive frames reuses its bundle: one
+    /// rebuild, then cached executes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_reuses_stable_keys() {
+        let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+        let ops = [bundle_op(3, Some(7), 0, 40), bundle_op(5, Some(9), 4, 12)];
+        let key = bundle_key(&ops);
+
+        assert!(!cache.hit(&key), "empty cache must miss");
+        cache.insert(key.clone(), 111);
+        assert_eq!(cache.get(&key), Some(&111));
+        cache.end_frame();
+
+        for _ in 0..3 {
+            assert!(cache.hit(&bundle_key(&ops)), "stable key must stay cached");
+            cache.end_frame();
+        }
+        assert_eq!(cache.stats(), (1, 3), "one rebuild, three cached executes");
+    }
+
+    /// Recapture (epoch bump), span reorder, count change, range change and
+    /// slot release each change the key, so a stale bundle can never satisfy
+    /// the lookup.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_invalidates_on_any_op_change() {
+        let ops = [bundle_op(3, Some(7), 0, 40), bundle_op(5, Some(9), 4, 12)];
+        let variants: [Vec<RetainedBundleOpKey>; 5] = [
+            // Recaptured slot 3: same id, bumped epoch.
+            vec![bundle_op(3, Some(8), 0, 40), bundle_op(5, Some(9), 4, 12)],
+            // Reordered stretch.
+            vec![bundle_op(5, Some(9), 4, 12), bundle_op(3, Some(7), 0, 40)],
+            // Op count changed.
+            vec![bundle_op(3, Some(7), 0, 40)],
+            // Draw range changed.
+            vec![bundle_op(3, Some(7), 0, 41), bundle_op(5, Some(9), 4, 12)],
+            // Slot 5 released: epoch gone.
+            vec![bundle_op(3, Some(7), 0, 40), bundle_op(5, None, 4, 12)],
+        ];
+        for changed in variants {
+            let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+            cache.insert(bundle_key(&ops), 111);
+            cache.end_frame();
+            assert!(
+                !cache.hit(&RetainedBundleKey {
+                    ops: changed.clone()
+                }),
+                "changed key {changed:?} must not reuse the stale bundle"
+            );
+        }
+    }
+
+    /// Entries a frame does not use are evicted at its end — bundles pin
+    /// slot buffers, so unused ones must not accumulate — and `clear` (the
+    /// slot-release path) empties the cache outright.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_evicts_unused_entries() {
+        let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+        let stale = bundle_key(&[bundle_op(1, Some(1), 0, 6)]);
+        let live = bundle_key(&[bundle_op(2, Some(2), 0, 6)]);
+        cache.insert(stale.clone(), 1);
+        cache.insert(live.clone(), 2);
+        cache.end_frame();
+
+        assert!(cache.hit(&live));
+        cache.end_frame();
+
+        assert!(
+            !cache.hit(&stale),
+            "entry unused for a frame must have been evicted"
+        );
+        assert!(cache.hit(&live), "used entry must survive eviction");
+
+        cache.clear();
+        assert!(!cache.hit(&live), "clear must drop every entry");
     }
 }

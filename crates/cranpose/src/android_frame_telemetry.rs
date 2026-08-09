@@ -69,10 +69,14 @@ fn property_flag(name: &str) -> bool {
 ///
 /// Property names are capped at 32 bytes by `PROP_NAME_MAX`, which is why they
 /// are abbreviations rather than the full variable name.
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 14] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 15] = [
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
     ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
     ("debug.cranpose.arc_mesh", "CRANPOSE_ARC_MESH"),
+    (
+        "debug.cranpose.retained_bundles",
+        "CRANPOSE_RETAINED_BUNDLES",
+    ),
     (
         "debug.cranpose.cmd_replay_diag",
         "CRANPOSE_COMMAND_REPLAY_DIAG",

@@ -421,6 +421,17 @@ impl WgpuRenderer {
             .map(GpuRenderer::replay_slot_mesh_stats)
             .unwrap_or((0, 0))
     }
+
+    /// Test/diagnostic view of the retained bundle cache: lifetime
+    /// (rebuilds, cached executes).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn retained_bundle_stats(&self) -> (u64, u64) {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::retained_bundle_stats)
+            .unwrap_or((0, 0))
+    }
 }
 
 impl Default for WgpuRenderer {
