@@ -9,7 +9,8 @@ pub mod style;
 pub mod unit;
 
 pub use annotated_string::{
-    shared_plain_annotated_string, AnnotatedString, LinkAnnotation, RangeStyle, StringAnnotation,
+    shared_plain_annotated_string, AnnotatedString, LinkAnnotation, LinkKey, RangeStyle,
+    RenderString, StringAnnotation,
 };
 
 pub use crate::text_layout_result::TextLayoutResult;

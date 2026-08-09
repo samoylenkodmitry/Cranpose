@@ -3,8 +3,8 @@ use ab_glyph::{
 };
 use cranpose_core::hash::default as default_hash;
 use cranpose_ui::text::{
-    AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, Shadow, TextDrawStyle,
-    TextMotion, TextShaping, TextStyle,
+    AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, RangeStyle, RenderString,
+    Shadow, SpanStyle, TextDrawStyle, TextMotion, TextShaping, TextStyle,
 };
 use cranpose_ui::text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult};
 use cranpose_ui::{TextLinePrefixWidths, TextMeasurer, TextMetrics};
@@ -1409,9 +1409,58 @@ pub fn rasterize_text_to_image_with_glyph_cache(
     )
 }
 
+/// The slice of a text payload that solid-run rasterization reads: content
+/// plus span styles. Borrowable from both an [`AnnotatedString`] (UI-side
+/// text) and a [`RenderString`] (a lowered scene's link-handler-free view),
+/// so the run collectors serve both without copying either.
+#[derive(Clone, Copy)]
+pub struct StyledTextRef<'a> {
+    pub text: &'a str,
+    pub span_styles: &'a [RangeStyle<SpanStyle>],
+}
+
+impl StyledTextRef<'_> {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Mirrors [`AnnotatedString::span_boundaries`].
+    fn span_boundaries(&self) -> Vec<usize> {
+        let mut boundaries = vec![0, self.text.len()];
+        for span in self.span_styles {
+            boundaries.push(span.range.start);
+            boundaries.push(span.range.end);
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+        boundaries
+            .into_iter()
+            .filter(|&b| b <= self.text.len() && self.text.is_char_boundary(b))
+            .collect()
+    }
+}
+
+impl<'a> From<&'a AnnotatedString> for StyledTextRef<'a> {
+    fn from(text: &'a AnnotatedString) -> Self {
+        Self {
+            text: text.text.as_str(),
+            span_styles: &text.span_styles,
+        }
+    }
+}
+
+impl<'a> From<&'a RenderString> for StyledTextRef<'a> {
+    fn from(text: &'a RenderString) -> Self {
+        Self {
+            text: text.text.as_str(),
+            span_styles: &text.span_styles,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn rasterize_annotated_text_to_image_with_glyph_cache(
-    text: &AnnotatedString,
+pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
+    text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
     style: &TextStyle,
     fallback_color: Color,
@@ -1420,10 +1469,11 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache(
     fonts: &SoftwareTextFontSet,
     glyph_cache: &mut SoftwareGlyphRasterCache,
 ) -> Option<ImageBitmap> {
+    let text: StyledTextRef<'a> = text.into();
     if text.span_styles.is_empty() {
         let font = fonts.resolve(style)?;
         return rasterize_text_to_image_with_glyph_cache(
-            text.text.as_str(),
+            text.text,
             rect,
             style,
             fallback_color,
@@ -1454,7 +1504,7 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(text.span_styles, style, start, end);
         if !style_can_rasterize_direct_solid(&segment_style) {
             return None;
         }
@@ -1573,7 +1623,7 @@ pub fn collect_solid_text_atlas_glyphs(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         if !style_can_atlas_solid_fill(&segment_style) {
             out.truncate(initial_len);
             return None;
@@ -1685,7 +1735,7 @@ pub fn collect_cached_solid_text_atlas_placements(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         if !style_can_atlas_solid_fill(&segment_style) {
             out.truncate(initial_len);
             return None;
@@ -1752,8 +1802,8 @@ pub fn collect_cached_solid_text_atlas_placements(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn collect_solid_text_atlas_run(
-    text: &AnnotatedString,
+pub fn collect_solid_text_atlas_run<'a>(
+    text: impl Into<StyledTextRef<'a>>,
     rect: Rect,
     style: &TextStyle,
     fallback_color: Color,
@@ -1763,6 +1813,7 @@ pub fn collect_solid_text_atlas_run(
     glyph_cache: &mut SoftwareGlyphRasterCache,
     out: &mut Vec<SoftwareGlyphAtlasRunGlyph>,
 ) -> Option<()> {
+    let text: StyledTextRef<'a> = text.into();
     if text.is_empty()
         || rect.width <= 0.0
         || rect.height <= 0.0
@@ -1797,7 +1848,7 @@ pub fn collect_solid_text_atlas_run(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(text.span_styles, style, start, end);
         if !style_can_atlas_solid_fill(&segment_style) {
             out.truncate(initial_len);
             return None;
@@ -2961,7 +3012,7 @@ fn annotated_line_prefix_widths_with_font_set_cached(
                 continue;
             }
             let segment = &text.text[start..end];
-            let segment_style = effective_style_for_range(text, style, start, end);
+            let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
             append_prefix_width_segment_cached(segment, &segment_style, fonts, cache, &mut sink);
         }
 
@@ -3175,7 +3226,7 @@ fn measure_annotated_text_with_resolver(
             continue;
         }
         let segment = &text.text[start..end];
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         let segment_font_size = resolve_font_size(&segment_style);
         let Some(segment_font) = fonts.resolve(&segment_style) else {
             let mut remaining = segment;
@@ -3308,7 +3359,7 @@ fn annotated_line_heights_with_resolver(
             continue;
         }
         let segment = &text.text[start..end];
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         let segment_font_size = resolve_font_size(&segment_style);
         let segment_line_height = if let Some(segment_font) = fonts.resolve(&segment_style) {
             line_height_for_style(&segment_style, segment_font_size, &segment_font.font)
@@ -3350,7 +3401,7 @@ fn max_line_height_for_annotated_text_with_resolver(
         if start == end {
             continue;
         }
-        let segment_style = effective_style_for_range(text, style, start, end);
+        let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         let segment_font_size = resolve_font_size(&segment_style);
         let segment_line_height = fonts
             .resolve(&segment_style)
@@ -3362,13 +3413,13 @@ fn max_line_height_for_annotated_text_with_resolver(
 }
 
 fn effective_style_for_range(
-    text: &AnnotatedString,
+    span_styles: &[RangeStyle<SpanStyle>],
     style: &TextStyle,
     start: usize,
     end: usize,
 ) -> TextStyle {
     let mut effective = style.clone();
-    for span in &text.span_styles {
+    for span in span_styles {
         if span.range.start < end && span.range.end > start {
             effective.span_style = effective.span_style.merge(&span.item);
         }

@@ -822,7 +822,7 @@ impl TextStyleDrawSink for CompositorScene {
                 rect,
                 snap_anchor: None,
                 translated_content_context: false,
-                text,
+                text: crate::scene::render_string_for(&text),
                 color,
                 text_style,
                 font_size,

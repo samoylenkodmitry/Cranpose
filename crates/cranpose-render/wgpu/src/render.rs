@@ -88,7 +88,7 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -519,7 +519,7 @@ struct CachedGpuTextGlyphRun {
 struct TextLineIndexCacheKey(usize);
 
 struct CachedTextLineIndex {
-    text: Weak<cranpose_ui::text::AnnotatedString>,
+    text: std::sync::Weak<cranpose_ui::text::RenderString>,
     len: usize,
     starts: Rc<[usize]>,
 }
@@ -535,14 +535,14 @@ impl TextLineIndexCache {
         }
     }
 
-    fn line_starts(&mut self, text: &Rc<cranpose_ui::text::AnnotatedString>) -> Rc<[usize]> {
-        let key = TextLineIndexCacheKey(Rc::as_ptr(text) as usize);
+    fn line_starts(&mut self, text: &Arc<cranpose_ui::text::RenderString>) -> Rc<[usize]> {
+        let key = TextLineIndexCacheKey(Arc::as_ptr(text) as usize);
         if let Some(cached) = self.entries.get(&key) {
             if cached.len == text.text.len()
                 && cached
                     .text
                     .upgrade()
-                    .is_some_and(|cached_text| Rc::ptr_eq(&cached_text, text))
+                    .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
             {
                 return cached.starts.clone();
             }
@@ -552,7 +552,7 @@ impl TextLineIndexCache {
         self.entries.put(
             key,
             CachedTextLineIndex {
-                text: Rc::downgrade(text),
+                text: Arc::downgrade(text),
                 len: text.text.len(),
                 starts: starts.clone(),
             },
@@ -8090,8 +8090,11 @@ impl GpuRenderer {
             stop_min: u32::MAX,
             stop_max: 0,
         };
-        let mut dirty: std::collections::HashMap<u32, DirtySpan, cranpose_ui_graphics::FxBuildHasher> =
-            std::collections::HashMap::default();
+        let mut dirty: std::collections::HashMap<
+            u32,
+            DirtySpan,
+            cranpose_ui_graphics::FxBuildHasher,
+        > = std::collections::HashMap::default();
 
         for patch in &patches {
             let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
@@ -9186,7 +9189,7 @@ impl GpuRenderer {
                 collected_run.clear();
                 let collect_start = Instant::now();
                 let collect_result = collect_solid_text_atlas_run(
-                    &source_draw.text,
+                    source_draw.text.as_ref(),
                     source_raster_rect,
                     &source_draw.text_style,
                     source_draw.color,
@@ -9206,7 +9209,7 @@ impl GpuRenderer {
                             is_visible,
                             draw_action == TextGlyphDrawAction::PrewarmOffscreen,
                             source_draw.text.span_styles.len(),
-                            source_draw.text.link_annotations.len(),
+                            source_draw.text.links.len(),
                             source_draw.text.text.len(),
                             preview,
                             source_draw.text_style.span_style,
@@ -10025,7 +10028,7 @@ impl GpuRenderer {
         }
 
         if let Some(image) = rasterize_annotated_text_to_image_with_glyph_cache(
-            &text_draw.text,
+            text_draw.text.as_ref(),
             raster_rect,
             &text_draw.text_style,
             text_draw.color,
@@ -10255,7 +10258,7 @@ fn clipped_text_raster_source_with_line_starts<'a>(
         width: logical_rect.width,
         height: slice_height,
     };
-    sliced_draw.text = Rc::new(text_draw.text.subsequence(byte_start..byte_end));
+    sliced_draw.text = Arc::new(text_draw.text.subsequence(byte_start..byte_end));
 
     TextRasterSource {
         draw: Cow::Owned(sliced_draw),
@@ -11395,7 +11398,7 @@ mod tests {
             rect,
             snap_anchor: None,
             translated_content_context: false,
-            text: Rc::new(AnnotatedString::new("stable markdown row".to_string())),
+            text: Arc::new(AnnotatedString::new("stable markdown row".to_string()).render_string()),
             color: Color::WHITE,
             text_style,
             font_size: 14.0,
@@ -11480,7 +11483,7 @@ mod tests {
             .map(|line| format!("line-{line:03}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -11944,7 +11947,7 @@ mod tests {
             .map(|line| format!("line-{line:03}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -11992,7 +11995,7 @@ mod tests {
             .map(|line| format!("code-line-{line:02}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -12028,7 +12031,7 @@ mod tests {
     #[test]
     fn text_line_index_cache_reuses_retained_index_for_same_text_instance() {
         let mut cache = TextLineIndexCache::new(4);
-        let text = Rc::new(AnnotatedString::from("a\nb\nc"));
+        let text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
 
         let first = cache.line_starts(&text);
         let second = cache.line_starts(&text);
@@ -12043,8 +12046,8 @@ mod tests {
     #[test]
     fn text_line_index_cache_is_retained_text_instance_local() {
         let mut cache = TextLineIndexCache::new(4);
-        let first_text = Rc::new(AnnotatedString::from("a\nb\nc"));
-        let second_text = Rc::new(AnnotatedString::from("a\nb\nc"));
+        let first_text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
+        let second_text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
 
         let first = cache.line_starts(&first_text);
         let second = cache.line_starts(&second_text);
@@ -12515,7 +12518,7 @@ mod tests {
             },
             snap_anchor: None,
             translated_content_context: false,
-            text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
+            text: Arc::new(cranpose_ui::text::AnnotatedString::from("t").render_string()),
             color: Color::WHITE,
             text_style: cranpose_ui::TextStyle::default(),
             font_size: 12.0,

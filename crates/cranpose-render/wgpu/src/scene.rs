@@ -59,7 +59,10 @@ pub(crate) struct TextDraw {
     pub rect: Rect,
     pub snap_anchor: Option<SnapAnchor>,
     pub translated_content_context: bool,
-    pub text: Rc<cranpose_ui::text::AnnotatedString>,
+    /// The render view of the node's text — content, styles and link identity,
+    /// no link handlers — so the lowered scene payload is `Send`. `Arc` keeps
+    /// the clones into shadow draws and retained scenes cheap.
+    pub text: std::sync::Arc<cranpose_ui::text::RenderString>,
     pub color: Color,
     pub text_style: TextStyle,
     pub font_size: f32,
@@ -67,6 +70,62 @@ pub(crate) struct TextDraw {
     pub layout_options: TextLayoutOptions,
     pub z_index: usize,
     pub clip: Option<Rect>,
+}
+
+/// How many `AnnotatedString` → `RenderString` conversions each thread keeps.
+/// Matches the annotated-string hash cache in `render_paths.rs`: a scene has
+/// at most a few hundred distinct strings, and entries die with their `Rc`.
+const RENDER_STRING_MEMO_CAPACITY: usize = 2048;
+
+thread_local! {
+    static RENDER_STRING_MEMO: std::cell::RefCell<
+        cranpose_core::collections::map::HashMap<usize, RenderStringMemoEntry>,
+    > = std::cell::RefCell::new(cranpose_core::collections::map::HashMap::default());
+}
+
+struct RenderStringMemoEntry {
+    text: std::rc::Weak<cranpose_ui::text::AnnotatedString>,
+    render: std::sync::Arc<cranpose_ui::text::RenderString>,
+}
+
+/// Returns the shared [`cranpose_ui::text::RenderString`] for an
+/// `AnnotatedString` about to be lowered into a [`TextDraw`], reusing the
+/// conversion made on an earlier frame when the same `Rc` lowers again.
+///
+/// Steady-state scenes lower the same graph strings (and the same pooled
+/// draw-scope strings) every frame; without this memo each frame would
+/// re-clone every string's content and styles once per emitted draw. Entries
+/// are weak-keyed by `Rc` identity — a dead entry can never validate, because
+/// the `Weak` pins the allocation, so a pointer match plus a live strong
+/// count proves it is the same string.
+pub(crate) fn render_string_for(
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
+) -> std::sync::Arc<cranpose_ui::text::RenderString> {
+    RENDER_STRING_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        let key = Rc::as_ptr(text) as usize;
+        if let Some(entry) = memo.get(&key) {
+            if entry.text.strong_count() > 0 && entry.text.as_ptr() == Rc::as_ptr(text) {
+                return std::sync::Arc::clone(&entry.render);
+            }
+        }
+
+        let render = std::sync::Arc::new(text.render_string());
+        if memo.len() >= RENDER_STRING_MEMO_CAPACITY {
+            memo.retain(|_, entry| entry.text.strong_count() > 0);
+            if memo.len() >= RENDER_STRING_MEMO_CAPACITY {
+                memo.clear();
+            }
+        }
+        memo.insert(
+            key,
+            RenderStringMemoEntry {
+                text: Rc::downgrade(text),
+                render: std::sync::Arc::clone(&render),
+            },
+        );
+        render
+    })
 }
 
 #[derive(Clone)]
@@ -497,7 +556,7 @@ impl CompositorScene {
             rect,
             snap_anchor: None,
             translated_content_context: false,
-            text,
+            text: render_string_for(&text),
             color,
             text_style,
             font_size,

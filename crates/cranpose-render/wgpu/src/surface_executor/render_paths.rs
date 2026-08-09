@@ -46,13 +46,12 @@ use cranpose_render_common::layer_composition::{
     effective_layer_isolation, layer_composite_params,
 };
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
-use cranpose_ui::text::LinkAnnotation;
+use cranpose_ui::text::LinkKey;
 use cranpose_ui_graphics::{
     BlendMode, Brush, FxHasher, Rect, RenderEffect, RenderHash, RuntimeShader,
 };
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::rc::Weak;
 
 fn layer_render_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -105,44 +104,45 @@ const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 256 * 1024;
 const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 1_048_576;
 const DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 1024 * 1024;
 const MAX_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = MAX_SCENE_RANGE_CACHE_ENTRY_BYTES;
-const ANNOTATED_STRING_HASH_CACHE_CAPACITY: usize = 2048;
+const RENDER_STRING_HASH_CACHE_CAPACITY: usize = 2048;
 
 thread_local! {
-    static ANNOTATED_STRING_HASH_CACHE: RefCell<AnnotatedStringHashCache> =
-        RefCell::new(AnnotatedStringHashCache::default());
+    static RENDER_STRING_HASH_CACHE: RefCell<RenderStringHashCache> =
+        RefCell::new(RenderStringHashCache::default());
 }
 
 #[derive(Default)]
-struct AnnotatedStringHashCache {
-    entries: HashMap<usize, AnnotatedStringHashEntry>,
+struct RenderStringHashCache {
+    entries: HashMap<usize, RenderStringHashEntry>,
 }
 
-struct AnnotatedStringHashEntry {
-    text: Weak<cranpose_ui::text::AnnotatedString>,
+struct RenderStringHashEntry {
+    text: std::sync::Weak<cranpose_ui::text::RenderString>,
     hash: u64,
 }
 
-impl AnnotatedStringHashCache {
-    fn get_or_insert(&mut self, text: &std::rc::Rc<cranpose_ui::text::AnnotatedString>) -> u64 {
-        let key = std::rc::Rc::as_ptr(text) as usize;
+impl RenderStringHashCache {
+    fn get_or_insert(&mut self, text: &std::sync::Arc<cranpose_ui::text::RenderString>) -> u64 {
+        let key = std::sync::Arc::as_ptr(text) as usize;
         if let Some(entry) = self.entries.get(&key) {
-            if entry.text.strong_count() > 0 && entry.text.as_ptr() == std::rc::Rc::as_ptr(text) {
+            if entry.text.strong_count() > 0 && entry.text.as_ptr() == std::sync::Arc::as_ptr(text)
+            {
                 return entry.hash;
             }
         }
 
-        let hash = compute_annotated_string_hash(text);
-        if self.entries.len() >= ANNOTATED_STRING_HASH_CACHE_CAPACITY {
+        let hash = compute_render_string_hash(text);
+        if self.entries.len() >= RENDER_STRING_HASH_CACHE_CAPACITY {
             self.entries
                 .retain(|_, entry| entry.text.strong_count() > 0);
-            if self.entries.len() >= ANNOTATED_STRING_HASH_CACHE_CAPACITY {
+            if self.entries.len() >= RENDER_STRING_HASH_CACHE_CAPACITY {
                 self.entries.clear();
             }
         }
         self.entries.insert(
             key,
-            AnnotatedStringHashEntry {
-                text: std::rc::Rc::downgrade(text),
+            RenderStringHashEntry {
+                text: std::sync::Arc::downgrade(text),
                 hash,
             },
         );
@@ -2740,7 +2740,7 @@ fn hash_text_draw<H: Hasher>(text: &TextDraw, state: &mut H) {
     hash_rect(text.rect, state);
     hash_snap_anchor(text.snap_anchor, state);
     text.translated_content_context.hash(state);
-    annotated_string_render_hash(&text.text).hash(state);
+    render_string_scene_hash(&text.text).hash(state);
     text.color.render_hash().hash(state);
     text.text_style.render_hash().hash(state);
     hash_f32_bits(text.font_size, state);
@@ -2750,20 +2750,17 @@ fn hash_text_draw<H: Hasher>(text: &TextDraw, state: &mut H) {
     hash_optional_rect(text.clip, state);
 }
 
-fn annotated_string_render_hash(text: &std::rc::Rc<cranpose_ui::text::AnnotatedString>) -> u64 {
-    ANNOTATED_STRING_HASH_CACHE.with(|cache| cache.borrow_mut().get_or_insert(text))
+fn render_string_scene_hash(text: &std::sync::Arc<cranpose_ui::text::RenderString>) -> u64 {
+    RENDER_STRING_HASH_CACHE.with(|cache| cache.borrow_mut().get_or_insert(text))
 }
 
-fn compute_annotated_string_hash(text: &cranpose_ui::text::AnnotatedString) -> u64 {
+fn compute_render_string_hash(text: &cranpose_ui::text::RenderString) -> u64 {
     let mut hasher = FxHasher::default();
-    hash_annotated_string_contents(text, &mut hasher);
+    hash_render_string_contents(text, &mut hasher);
     hasher.finish()
 }
 
-fn hash_annotated_string_contents<H: Hasher>(
-    text: &cranpose_ui::text::AnnotatedString,
-    state: &mut H,
-) {
+fn hash_render_string_contents<H: Hasher>(text: &cranpose_ui::text::RenderString, state: &mut H) {
     text.text.hash(state);
     text.span_styles.len().hash(state);
     for style in &text.span_styles {
@@ -2784,16 +2781,16 @@ fn hash_annotated_string_contents<H: Hasher>(
         annotation.item.tag.hash(state);
         annotation.item.annotation.hash(state);
     }
-    text.link_annotations.len().hash(state);
-    for link in &text.link_annotations {
+    text.links.len().hash(state);
+    for link in &text.links {
         link.range.start.hash(state);
         link.range.end.hash(state);
         match &link.item {
-            LinkAnnotation::Url(url) => {
+            LinkKey::Url(url) => {
                 0u8.hash(state);
                 url.hash(state);
             }
-            LinkAnnotation::Clickable { tag, .. } => {
+            LinkKey::Clickable(tag) => {
                 1u8.hash(state);
                 tag.hash(state);
             }
@@ -5217,16 +5214,16 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
 #[cfg(test)]
 mod tests {
     use super::{
-        anchored_composite_dest_quad, annotated_string_render_hash,
-        axis_aligned_backdrop_copy_region, axis_aligned_backdrop_snapshot_copy_plan,
-        backdrop_effect_cache_key, backdrop_scene_prefix_hash,
-        backdrop_underlay_is_covered_by_local_content, child_composite_visible,
-        composite_dest_viewport, dest_quad_intersects_rect, direct_scene_range_cache_chunk_end,
-        direct_scene_range_cache_enabled_for_policy, direct_scene_range_cache_key,
-        direct_scene_range_chunk_fits_cache_entry, layer_source_cache_key,
-        layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
-        layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
-        rects_intersect, retained_render_effect_hash, surface_target_size,
+        anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
+        axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
+        backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
+        child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
+        direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
+        direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
+        layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
+        layer_surface_dest_quad, layer_surface_translation_context,
+        minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
+        render_string_scene_hash, retained_render_effect_hash, surface_target_size,
         visible_backdrop_capture_rect, BackdropPrefixChildContribution,
         DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
         MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
@@ -5252,7 +5249,7 @@ mod tests {
         BlendMode, Brush, Color, GraphicsLayer, ImageBitmap, ImageSampling, RenderEffect,
         RuntimeShader,
     };
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     #[test]
     fn direct_scene_range_cache_policy_keeps_default_entries_small() {
@@ -5511,26 +5508,28 @@ mod tests {
     }
 
     #[test]
-    fn annotated_string_render_hash_is_content_based_and_retained() {
-        let first = Rc::new(AnnotatedString::new("cached text".to_string()));
-        let same_content = Rc::new(AnnotatedString::new("cached text".to_string()));
-        let different = Rc::new(AnnotatedString::new("different text".to_string()));
+    fn render_string_scene_hash_is_content_based_and_retained() {
+        let first = Arc::new(AnnotatedString::new("cached text".to_string()).render_string());
+        let same_content =
+            Arc::new(AnnotatedString::new("cached text".to_string()).render_string());
+        let different =
+            Arc::new(AnnotatedString::new("different text".to_string()).render_string());
 
-        let first_hash = annotated_string_render_hash(&first);
+        let first_hash = render_string_scene_hash(&first);
 
         assert_eq!(
             first_hash,
-            annotated_string_render_hash(&first),
-            "retained annotated strings should reuse their cached render hash"
+            render_string_scene_hash(&first),
+            "retained render strings should reuse their cached render hash"
         );
         assert_eq!(
             first_hash,
-            annotated_string_render_hash(&same_content),
+            render_string_scene_hash(&same_content),
             "distinct allocations with equal text content should produce the same render hash"
         );
         assert_ne!(
             first_hash,
-            annotated_string_render_hash(&different),
+            render_string_scene_hash(&different),
             "text content changes must still invalidate direct scene range cache keys"
         );
     }

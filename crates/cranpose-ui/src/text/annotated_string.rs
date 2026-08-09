@@ -74,6 +74,152 @@ pub struct StringAnnotation {
     pub annotation: String,
 }
 
+/// Link identity without the link behavior: what rendering may know about a
+/// [`LinkAnnotation`]. URL links keep their URL, clickable links keep their
+/// tag — the handler stays UI-side.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinkKey {
+    /// Identity of a [`LinkAnnotation::Url`].
+    Url(String),
+    /// Identity of a [`LinkAnnotation::Clickable`] — its tag.
+    Clickable(String),
+}
+
+/// What rendering reads from an [`AnnotatedString`]: content, styles, and
+/// link identity — never the link handlers, which live UI-side only.
+///
+/// Unlike `AnnotatedString` this is plain owned data (`Send + Sync`), so a
+/// lowered scene that carries it can cross threads.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RenderString {
+    pub text: String,
+    pub span_styles: Vec<RangeStyle<SpanStyle>>,
+    pub paragraph_styles: Vec<RangeStyle<ParagraphStyle>>,
+    pub string_annotations: Vec<RangeStyle<StringAnnotation>>,
+    /// Link ranges by identity (tag/url) — enough to hash and to key caches,
+    /// never enough to invoke a link.
+    pub links: Vec<RangeStyle<LinkKey>>,
+}
+
+const _: () = {
+    fn assert_send<T: Send + Sync>() {}
+    #[allow(dead_code)]
+    fn assert_render_string_is_send_sync() {
+        assert_send::<RenderString>();
+    }
+};
+
+impl RenderString {
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Returns a sorted list of unique byte indices where styles change.
+    ///
+    /// Mirrors [`AnnotatedString::span_boundaries`].
+    pub fn span_boundaries(&self) -> Vec<usize> {
+        span_boundaries_impl(&self.text, &self.span_styles)
+    }
+
+    /// Mirrors [`AnnotatedString::render_hash`]: hashes the exact same fields
+    /// with the exact same formula, so a cache keyed by either stays keyed by
+    /// the same distinctions.
+    pub fn render_hash(&self) -> u64 {
+        render_hash_impl(&self.text, &self.span_styles, &self.paragraph_styles)
+    }
+
+    /// Returns a new `RenderString` containing a substring of the original
+    /// text and any styles that overlap with the new range, with indices
+    /// adjusted. Mirrors [`AnnotatedString::subsequence`].
+    pub fn subsequence(&self, range: std::ops::Range<usize>) -> Self {
+        if range.is_empty() {
+            return Self {
+                text: String::new(),
+                ..Default::default()
+            };
+        }
+
+        let start = range.start.min(self.text.len());
+        let end = range.end.max(start).min(self.text.len());
+
+        if start == end {
+            return Self {
+                text: String::new(),
+                ..Default::default()
+            };
+        }
+
+        Self {
+            text: self.text[start..end].to_string(),
+            span_styles: clip_range_styles(&self.span_styles, start, end),
+            paragraph_styles: clip_range_styles(&self.paragraph_styles, start, end),
+            string_annotations: clip_range_styles(&self.string_annotations, start, end),
+            links: clip_range_styles(&self.links, start, end),
+        }
+    }
+}
+
+fn clip_range_styles<T: Clone>(
+    styles: &[RangeStyle<T>],
+    start: usize,
+    end: usize,
+) -> Vec<RangeStyle<T>> {
+    let mut clipped = Vec::new();
+    for style in styles {
+        let intersection_start = style.range.start.max(start);
+        let intersection_end = style.range.end.min(end);
+        if intersection_start < intersection_end {
+            clipped.push(RangeStyle {
+                item: style.item.clone(),
+                range: (intersection_start - start)..(intersection_end - start),
+            });
+        }
+    }
+    clipped
+}
+
+fn span_boundaries_impl(text: &str, span_styles: &[RangeStyle<SpanStyle>]) -> Vec<usize> {
+    let mut boundaries = vec![0, text.len()];
+    for span in span_styles {
+        boundaries.push(span.range.start);
+        boundaries.push(span.range.end);
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries
+        .into_iter()
+        .filter(|&b| b <= text.len() && text.is_char_boundary(b))
+        .collect()
+}
+
+fn render_hash_impl(
+    text: &str,
+    span_styles: &[RangeStyle<SpanStyle>],
+    paragraph_styles: &[RangeStyle<ParagraphStyle>],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = cranpose_ui_graphics::FxHasher::default();
+    text.hash(&mut hasher);
+    span_styles.len().hash(&mut hasher);
+    for span in span_styles {
+        span.range.start.hash(&mut hasher);
+        span.range.end.hash(&mut hasher);
+        span.item.render_hash().hash(&mut hasher);
+    }
+    paragraph_styles.len().hash(&mut hasher);
+    for paragraph in paragraph_styles {
+        paragraph.range.start.hash(&mut hasher);
+        paragraph.range.end.hash(&mut hasher);
+        paragraph.item.render_hash().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 /// The basic data structure of text with multiple styles.
 ///
 /// To construct an `AnnotatedString` you can use `AnnotatedString::builder()`.
@@ -163,17 +309,31 @@ impl AnnotatedString {
 
     /// Returns a sorted list of unique byte indices where styles change.
     pub fn span_boundaries(&self) -> Vec<usize> {
-        let mut boundaries = vec![0, self.text.len()];
-        for span in &self.span_styles {
-            boundaries.push(span.range.start);
-            boundaries.push(span.range.end);
+        span_boundaries_impl(&self.text, &self.span_styles)
+    }
+
+    /// Returns the [`RenderString`] view of this string: everything rendering
+    /// reads (content, styles, link identity), nothing it must not touch
+    /// (link handlers). A clone-conversion — memoize at the call site when
+    /// the same `AnnotatedString` lowers every frame.
+    pub fn render_string(&self) -> RenderString {
+        RenderString {
+            text: self.text.clone(),
+            span_styles: self.span_styles.clone(),
+            paragraph_styles: self.paragraph_styles.clone(),
+            string_annotations: self.string_annotations.clone(),
+            links: self
+                .link_annotations
+                .iter()
+                .map(|link| RangeStyle {
+                    item: match &link.item {
+                        LinkAnnotation::Url(url) => LinkKey::Url(url.clone()),
+                        LinkAnnotation::Clickable { tag, .. } => LinkKey::Clickable(tag.clone()),
+                    },
+                    range: link.range.clone(),
+                })
+                .collect(),
         }
-        boundaries.sort_unstable();
-        boundaries.dedup();
-        boundaries
-            .into_iter()
-            .filter(|&b| b <= self.text.len() && self.text.is_char_boundary(b))
-            .collect()
     }
 
     /// Computes a hash representing the contents of the span styles, suitable for cache invalidation.
@@ -213,23 +373,7 @@ impl AnnotatedString {
     }
 
     pub fn render_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = cranpose_ui_graphics::FxHasher::default();
-        self.text.hash(&mut hasher);
-        self.span_styles.len().hash(&mut hasher);
-        for span in &self.span_styles {
-            span.range.start.hash(&mut hasher);
-            span.range.end.hash(&mut hasher);
-            span.item.render_hash().hash(&mut hasher);
-        }
-        self.paragraph_styles.len().hash(&mut hasher);
-        for paragraph in &self.paragraph_styles {
-            paragraph.range.start.hash(&mut hasher);
-            paragraph.range.end.hash(&mut hasher);
-            paragraph.item.render_hash().hash(&mut hasher);
-        }
-        hasher.finish()
+        render_hash_impl(&self.text, &self.span_styles, &self.paragraph_styles)
     }
 
     /// Returns a new `AnnotatedString` containing a substring of the original text
