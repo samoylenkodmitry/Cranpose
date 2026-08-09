@@ -820,7 +820,7 @@ impl Runtime {
     }
 
     pub fn needs_frame(&self) -> bool {
-        *self.inner.needs_frame.borrow() || self.inner.ui_dispatcher.has_pending()
+        *self.inner.needs_frame.borrow()
     }
 
     pub fn set_needs_frame(&self, value: bool) {

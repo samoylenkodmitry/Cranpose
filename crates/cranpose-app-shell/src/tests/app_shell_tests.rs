@@ -959,6 +959,31 @@ fn renderer_warmup_keeps_frame_schedule_until_renderer_clears_it() {
 }
 
 #[test]
+fn idle_ui_task_wakes_for_an_update_without_scheduling_a_frame() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    shell.update();
+    shell.runtime.runtime_handle().post_ui(|| {});
+
+    let pending = shell.frame_schedule();
+    assert!(pending.needs_update, "queued UI work must wake the shell");
+    assert!(
+        !pending.needs_frame,
+        "a UI task that has not invalidated anything must not request a present"
+    );
+
+    assert_eq!(shell.update(), FrameUpdateResult::default());
+    let settled = shell.frame_schedule();
+    assert!(!settled.needs_update);
+    assert!(!settled.needs_frame);
+}
+
+#[test]
 fn two_app_shells_do_not_share_density_or_render_invalidations() {
     let _guard = test_guard();
     reset_public_render_state_for_test();

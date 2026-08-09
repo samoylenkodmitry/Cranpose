@@ -657,7 +657,7 @@ where
             return true;
         }
 
-        self.composition.should_render()
+        self.composition.runtime_handle().has_pending_ui() || self.composition.should_render()
     }
 
     pub fn needs_update(&self) -> bool {
@@ -670,7 +670,7 @@ where
     pub fn needs_redraw(&self) -> bool {
         let app_context = Rc::clone(&self.app_context);
         app_context
-            .enter(|| self.needs_ui_update_in_context() || self.renderer.needs_frame_warmup())
+            .enter(|| self.is_dirty || self.should_render() || self.renderer.needs_frame_warmup())
     }
 
     /// Marks the shell as dirty, indicating a redraw is needed.
@@ -756,8 +756,8 @@ where
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
         let needs_update = self.needs_update();
-        let needs_frame = needs_update
-            || self.has_active_animations()
+        let needs_frame = self.is_dirty
+            || self.should_render()
             || self.has_active_pointer_gesture()
             || self.renderer.needs_frame_warmup();
         FrameSchedule {
