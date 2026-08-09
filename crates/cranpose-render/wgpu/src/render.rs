@@ -2226,7 +2226,14 @@ impl MeshVertex {
 /// A/B needs no rebuild. Read per capture — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_enabled() -> bool {
-    std::env::var("CRANPOSE_ARC_MESH").as_deref() != Ok("0")
+    // Opt-in (CRANPOSE_ARC_MESH=1 / debug.cranpose.arc_mesh): the Gate 0
+    // off-charger watch A/B measured the non-indexed mesh 5-7 fps SLOWER
+    // than plain quads on the Adreno 702 — the 4-6x vertex amplification
+    // outweighs the fragment savings on a small binning GPU (big desktop
+    // GPUs and the at-vsync-ceiling Huawei masked it). Default returns to
+    // quad expansion until indexed band-boundary geometry removes the
+    // amplification; then the A/B is repeated.
+    matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok(v) if v != "0")
 }
 
 /// Dilation applied to the band's half-thickness before meshing, in capture
