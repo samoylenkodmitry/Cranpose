@@ -310,6 +310,14 @@ const MAX_COMMIT_ATTEMPTS: usize = 4;
 /// When live coverage sinks below this fraction of the retained records,
 /// re-partition from scratch.
 const MIN_COVERAGE_FRACTION: f32 = 0.5;
+/// Coverage eroding this far below what the capture achieved re-partitions
+/// to win dead ranges back — deaths are permanent otherwise, while the
+/// content they covered usually stabilizes again a moment later.
+const RECAPTURE_EROSION: f32 = 0.05;
+/// Frames a capture must survive before erosion alone may retire it. Keeps
+/// an inherently churning scene from recapturing in a loop — at worst one
+/// two-frame recapture per cooldown.
+const RECAPTURE_COOLDOWN_FRAMES: u32 = 180;
 
 /// The similarity-checkable view of one tape entry: which typed store it
 /// lives in and its index there. `None` marks entries replay cannot carry
@@ -589,6 +597,14 @@ pub struct CommandReplayState {
     snapshot_views: Vec<Option<ReplayView>>,
     segments: Vec<CommandSegment>,
     next_segment_id: u32,
+    lifetime_deaths: u64,
+    lifetime_splits: u64,
+    /// Fraction of the tape the capture covered when it was taken. Dead
+    /// segments never come back on their own, so coverage eroding well
+    /// below this watermark means stable content sits unwatched — worth
+    /// paying a recapture for.
+    capture_coverage: f32,
+    frames_since_capture: u32,
 }
 
 impl Default for CommandReplayState {
@@ -600,6 +616,10 @@ impl Default for CommandReplayState {
             snapshot_views: Vec::new(),
             segments: Vec::new(),
             next_segment_id: 0,
+            lifetime_deaths: 0,
+            lifetime_splits: 0,
+            capture_coverage: 0.0,
+            frames_since_capture: 0,
         }
     }
 }
@@ -607,6 +627,12 @@ impl Default for CommandReplayState {
 impl CommandReplayState {
     pub fn segments(&self) -> &[CommandSegment] {
         &self.segments
+    }
+
+    /// Lifetime (deaths, splits) across every verified frame — diagnostics
+    /// for judging how churn interacts with retention.
+    pub fn stats(&self) -> (u64, u64) {
+        (self.lifetime_deaths, self.lifetime_splits)
     }
 
     /// Advances the state machine with this frame's recording and returns
@@ -745,6 +771,13 @@ impl CommandReplayState {
                 }
             })
             .collect();
+        let covered: usize = self
+            .segments
+            .iter()
+            .map(|segment| segment.tape_end - segment.tape_start)
+            .sum();
+        self.capture_coverage = covered as f32 / current.tape.len().max(1) as f32;
+        self.frames_since_capture = 0;
         self.phase = CommandReplayPhase::Captured;
     }
 
@@ -753,14 +786,15 @@ impl CommandReplayState {
     /// [`RESYNC_WINDOW`] — dynamic spans between segments change length
     /// freely — probing a few entries under each candidate transform before
     /// committing to a full-span verification (a wrong candidate from a
-    /// different ring fails the probe on its radii). A mismatching segment
-    /// dies whole for this frame (splits are a later refinement); eroded
-    /// coverage re-snapshots for the next frame.
+    /// different ring fails the probe on its radii). A mismatch mid-span
+    /// splits the segment: the matched prefix stays retained, the record
+    /// that changed goes dynamic, and the suffix re-enters the location
+    /// queue as its own segment — churn costs the records it touched, not
+    /// the whole capture. Eroded coverage re-snapshots for the next frame.
     fn verify(&mut self, current: &CommandRecording) -> ReplayOutcome {
         let current_views = build_views(current);
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
-        let mut dead_segments: Vec<usize> = Vec::new();
         let mut cursor = 0usize; // current-tape position covered so far
         // How far the current tape has drifted from the capture tape, from
         // the segments located so far. Self-similar rings make a linear
@@ -768,7 +802,13 @@ impl CommandReplayState {
         // probe — so candidates are tried by distance from the expected
         // position, where the true anchor almost always sits.
         let mut drift = 0isize;
-        for (segment_index, segment) in self.segments.iter().enumerate() {
+        // Segments awaiting location this frame, tape order. A split pushes
+        // the suffix back onto the front so it is located before the next
+        // original segment.
+        let mut pending: std::collections::VecDeque<CommandSegment> =
+            self.segments.drain(..).collect();
+        let mut survivors: Vec<CommandSegment> = Vec::new();
+        while let Some(segment) = pending.pop_front() {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
                 .min(current_views.len().saturating_sub(len - 1))
@@ -789,6 +829,12 @@ impl CommandReplayState {
             });
             type Located = (usize, RecordTransform, Vec<(u32, Color)>);
             let mut located: Option<Located> = None;
+            // The longest cleanly matched prefix among failed commits:
+            // (start, matched records, transform, recolors within prefix).
+            // A genuine mid-span change surfaces here — the right anchor
+            // matches far more than any mislocated one.
+            let mut best_prefix: Option<Located> = None;
+            let mut best_prefix_len = 0usize;
             let mut attempts = 0usize;
             'search: for start in candidates {
                 let (Some(view), Some(snapshot_view)) = (
@@ -828,32 +874,43 @@ impl CommandReplayState {
                 // mislocated anchor (self-similar rings), so the search
                 // resumes — a bounded number of times.
                 let mut recolors: Vec<(u32, Color)> = Vec::new();
-                let mut failed = false;
+                let mut matched = len;
                 for offset in 0..len {
-                    let (Some(view), Some(snapshot_view)) = (
+                    let entry_match = match (
                         current_views[start + offset],
                         self.snapshot_views[segment.tape_start + offset],
-                    ) else {
-                        failed = true;
-                        break;
+                    ) {
+                        (Some(view), Some(snapshot_view)) => match_pair(
+                            current,
+                            view,
+                            &self.snapshot,
+                            snapshot_view,
+                            self.center,
+                            t,
+                        ),
+                        _ => RecordMatch::Mismatch,
                     };
-                    match match_pair(current, view, &self.snapshot, snapshot_view, self.center, t)
-                    {
+                    match entry_match {
                         RecordMatch::Exact => {}
                         RecordMatch::Recolor => {
-                            let color = match view {
-                                ReplayView::Arc(a) => current.arcs[a].color,
-                                ReplayView::RoundRect(r) => current.round_rects[r].color,
+                            let color = match current_views[start + offset] {
+                                Some(ReplayView::Arc(a)) => current.arcs[a].color,
+                                Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
+                                None => unreachable!("recolor requires a view"),
                             };
                             recolors.push((offset as u32, color));
                         }
                         RecordMatch::Mismatch => {
-                            failed = true;
+                            matched = offset;
                             break;
                         }
                     }
                 }
-                if failed {
+                if matched < len {
+                    if matched > best_prefix_len {
+                        best_prefix_len = matched;
+                        best_prefix = Some((start, t, recolors));
+                    }
                     attempts += 1;
                     if attempts >= MAX_COMMIT_ATTEMPTS {
                         break 'search;
@@ -863,11 +920,61 @@ impl CommandReplayState {
                 located = Some((start, t, recolors));
                 break;
             }
-            let Some((span_start, t, recolors)) = located else {
-                dead_segments.push(segment_index);
-                continue;
+            // A failed segment splits around the record that changed: the
+            // matched prefix is retained now, the suffix re-enters the
+            // queue to locate itself past whatever churn displaced it. Only
+            // a prefix long enough to prove the anchor was right earns a
+            // split — a segment with no solid prefix dies whole, or a weak
+            // wrong-anchor prefix would shed one record and re-fail across
+            // the whole span.
+            let (span_start, t, recolors, span_len) = match located {
+                Some((start, t, recolors)) => (start, t, recolors, len),
+                None => {
+                    let split = best_prefix_len >= MIN_SEGMENT_RECORDS;
+                    let Some((start, t, recolors)) = best_prefix.filter(|_| split) else {
+                        self.lifetime_deaths += 1;
+                        continue;
+                    };
+                    let suffix_start = segment.tape_start + best_prefix_len + 1;
+                    if segment.tape_end > suffix_start
+                        && segment.tape_end - suffix_start >= MIN_SEGMENT_RECORDS
+                    {
+                        let id = self.next_segment_id;
+                        self.next_segment_id += 1;
+                        pending.push_front(CommandSegment {
+                            id,
+                            tape_start: suffix_start,
+                            tape_end: segment.tape_end,
+                            bounds: range_bounds(
+                                &self.snapshot,
+                                &self.snapshot_views,
+                                (suffix_start, segment.tape_end),
+                            ),
+                        });
+                    }
+                    self.lifetime_splits += 1;
+                    (start, t, recolors, best_prefix_len)
+                }
             };
-            drift = span_start as isize - segment.tape_start as isize;
+            let survivor = if span_len == len {
+                segment
+            } else {
+                // The prefix is a new capture identity: its geometry range
+                // differs from the segment it came from.
+                let id = self.next_segment_id;
+                self.next_segment_id += 1;
+                CommandSegment {
+                    id,
+                    tape_start: segment.tape_start,
+                    tape_end: segment.tape_start + span_len,
+                    bounds: range_bounds(
+                        &self.snapshot,
+                        &self.snapshot_views,
+                        (segment.tape_start, segment.tape_start + span_len),
+                    ),
+                }
+            };
+            drift = span_start as isize - survivor.tape_start as isize;
 
             if span_start > cursor {
                 spans.push(ReplaySpan::Dynamic {
@@ -875,14 +982,15 @@ impl CommandReplayState {
                     tape_end: span_start,
                 });
             }
-            retained_records += len;
+            retained_records += span_len;
             spans.push(ReplaySpan::Retained {
-                segment: segment.id,
+                segment: survivor.id,
                 transform: t,
                 recolors,
-                bounds: t.apply_to_bounds(self.center, segment.bounds),
+                bounds: t.apply_to_bounds(self.center, survivor.bounds),
             });
-            cursor = span_start + len;
+            cursor = span_start + span_len;
+            survivors.push(survivor);
         }
         if cursor < current.tape.len() {
             spans.push(ReplaySpan::Dynamic {
@@ -891,18 +999,20 @@ impl CommandReplayState {
             });
         }
 
-        for segment_index in dead_segments.into_iter().rev() {
-            self.segments.remove(segment_index);
-        }
+        self.segments = survivors;
+        self.frames_since_capture += 1;
         let retained_total: usize = self
             .segments
             .iter()
             .map(|segment| segment.tape_end - segment.tape_start)
             .sum();
-        if retained_records == 0
-            || (retained_total as f32) < MIN_COVERAGE_FRACTION * current.tape.len() as f32
-        {
-            // Erosion: re-snapshot so the next two frames re-partition.
+        let coverage = retained_total as f32 / current.tape.len().max(1) as f32;
+        let collapsed = retained_records == 0 || coverage < MIN_COVERAGE_FRACTION;
+        let eroded = coverage + RECAPTURE_EROSION < self.capture_coverage
+            && self.frames_since_capture >= RECAPTURE_COOLDOWN_FRAMES;
+        if collapsed || eroded {
+            // Re-snapshot so the next two frames re-partition. Collapse pays
+            // immediately; mere erosion waits out the capture cooldown.
             let center = self.center;
             self.take_snapshot(current, center);
             if retained_records == 0 {
@@ -1218,6 +1328,93 @@ mod tests {
         assert!(
             retained >= 2,
             "the untouched rings keep retaining, got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn mid_segment_change_splits_and_retains_both_halves() {
+        let mut state = CommandReplayState::default();
+        state.advance(&ring_frame(1, 900, 0, 0));
+        state.advance(&ring_frame(1, 900, 1, 0));
+        assert_eq!(state.segments().len(), 1, "one ring is one segment");
+        let mut broken = ring_frame(1, 900, 2, 0);
+        broken.arcs[450].sweep_angle *= 3.0;
+        let ReplayOutcome::Spans(spans) = state.advance(&broken) else {
+            panic!("a single changed record must not drop retention");
+        };
+        let dynamic: usize = spans
+            .iter()
+            .filter_map(|span| match span {
+                ReplaySpan::Dynamic {
+                    tape_start,
+                    tape_end,
+                } => Some(tape_end - tape_start),
+                _ => None,
+            })
+            .sum();
+        let retained = spans
+            .iter()
+            .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
+            .count();
+        assert_eq!(retained, 2, "prefix and suffix both retain: {spans:?}");
+        assert_eq!(dynamic, 1, "only the changed record goes dynamic");
+        assert_eq!(state.stats(), (0, 1), "one split, no deaths");
+
+        // The pieces keep retaining on later frames, the changed record's
+        // slot staying dynamic between them.
+        let ReplayOutcome::Spans(spans) = state.advance(&ring_frame(1, 900, 3, 0)) else {
+            panic!("split pieces must keep retaining");
+        };
+        let retained = spans
+            .iter()
+            .filter(|span| matches!(span, ReplaySpan::Retained { .. }))
+            .count();
+        assert_eq!(retained, 2, "both pieces relocate next frame: {spans:?}");
+    }
+
+    #[test]
+    fn erosion_recaptures_dead_ranges_after_the_cooldown() {
+        let mut state = CommandReplayState::default();
+        state.advance(&ring_frame(3, 300, 0, 0));
+        state.advance(&ring_frame(3, 300, 1, 0));
+        // The middle ring changes shape permanently: its segment dies, and
+        // only a recapture can watch the new shape.
+        let mutated = |frame: usize| {
+            let mut recording = ring_frame(3, 300, frame, 0);
+            for arc in &mut recording.arcs[300..600] {
+                arc.sweep_angle *= 3.0;
+            }
+            recording
+        };
+        let dynamic_records = |outcome: &ReplayOutcome| -> usize {
+            match outcome {
+                ReplayOutcome::AllDynamic => usize::MAX,
+                ReplayOutcome::Spans(spans) => spans
+                    .iter()
+                    .filter_map(|span| match span {
+                        ReplaySpan::Dynamic {
+                            tape_start,
+                            tape_end,
+                        } => Some(tape_end - tape_start),
+                        _ => None,
+                    })
+                    .sum(),
+            }
+        };
+        let after_death = state.advance(&mutated(2));
+        let lost = dynamic_records(&after_death);
+        assert!(
+            (250..=400).contains(&lost),
+            "the changed ring goes dynamic, got {lost}"
+        );
+        for frame in 3..(3 + RECAPTURE_COOLDOWN_FRAMES as usize + 4) {
+            state.advance(&mutated(frame));
+        }
+        let recovered = state.advance(&mutated(200));
+        let residue = dynamic_records(&recovered);
+        assert!(
+            residue < 50,
+            "the recapture watches the ring's new shape, got {residue} dynamic"
         );
     }
 

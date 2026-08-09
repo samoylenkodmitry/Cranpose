@@ -892,6 +892,15 @@ pub struct CommandRecording {
 }
 
 impl CommandRecording {
+    /// Total recorded entries (the tape length).
+    pub fn len(&self) -> usize {
+        self.tape.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tape.is_empty()
+    }
+
     fn clear(&mut self) {
         self.tape.clear();
         self.rects.clear();

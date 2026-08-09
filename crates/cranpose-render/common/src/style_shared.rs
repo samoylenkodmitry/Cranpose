@@ -241,6 +241,24 @@ pub fn primitives_for_placement_retained(
     recording: CommandRecording,
     storage: Vec<DrawPrimitive>,
 ) -> (Vec<DrawPrimitive>, CommandRecording) {
+    let mut no_replay = None;
+    primitives_for_placement_verified(command, placement, size, recording, storage, &mut no_replay)
+}
+
+/// [`primitives_for_placement_retained`] with per-command similarity
+/// verification: when `replay` carries the command's state, the freshly
+/// recorded compact form advances it BEFORE materialization, yielding the
+/// frame's retained/dynamic span structure. Rendering still materializes
+/// everything — consuming the spans (and skipping materialization for
+/// retained ones) is the renderer-side half of the retention work.
+pub fn primitives_for_placement_verified(
+    command: &DrawCommand,
+    placement: DrawPlacement,
+    size: Size,
+    recording: CommandRecording,
+    storage: Vec<DrawPrimitive>,
+    replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
+) -> (Vec<DrawPrimitive>, CommandRecording) {
     // `markers` is the recording scope's own count of `Content` markers,
     // maintained while the command records (`draw_content()` calls and pushed
     // batches both keep it current), so it is authoritative: zero means the
@@ -308,28 +326,57 @@ pub fn primitives_for_placement_retained(
         size: Size,
         recording: CommandRecording,
         storage: Vec<DrawPrimitive>,
+        replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
     ) -> FinishedRecording {
         let mut scope = cranpose_ui::command_draw_scope_retained(size, recording, storage);
         func(&mut scope);
+        if let Some(state) = replay {
+            let outcome = state.advance(scope.recorded());
+            if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
+                if let cranpose_ui_graphics::ReplayOutcome::Spans(spans) = &outcome {
+                    let (mut retained, mut dynamic) = (0usize, 0usize);
+                    for span in spans {
+                        match span {
+                            cranpose_ui_graphics::ReplaySpan::Retained { .. } => retained += 1,
+                            cranpose_ui_graphics::ReplaySpan::Dynamic {
+                                tape_start,
+                                tape_end,
+                            } => dynamic += tape_end - tape_start,
+                        }
+                    }
+                    let (deaths, splits) = state.stats();
+                    eprintln!(
+                        "[command-replay] {} records: {} retained spans, {} dynamic records; \
+                         {} segments alive, lifetime deaths {} splits {}",
+                        scope.recorded().len(),
+                        retained,
+                        dynamic,
+                        state.segments().len(),
+                        deaths,
+                        splits,
+                    );
+                }
+            }
+        }
         scope.finish()
     }
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let finished = record_into(func, size, recording, storage);
+            let finished = record_into(func, size, recording, storage, replay);
             (
                 filter_content(finished.primitives, finished.content_markers),
                 finished.recording,
             )
         }
         (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let finished = record_into(func, size, recording, storage);
+            let finished = record_into(func, size, recording, storage, replay);
             (
                 filter_content(finished.primitives, finished.content_markers),
                 finished.recording,
             )
         }
         (_, DrawCommand::WithContent(func)) => {
-            let finished = record_into(func, size, recording, storage);
+            let finished = record_into(func, size, recording, storage, replay);
             (
                 split_with_content(finished.primitives, placement, finished.content_markers),
                 finished.recording,

@@ -21,7 +21,7 @@ use crate::graph::{
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{primitives_for_placement_retained, DrawPlacement};
+use crate::style_shared::{primitives_for_placement_verified, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
@@ -748,6 +748,9 @@ struct RecorderSlot {
     /// owner is always the registry or the in-flight scope, never the graph,
     /// so unlike `handles` these need no sharing discipline.
     recording: cranpose_ui_graphics::CommandRecording,
+    /// Per-command similarity verification state: the retained snapshot and
+    /// its segments. Advances every time the command re-records.
+    replay: cranpose_ui_graphics::CommandReplayState,
 }
 
 thread_local! {
@@ -781,13 +784,19 @@ fn acquire_recording(
 ) -> (
     cranpose_ui_graphics::CommandRecording,
     Vec<cranpose_ui_graphics::DrawPrimitive>,
+    cranpose_ui_graphics::CommandReplayState,
 ) {
     COMMAND_RECORDINGS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(slot) = map.get_mut(&id) else {
-            return (cranpose_ui_graphics::CommandRecording::default(), Vec::new());
+            return (
+                cranpose_ui_graphics::CommandRecording::default(),
+                Vec::new(),
+                cranpose_ui_graphics::CommandReplayState::default(),
+            );
         };
         let recording = std::mem::take(&mut slot.recording);
+        let replay = std::mem::take(&mut slot.replay);
         for handle in &mut slot.handles {
             if handle
                 .as_ref()
@@ -795,10 +804,10 @@ fn acquire_recording(
             {
                 let shared = handle.take().expect("checked some above");
                 let storage = Rc::try_unwrap(shared).expect("sole owner checked above");
-                return (recording, storage);
+                return (recording, storage, replay);
             }
         }
-        (recording, Vec::new())
+        (recording, Vec::new(), replay)
     })
 }
 
@@ -806,6 +815,7 @@ fn publish_recording(
     id: DrawCommandId,
     recording: cranpose_ui_graphics::CommandRecording,
     primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
+    replay: cranpose_ui_graphics::CommandReplayState,
 ) -> Rc<Vec<cranpose_ui_graphics::DrawPrimitive>> {
     let shared = Rc::new(primitives);
     COMMAND_RECORDINGS.with(|map| {
@@ -815,9 +825,11 @@ fn publish_recording(
             generation,
             handles: [None, None],
             recording: cranpose_ui_graphics::CommandRecording::default(),
+            replay: cranpose_ui_graphics::CommandReplayState::default(),
         });
         slot.generation = generation;
         slot.recording = recording;
+        slot.replay = replay;
         // Newest first; the displaced oldest handle drops out of the
         // registry, and its buffer lives on only while a graph node holds it.
         slot.handles[1] = slot.handles[0].take();
@@ -840,9 +852,15 @@ fn draw_nodes(
             command_index: command_index as u32,
             placement,
         };
-        let (recording, storage) = acquire_recording(id);
-        let (primitives, recording) =
-            primitives_for_placement_retained(command, placement, size, recording, storage);
+        let (recording, storage, mut replay) = acquire_recording(id);
+        let (primitives, recording) = primitives_for_placement_verified(
+            command,
+            placement,
+            size,
+            recording,
+            storage,
+            &mut Some(&mut replay),
+        );
         // An empty recording with no earned capacity is what a command's
         // mismatched placement pass produces every rebuild; keeping those out
         // of the registry halves its population. An empty recording WITH
@@ -851,7 +869,7 @@ fn draw_nodes(
         if primitives.is_empty() && primitives.capacity() == 0 {
             continue;
         }
-        let shared = publish_recording(id, recording, primitives);
+        let shared = publish_recording(id, recording, primitives, replay);
         if shared.is_empty() {
             continue;
         }
