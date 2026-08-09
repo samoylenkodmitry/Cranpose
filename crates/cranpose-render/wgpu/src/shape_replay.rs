@@ -245,13 +245,13 @@ pub(crate) fn replay_enabled() -> bool {
     std::env::var("CRANPOSE_SIMILARITY_REPLAY").as_deref() != Ok("0")
 }
 
-/// Opt-in switch for the identity feed while it runs alongside the flat
-/// detector: `CRANPOSE_COMMAND_FEED=1` makes runs carrying a replay frame
-/// draw from identity-keyed slots; anything else leaves the flat detector
-/// in charge. Flips to default-on (and then the flag dies with the flat
-/// detector) once parity is proven on the game.
+/// Kill switch for the identity feed while it runs alongside the flat
+/// detector: default ON since parity with the flat detector was proven
+/// exact on the game scene (command_feed_parity test + desktop runs);
+/// `CRANPOSE_COMMAND_FEED=0` restores flat-detector-only retention for
+/// A/B comparison. The flag dies with the flat detector.
 pub(crate) fn command_feed_enabled() -> bool {
-    std::env::var("CRANPOSE_COMMAND_FEED").as_deref() == Ok("1")
+    std::env::var("CRANPOSE_COMMAND_FEED").as_deref() != Ok("0")
 }
 
 /// Test/diagnostic view of the identity feed on this thread: live feed
