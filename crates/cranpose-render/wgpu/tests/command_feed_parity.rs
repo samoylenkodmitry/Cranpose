@@ -197,7 +197,11 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     );
 
     // Baseline: everything through the full pipeline — no feed, no flat
-    // detector (its retention is not what this test compares against).
+    // detector (its retention is not what this test compares against), and
+    // no retained arc meshes: this test documents the FEED's divergence
+    // envelope, so its captures stay on the legacy quad expansion (the mesh
+    // adds its own interpolation noise, measured in arc_mesh_parity).
+    std::env::set_var("CRANPOSE_ARC_MESH", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
     let baseline = render_sequence(&mut renderer, &graphs);
 
@@ -248,6 +252,7 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     let bypassed = render_sequence(&mut renderer, &bypassed_graphs);
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_ARC_MESH");
 
     let (feed_slots, patches) = cranpose_render_wgpu::command_feed_live_stats();
     assert!(

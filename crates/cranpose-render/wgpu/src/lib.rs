@@ -22,22 +22,22 @@ mod shader_cache;
 mod shaders;
 #[cfg(not(target_arch = "wasm32"))]
 mod shape_replay;
-#[cfg(not(target_arch = "wasm32"))]
-mod worker_pool;
 mod surface_executor;
 mod surface_plan;
 mod surface_requirements;
 #[cfg(test)]
 mod test_support;
+#[cfg(not(target_arch = "wasm32"))]
+mod worker_pool;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 pub use scene::{ClickAction, HitRegion, Scene};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::live_stats as shape_replay_live_stats;
+pub use shape_replay::feed_live_stats as command_feed_live_stats;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::feed_live_stats as command_feed_live_stats;
+pub use shape_replay::live_stats as shape_replay_live_stats;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
@@ -409,6 +409,17 @@ impl WgpuRenderer {
     /// Return the WGPU device when GPU resources are initialized.
     pub fn try_device(&self) -> Option<&wgpu::Device> {
         self.gpu_renderer.as_ref().map(|r| &*r.device)
+    }
+
+    /// Test/diagnostic view of retained arc meshes: (slots holding a mesh,
+    /// total live replay slots).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::replay_slot_mesh_stats)
+            .unwrap_or((0, 0))
     }
 }
 

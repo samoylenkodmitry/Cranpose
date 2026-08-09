@@ -1363,6 +1363,66 @@ fn create_shape_pipeline(
     })
 }
 
+/// Storage-mode pipeline for retained slots that captured a conservative arc
+/// mesh: `vs_mesh` consumes `{position, uv, shape_idx}` vertices instead of
+/// expanding six corners per shape. Fragment stage, bind group layouts
+/// (including the dynamic-offset similarity binding and the retained paint
+/// binding) and the SrcOver blend are exactly the ones the legacy retained
+/// path uses — only the vertex fetch differs.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_mesh_shape_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: &wgpu::BindGroupLayout,
+    shape_layout: &wgpu::BindGroupLayout,
+    batch_limits: ShapeBatchLimits,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shape Mesh Shader"),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Mesh Render Pipeline Layout"),
+        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Retained Mesh Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_mesh"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[MeshVertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 fn create_image_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -2074,6 +2134,439 @@ struct ReplaySlot {
     /// spans' extra bytes ever could.
     paint_mirror: Vec<[f32; 4]>,
     gradient_mirror: Vec<GradientStop>,
+    /// Conservative capture-space arc/ring mesh, built once at capture.
+    /// `None` when the kill switch is off, the slot meshed no arcs, or the
+    /// vertex budget overflowed — those slots replay through the legacy
+    /// six-vertices-per-shape path.
+    mesh: Option<ReplaySlotMesh>,
+}
+
+/// Vertex geometry a retained slot replays instead of per-shape quads: arc
+/// bands get trapezoid strips covering only their antialiasing footprint,
+/// every other shape gets a passthrough pair of triangles identical to the
+/// quad expansion. See [`build_arc_mesh_vertices`].
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlotMesh {
+    vertex_buffer: wgpu::Buffer,
+    /// Prefix table, `shape_count + 1` entries: shape `i`'s triangles occupy
+    /// vertices `vertex_prefix[i]..vertex_prefix[i + 1]`, so a retained span
+    /// draws `vertex_prefix[first]..vertex_prefix[first + count]` — one draw
+    /// per op, identical shape order, z untouched.
+    vertex_prefix: Vec<u32>,
+}
+
+/// Vertex of a retained slot's conservative arc mesh: capture-device-space
+/// position, the uv reproducing `vs_main`'s affine rect map at that position,
+/// and the shape index standing in for `vertex_index / 6`.
+#[cfg(not(target_arch = "wasm32"))]
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct MeshVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    shape_idx: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MeshVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+/// Kill switch, mirroring `command_feed_enabled`: default ON,
+/// `CRANPOSE_ARC_MESH=0` (or the `debug.cranpose.arc_mesh` property on
+/// Android) makes the next capture skip mesh building entirely, so a device
+/// A/B needs no rebuild. Read per capture — captures are rare.
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_enabled() -> bool {
+    std::env::var("CRANPOSE_ARC_MESH").as_deref() != Ok("0")
+}
+
+/// Dilation applied to the band's half-thickness before meshing, in capture
+/// device pixels. The fragment SDF feathers over ±0.5 px
+/// (`smoothstep(-0.5, 0.5, dist)`), so every pixel the shader keeps sits
+/// within 0.5 px of the band; the other 0.5 px absorbs f32 slop between this
+/// builder's trig and the converted shape's precomputed (sin, cos) pairs.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MARGIN: f32 = 1.0;
+
+/// Chord overshoot budget in pixels: the segment count is chosen so pushing
+/// outer edges tangent-outside the dilated outer circle overshoots it by
+/// about this much at the chord ends.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_OVERSHOOT: f32 = 2.0;
+
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MIN_SEGMENTS: usize = 4;
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MAX_SEGMENTS: usize = 64;
+
+/// Per-slot vertex budget: `48 * shape_count` (floored for tiny slots so a
+/// single huge ring still fits). MEGA's retained arcs average ~30 vertices
+/// each, so this bounds a slot's mesh at ~1 KB per shape while leaving real
+/// headroom. Overflow falls back to whole-slot passthrough WITH a warning —
+/// truncating silently would break the containment invariant.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_VERTEX_BUDGET_PER_SHAPE: usize = 48;
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_VERTEX_BUDGET_FLOOR: usize = 4096;
+
+/// Band parameters of a captured arc that qualifies for a conservative mesh:
+/// solid brush, no clip, and a quad that is exactly — tolerance zero — the
+/// axis-aligned box of its rect. Everything else returns `None` and passes
+/// through as today's two quad triangles.
+#[cfg(not(target_arch = "wasm32"))]
+struct ArcMeshBand {
+    center: [f32; 2],
+    inner: f32,
+    outer: f32,
+    start: f32,
+    sweep: f32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
+    // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    if flags & 3 != SHAPE_KIND_ARC {
+        return None;
+    }
+    // Solid brushes only: gradients also derive from `rect_pos` and would
+    // mesh in principle, but the hot retained scenes are solid and a narrow
+    // gate keeps the byte-exactness surface small.
+    if shape.brush_type != 0 {
+        return None;
+    }
+    // A live clip is a hard `world_pos` comparison in the fragment shader.
+    // Meshed arcs interpolate `world_pos` across different triangles than
+    // the quad would, and one ulp of difference at the clip boundary flips
+    // whole pixels — clipped arcs pass through untouched.
+    if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
+        return None;
+    }
+    let [x, y, w, h] = shape.rect;
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    // Exact compare, tolerance zero: the mesh is clipped to this box, so the
+    // quad must BE the box bitwise or the mesh could rasterize pixels
+    // today's quad does not (the tight arc AABB crops alpha≈0.5 pixels at
+    // the tangent points — a mesh without the identical crop would add
+    // them).
+    if shape.quad01 != [x, y, x + w, y] || shape.quad23 != [x, y + h, x + w, y + h] {
+        return None;
+    }
+    let center = [shape.arc_params[0], shape.arc_params[1]];
+    let start = shape.arc_params[2];
+    let sweep = shape.arc_params[3];
+    let outer = shape.stroke_params[2];
+    let inner = shape.stroke_params[3];
+    let finite = center[0].is_finite()
+        && center[1].is_finite()
+        && start.is_finite()
+        && sweep.is_finite()
+        && outer.is_finite()
+        && inner.is_finite();
+    if !finite || outer <= 0.0 || sweep <= 0.0 {
+        return None;
+    }
+    Some(ArcMeshBand {
+        center,
+        inner,
+        outer,
+        start,
+        sweep,
+    })
+}
+
+/// Emits the six vertices `vs_main` would expand for this shape — corner
+/// order (0, 1, 2)(2, 1, 3) and corner uvs, positions straight from the
+/// captured quad — so a passthrough shape rasterizes bit-identically to the
+/// legacy indexless path.
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_passthrough_quad(shape: &ShapeData, shape_idx: u32, out: &mut Vec<MeshVertex>) {
+    let corners = [
+        ([shape.quad01[0], shape.quad01[1]], [0.0, 0.0]),
+        ([shape.quad01[2], shape.quad01[3]], [1.0, 0.0]),
+        ([shape.quad23[0], shape.quad23[1]], [0.0, 1.0]),
+        ([shape.quad23[2], shape.quad23[3]], [1.0, 1.0]),
+    ];
+    for corner in [0usize, 1, 2, 2, 1, 3] {
+        let (position, uv) = corners[corner];
+        out.push(MeshVertex {
+            position,
+            uv,
+            shape_idx,
+        });
+    }
+}
+
+/// One Sutherland–Hodgman pass against an axis-aligned half-plane.
+///
+/// Two properties the byte-exactness bar depends on:
+/// * the clipped coordinate is set to `bound` EXACTLY rather than recomputed
+///   through `p + t * (q - p)`, so every clipped polygon's boundary lies
+///   bitwise on the clip line;
+/// * the intersection is computed on the lexicographically ordered endpoint
+///   pair, so the shared radial edge of two adjacent trapezoids — traversed
+///   in opposite directions — clips to bitwise-identical points, keeping the
+///   strip watertight (no pixel shaded twice or missed along the seam).
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_polygon_axis(
+    input: &[[f32; 2]],
+    axis: usize,
+    bound: f32,
+    keep_at_most: bool,
+    output: &mut Vec<[f32; 2]>,
+) {
+    output.clear();
+    let inside = |p: [f32; 2]| {
+        if keep_at_most {
+            p[axis] <= bound
+        } else {
+            p[axis] >= bound
+        }
+    };
+    let intersect = |a: [f32; 2], b: [f32; 2]| {
+        let (p, q) = if (b[0], b[1]) < (a[0], a[1]) {
+            (b, a)
+        } else {
+            (a, b)
+        };
+        let t = (bound - p[axis]) / (q[axis] - p[axis]);
+        let mut point = [0.0f32; 2];
+        point[axis] = bound;
+        point[1 - axis] = p[1 - axis] + t * (q[1 - axis] - p[1 - axis]);
+        point
+    };
+    for (index, &current) in input.iter().enumerate() {
+        let previous = input[(index + input.len() - 1) % input.len()];
+        match (inside(previous), inside(current)) {
+            (true, true) => output.push(current),
+            (true, false) => output.push(intersect(previous, current)),
+            (false, true) => {
+                output.push(intersect(previous, current));
+                output.push(current);
+            }
+            (false, false) => {}
+        }
+    }
+}
+
+/// Emits the conservative trapezoid-strip mesh for one qualifying arc band.
+///
+/// CONTAINMENT INVARIANT (the byte-exactness bar): the union of emitted
+/// triangles is a superset of `{ p in the capture quad's box :
+/// sdf_arc_band(p) <= 0.5 }` — every pixel the fragment shader would keep.
+/// Over-inclusion is free (the SDF discards those pixels identically to
+/// today's quad); only under-inclusion can diverge, and
+/// `arc_mesh_contains_every_band_pixel` checks it never happens.
+///
+/// Geometry: outer vertices ride at `Ro / cos(step / 2)` so every chord is
+/// tangent-outside the dilated outer circle; inner vertices ride at the
+/// dilated inner radius, whose chords lie inside the hole. Cap coverage is
+/// bounded by the round-cap disc about the band endpoint (butt/square caps
+/// only cut that disc with planes — see `sdf_arc_band`), so padding the
+/// angular range by the disc's angular half-extent contains every cap. Each
+/// trapezoid is clipped to the quad box and fan-triangulated; boundary
+/// vertices are computed once and shared by both adjacent trapezoids so the
+/// strip stays bitwise watertight.
+///
+/// Returns the emitted segment count, or `None` when the mesh came out empty
+/// — the caller emits the passthrough quad instead (never risk
+/// under-coverage).
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_arc_band_mesh(
+    shape: &ShapeData,
+    shape_idx: u32,
+    band: &ArcMeshBand,
+    out: &mut Vec<MeshVertex>,
+) -> Option<usize> {
+    let [cx, cy] = band.center;
+    let ra = (band.outer + band.inner) * 0.5;
+    let rb = ((band.outer - band.inner) * 0.5).max(0.0);
+    let rb_m = rb + ARC_MESH_MARGIN;
+    let ro = ra + rb_m;
+    let ri = (ra - rb_m).max(0.0);
+    let tau = cranpose_ui_graphics::TAU;
+
+    let (range_start, range) = if band.sweep >= tau {
+        (0.0, tau)
+    } else {
+        let pad = if rb_m < ra {
+            (rb_m / ra).asin() + 0.05
+        } else {
+            // The cap disc wraps the center; such shapes are tiny, take the
+            // whole circle.
+            std::f32::consts::PI
+        };
+        let padded = band.sweep + pad + pad;
+        if padded >= tau {
+            (0.0, tau)
+        } else {
+            (band.start - pad, padded)
+        }
+    };
+    let closed = range >= tau;
+
+    let dtheta = (2.0 * (ro / (ro + ARC_MESH_OVERSHOOT)).acos()).clamp(tau / 64.0, tau / 6.0);
+    let segments =
+        ((range / dtheta).ceil() as usize).clamp(ARC_MESH_MIN_SEGMENTS, ARC_MESH_MAX_SEGMENTS);
+    let step = range / segments as f32;
+    let rc = ro / (step * 0.5).cos();
+
+    // Boundary vertices are computed once and shared by both adjacent
+    // trapezoids: bitwise-equal edge endpoints are what let the rasterizer's
+    // fill rule shade each seam exactly once.
+    let boundary_count = if closed { segments } else { segments + 1 };
+    let mut boundaries = Vec::with_capacity(boundary_count);
+    for j in 0..boundary_count {
+        let (sin, cos) = (range_start + step * j as f32).sin_cos();
+        boundaries.push((
+            [cx + cos * ri, cy + sin * ri],
+            [cx + cos * rc, cy + sin * rc],
+        ));
+    }
+
+    let quad_min = [shape.quad01[0], shape.quad01[1]];
+    let quad_max = [shape.quad23[2], shape.quad23[3]];
+    let start_len = out.len();
+    let mut polygon: Vec<[f32; 2]> = Vec::with_capacity(8);
+    let mut scratch: Vec<[f32; 2]> = Vec::with_capacity(8);
+    for j in 0..segments {
+        let (inner_a, outer_a) = boundaries[j];
+        let (inner_b, outer_b) = boundaries[(j + 1) % boundary_count];
+        polygon.clear();
+        polygon.extend_from_slice(&[inner_a, outer_a, outer_b, inner_b]);
+        clip_polygon_axis(&polygon, 0, quad_min[0], false, &mut scratch);
+        clip_polygon_axis(&scratch, 0, quad_max[0], true, &mut polygon);
+        clip_polygon_axis(&polygon, 1, quad_min[1], false, &mut scratch);
+        clip_polygon_axis(&scratch, 1, quad_max[1], true, &mut polygon);
+        // Collapse exact duplicates (an `Ri == 0` pie wedge duplicates the
+        // center) before fanning.
+        scratch.clear();
+        for &point in polygon.iter() {
+            if scratch.last() != Some(&point) {
+                scratch.push(point);
+            }
+        }
+        while scratch.len() > 1 && scratch.first() == scratch.last() {
+            scratch.pop();
+        }
+        if scratch.len() < 3 {
+            continue;
+        }
+        let anchor = scratch[0];
+        for pair in scratch[1..].windows(2) {
+            for position in [anchor, pair[0], pair[1]] {
+                out.push(MeshVertex {
+                    position,
+                    uv: [
+                        (position[0] - shape.rect[0]) / shape.rect[2],
+                        (position[1] - shape.rect[1]) / shape.rect[3],
+                    ],
+                    shape_idx,
+                });
+            }
+        }
+    }
+    if out.len() == start_len {
+        return None;
+    }
+    Some(segments)
+}
+
+/// Unsigned shoelace area of an emitted triangle list, for telemetry.
+#[cfg(not(target_arch = "wasm32"))]
+fn triangles_shoelace_area(vertices: &[MeshVertex]) -> f64 {
+    vertices
+        .chunks_exact(3)
+        .map(|tri| {
+            let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
+            let cross = (b[0] as f64 - a[0] as f64) * (c[1] as f64 - a[1] as f64)
+                - (b[1] as f64 - a[1] as f64) * (c[0] as f64 - a[0] as f64);
+            cross.abs() * 0.5
+        })
+        .sum()
+}
+
+/// Unsigned area of the two triangles the legacy path would rasterize for
+/// this shape, for telemetry.
+#[cfg(not(target_arch = "wasm32"))]
+fn quad_shoelace_area(shape: &ShapeData) -> f64 {
+    let corners = [
+        [shape.quad01[0] as f64, shape.quad01[1] as f64],
+        [shape.quad01[2] as f64, shape.quad01[3] as f64],
+        [shape.quad23[0] as f64, shape.quad23[1] as f64],
+        [shape.quad23[2] as f64, shape.quad23[3] as f64],
+    ];
+    let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
+    };
+    tri(corners[0], corners[1], corners[2]) + tri(corners[2], corners[1], corners[3])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ArcMeshBuild {
+    vertices: Vec<MeshVertex>,
+    /// `shape_count + 1` entries; shape `i` owns `prefix[i]..prefix[i + 1]`.
+    vertex_prefix: Vec<u32>,
+    meshed_arcs: usize,
+    meshed_segments: usize,
+    passthrough: usize,
+    quad_area: f64,
+    mesh_area: f64,
+}
+
+/// Builds a slot's conservative mesh: arc bands become trapezoid strips,
+/// every other shape a passthrough quad, in the exact capture shape order.
+/// Returns `None` when the vertex budget overflows — the caller warns and the
+/// whole slot replays through the legacy path (silent truncation would break
+/// the containment invariant).
+#[cfg(not(target_arch = "wasm32"))]
+fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
+    let budget =
+        (shape_data.len() * ARC_MESH_VERTEX_BUDGET_PER_SHAPE).max(ARC_MESH_VERTEX_BUDGET_FLOOR);
+    let mut build = ArcMeshBuild {
+        vertices: Vec::new(),
+        vertex_prefix: Vec::with_capacity(shape_data.len() + 1),
+        meshed_arcs: 0,
+        meshed_segments: 0,
+        passthrough: 0,
+        quad_area: 0.0,
+        mesh_area: 0.0,
+    };
+    build.vertex_prefix.push(0);
+    for (index, shape) in shape_data.iter().enumerate() {
+        let start = build.vertices.len();
+        let meshed = arc_mesh_band(shape)
+            .and_then(|band| emit_arc_band_mesh(shape, index as u32, &band, &mut build.vertices));
+        match meshed {
+            Some(segments) => {
+                build.meshed_arcs += 1;
+                build.meshed_segments += segments;
+            }
+            None => {
+                emit_passthrough_quad(shape, index as u32, &mut build.vertices);
+                build.passthrough += 1;
+            }
+        }
+        if build.vertices.len() > budget {
+            return None;
+        }
+        build.vertex_prefix.push(build.vertices.len() as u32);
+        build.quad_area += quad_shoelace_area(shape);
+        build.mesh_area += triangles_shoelace_area(&build.vertices[start..]);
+    }
+    Some(build)
 }
 
 /// The renderer's registry of live replay slots. The replay cache (scene
@@ -2821,6 +3314,11 @@ pub struct GpuRenderer {
     shape_batch_limits: ShapeBatchLimits,
     pipeline: wgpu::RenderPipeline,
     pipeline_dst_out: wgpu::RenderPipeline,
+    /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
+    /// over a vertex buffer) that replay slots with a captured arc mesh draw
+    /// through. Uniform-mode devices never host retained slots.
+    #[cfg(not(target_arch = "wasm32"))]
+    mesh_pipeline: Option<wgpu::RenderPipeline>,
     #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
@@ -3206,6 +3704,16 @@ impl GpuRenderer {
             BlendMode::DstOut,
             shape_batch_limits,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        let mesh_pipeline = shape_batch_limits.storage.then(|| {
+            create_mesh_shape_pipeline(
+                &device,
+                surface_format,
+                &uniform_bind_group_layout,
+                &shape_bind_group_layout,
+                shape_batch_limits,
+            )
+        });
 
         let image_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -3358,6 +3866,8 @@ impl GpuRenderer {
             shape_batch_limits,
             pipeline,
             pipeline_dst_out,
+            #[cfg(not(target_arch = "wasm32"))]
+            mesh_pipeline,
             #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
@@ -8397,6 +8907,59 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::cast_slice(&gradients));
         gradient_buffer.unmap();
 
+        let mesh = if arc_mesh_enabled() {
+            match build_arc_mesh_vertices(&shape_data) {
+                Some(build) => {
+                    let cut = if build.quad_area > 0.0 {
+                        (1.0 - build.mesh_area / build.quad_area) * 100.0
+                    } else {
+                        0.0
+                    };
+                    // Always-on warn: `log::info` is invisible on the desktop
+                    // console, and captures are rare — one line per slot
+                    // lifetime.
+                    log::warn!(
+                        "[arc-mesh] slot {id}: {} arcs meshed ({} segs), {} passthrough; \
+                         quad_px {:.0} -> mesh_px {:.0} (-{:.1}%)",
+                        build.meshed_arcs,
+                        build.meshed_segments,
+                        build.passthrough,
+                        build.quad_area,
+                        build.mesh_area,
+                        cut,
+                    );
+                    // A slot that meshed nothing gains nothing over the
+                    // indexless quad path — skip the buffer.
+                    (build.meshed_arcs > 0).then(|| {
+                        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Replay Mesh Vertex Buffer"),
+                            size: (std::mem::size_of::<MeshVertex>() * build.vertices.len()) as u64,
+                            usage: wgpu::BufferUsages::VERTEX,
+                            mapped_at_creation: true,
+                        });
+                        vertex_buffer
+                            .slice(..)
+                            .get_mapped_range_mut()
+                            .copy_from_slice(bytemuck::cast_slice(&build.vertices));
+                        vertex_buffer.unmap();
+                        ReplaySlotMesh {
+                            vertex_buffer,
+                            vertex_prefix: build.vertex_prefix,
+                        }
+                    })
+                }
+                None => {
+                    log::warn!(
+                        "[arc-mesh] slot {id}: vertex budget overflowed for {shape_count} \
+                         shapes; whole slot falls back to quad passthrough"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Seed the mutable paint from the converted colors, so an unpatched
         // replay renders bit-identically to the capture frame.
         let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
@@ -8457,6 +9020,7 @@ impl GpuRenderer {
                 gradient_offsets,
                 paint_mirror: paint,
                 gradient_mirror: gradients,
+                mesh,
             },
         );
         Some(id)
@@ -8468,6 +9032,20 @@ impl GpuRenderer {
         if self.replay_slots.slots.remove(&id).is_some() {
             self.replay_slots.free_ids.push(id);
         }
+    }
+
+    /// Test/diagnostic view of retained arc meshes: how many live replay
+    /// slots hold a mesh, out of all live slots.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
+        let meshed = self
+            .replay_slots
+            .slots
+            .values()
+            .filter(|slot| slot.mesh.is_some())
+            .count();
+        (meshed, self.replay_slots.slots.len())
     }
 
     /// Draws one retained replay batch — `retained`'s shape range of its
@@ -8499,14 +9077,31 @@ impl GpuRenderer {
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
         render_pass.set_scissor_rect(0, 0, width, height);
-        render_pass.set_pipeline(&self.pipeline);
+        // A captured mesh replaces the six-per-shape quad expansion with the
+        // slot's conservative arc mesh — same bind groups, same SrcOver
+        // blend, one draw per op over the identical shape range, so z order
+        // is untouched either way.
+        let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+        match &mesh {
+            Some((_, mesh_pipeline)) => render_pass.set_pipeline(mesh_pipeline),
+            None => render_pass.set_pipeline(&self.pipeline),
+        }
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_bind_group(
             1,
             &slot.bind_group,
             &[retained_index as u32 * REPLAY_TRANSFORM_STRIDE as u32],
         );
-        render_pass.draw(first * 6..last * 6, 0..1);
+        match mesh {
+            Some((mesh, _)) => {
+                render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                render_pass.draw(
+                    mesh.vertex_prefix[first as usize]..mesh.vertex_prefix[last as usize],
+                    0..1,
+                );
+            }
+            None => render_pass.draw(first * 6..last * 6, 0..1),
+        }
     }
 
     fn draw_prepared_shapes(
@@ -16453,6 +17048,225 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn mesh_vertex_layout_matches_the_wgsl_input() {
+        // {pos: vec2<f32>, uv: vec2<f32>, shape_idx: u32} = 20 bytes, no
+        // padding — the vertex buffer layout stride relies on it.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 20);
+    }
+
+    /// f32 port of `sdf_arc_band` (shape.wgsl), operation for operation: the
+    /// same ra/rb derivation and clamp, the same mirror trick (`abs` on the
+    /// rotated x), the same cap branches.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn sdf_arc_band_reference(
+        p: [f32; 2],
+        center: [f32; 2],
+        inner: f32,
+        outer: f32,
+        mid_sin_cos: [f32; 2],
+        half_sin_cos: [f32; 2],
+        cap: u32,
+    ) -> f32 {
+        let ra = (outer + inner) * 0.5;
+        let rb = ((outer - inner) * 0.5).max(0.0);
+        let sm = mid_sin_cos[0];
+        let cm = mid_sin_cos[1];
+        let d = [p[0] - center[0], p[1] - center[1]];
+        let mut q = [-sm * d[0] + cm * d[1], cm * d[0] + sm * d[1]];
+        q[0] = q[0].abs();
+        let sc = half_sin_cos;
+        let mut dist = if sc[1] * q[0] > sc[0] * q[1] {
+            let dx = q[0] - sc[0] * ra;
+            let dy = q[1] - sc[1] * ra;
+            (dx * dx + dy * dy).sqrt() - rb
+        } else {
+            ((q[0] * q[0] + q[1] * q[1]).sqrt() - ra).abs() - rb
+        };
+        let plane = sc[1] * q[0] - sc[0] * q[1];
+        // STROKE_CAP_BUTT = 0, STROKE_CAP_SQUARE = 2, as in the shader.
+        if cap == 0 {
+            dist = dist.max(plane);
+        } else if cap == 2 {
+            dist = dist.max(plane - rb);
+        }
+        dist
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn point_in_triangle(p: [f64; 2], tri: &[[f64; 2]; 3]) -> bool {
+        let side = |a: [f64; 2], b: [f64; 2]| {
+            (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+        };
+        let d0 = side(tri[0], tri[1]);
+        let d1 = side(tri[1], tri[2]);
+        let d2 = side(tri[2], tri[0]);
+        let has_neg = d0 < 0.0 || d1 < 0.0 || d2 < 0.0;
+        let has_pos = d0 > 0.0 || d1 > 0.0 || d2 > 0.0;
+        !(has_neg && has_pos)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn converted_arc_shape(arc: cranpose_ui_graphics::ArcGeometry, root_scale: f32) -> ShapeData {
+        let bounds = arc.bounds();
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.rect = bounds;
+        shape.local_rect = bounds;
+        shape.quad = [
+            [bounds.x, bounds.y],
+            [bounds.x + bounds.width, bounds.y],
+            [bounds.x, bounds.y + bounds.height],
+            [bounds.x + bounds.width, bounds.y + bounds.height],
+        ];
+        shape.arc = Some(arc);
+        let mut converted = ShapeData::zeroed();
+        convert_shape_into_slots(&shape, root_scale, 0, &mut converted, &mut []);
+        converted
+    }
+
+    /// The containment invariant, checked directly: every point of the
+    /// capture box whose (exactly ported) SDF keeps it must lie inside the
+    /// emitted triangle set. Thin/thick, tiny/huge, full rings, near-zero
+    /// and near-TAU sweeps, all caps, `Ri == 0` discs and pie wedges.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_contains_every_band_pixel() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        let center = Point::new(250.0, 250.0);
+        let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
+            // full ring, thin band
+            (90.0, 100.0, 0.0, tau, StrokeCap::Round),
+            // sweep > TAU normalizes to a closed ring
+            (80.0, 100.0, 1.0, 10.0, StrokeCap::Butt),
+            // full disc: Ri == 0
+            (0.0, 40.0, 0.0, tau, StrokeCap::Round),
+            // thick partial arc, every cap
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Butt),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Square),
+            // thin, axis-crossing sweep
+            (99.0, 101.0, 3.0, 4.0, StrokeCap::Round),
+            // tiny
+            (0.6, 2.0, 0.3, 1.2, StrokeCap::Butt),
+            // huge radius, thin band
+            (1900.0, 1904.0, 0.1, 0.35, StrokeCap::Square),
+            // near-zero sweep
+            (40.0, 60.0, 5.0, 1e-3, StrokeCap::Round),
+            // sweep near TAU: the cap pads wrap the range closed
+            (40.0, 60.0, 0.2, tau - 1e-3, StrokeCap::Butt),
+            // rb_m >= ra: the cap disc wraps the center (pie wedge)
+            (0.0, 3.0, 1.0, 2.0, StrokeCap::Round),
+            // filled annular sector (butt radial ends)
+            (20.0, 60.0, 4.5, 1.9, StrokeCap::Butt),
+        ];
+        for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
+            for root_scale in [1.0f32, 2.0] {
+                let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
+                assert!(!arc.is_degenerate(), "case {case} must be drawable");
+                let converted = converted_arc_shape(arc, root_scale);
+                let band = arc_mesh_band(&converted)
+                    .unwrap_or_else(|| panic!("case {case} must qualify for meshing"));
+                let mut vertices = Vec::new();
+                let segments = emit_arc_band_mesh(&converted, 0, &band, &mut vertices)
+                    .unwrap_or_else(|| panic!("case {case} must produce a mesh"));
+                assert!(segments >= ARC_MESH_MIN_SEGMENTS);
+                let triangles: Vec<[[f64; 2]; 3]> = vertices
+                    .chunks_exact(3)
+                    .map(|tri| {
+                        [
+                            [tri[0].position[0] as f64, tri[0].position[1] as f64],
+                            [tri[1].position[0] as f64, tri[1].position[1] as f64],
+                            [tri[2].position[0] as f64, tri[2].position[1] as f64],
+                        ]
+                    })
+                    .collect();
+
+                let [rx, ry, rw, rh] = converted.rect;
+                let cap_bits = (converted.stroke_params[1].max(0.0) as u32 >> 2) & 3;
+                let step = (rw.max(rh) / 400.0).clamp(0.25, 2.0);
+                let mut band_points = 0usize;
+                let mut y = ry;
+                while y <= ry + rh {
+                    let mut x = rx;
+                    while x <= rx + rw {
+                        let dist = sdf_arc_band_reference(
+                            [x, y],
+                            [converted.arc_params[0], converted.arc_params[1]],
+                            converted.stroke_params[3],
+                            converted.stroke_params[2],
+                            [converted.radii[0], converted.radii[1]],
+                            [converted.radii[2], converted.radii[3]],
+                            cap_bits,
+                        );
+                        if dist <= 0.5 {
+                            band_points += 1;
+                            let p = [x as f64, y as f64];
+                            assert!(
+                                triangles.iter().any(|tri| point_in_triangle(p, tri)),
+                                "case {case} scale {root_scale}: band point ({x}, {y}) \
+                                 dist {dist} escapes the mesh"
+                            );
+                        }
+                        x += step;
+                    }
+                    y += step;
+                }
+                assert!(
+                    band_points > 0,
+                    "case {case} scale {root_scale}: the sampling grid never hit the band"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_passthrough_replicates_the_quad_expansion() {
+        let shape = test_shape(0, BlendMode::SrcOver);
+        let mut converted = ShapeData::zeroed();
+        convert_shape_into_slots(&shape, 1.0, 0, &mut converted, &mut []);
+        let build =
+            build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
+        assert_eq!(build.meshed_arcs, 0);
+        assert_eq!(build.passthrough, 1);
+        assert_eq!(build.vertex_prefix, vec![0, 6]);
+        let corners = [
+            ([converted.quad01[0], converted.quad01[1]], [0.0f32, 0.0]),
+            ([converted.quad01[2], converted.quad01[3]], [1.0, 0.0]),
+            ([converted.quad23[0], converted.quad23[1]], [0.0, 1.0]),
+            ([converted.quad23[2], converted.quad23[3]], [1.0, 1.0]),
+        ];
+        // vs_main's slot order: triangles (0, 1, 2) and (2, 1, 3).
+        for (vertex, corner) in build.vertices.iter().zip([0usize, 1, 2, 2, 1, 3]) {
+            assert_eq!(vertex.position, corners[corner].0);
+            assert_eq!(vertex.uv, corners[corner].1);
+            assert_eq!(vertex.shape_idx, 0);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_budget_overflow_falls_back_to_whole_slot_passthrough() {
+        use cranpose_ui_graphics::ArcGeometry;
+        // 100 large full rings mesh at the 64-segment ceiling (~384+ vertices
+        // each), far past max(48 * 100, 4096) — the builder must refuse the
+        // whole slot rather than truncate.
+        let arc = ArcGeometry::new(
+            Point::new(2000.0, 2000.0),
+            1690.0,
+            1710.0,
+            0.0,
+            cranpose_ui_graphics::TAU,
+            StrokeCap::Round,
+        );
+        let converted = converted_arc_shape(arc, 1.0);
+        let shapes = vec![converted; 100];
+        assert!(build_arc_mesh_vertices(&shapes).is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn shape_batch_limits_follow_uniform_binding_size() {
         // With a 160-byte ShapeData, even a desktop-class 64 KiB binding can no
         // longer hold the full compile-time cap: 65536 / 160 = 409 < 768.
@@ -16558,6 +17372,17 @@ mod tests {
         assert!(
             source.contains("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)"),
             "storage-mode shader must read paint under the paint_select flag"
+        );
+        assert!(
+            source.contains("fn vs_mesh("),
+            "the storage rewrite must leave the retained-mesh vertex entry intact"
+        );
+        assert_eq!(
+            source
+                .matches("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)")
+                .count(),
+            2,
+            "both vs_main and vs_mesh must read paint under the paint_select flag"
         );
 
         // The storage variant is what native devices actually compile; it

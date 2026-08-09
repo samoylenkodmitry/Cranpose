@@ -130,6 +130,64 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     return output;
 }
 
+// Mesh vertex path for retained arc/ring slots (storage mode only): instead
+// of expanding six ShapeData corners per shape, a mesh captured alongside the
+// slot supplies positions that cover only the arc band's antialiasing
+// footprint, with `uv` precomputed on the CPU from the same affine rect map
+// the quad corners define. Uniform-mode devices never bind a pipeline with
+// this entry point; in that variant it is dead code, which keeps the base
+// text valid for WebGL.
+struct MeshVertexInput {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) shape_idx: u32,
+}
+
+// BIT-EXACTNESS REQUIREMENT: the transform below must stay expression-for-
+// expression identical to `vs_main`. Passthrough mesh vertices carry the
+// exact quad corner values, and identical arithmetic is what makes their
+// clip positions — and so their rasterization — bit-identical to the legacy
+// path at the identity transform (measured on Metal). Under a rotating
+// similarity the backend compiler may still contract the multiply-adds
+// differently per entry point, which is one ulp of position and part of the
+// small measured envelope in `arc_mesh_parity`.
+@vertex
+fn vs_mesh(in: MeshVertexInput) -> VertexOutput {
+    var output: VertexOutput;
+
+    let shape_idx = in.shape_idx;
+    let shape = shape_data[shape_idx];
+    var position = in.position;
+
+    let rel = position - similarity.center;
+    position = similarity.center + vec2<f32>(
+        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
+        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
+    ) * similarity.scale;
+
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+
+    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.color = shape.color;
+    output.uv = in.uv;
+    output.world_pos = position;
+    output.rect = shape.rect;
+    output.radii = shape.radii;
+    output.gradient_params = shape.gradient_params;
+    output.clip_rect = shape.clip_rect;
+    output.stroke_params = shape.stroke_params;
+    output.arc_params = shape.arc_params;
+    output.brush = vec4<u32>(
+        shape.brush_type,
+        shape.gradient_start,
+        shape.gradient_count,
+        shape.gradient_tile_mode,
+    );
+
+    return output;
+}
+
 // Fragment shader structs and data
 //
 // `stroke_params.y` packs three 2-bit fields so the struct stays at ten
