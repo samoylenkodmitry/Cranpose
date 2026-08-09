@@ -918,10 +918,10 @@ fn flush_shape_run_parallel(
 use crate::shape_replay::{
     anchor_compatible, anchor_transform, anchor_transform_pinned, context_fingerprint,
     entries_bounds, is_circle, layer_supports_replay, match_entry, rect_contains, stroke_width,
-    transforms_group, EntryMatch, PendingBrushPatch, PendingCapture, ReplayPhase, ReplaySegment,
-    SegmentTransform, ShapeReplayState, SnapshotEntry, SnapshotShape, ANCHOR_PROBE_ENTRIES,
-    MAX_RETAINED_OPS, MAX_SEGMENT_ENTRIES, MIN_REPLAY_RUN_ENTRIES, MIN_SEGMENT_ENTRIES,
-    RESYNC_WINDOW, SHAPE_REPLAY,
+    transforms_group, ColorPatch, EntryMatch, PendingBrushPatch, PendingCapture, ReplayPhase,
+    ReplaySegment, SegmentTransform, ShapeReplayState, SnapshotEntry, SnapshotShape,
+    ANCHOR_PROBE_ENTRIES, MAX_RETAINED_OPS, MAX_SEGMENT_ENTRIES, MIN_REPLAY_RUN_ENTRIES,
+    MIN_SEGMENT_ENTRIES, RESYNC_WINDOW, SHAPE_REPLAY,
 };
 
 /// The replay-relevant view of one run entry: its similarity-checkable
@@ -1740,14 +1740,21 @@ fn commit_segment_patches(
     for &k in patches {
         let (_, brush) = views[anchor + k].as_ref().expect("verified entry");
         segment.entries[k].brush = (*brush).clone();
-        state.pending_patches.push(PendingBrushPatch {
-            slot,
-            shape_index: segment.slot_offset + k as u32,
-            brush: cranpose_render_common::style_shared::apply_layer_to_brush(
-                (*brush).clone(),
-                layer,
-            ),
-        });
+        let shape_index = segment.slot_offset + k as u32;
+        // Solid results take the flat 16-byte queue; only gradients need the
+        // Brush-carrying queue (and its stop rewrite at drain).
+        match cranpose_render_common::style_shared::apply_layer_to_brush((*brush).clone(), layer) {
+            Brush::Solid(c) => state.pending_color_patches.push(ColorPatch {
+                slot,
+                shape_index,
+                color: [c.r(), c.g(), c.b(), c.a()],
+            }),
+            brush => state.pending_patches.push(PendingBrushPatch {
+                slot,
+                shape_index,
+                brush,
+            }),
+        }
     }
 }
 
@@ -2009,7 +2016,7 @@ fn try_command_feed<'a>(
     shape_run: &mut Vec<ShapeRunEntry<'a>>,
     context: &LocalPrimitiveContext<'_>,
 ) -> bool {
-    use crate::shape_replay::{command_feed_enabled, PendingBrushPatch, PendingFeedCapture};
+    use crate::shape_replay::{command_feed_enabled, ColorPatch, PendingFeedCapture};
     // Guard order and content are the happy path's exact current checks —
     // when they all pass, nothing below this block costs anything new.
     let feed_ready = command_feed_enabled()
@@ -2156,11 +2163,13 @@ fn try_command_feed<'a>(
                             }
                             feed_slot.last_referenced = frame_now;
                             let gpu_slot = feed_slot.gpu_slot;
+                            // Compact-record recolors are always solid: a
+                            // flat 16-byte color write, no Brush at all.
                             for (offset, color) in recolors {
-                                state.pending_patches.push(PendingBrushPatch {
+                                state.pending_color_patches.push(ColorPatch {
                                     slot: gpu_slot,
                                     shape_index: *slot_offset + offset,
-                                    brush: Brush::Solid(*color),
+                                    color: [color.r(), color.g(), color.b(), color.a()],
                                 });
                             }
                             state.stat_patches += recolors.len() as u64;

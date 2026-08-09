@@ -664,6 +664,15 @@ enum CommandReplayPhase {
     Captured,
 }
 
+/// A pooled span job's result: the cleanly matched prefix length and the
+/// recolors within it. One slot per segment, reused across frames — see
+/// [`CommandReplayState::verify_results`].
+#[derive(Debug, Default)]
+struct SpanResultSlot {
+    matched: usize,
+    recolors: Vec<(u32, Color)>,
+}
+
 /// Per-command replay state: the retained snapshot (previous stable form of
 /// the recording) and the segments carved out of it. This is the double
 /// buffer sol's plan sanctions — previous and current forms coexist only
@@ -686,6 +695,28 @@ pub struct CommandReplayState {
     /// Frames the pooled fast path fully committed — diagnostics for
     /// judging how often verification actually parallelizes.
     optimistic_commits: u64,
+    /// Reusable per-job result slots for the pooled fast path — one slot
+    /// per segment, grown once, recolor capacity retained across frames.
+    /// The Mutex is uncontended (each job writes only its own slot once);
+    /// what this kills is the per-frame allocation of the results vector,
+    /// its mutexes, and every job's recolors vector. When the pass commits,
+    /// each emitted span `mem::take`s its slot's recolors — the buffer
+    /// walks into the graph and the slot re-grows next frame (accepted:
+    /// emitting spans do real work); on a bail the buffers stay warm in
+    /// their slots.
+    verify_results: Vec<std::sync::Mutex<SpanResultSlot>>,
+    /// The serial walk's recolor buffer, refilled by every `match_span`
+    /// commit attempt. An emitted span `mem::take`s the contents and the
+    /// scratch re-grows on the next attempt — same accepted emit-cost as
+    /// the pooled slots.
+    recolor_scratch: Vec<(u32, Color)>,
+    /// The best-prefix recolors during the serial walk's candidate scan,
+    /// swapped with `recolor_scratch` whenever a longer prefix turns up.
+    best_recolor_scratch: Vec<(u32, Color)>,
+    /// Serial-walk segment queues, persistent so their buffers keep their
+    /// high-water capacity; refilled per verified frame.
+    verify_pending: std::collections::VecDeque<CommandSegment>,
+    verify_survivors: Vec<CommandSegment>,
 }
 
 impl Default for CommandReplayState {
@@ -701,6 +732,11 @@ impl Default for CommandReplayState {
             capture_coverage: 0.0,
             frames_since_capture: 0,
             optimistic_commits: 0,
+            verify_results: Vec::new(),
+            recolor_scratch: Vec::new(),
+            best_recolor_scratch: Vec::new(),
+            verify_pending: std::collections::VecDeque::new(),
+            verify_survivors: Vec::new(),
         }
     }
 }
@@ -936,11 +972,12 @@ impl CommandReplayState {
         let mut cursor = 0usize;
         // Segments awaiting location this frame, tape order. A split pushes
         // the suffix back onto the front so it is located before the next
-        // original segment.
-        let mut pending: std::collections::VecDeque<CommandSegment> =
-            self.segments.drain(..).collect();
-        let mut survivors: Vec<CommandSegment> = Vec::new();
-        while let Some(segment) = pending.pop_front() {
+        // original segment. Both queues are persistent fields refilled per
+        // frame, so their buffers keep their high-water capacity.
+        self.verify_pending.clear();
+        self.verify_pending.extend(self.segments.drain(..));
+        self.verify_survivors.clear();
+        while let Some(segment) = self.verify_pending.pop_front() {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
                 .min(current.tape.len().saturating_sub(len - 1))
@@ -954,13 +991,13 @@ impl CommandReplayState {
             // first. The true anchor is always the LEFTMOST compatible
             // candidate, exactly the order the flat detector proved out.
             let candidates = cursor..search_end;
-            type Located = (usize, RecordTransform, Vec<(u32, Color)>);
-            let mut located: Option<Located> = None;
+            let mut located: Option<(usize, RecordTransform)> = None;
             // The longest cleanly matched prefix among failed commits:
-            // (start, matched records, transform, recolors within prefix).
-            // A genuine mid-span change surfaces here — the right anchor
-            // matches far more than any mislocated one.
-            let mut best_prefix: Option<Located> = None;
+            // (start, transform); its length and the recolors within it
+            // live in `best_prefix_len` / `best_recolor_scratch`. A genuine
+            // mid-span change surfaces here — the right anchor matches far
+            // more than any mislocated one.
+            let mut best_prefix: Option<(usize, RecordTransform)> = None;
             let mut best_prefix_len = 0usize;
             let mut attempts = 0usize;
             'search: for start in candidates {
@@ -977,7 +1014,7 @@ impl CommandReplayState {
                 // Committed: verify the whole span. A failure may still be a
                 // mislocated anchor (self-similar rings), so the search
                 // resumes — a bounded number of times.
-                let (matched, recolors) = match_span(
+                let matched = match_span(
                     TypedRecords::from(current),
                     TypedRecords::from(&self.snapshot),
                     self.center,
@@ -985,11 +1022,15 @@ impl CommandReplayState {
                     segment.tape_start,
                     len,
                     t,
+                    &mut self.recolor_scratch,
                 );
                 if matched < len {
                     if matched > best_prefix_len {
                         best_prefix_len = matched;
-                        best_prefix = Some((start, t, recolors));
+                        best_prefix = Some((start, t));
+                        // Keep the best prefix's recolors without an
+                        // allocation: the two scratches trade places.
+                        std::mem::swap(&mut self.recolor_scratch, &mut self.best_recolor_scratch);
                     }
                     // Only failures with a substantial matched prefix
                     // consume the commit budget: those are genuine split
@@ -1007,7 +1048,7 @@ impl CommandReplayState {
                     }
                     continue;
                 }
-                located = Some((start, t, recolors));
+                located = Some((start, t));
                 break;
             }
             // A failed segment splits around the record that changed: the
@@ -1016,12 +1057,15 @@ impl CommandReplayState {
             // a prefix long enough to prove the anchor was right earns a
             // split — a segment with no solid prefix dies whole, or a weak
             // wrong-anchor prefix would shed one record and re-fail across
-            // the whole span.
+            // the whole span. The emitted span `mem::take`s its recolors
+            // out of the owning scratch — the buffer walks into the graph
+            // and the scratch re-grows on the next attempt (accepted:
+            // emitting spans do real work).
             let (span_start, t, recolors, span_len) = match located {
-                Some((start, t, recolors)) => (start, t, recolors, len),
+                Some((start, t)) => (start, t, std::mem::take(&mut self.recolor_scratch), len),
                 None => {
                     let split = best_prefix_len >= MIN_SEGMENT_RECORDS;
-                    let Some((start, t, recolors)) = best_prefix.filter(|_| split) else {
+                    let Some((start, t)) = best_prefix.filter(|_| split) else {
                         self.lifetime_deaths += 1;
                         continue;
                     };
@@ -1031,7 +1075,7 @@ impl CommandReplayState {
                     {
                         // The suffix addresses the SAME captured content,
                         // just deeper in: no recapture, only an offset.
-                        pending.push_front(CommandSegment {
+                        self.verify_pending.push_front(CommandSegment {
                             slot: segment.slot,
                             slot_offset: segment.slot_offset + (suffix_start - segment.tape_start),
                             tape_start: suffix_start,
@@ -1040,7 +1084,12 @@ impl CommandReplayState {
                         });
                     }
                     self.lifetime_splits += 1;
-                    (start, t, recolors, best_prefix_len)
+                    (
+                        start,
+                        t,
+                        std::mem::take(&mut self.best_recolor_scratch),
+                        best_prefix_len,
+                    )
                 }
             };
             let survivor = if span_len == len {
@@ -1077,7 +1126,7 @@ impl CommandReplayState {
                 bounds: t.apply_to_bounds(self.center, survivor.bounds),
             });
             cursor = span_start + span_len;
-            survivors.push(survivor);
+            self.verify_survivors.push(survivor);
         }
         if cursor < current.tape.len() {
             spans.push(ReplaySpan::Dynamic {
@@ -1086,7 +1135,9 @@ impl CommandReplayState {
             });
         }
 
-        self.segments = survivors;
+        // Survivors become the live table; swapping (the table was drained
+        // above) lets the two buffers ping-pong, both keeping capacity.
+        std::mem::swap(&mut self.segments, &mut self.verify_survivors);
         self.finish_verify(current, spans, retained_records)
     }
 
@@ -1123,14 +1174,15 @@ impl CommandReplayState {
     /// The clean-frame fast path: locates every segment serially with cheap
     /// probes only (identical candidate order to the serial walk), then fans
     /// the expensive full-span matching across `pool`. Returns `None` — and
-    /// changes nothing — the moment any segment lacks a probe-passing
-    /// candidate or any span fails to match whole, leaving the serial walk
+    /// changes nothing but its private result scratch — the moment any
+    /// segment lacks a probe-passing candidate
+    /// or any span fails to match whole, leaving the serial walk
     /// to redo the frame with its split/death/attempt machinery. When it
     /// does return spans, they are exactly what the serial walk would have
     /// produced: a fully matching first probe-passing candidate is the
     /// leftmost committing candidate.
     fn verify_optimistic(
-        &self,
+        &mut self,
         current: &CommandRecording,
         pool: &dyn VerifyExecutor,
     ) -> Option<(Vec<ReplaySpan>, usize)> {
@@ -1170,19 +1222,24 @@ impl CommandReplayState {
             });
             cursor = start + len;
         }
-        // A span body's commit result: matched prefix length and recolors.
-        type SpanMatch = (usize, Vec<(u32, Color)>);
-        let results: Vec<std::sync::Mutex<Option<SpanMatch>>> =
-            jobs.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        // One reusable result slot per job, grown once and kept across
+        // frames; every job writes only its own slot, filling the slot's
+        // own recolor buffer in place via the out-param.
+        if self.verify_results.len() < jobs.len() {
+            self.verify_results
+                .resize_with(jobs.len(), Default::default);
+        }
         {
             let current = TypedRecords::from(current);
             let snapshot = TypedRecords::from(&self.snapshot);
             let center = self.center;
             let jobs = &jobs;
-            let results = &results;
+            let results = &self.verify_results;
             pool.for_each(jobs.len(), &|i| {
                 let job = &jobs[i];
-                let outcome = match_span(
+                let mut guard = results[i].lock().expect("verify span job lock");
+                let slot = &mut *guard;
+                slot.matched = match_span(
                     current,
                     snapshot,
                     center,
@@ -1190,22 +1247,30 @@ impl CommandReplayState {
                     job.seg_start,
                     job.len,
                     job.t,
+                    &mut slot.recolors,
                 );
-                *results[i].lock().expect("verify span job lock") = Some(outcome);
             });
+        }
+        // Bail before taking anything: a single short match leaves every
+        // slot's recolor buffer warm for the serial rerun and later frames.
+        for (job, result) in jobs.iter().zip(&self.verify_results) {
+            if result.lock().expect("verify span job lock").matched < job.len {
+                return None;
+            }
         }
         let mut spans: Vec<ReplaySpan> = Vec::with_capacity(jobs.len() * 2 + 1);
         let mut retained_records = 0usize;
         let mut cursor = 0usize;
-        for (segment, (job, result)) in self.segments.iter().zip(jobs.iter().zip(&results)) {
-            let (matched, recolors) = result
-                .lock()
-                .expect("verify span job lock")
-                .take()
-                .expect("every span job ran");
-            if matched < job.len {
-                return None;
-            }
+        for (segment, (job, result)) in self
+            .segments
+            .iter()
+            .zip(jobs.iter().zip(&self.verify_results))
+        {
+            // Committing: each emitted span takes its slot's buffer — the
+            // capacity walks into the graph and the slot re-grows next
+            // frame (accepted: emitting spans do real work).
+            let recolors =
+                std::mem::take(&mut result.lock().expect("verify span job lock").recolors);
             if job.start > cursor {
                 spans.push(ReplaySpan::Dynamic {
                     tape_start: cursor,
@@ -1300,10 +1365,13 @@ impl TypedRecords<'_> {
 }
 
 /// The full-span commit body: matches `len` records of `current` from
-/// `start` against the snapshot span at `seg_start` under `t`. Returns the
-/// cleanly matched prefix length and the recolors within that prefix. The
+/// `start` against the snapshot span at `seg_start` under `t`. Fills
+/// `recolors` (cleared at entry) with the recolors inside the cleanly
+/// matched prefix and returns that prefix's length — the out-param lets
+/// callers own reusable buffers instead of allocating per call. The
 /// record dispatch mirrors [`match_pair`] exactly; it operates on the typed
 /// slices so one call per segment can run on a worker thread.
+#[allow(clippy::too_many_arguments)]
 fn match_span(
     current: TypedRecords<'_>,
     snapshot: TypedRecords<'_>,
@@ -1312,8 +1380,9 @@ fn match_span(
     seg_start: usize,
     len: usize,
     t: RecordTransform,
-) -> (usize, Vec<(u32, Color)>) {
-    let mut recolors: Vec<(u32, Color)> = Vec::new();
+    recolors: &mut Vec<(u32, Color)>,
+) -> usize {
+    recolors.clear();
     for offset in 0..len {
         let entry_match = match (
             current.view_at(start + offset),
@@ -1337,10 +1406,10 @@ fn match_span(
                 };
                 recolors.push((offset as u32, color));
             }
-            RecordMatch::Mismatch => return (offset, recolors),
+            RecordMatch::Mismatch => return offset,
         }
     }
-    (len, recolors)
+    len
 }
 
 #[cfg(test)]

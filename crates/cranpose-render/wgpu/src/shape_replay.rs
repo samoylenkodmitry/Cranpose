@@ -132,6 +132,16 @@ pub(crate) struct PendingBrushPatch {
     pub brush: Brush,
 }
 
+/// A pending solid recolor of one retained shape: a bare 16-byte color
+/// write into the slot's paint mirror. The overwhelmingly common patch —
+/// gradient recolors stay on the Brush-carrying queue.
+#[derive(Clone, Copy)]
+pub(crate) struct ColorPatch {
+    pub slot: u32,
+    pub shape_index: u32,
+    pub color: [f32; 4],
+}
+
 /// Renderer slot state for one identity-fed capture, keyed by the
 /// (command, slot) pair the scene builder's verifier stamped on the span.
 /// Unlike the flat detector's segments, liveness is driven by the graph:
@@ -229,7 +239,9 @@ pub(crate) struct ShapeReplayState {
     pub stat_remat_miss: u64,
     /// Queues drained by the renderer once per frame.
     pub pending_captures: Vec<PendingCapture>,
+    /// Gradient recolors only; solid recolors ride the flat queue below.
     pub pending_patches: Vec<PendingBrushPatch>,
+    pub pending_color_patches: Vec<ColorPatch>,
     pub pending_releases: Vec<u32>,
     /// Identity-fed retained slots (see [`FeedSlot`]) and their capture
     /// queue, driven by [`CommandReplayFrame`]s the graph carries instead
@@ -348,6 +360,7 @@ impl ShapeReplayState {
         self.pending_captures.clear();
         self.pending_feed_captures.clear();
         self.pending_patches.clear();
+        self.pending_color_patches.clear();
         self.phase = ReplayPhase::Idle;
         self.rebuild_pending = false;
         self.captured_root_scale = None;
@@ -381,7 +394,7 @@ impl ShapeReplayState {
             .is_some_and(|captured| captured != root_scale);
         if (!self.supported && self.phase != ReplayPhase::Idle)
             || scale_changed
-            || self.pending_patches.len() > MAX_PENDING_PATCHES
+            || self.pending_patches.len() + self.pending_color_patches.len() > MAX_PENDING_PATCHES
         {
             self.retire_all();
         }

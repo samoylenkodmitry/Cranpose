@@ -3850,6 +3850,14 @@ pub struct GpuRenderer {
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
+    /// Drain arenas for the replay patch queues: `stage_replay_patches`
+    /// swaps the thread-local queues against these instead of `mem::take`,
+    /// so both sides keep their high-water capacity across frames. Always
+    /// empty between drains.
+    #[cfg(not(target_arch = "wasm32"))]
+    color_patch_scratch: Vec<crate::shape_replay::ColorPatch>,
+    #[cfg(not(target_arch = "wasm32"))]
+    brush_patch_scratch: Vec<crate::shape_replay::PendingBrushPatch>,
     /// Cached render bundles for maximal consecutive retained stretches in
     /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
@@ -4450,6 +4458,10 @@ impl GpuRenderer {
             warning_state: RendererWarningState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_upload_stats: ReplayUploadStats::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            color_patch_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            brush_patch_scratch: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
         }
@@ -9238,10 +9250,11 @@ impl GpuRenderer {
         });
     }
 
-    /// Stages every queued replay recolor patch. All brushes rewrite the
-    /// shape's 16-byte record in the slot's paint buffer (the solid color,
-    /// or the first gradient stop — what `ShapeData.color` carried at
-    /// capture); gradient brushes additionally rewrite their stop span in
+    /// Stages every queued replay recolor patch, from both queues: flat
+    /// solid patches and Brush-carrying gradient patches. Every patch
+    /// rewrites the shape's 16-byte record in the slot's paint buffer (the
+    /// solid color, or the first gradient stop — what `ShapeData.color`
+    /// carried at capture); gradient brushes additionally rewrite their stop span in
     /// the slot's gradient buffer. The captured `ShapeData` itself is
     /// immutable, so a recolored frame uploads colors, not geometry. Runs
     /// in the retained prepare arms so the writes land in the same
@@ -9249,9 +9262,22 @@ impl GpuRenderer {
     /// idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
-        let patches = crate::shape_replay::SHAPE_REPLAY
-            .with(|state| std::mem::take(&mut state.borrow_mut().pending_patches));
-        if patches.is_empty() {
+        // Capacity-retaining drain: swap the thread-local queues against the
+        // renderer's scratch arenas instead of `mem::take`, so both sides
+        // keep their high-water capacity across frames. The scratch is
+        // cleared before every return, which preserves drain idempotence
+        // across the retained prepare arms: a later drain in the same frame
+        // swaps one empty-with-capacity arena for another and stages nothing.
+        crate::shape_replay::SHAPE_REPLAY.with(|state| {
+            let mut state = state.borrow_mut();
+            std::mem::swap(
+                &mut state.pending_color_patches,
+                &mut self.color_patch_scratch,
+            );
+            std::mem::swap(&mut state.pending_patches, &mut self.brush_patch_scratch);
+        });
+        let total_patches = self.color_patch_scratch.len() + self.brush_patch_scratch.len();
+        if total_patches == 0 {
             self.replay_upload_stats.note_frame(0, 0, 0, 0, 0);
             return;
         }
@@ -9280,7 +9306,22 @@ impl GpuRenderer {
             cranpose_ui_graphics::FxBuildHasher,
         > = std::collections::HashMap::default();
 
-        for patch in &patches {
+        // Solid patches: one bare 16-byte write into the slot's paint
+        // mirror — no gradient-stop lookup, no brush match.
+        for patch in &self.color_patch_scratch {
+            let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
+                continue;
+            };
+            let Some(paint) = slot.paint_mirror.get_mut(patch.shape_index as usize) else {
+                continue;
+            };
+            *paint = patch.color;
+            let span = dirty.entry(patch.slot).or_insert(CLEAN);
+            span.paint_min = span.paint_min.min(patch.shape_index);
+            span.paint_max = span.paint_max.max(patch.shape_index);
+        }
+
+        for patch in &self.brush_patch_scratch {
             let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
                 continue;
             };
@@ -9350,9 +9391,9 @@ impl GpuRenderer {
         // A patched color is one 16-byte vec4; the staged bytes exceed this
         // only by the untouched records inside each coalesced span (and by
         // gradient-stop rewrites, which carry real data either way).
-        let ideal_bytes = patches.len() as u64 * 16;
+        let ideal_bytes = total_patches as u64 * 16;
         self.replay_upload_stats.note_frame(
-            patches.len() as u64,
+            total_patches as u64,
             slots_touched,
             uploaded_records,
             uploaded_bytes,
@@ -9362,13 +9403,15 @@ impl GpuRenderer {
             log::warn!(
                 "[replay-upload] frame: {} patches -> {} records / {:.1} KB staged \
                  across {} slots (color-only {:.1} KB)",
-                patches.len(),
+                total_patches,
                 uploaded_records,
                 uploaded_bytes as f64 / 1024.0,
                 slots_touched,
                 ideal_bytes as f64 / 1024.0,
             );
         }
+        self.color_patch_scratch.clear();
+        self.brush_patch_scratch.clear();
     }
 
     /// Converts `shape_refs` once and retains the result on the GPU as a
