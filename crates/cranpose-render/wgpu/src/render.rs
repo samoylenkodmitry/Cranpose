@@ -2885,7 +2885,8 @@ pub struct GpuRenderer {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct ReplayUploadStats {
-    frames: u64,
+    calls: u64,
+    patched_calls: u64,
     patches: u64,
     slots: u64,
     records: u64,
@@ -2896,34 +2897,41 @@ struct ReplayUploadStats {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl ReplayUploadStats {
-    /// One aggregate line roughly every 5-10 s of retained frames: cheap
-    /// enough to stay on unconditionally, which matters because the watch
-    /// cannot take setprop-backed diag flags — its logcat is the only
-    /// channel, and a measurement window must catch several lines. Counts
-    /// every drain call (patched or not) so a target with zero paint
-    /// traffic still reports an affirmative zero instead of silence.
+    /// One aggregate line roughly every few seconds: cheap enough to stay
+    /// on unconditionally, which matters because the watch cannot take
+    /// setprop-backed diag flags — its logcat is the only channel, and a
+    /// measurement window must catch several lines. Counts every drain
+    /// call (the drain runs several times per frame; only the first sees
+    /// patches) so a target with zero paint traffic still reports an
+    /// affirmative zero instead of silence, while the averages divide by
+    /// PATCHED calls so they read as per-frame numbers.
     /// warn level: the platform loggers filter info on desktop.
-    const REPORT_FRAMES: u64 = 256;
+    const REPORT_CALLS: u64 = 1024;
 
     fn note_frame(&mut self, patches: u64, slots: u64, records: u64, bytes: u64, ideal: u64) {
-        self.frames += 1;
-        self.patches += patches;
-        self.slots += slots;
-        self.records += records;
-        self.bytes += bytes;
-        self.ideal_bytes += ideal;
-        self.max_frame_bytes = self.max_frame_bytes.max(bytes);
-        if self.frames >= Self::REPORT_FRAMES {
+        self.calls += 1;
+        if patches > 0 {
+            self.patched_calls += 1;
+            self.patches += patches;
+            self.slots += slots;
+            self.records += records;
+            self.bytes += bytes;
+            self.ideal_bytes += ideal;
+            self.max_frame_bytes = self.max_frame_bytes.max(bytes);
+        }
+        if self.calls >= Self::REPORT_CALLS {
+            let patched = self.patched_calls.max(1);
             log::warn!(
-                "[replay-upload] {} retained frames: avg {:.1} KB/frame (max {:.1} KB), \
+                "[replay-upload] {} patched of {} drains: avg {:.1} KB/frame (max {:.1} KB), \
                  color-only would be {:.1} KB/frame; avg {} patches over {} records in {} slots",
-                self.frames,
-                self.bytes as f64 / self.frames as f64 / 1024.0,
+                self.patched_calls,
+                self.calls,
+                self.bytes as f64 / patched as f64 / 1024.0,
                 self.max_frame_bytes as f64 / 1024.0,
-                self.ideal_bytes as f64 / self.frames as f64 / 1024.0,
-                self.patches / self.frames,
-                self.records / self.frames,
-                self.slots / self.frames,
+                self.ideal_bytes as f64 / patched as f64 / 1024.0,
+                self.patches / patched,
+                self.records / patched,
+                self.slots / patched,
             );
             *self = Self::default();
         }
