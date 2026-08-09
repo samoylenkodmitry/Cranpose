@@ -1047,6 +1047,18 @@ impl DrawScopeDefault {
     /// arc bands, tight bounds, and the degeneracy drop happen, so the
     /// output is exactly what recording used to produce directly.
     pub fn finish(mut self) -> FinishedRecording {
+        // Composition diagnostic for retention work: how much of a heavy
+        // command is typed records vs ordinary primitives.
+        if std::env::var_os("CRANPOSE_RECORD_MIX_DIAG").is_some() && self.rec.tape.len() > 400 {
+            eprintln!(
+                "[record-mix] tape={} rects={} round_rects={} arcs={} others={}",
+                self.rec.tape.len(),
+                self.rec.rects.len(),
+                self.rec.round_rects.len(),
+                self.rec.arcs.len(),
+                self.rec.others.len(),
+            );
+        }
         let mut out = std::mem::take(&mut self.out);
         out.clear();
         out.reserve(self.rec.tape.len());
