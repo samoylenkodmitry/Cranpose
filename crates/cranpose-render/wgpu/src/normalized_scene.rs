@@ -2036,6 +2036,8 @@ fn try_command_feed<'a>(
     );
     let (root_scale, frame_now) =
         SHAPE_REPLAY.with(|state| (state.borrow().root_scale, state.borrow().frame));
+    let (mut stat_retained, mut stat_fallback, mut stat_remat, mut stat_captures) =
+        (0usize, 0usize, 0usize, 0usize);
     for span in &frame.spans {
         match span {
             cranpose_ui_graphics::FrameSpan::Dynamic { range } => {
@@ -2086,6 +2088,7 @@ fn try_command_feed<'a>(
                     }
                 }
                 if clean {
+                    stat_captures += 1;
                     SHAPE_REPLAY.with(|state| {
                         state
                             .borrow_mut()
@@ -2156,7 +2159,10 @@ fn try_command_feed<'a>(
                         });
                     })
                     .is_some();
-                if !emitted {
+                if emitted {
+                    stat_retained += 1;
+                } else {
+                    stat_fallback += 1;
                     if range.1 > range.0 {
                         emit_feed_range(
                             local_scene,
@@ -2174,22 +2180,38 @@ fn try_command_feed<'a>(
                         // Bypassed span whose retained buffer went away this
                         // frame: rebuild its primitives from the command's
                         // surviving recording.
+                        stat_remat += 1;
                         emit_feed_range(local_scene, &primitives, context, motion);
                     } else {
                         static REMAT_MISS: std::sync::atomic::AtomicU32 =
                             std::sync::atomic::AtomicU32::new(0);
                         let n = REMAT_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if n < 8 {
-                            eprintln!(
-                                "[cranpose] WARN command feed: bypassed span for slot {} of {:?} \
+                            log::warn!(
+                                "[command-feed] bypassed span for slot {} of {:?} \
                                  could not be rematerialized",
-                                slot, command
+                                slot,
+                                command
                             );
                         }
                     }
                 }
             }
         }
+    }
+    if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
+        log::warn!(
+            "[command-feed] frame {}: {} spans -> {} retained, {} fallback ({} remat), \
+             {} captures queued; scene {} shapes {} retained ops",
+            frame_now,
+            frame.spans.len(),
+            stat_retained,
+            stat_fallback,
+            stat_remat,
+            stat_captures,
+            local_scene.shapes.len(),
+            local_scene.retained_draws.len(),
+        );
     }
     true
 }

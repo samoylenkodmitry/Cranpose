@@ -1050,6 +1050,7 @@ dependencies = [
  "cranpose-ui",
  "cranpose-ui-graphics",
  "hyphenation",
+ "log",
  "thiserror 2.0.18",
  "tiny-skia",
  "ttf-parser",

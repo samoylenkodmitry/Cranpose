@@ -381,7 +381,7 @@ pub fn primitives_for_placement_verified(
                         } => dynamic += tape_end - tape_start,
                     }
                 }
-                eprintln!(
+                log::warn!(
                     "[command-replay] {} records: {} retained spans, {} dynamic records, \
                      {} materialized; {} segments alive, lifetime deaths {} splits {}",
                     records,

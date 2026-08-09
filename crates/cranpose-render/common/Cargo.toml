@@ -19,6 +19,7 @@ cranpose-core = { workspace = true }
 tiny-skia = { version = "0.11.4", default-features = false, features = ["std", "simd"] }
 hyphenation = { version = "0.8.4", default-features = false, optional = true }
 ab_glyph = "0.2.32"
+log = "0.4"
 thiserror = "2.0.18"
 ttf-parser = "0.25.1"
 
