@@ -31,6 +31,9 @@ mod test_support;
 mod worker_pool;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use pipeline::retained_feed_generation;
 pub use scene::{ClickAction, HitRegion, Scene};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
@@ -38,6 +41,9 @@ pub use shape_replay::feed_live_stats as command_feed_live_stats;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use shape_replay::live_stats as shape_replay_live_stats;
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count_for_tests};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
@@ -243,6 +249,14 @@ impl WgpuRenderer {
     }
 
     /// Initialize GPU resources with a WGPU device and queue.
+    ///
+    /// Replacing a live renderer (Android surface recreation, device loss)
+    /// drops every retained replay slot with the old `GpuRenderer`, so the
+    /// bypass contract fails closed BEFORE the new renderer exists: every
+    /// slot confirmation is revoked and the feed generation bumped — no
+    /// scene build may omit primitives against buffers that died, and
+    /// already-built frames rematerialize their bypassed spans instead of
+    /// referencing the dead renderer's slot ids.
     pub fn init_gpu(
         &mut self,
         device: Arc<wgpu::Device>,
@@ -250,6 +264,24 @@ impl WgpuRenderer {
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
     ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.gpu_renderer.is_some() {
+            crate::shape_replay::SHAPE_REPLAY.with(|state| {
+                let mut state = state.borrow_mut();
+                state.retire_feed();
+                state.retire_all();
+                // Queued releases name the OLD renderer's slot ids. The new
+                // store starts fully free, so draining them there is at
+                // best a no-op today (release is guarded on the id being
+                // live) — clear the queue instead of relying on that,
+                // so ids never cross renderers.
+                state.pending_releases.clear();
+            });
+            log::warn!(
+                "[command-feed] renderer replaced: retained slots retired, \
+                 confirmations revoked, feed generation bumped"
+            );
+        }
         self.gpu_renderer = Some(GpuRenderer::new(
             device,
             queue,

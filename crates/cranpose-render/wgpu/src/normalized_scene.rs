@@ -2010,15 +2010,25 @@ fn try_command_feed<'a>(
     context: &LocalPrimitiveContext<'_>,
 ) -> bool {
     use crate::shape_replay::{command_feed_enabled, PendingBrushPatch, PendingFeedCapture};
-    if !command_feed_enabled() {
-        return false;
-    }
-    let supported = SHAPE_REPLAY.with(|state| state.borrow().supported);
-    if !supported
-        || context.draw_snap_anchor.is_some()
-        || !layer_supports_replay(context.local_layer)
-    {
-        return false;
+    // Guard order and content are the happy path's exact current checks —
+    // when they all pass, nothing below this block costs anything new.
+    let feed_ready = command_feed_enabled()
+        && SHAPE_REPLAY.with(|state| state.borrow().supported)
+        && context.draw_snap_anchor.is_none()
+        && layer_supports_replay(context.local_layer);
+    if !feed_ready {
+        // Fail closed: a frame that bypassed materialization has spans
+        // `run.primitives` is missing, so falling back to the caller's
+        // ordinary loop would silently omit them. Only a frame with no
+        // bypassed spans may return false here.
+        return emit_unserved_frame_rematerialized(
+            local_scene,
+            run,
+            frame,
+            command,
+            shape_run,
+            context,
+        );
     }
     // The feed owns retention for scenes it serves; a live flat-detector
     // table would be a second retention system fighting over slots.
@@ -2108,6 +2118,7 @@ fn try_command_feed<'a>(
                                 shape_count: primitives.len(),
                                 fingerprint,
                                 capture_clip: context.visual_clip,
+                                frame: frame_now,
                             });
                     });
                 }
@@ -2194,17 +2205,7 @@ fn try_command_feed<'a>(
                         stat_remat += 1;
                         emit_feed_range(local_scene, &primitives, context, motion);
                     } else {
-                        static REMAT_MISS: std::sync::atomic::AtomicU32 =
-                            std::sync::atomic::AtomicU32::new(0);
-                        let n = REMAT_MISS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if n < 8 {
-                            log::warn!(
-                                "[command-feed] bypassed span for slot {} of {:?} \
-                                 could not be rematerialized",
-                                slot,
-                                command
-                            );
-                        }
+                        note_remat_miss(command, *slot);
                     }
                 }
             }
@@ -2226,6 +2227,124 @@ fn try_command_feed<'a>(
         );
     }
     true
+}
+
+/// Fail-closed emission for a fed run the feed cannot serve (feed disabled,
+/// unsupported collection window, snap-anchored context, unsupported
+/// layer). A frame with NO bypassed spans returns `false`: `run.primitives`
+/// is complete and the caller's ordinary loop draws it exactly as before —
+/// the historical fallback, kept bit-identical. A frame that DID bypass
+/// materialization returns `true` after emitting every span in order
+/// itself: spans with primitives ordinarily, bypassed spans rebuilt from
+/// their command's surviving recording, with the remat-miss terminal
+/// ([`note_remat_miss`]) on any span that cannot be rebuilt.
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_unserved_frame_rematerialized<'a>(
+    local_scene: &mut CompositorScene,
+    run: &'a DrawRunNode,
+    frame: &cranpose_ui_graphics::CommandReplayFrame,
+    command: cranpose_render_common::graph::DrawCommandId,
+    shape_run: &mut Vec<ShapeRunEntry<'a>>,
+    context: &LocalPrimitiveContext<'_>,
+) -> bool {
+    let has_bypassed_span = frame.spans.iter().any(|span| {
+        matches!(
+            span,
+            cranpose_ui_graphics::FrameSpan::Retained {
+                capture: false,
+                range,
+                ..
+            } if range.1 <= range.0
+        )
+    });
+    if !has_bypassed_span {
+        return false;
+    }
+    {
+        static WALKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 8 {
+            log::warn!(
+                "[command-feed] feed cannot serve a frame of {:?} with bypassed spans; \
+                 rematerializing the whole run (fail-closed walk {})",
+                command,
+                n + 1,
+            );
+        }
+    }
+    // Entries accumulated from earlier nodes flush first, exactly as the
+    // fed path does: span emission must land after them to keep z order.
+    flush_shape_run(local_scene, shape_run, context);
+    let motion = context.motion_context_animated || context.content_offset_translation;
+    let counts_before = scene_counts(local_scene);
+    for span in &frame.spans {
+        let (range, bypassed_slot) = match span {
+            cranpose_ui_graphics::FrameSpan::Dynamic { range } => (range, None),
+            cranpose_ui_graphics::FrameSpan::Retained {
+                slot,
+                capture,
+                range,
+                tape_range,
+                ..
+            } => (range, (!capture).then_some((*slot, *tape_range))),
+        };
+        if range.1 > range.0 {
+            emit_feed_range(
+                local_scene,
+                &run.primitives[range.0 as usize..range.1 as usize],
+                context,
+                motion,
+            );
+            continue;
+        }
+        // An empty dynamic or capture span carries nothing to draw; an
+        // empty retained span is a bypass and must rebuild.
+        let Some((slot, tape_range)) = bypassed_slot else {
+            continue;
+        };
+        if let Some(primitives) = cranpose_render_common::scene_builder::materialize_command_span(
+            command,
+            tape_range.0 as usize,
+            tape_range.1 as usize,
+        ) {
+            emit_feed_range(local_scene, &primitives, context, motion);
+        } else {
+            note_remat_miss(command, slot);
+        }
+    }
+    // One of the guards that routed us here may be a snap-anchored context:
+    // the ordinary loop would have anchored these draws, so anchor
+    // everything the walk emitted (idempotent over loose draws that already
+    // anchored themselves).
+    assign_snap_anchor_since(local_scene, counts_before, context.draw_snap_anchor);
+    true
+}
+
+/// The fail-closed terminal for a bypassed span that could neither draw
+/// retained nor rebuild from its command's recording: nothing exists to
+/// draw it this frame, so make the omission loud, counted, and bounded.
+/// Revoking the confirmation makes the very next graph build materialize
+/// the span again — the earliest self-heal point reachable from here, as
+/// scene collection has no frame-invalidation hook to request an early
+/// rebuild; on animating scenes that bound is the next frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn note_remat_miss(command: cranpose_render_common::graph::DrawCommandId, slot: u32) {
+    cranpose_render_common::scene_builder::revoke_retained_slot(command, slot);
+    let misses = SHAPE_REPLAY.with(|state| {
+        let mut state = state.borrow_mut();
+        state.stat_remat_miss += 1;
+        state.stat_remat_miss
+    });
+    if misses <= 8 || misses.is_multiple_of(256) {
+        log::warn!(
+            "[command-feed] bypassed span for slot {} of {:?} could not be \
+             rematerialized (lifetime misses {}); confirmation revoked, the \
+             next build redraws it",
+            slot,
+            command,
+            misses,
+        );
+    }
 }
 
 /// The ordinary path for one span of a fed run: shape entries convert in

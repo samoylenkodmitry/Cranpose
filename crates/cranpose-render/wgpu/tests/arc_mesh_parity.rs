@@ -1,7 +1,7 @@
 //! Pixel parity for retained arc/ring meshes.
 //!
 //! Renders the same churning retained scene as `command_feed_parity` under
-//! two capture regimes — `CRANPOSE_ARC_MESH=0` (legacy quad expansion) and
+//! two capture regimes — `CRANPOSE_ARC_MESH=0` (plain quad expansion) and
 //! the default-on conservative mesh — and compares same-position passes.
 //!
 //! THE MEASURED ENVELOPE, AND WHY IT IS NOT ZERO. The design bar was
@@ -13,7 +13,7 @@
 //! interpolated `rect_pos` at a pixel, which after the SDF, smoothstep and
 //! unorm8 quantization flips low bits on arc AA edges. A controlled
 //! isolation run (all shapes forced through the mesh pipeline as
-//! passthrough quads, i.e. geometry bitwise identical to the legacy path)
+//! passthrough quads, i.e. geometry bitwise identical to the quad path)
 //! measured: identity-transform frames byte-EXACT — the vertex path itself
 //! is bit-clean — while rotated frames still differed by ≤27 single-ulp
 //! channels because the two vertex entry points compile with different fma

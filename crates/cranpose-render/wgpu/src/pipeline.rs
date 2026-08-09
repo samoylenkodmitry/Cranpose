@@ -1930,6 +1930,16 @@ pub(crate) fn bump_retained_feed_generation() {
     RETAINED_FEED_GENERATION.with(|cell| cell.set(cell.get().wrapping_add(1)));
 }
 
+/// The current retained-feed generation: the slot universe confirmations
+/// are stamped with when the renderer honors a capture, and the epoch
+/// [`declare_retained_feed`] declares to scene building. Public (hidden)
+/// so the fail-closed contract tests can assert revocation bumped it.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn retained_feed_generation() -> u64 {
+    RETAINED_FEED_GENERATION.with(std::cell::Cell::get)
+}
+
 /// Declares to scene building that the wgpu renderer consumes retained
 /// draw-run spans by identity. wasm has no storage-buffer retained path, so
 /// it declares nothing and scene building skips verification entirely. With

@@ -779,37 +779,63 @@ pub fn set_retained_feed_epoch(epoch: Option<u64>) {
 
 thread_local! {
     static CONFIRMED_RETAINED_SLOTS: std::cell::RefCell<
-        std::collections::HashSet<(DrawCommandId, u32), cranpose_ui_graphics::FxBuildHasher>,
-    > = std::cell::RefCell::new(std::collections::HashSet::default());
+        std::collections::HashMap<(DrawCommandId, u32), u64, cranpose_ui_graphics::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
 }
 
 /// The renderer's word that it holds a live retained buffer for this
-/// (command, slot) identity. Only confirmed spans may skip materialization:
+/// (command, slot) identity, stamped with the retained-feed generation the
+/// buffer was captured under. Only confirmed spans may skip materialization:
 /// an unconfirmed span's primitives are the renderer's only way to draw it
-/// in the same frame.
-pub fn confirm_retained_slot(command: DrawCommandId, slot: u32) {
-    CONFIRMED_RETAINED_SLOTS.with(|set| {
-        set.borrow_mut().insert((command, slot));
+/// in the same frame. The stamp is what keeps the word LIVE: a confirmation
+/// from a dead slot universe (renderer replaced, device lost, root-scale
+/// change) stops matching the epoch declared for the build and bypass fails
+/// closed instead of trusting a buffer that no longer exists.
+pub fn confirm_retained_slot(command: DrawCommandId, slot: u32, generation: u64) {
+    CONFIRMED_RETAINED_SLOTS.with(|map| {
+        map.borrow_mut().insert((command, slot), generation);
     });
 }
 
 /// The renderer released this identity's buffer (aged out, replaced):
 /// spans referencing it must materialize again.
 pub fn revoke_retained_slot(command: DrawCommandId, slot: u32) {
-    CONFIRMED_RETAINED_SLOTS.with(|set| {
-        set.borrow_mut().remove(&(command, slot));
+    CONFIRMED_RETAINED_SLOTS.with(|map| {
+        map.borrow_mut().remove(&(command, slot));
     });
 }
 
 /// Wholesale retire: every confirmation dies with the slots.
 pub fn clear_retained_slot_confirmations() {
-    CONFIRMED_RETAINED_SLOTS.with(|set| set.borrow_mut().clear());
+    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow_mut().clear());
 }
 
 /// Whether the renderer has confirmed a live retained buffer for this
-/// identity (readable by tests driving the recorder by hand).
+/// identity UNDER THE EPOCH DECLARED FOR THIS BUILD (readable by tests
+/// driving the recorder by hand). No declared epoch means no consumer for
+/// bypassed spans, so nothing may skip materialization; a stored generation
+/// from another epoch is a buffer of a dead slot universe.
 pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
-    CONFIRMED_RETAINED_SLOTS.with(|set| set.borrow().contains(&(command, slot)))
+    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
+        return false;
+    };
+    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow().get(&(command, slot)) == Some(&epoch))
+}
+
+/// Whether any of this command's retained slots carries a live (current
+/// epoch) confirmation. A graph node may still hold a bypassed span for the
+/// command, making its recording the only rematerialization source — the
+/// idle sweep must not drop it. Stale-epoch entries are non-live, so dead
+/// confirmations never pin recordings.
+fn command_has_live_confirmation(command: DrawCommandId) -> bool {
+    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
+        return false;
+    };
+    CONFIRMED_RETAINED_SLOTS.with(|map| {
+        map.borrow()
+            .iter()
+            .any(|((id, _), generation)| *id == command && *generation == epoch)
+    })
 }
 
 thread_local! {
@@ -848,11 +874,47 @@ pub fn materialize_command_span(
     })
 }
 
+/// Test hook: installs `recording` as `id`'s current recording, exactly as
+/// the end of a build would, so integration tests that drive the recorder
+/// by hand (outside the applier path) can exercise
+/// [`materialize_command_span`] against the frame they are about to render.
+#[doc(hidden)]
+pub fn publish_command_recording_for_tests(
+    id: DrawCommandId,
+    recording: cranpose_ui_graphics::CommandRecording,
+) {
+    COMMAND_RECORDINGS.with(|map| {
+        let mut map = map.borrow_mut();
+        let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
+        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
+            generation,
+            handles: [None, None],
+            recording: cranpose_ui_graphics::CommandRecording::default(),
+            replay: cranpose_ui_graphics::CommandReplayState::default(),
+            replay_epoch: None,
+        });
+        slot.generation = generation;
+        slot.recording = recording;
+    });
+}
+
+/// Test hook: drops every command recording on this thread, simulating the
+/// loss of all rematerialization sources (the remat-miss terminal).
+#[doc(hidden)]
+pub fn clear_command_recordings_for_tests() {
+    COMMAND_RECORDINGS.with(|map| map.borrow_mut().clear());
+}
+
 /// Called once per graph build/update. The sweep drops slots whose commands
-/// stopped recording long ago (screen navigated away); a slot's buffers only
-/// die here if no graph node shares them, so this is purely a capacity
-/// release, never a correctness event. Clean-but-live commands losing their
-/// slot merely re-earn capacity if they ever re-record.
+/// stopped recording long ago (screen navigated away); a slot's shared
+/// `handles` only die here if no graph node shares them, so those are a pure
+/// capacity release. The `recording` is NOT: with the retained feed, a live
+/// graph node may hold a bypassed span whose only rematerialization source
+/// is the command's recording ([`materialize_command_span`]), so a slot
+/// whose command carries a live confirmation is exempt from the sweep — it
+/// is released once its confirmations are revoked or their epoch dies.
+/// Clean-but-live commands losing their slot merely re-earn capacity if
+/// they ever re-record.
 fn bump_recording_generation() {
     let generation = RECORDING_GENERATION.with(|cell| {
         let next = cell.get().wrapping_add(1);
@@ -861,8 +923,9 @@ fn bump_recording_generation() {
     });
     if generation.is_multiple_of(512) {
         COMMAND_RECORDINGS.with(|map| {
-            map.borrow_mut()
-                .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
+            map.borrow_mut().retain(|id, slot| {
+                generation.wrapping_sub(slot.generation) <= 64 || command_has_live_confirmation(*id)
+            });
         });
     }
 }
@@ -3727,5 +3790,96 @@ mod tests {
                 following_top
             );
         });
+    }
+
+    /// Records one circle through the command scope and publishes it under
+    /// `id`, returning the recording's tape length. The recording is taken
+    /// before `finish` (which clears it for capacity reuse); production's
+    /// `finish_replay` keeps it whole the same way.
+    fn publish_test_recording(id: DrawCommandId) -> usize {
+        let mut scope = DrawScopeDefault::new(cranpose_ui_graphics::Size::new(100.0, 100.0));
+        scope.draw_circle(
+            Brush::solid(cranpose_ui_graphics::Color(0.2, 0.4, 0.6, 1.0)),
+            cranpose_ui_graphics::Point::new(50.0, 50.0),
+            10.0,
+        );
+        let recording = scope.recorded().clone();
+        let tape_len = recording.len();
+        assert!(tape_len > 0, "the test circle must record");
+        publish_command_recording_for_tests(id, recording);
+        tape_len
+    }
+
+    #[test]
+    fn retained_slot_confirmations_are_live_only_under_their_generation() {
+        let command = DrawCommandId {
+            node_id: 990_101,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        set_retained_feed_epoch(Some(7));
+        confirm_retained_slot(command, 3, 7);
+        assert!(retained_slot_confirmed(command, 3));
+        // A new epoch (renderer swap, device loss) makes the word stale.
+        set_retained_feed_epoch(Some(8));
+        assert!(!retained_slot_confirmed(command, 3));
+        // No declared epoch means no consumer: never confirmed.
+        set_retained_feed_epoch(None);
+        assert!(!retained_slot_confirmed(command, 3));
+        // Back on the stored generation the buffer is live again.
+        set_retained_feed_epoch(Some(7));
+        assert!(retained_slot_confirmed(command, 3));
+        revoke_retained_slot(command, 3);
+        assert!(!retained_slot_confirmed(command, 3));
+        set_retained_feed_epoch(None);
+        clear_retained_slot_confirmations();
+    }
+
+    #[test]
+    fn recording_sweep_exempts_commands_with_live_confirmations() {
+        let command = DrawCommandId {
+            node_id: 990_102,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        let tape_len = publish_test_recording(command);
+        set_retained_feed_epoch(Some(41));
+        confirm_retained_slot(command, 0, 41);
+
+        // 1024 builds without re-recording: both sweeps (512, 1024) run
+        // with the slot idle far past the 64-build window. The live
+        // confirmation must exempt it — the recording is the only source
+        // for the bypassed span a graph may still hold.
+        for _ in 0..1024 {
+            bump_recording_generation();
+        }
+        assert!(
+            materialize_command_span(command, 0, tape_len).is_some(),
+            "a confirmed command's recording must survive the idle sweep"
+        );
+
+        // Revoked, the next sweep drops it like any idle slot.
+        revoke_retained_slot(command, 0);
+        for _ in 0..512 {
+            bump_recording_generation();
+        }
+        assert!(
+            materialize_command_span(command, 0, tape_len).is_none(),
+            "a revoked command's recording must age out normally"
+        );
+
+        // A stale-epoch confirmation must NOT pin a recording forever.
+        let tape_len = publish_test_recording(command);
+        confirm_retained_slot(command, 0, 41);
+        set_retained_feed_epoch(Some(42));
+        for _ in 0..1024 {
+            bump_recording_generation();
+        }
+        assert!(
+            materialize_command_span(command, 0, tape_len).is_none(),
+            "a dead-epoch confirmation must not exempt the recording"
+        );
+        set_retained_feed_epoch(None);
+        clear_retained_slot_confirmations();
     }
 }

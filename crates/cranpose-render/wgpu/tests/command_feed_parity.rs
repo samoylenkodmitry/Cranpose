@@ -199,7 +199,7 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     // Baseline: everything through the full pipeline — no feed, no flat
     // detector (its retention is not what this test compares against), and
     // no retained arc meshes: this test documents the FEED's divergence
-    // envelope, so its captures stay on the legacy quad expansion (the mesh
+    // envelope, so its captures stay on the plain quad expansion (the mesh
     // adds its own interpolation noise, measured in arc_mesh_parity).
     std::env::set_var("CRANPOSE_ARC_MESH", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
@@ -212,7 +212,12 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     // The fed pass confirmed captured slots exactly as production does;
     // rebuild the same deterministic sequence with the bypass consulting
     // those confirmations, so retained records never materialize at all,
-    // and render it against the live slots.
+    // and render it against the live slots. Confirmations are live only
+    // under the feed generation they were stamped with, so declare it for
+    // this build exactly as the production pipeline does per build.
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(
+        cranpose_render_wgpu::retained_feed_generation(),
+    ));
     let command = DrawCommandId {
         node_id: 7,
         command_index: 0,
@@ -254,7 +259,11 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
     std::env::remove_var("CRANPOSE_ARC_MESH");
 
-    let (feed_slots, patches) = cranpose_render_wgpu::command_feed_live_stats();
+    let (feed_slots, patches, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
+    assert_eq!(
+        remat_misses, 0,
+        "no bypassed span may have hit the fail-closed remat-miss terminal"
+    );
     assert!(
         feed_slots >= 4,
         "the rings and twinkles should hold identity-fed slots, got {feed_slots}"

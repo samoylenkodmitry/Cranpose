@@ -1367,7 +1367,7 @@ fn create_shape_pipeline(
 /// mesh: `vs_mesh` consumes `{position, uv, shape_idx}` vertices instead of
 /// expanding six corners per shape. Fragment stage, bind group layouts
 /// (including the dynamic-offset similarity binding and the retained paint
-/// binding) and the SrcOver blend are exactly the ones the legacy retained
+/// binding) and the SrcOver blend are exactly the ones the quad-expansion retained
 /// path uses — only the vertex fetch differs.
 #[cfg(not(target_arch = "wasm32"))]
 fn create_mesh_shape_pipeline(
@@ -2170,7 +2170,7 @@ struct ReplaySlot {
     gradient_mirror: Vec<GradientStop>,
     /// Conservative capture-space arc/ring mesh, built once at capture.
     /// `None` when the kill switch is off, the slot meshed no arcs, or the
-    /// vertex budget overflowed — those slots replay through the legacy
+    /// vertex budget overflowed — those slots replay through the quad-expansion
     /// six-vertices-per-shape path.
     mesh: Option<ReplaySlotMesh>,
     /// Which capture created this slot's buffers, from the store's global
@@ -2339,7 +2339,7 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
 /// Emits the six vertices `vs_main` would expand for this shape — corner
 /// order (0, 1, 2)(2, 1, 3) and corner uvs, positions straight from the
 /// captured quad — so a passthrough shape rasterizes bit-identically to the
-/// legacy indexless path.
+/// quad-expansion indexless path.
 #[cfg(not(target_arch = "wasm32"))]
 fn emit_passthrough_quad(shape: &ShapeData, shape_idx: u32, out: &mut Vec<MeshVertex>) {
     let corners = [
@@ -2547,7 +2547,7 @@ fn triangles_shoelace_area(vertices: &[MeshVertex]) -> f64 {
         .sum()
 }
 
-/// Unsigned area of the two triangles the legacy path would rasterize for
+/// Unsigned area of the two triangles the quad-expansion path would rasterize for
 /// this shape, for telemetry.
 #[cfg(not(target_arch = "wasm32"))]
 fn quad_shoelace_area(shape: &ShapeData) -> f64 {
@@ -2578,7 +2578,7 @@ struct ArcMeshBuild {
 /// Builds a slot's conservative mesh: arc bands become trapezoid strips,
 /// every other shape a passthrough quad, in the exact capture shape order.
 /// Returns `None` when the vertex budget overflows — the caller warns and the
-/// whole slot replays through the legacy path (silent truncation would break
+/// whole slot replays through the quad-expansion path (silent truncation would break
 /// the containment invariant).
 #[cfg(not(target_arch = "wasm32"))]
 fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
@@ -8926,6 +8926,22 @@ impl GpuRenderer {
                 }
             }
             for capture in std::mem::take(&mut state.pending_feed_captures) {
+                if capture.frame != frame {
+                    // A capture that outlived its frame (aborted collection
+                    // that skipped this drain) references shape indices of a
+                    // scene that never rendered; honoring it against THIS
+                    // frame's shapes would retain wrong content under a
+                    // confirmed identity. Categorically drop it.
+                    log::warn!(
+                        "[command-feed] dropping stale capture for slot {} of {:?} \
+                         (queued frame {}, draining frame {})",
+                        capture.key.1,
+                        capture.key.0,
+                        capture.frame,
+                        frame,
+                    );
+                    continue;
+                }
                 let end = capture.shape_start + capture.shape_count;
                 let Some(slice) = shapes.get(capture.shape_start..end) else {
                     continue;
@@ -8947,10 +8963,13 @@ impl GpuRenderer {
                     self.release_replay_slot(old.gpu_slot);
                 }
                 // Only now may scene building skip materializing this span:
-                // the retained buffer verifiably exists.
+                // the retained buffer verifiably exists — in THIS feed
+                // generation's slot universe, which the confirmation is
+                // stamped with so a later universe never trusts it.
                 cranpose_render_common::scene_builder::confirm_retained_slot(
                     capture.key.0,
                     capture.key.1,
+                    crate::pipeline::retained_feed_generation(),
                 );
             }
             state.supported = false;
@@ -17590,7 +17609,7 @@ mod tests {
                     })
                     .collect();
 
-                // Sample the QUAD box, not `rect`: legacy rasterizes the
+                // Sample the QUAD box, not `rect`: quad expansion rasterizes the
                 // quad, the mesh clips to the quad, and at non-dyadic root
                 // scales the two boxes differ by an ulp.
                 let [qx, qy, ..] = converted.quad01;

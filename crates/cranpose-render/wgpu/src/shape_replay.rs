@@ -156,6 +156,11 @@ pub(crate) struct PendingFeedCapture {
     pub shape_count: usize,
     pub fingerprint: u64,
     pub capture_clip: Option<Rect>,
+    /// Frame ordinal at queue time. The drain honors a capture only against
+    /// that same frame's scene — its shape indices are meaningless in any
+    /// other, and capturing there would retain wrong content under a
+    /// confirmed identity.
+    pub frame: u64,
 }
 
 /// Frames a feed slot may go unreferenced before its buffers are released.
@@ -217,6 +222,11 @@ pub(crate) struct ShapeReplayState {
     pub stat_deaths: u64,
     pub stat_splits: u64,
     pub stat_patches: u64,
+    /// Lifetime count of bypassed spans that could neither draw retained
+    /// nor rematerialize from their command's recording — the fail-closed
+    /// terminal. Every hit revokes the span's confirmation so the next
+    /// build materializes it again; a nonzero steady rate is a defect.
+    pub stat_remat_miss: u64,
     /// Queues drained by the renderer once per frame.
     pub pending_captures: Vec<PendingCapture>,
     pub pending_patches: Vec<PendingBrushPatch>,
@@ -255,13 +265,50 @@ pub(crate) fn command_feed_enabled() -> bool {
 }
 
 /// Test/diagnostic view of the identity feed on this thread: live feed
-/// slots and lifetime patch count.
+/// slots, lifetime patch count, and lifetime remat-miss count (bypassed
+/// spans that could neither draw retained nor rebuild from their recording
+/// — the fail-closed terminal; see `stat_remat_miss`).
 #[doc(hidden)]
-pub fn feed_live_stats() -> (usize, u64) {
+pub fn feed_live_stats() -> (usize, u64, u64) {
     SHAPE_REPLAY.with(|state| {
         let state = state.borrow();
-        (state.feed_slots.len(), state.stat_patches)
+        (
+            state.feed_slots.len(),
+            state.stat_patches,
+            state.stat_remat_miss,
+        )
     })
+}
+
+/// Test hook: queues a feed capture stamped with the CURRENT frame ordinal.
+/// Rendering the next frame advances the ordinal before the drain runs, so
+/// an injected capture is exactly the stale-frame case the drain must drop
+/// without capturing or confirming.
+#[doc(hidden)]
+pub fn inject_feed_capture_for_tests(
+    command: cranpose_render_common::graph::DrawCommandId,
+    slot: u32,
+    shape_start: usize,
+    shape_count: usize,
+) {
+    SHAPE_REPLAY.with(|state| {
+        let mut state = state.borrow_mut();
+        let frame = state.frame;
+        state.pending_feed_captures.push(PendingFeedCapture {
+            key: (command, slot),
+            shape_start,
+            shape_count,
+            fingerprint: 0,
+            capture_clip: None,
+            frame,
+        });
+    });
+}
+
+/// Test hook: how many feed captures are queued on this thread.
+#[doc(hidden)]
+pub fn pending_feed_capture_count_for_tests() -> usize {
+    SHAPE_REPLAY.with(|state| state.borrow().pending_feed_captures.len())
 }
 
 /// Test/diagnostic view of the live replay state on this thread: segments
@@ -288,7 +335,10 @@ pub fn live_stats() -> (usize, u64, u64, bool, u8) {
 impl ShapeReplayState {
     /// Drops all replay state, queueing the release of any live slots. Only
     /// safe while the current frame has pushed no retained ops — the renderer
-    /// frees released slots before it encodes.
+    /// frees released slots before it encodes. Pending feed captures die
+    /// too: they reference shape indices of the scene being retired, and a
+    /// later frame's drain must never capture (and confirm) another scene's
+    /// shapes under their identities.
     pub(crate) fn retire_all(&mut self) {
         self.segments.clear();
         for (slot, _) in self.slot_refs.drain() {
@@ -296,6 +346,7 @@ impl ShapeReplayState {
         }
         self.snapshot.clear();
         self.pending_captures.clear();
+        self.pending_feed_captures.clear();
         self.pending_patches.clear();
         self.phase = ReplayPhase::Idle;
         self.rebuild_pending = false;
@@ -996,6 +1047,33 @@ mod tests {
         // A quarter turn clockwise in y-down space maps +X onto +Y.
         assert!((bounds.y - 10.0).abs() < 1e-4);
         assert!((bounds.height - 10.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn retire_all_clears_pending_feed_captures() {
+        let mut state = ShapeReplayState::default();
+        state.pending_feed_captures.push(PendingFeedCapture {
+            key: (
+                cranpose_render_common::graph::DrawCommandId {
+                    node_id: 1,
+                    command_index: 0,
+                    placement: cranpose_render_common::style_shared::DrawPlacement::Behind,
+                },
+                0,
+            ),
+            shape_start: 0,
+            shape_count: 4,
+            fingerprint: 0,
+            capture_clip: None,
+            frame: 3,
+        });
+        state.phase = ReplayPhase::Active;
+        state.retire_all();
+        assert!(
+            state.pending_feed_captures.is_empty(),
+            "retired scenes must void their capture requests: the shape \
+             indices reference a scene that will never render"
+        );
     }
 
     #[test]
