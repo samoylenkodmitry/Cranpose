@@ -2,7 +2,10 @@
 //!
 //! Renders the same churning retained scene as `command_feed_parity` under
 //! two capture regimes — `CRANPOSE_ARC_MESH=0` (plain quad expansion) and
-//! the default-on conservative mesh — and compares same-position passes.
+//! `CRANPOSE_ARC_MESH=1` (the opt-in conservative mesh, indexed since P1b)
+//! — and compares same-position passes. The instanced-quad selection is
+//! pinned OFF for the whole test so both arms match the regime this envelope
+//! was measured under (see the note at the top of the test body).
 //!
 //! THE MEASURED ENVELOPE, AND WHY IT IS NOT ZERO. The design bar was
 //! byte-identical output, on the argument that any vertex stream carrying
@@ -199,9 +202,18 @@ fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph
 
 #[test]
 fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
+    // Pin the instanced-quad selection OFF for this renderer (the flag is
+    // latched at construction, so it must be set BEFORE the renderer
+    // exists): this suite's envelope was measured against `vs_main` quads,
+    // and P1b's indexed mesh keeps triangle geometry byte-identical, so the
+    // per-frame numbers must reproduce byte-for-byte. Letting the quad arm
+    // drift onto `vs_shape_instanced` would fold the separate instancing
+    // fma envelope (covered by `instanced_quad_parity`) into this one.
+    std::env::set_var("CRANPOSE_INSTANCED_QUADS", "0");
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
+            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
             eprintln!("skipping arc mesh parity: headless WGPU init failed: {err}");
             return;
         }
@@ -232,6 +244,11 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
     std::env::remove_var("CRANPOSE_ARC_MESH");
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+    assert!(
+        !renderer.instanced_quads_active(),
+        "the pinned-off selection must have latched at construction"
+    );
 
     // Non-vacuity: the mesh arm must actually hold meshed slots, and the
     // quad arm's slots must exist without meshes.

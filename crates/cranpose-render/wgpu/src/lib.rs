@@ -443,6 +443,18 @@ impl WgpuRenderer {
         self.gpu_renderer.as_ref().map(|r| &*r.device)
     }
 
+    /// Test/diagnostic view of the latched instanced-quad selection: `true`
+    /// when the live GPU renderer's ordinary shape draws ride
+    /// `vs_shape_instanced` (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0
+    /// at construction).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn instanced_quads_active(&self) -> bool {
+        self.gpu_renderer
+            .as_ref()
+            .is_some_and(GpuRenderer::instanced_quads_active)
+    }
+
     /// Test/diagnostic view of retained arc meshes: (slots holding a mesh,
     /// total live replay slots).
     #[cfg(not(target_arch = "wasm32"))]

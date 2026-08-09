@@ -130,6 +130,74 @@ fn vs_main(@builtin(vertex_index) vertex_idx: u32) -> VertexOutput {
     return output;
 }
 
+// Instanced quad path for ordinary shape batches (storage mode only): one
+// instance per shape, four vertices fetched through the static index buffer
+// [0, 1, 2, 2, 1, 3] — the exact triangle pair `vs_main`'s six-slot expansion
+// produces, same diagonal, same winding — so per-shape vertex work drops from
+// six executions (and six ShapeData reads) to four. `shape_idx` comes from
+// the instance index instead of `vertex_index / 6`.
+//
+// BIT-EXACTNESS REQUIREMENT: every expression below is copied verbatim from
+// `vs_main` — identical corner mapping, identical uv derivation, identical
+// transform arithmetic. That is what makes the instanced path rasterize
+// bit-identically to the six-vertex path at the identity transform. Under a
+// rotating similarity the backend compiler may contract the multiply-adds
+// differently per entry point (the P1a lesson, measured on Metal), which is
+// a single ulp of position and the tiny envelope `instanced_quad_parity`
+// pins.
+//
+// Uniform/WebGL devices never create a pipeline with this entry point (GL
+// base-instance semantics for `instance_index` under a non-zero
+// first_instance are a portability hazard); in that variant it is dead code,
+// which keeps the base text valid for WebGL.
+@vertex
+fn vs_shape_instanced(
+    @builtin(vertex_index) corner_idx: u32,
+    @builtin(instance_index) instance_idx: u32,
+) -> VertexOutput {
+    var output: VertexOutput;
+
+    let shape_idx = instance_idx;
+    let corner = corner_idx;
+
+    let shape = shape_data[shape_idx];
+    var position: vec2<f32>;
+    switch corner {
+        case 0u: { position = shape.quad01.xy; }
+        case 1u: { position = shape.quad01.zw; }
+        case 2u: { position = shape.quad23.xy; }
+        default: { position = shape.quad23.zw; }
+    }
+
+    let rel = position - similarity.center;
+    position = similarity.center + vec2<f32>(
+        rel.x * similarity.rot.x - rel.y * similarity.rot.y,
+        rel.x * similarity.rot.y + rel.y * similarity.rot.x,
+    ) * similarity.scale;
+
+    let x = ((position.x - uniforms.viewport_offset.x) / uniforms.viewport.x) * 2.0 - 1.0;
+    let y = 1.0 - ((position.y - uniforms.viewport_offset.y) / uniforms.viewport.y) * 2.0;
+
+    output.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    output.color = shape.color;
+    output.uv = vec2<f32>(f32(corner & 1u), f32(corner >> 1u));
+    output.world_pos = position;
+    output.rect = shape.rect;
+    output.radii = shape.radii;
+    output.gradient_params = shape.gradient_params;
+    output.clip_rect = shape.clip_rect;
+    output.stroke_params = shape.stroke_params;
+    output.arc_params = shape.arc_params;
+    output.brush = vec4<u32>(
+        shape.brush_type,
+        shape.gradient_start,
+        shape.gradient_count,
+        shape.gradient_tile_mode,
+    );
+
+    return output;
+}
+
 // Mesh vertex path for retained arc/ring slots (storage mode only): instead
 // of expanding six ShapeData corners per shape, a mesh captured alongside the
 // slot supplies positions that cover only the arc band's antialiasing

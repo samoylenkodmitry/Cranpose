@@ -20,6 +20,19 @@
 //! rebuild path: the per-frame rebuild counters must keep moving after the
 //! initial build (churn safety), while cached executes dominate rebuilds
 //! (the cache is not vacuously rebuilding every frame).
+//!
+//! Since P1b the bundles must also cover the two new draw encodings, so
+//! every pass drives `CRANPOSE_ARC_MESH` per position: ON for the frames
+//! before the jolt (captures and revert-churn recaptures land with indexed
+//! meshes — `draw_indexed` over the slot's u32 index buffer inside the
+//! bundle) and OFF from the jolt on (its recaptures land meshless and ride
+//! the default-ON instanced-quad path — `draw_indexed(0..6, 0,
+//! first..last)` over the static u16 quad indices). Recaptures are
+//! per-position deterministic, so every pass sees the identical encoding
+//! mixture at the same frame and the same-position control holds; the
+//! per-frame slot stats assert the ON pass really bundled BOTH encodings
+//! at once. The zero-byte bar is unchanged: a bundle replays the IDENTICAL
+//! commands the direct path encodes, whatever the encoding.
 
 mod support;
 
@@ -174,15 +187,31 @@ fn build_sequence(node_id: usize) -> Vec<RenderGraph> {
         .collect()
 }
 
-/// Renders the sequence and returns each frame's pixels plus the bundle
-/// cache's per-frame (rebuilds, cached executes) deltas.
+/// Per-frame observations of one pass: pixels, bundle-cache (rebuilds,
+/// cached executes) deltas, and (meshed, total) replay-slot stats.
+type PassObservations = (Vec<Vec<u8>>, Vec<(u64, u64)>, Vec<(usize, usize)>);
+
+/// Renders the sequence and returns each frame's pixels, the bundle cache's
+/// per-frame (rebuilds, cached executes) deltas, and the per-frame (meshed,
+/// total) replay-slot stats.
+///
+/// `CRANPOSE_ARC_MESH` is driven per position — ON before the jolt, OFF
+/// from it — so captures land meshed while jolt recaptures land meshless.
+/// Recaptures are per-position deterministic (the graphs replay
+/// identically), so every pass sees the identical encoding mixture at the
+/// same frame index and the same-position control stays valid.
 fn render_sequence(
     renderer: &mut support::LockedRenderer,
     graphs: &[RenderGraph],
-) -> (Vec<Vec<u8>>, Vec<(u64, u64)>) {
+) -> PassObservations {
     let mut frames = Vec::with_capacity(graphs.len());
     let mut deltas = Vec::with_capacity(graphs.len());
+    let mut mesh_stats = Vec::with_capacity(graphs.len());
     for (frame, graph) in graphs.iter().enumerate() {
+        std::env::set_var(
+            "CRANPOSE_ARC_MESH",
+            if frame < JOLT_FRAME { "1" } else { "0" },
+        );
         let before = renderer.retained_bundle_stats();
         renderer.scene_mut().graph = Some(graph.clone());
         let captured = renderer
@@ -192,8 +221,9 @@ fn render_sequence(
         let after = renderer.retained_bundle_stats();
         frames.push(captured.pixels);
         deltas.push((after.0 - before.0, after.1 - before.1));
+        mesh_stats.push(renderer.replay_slot_mesh_stats());
     }
-    (frames, deltas)
+    (frames, deltas, mesh_stats)
 }
 
 fn assert_byte_exact(label: &str, a: &[Vec<u8>], b: &[Vec<u8>]) {
@@ -225,23 +255,44 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
 
     // Pass 1 (warm): captures land, slots churn, bundles are live — its
     // pixels are never compared, but its counters prove churn safety.
+    // (`render_sequence` drives CRANPOSE_ARC_MESH per position: meshed
+    // captures before the jolt, meshless recaptures from it.)
     std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "1");
-    let (_warm, warm_deltas) = render_sequence(&mut renderer, &graphs);
+    let (_warm, warm_deltas, _warm_mesh) = render_sequence(&mut renderer, &graphs);
 
     // Passes 2..4 at stable renderer positions: OFF control, ON, OFF control.
     std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "0");
-    let (off_frames, off_deltas) = render_sequence(&mut renderer, &graphs);
+    let (off_frames, off_deltas, _off_mesh) = render_sequence(&mut renderer, &graphs);
     std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "1");
-    let (on_frames, on_deltas) = render_sequence(&mut renderer, &graphs);
+    let (on_frames, on_deltas, on_mesh) = render_sequence(&mut renderer, &graphs);
     std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "0");
-    let (off2_frames, _off2_deltas) = render_sequence(&mut renderer, &graphs);
+    let (off2_frames, _off2_deltas, _off2_mesh) = render_sequence(&mut renderer, &graphs);
 
     std::env::remove_var("CRANPOSE_RETAINED_BUNDLES");
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_ARC_MESH");
 
     eprintln!("warm deltas (rebuilds, executes): {warm_deltas:?}");
     eprintln!("on   deltas (rebuilds, executes): {on_deltas:?}");
+
+    // Non-vacuity for the P1b encodings: within the ON pass the live slot
+    // population must have held BOTH meshed slots (indexed-mesh
+    // `draw_indexed` inside the executed bundles) and meshless slots
+    // (instanced-quad draws on the latched default-ON selection) — the
+    // per-frame stats prove the mixture existed while bundles drew.
+    eprintln!("on-pass (meshed, total) slots per frame: {on_mesh:?}");
+    assert!(
+        renderer.instanced_quads_active(),
+        "the default-ON instanced selection must have latched at construction"
+    );
+    assert!(
+        on_mesh
+            .iter()
+            .any(|&(meshed, total)| meshed >= 1 && meshed < total),
+        "the ON pass must have bundled a mixture of meshed and meshless \
+         slots (per-frame stats {on_mesh:?})"
+    );
 
     // The kill switch must actually kill: the OFF pass may not touch the
     // bundle path at all.

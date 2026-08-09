@@ -1423,6 +1423,71 @@ fn create_mesh_shape_pipeline(
     })
 }
 
+/// Storage-mode pipeline for ordinary shape batches drawn as instanced
+/// indexed quads (`vs_shape_instanced`): four vertex executions per shape
+/// through the static `[0, 1, 2, 2, 1, 3]` index buffer instead of six
+/// unindexed corner expansions. Everything but the vertex entry point is
+/// exactly `create_shape_pipeline` — same fragment stage, same layouts,
+/// same blend per mode — so a draw-time fallback to `vs_main` (the
+/// `CRANPOSE_INSTANCED_QUADS=0` kill switch) changes nothing else.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_instanced_shape_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: &wgpu::BindGroupLayout,
+    shape_layout: &wgpu::BindGroupLayout,
+    blend_mode: BlendMode,
+    batch_limits: ShapeBatchLimits,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shape Instanced Shader"),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Instanced Render Pipeline Layout"),
+        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Instanced Render Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_shape_instanced"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            // No vertex buffer: like `vs_main`, the corners come from
+            // ShapeData; only the shape index source differs
+            // (`instance_index` instead of `vertex_index / 6`).
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state_for_mode(blend_mode)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 fn create_image_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -2187,11 +2252,17 @@ struct ReplaySlot {
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlotMesh {
     vertex_buffer: wgpu::Buffer,
+    /// `u32` triangle-list indices into `vertex_buffer`: band-boundary
+    /// vertices are emitted once and shared by both adjacent trapezoids, so
+    /// per-arc vertex-shader work drops from ~30 executions to the unique
+    /// boundary vertices (~10-14) — the amplification that made the
+    /// non-indexed mesh SLOWER than plain quads on the watch's Adreno 702.
+    index_buffer: wgpu::Buffer,
     /// Prefix table, `shape_count + 1` entries: shape `i`'s triangles occupy
-    /// vertices `vertex_prefix[i]..vertex_prefix[i + 1]`, so a retained span
-    /// draws `vertex_prefix[first]..vertex_prefix[first + count]` — one draw
-    /// per op, identical shape order, z untouched.
-    vertex_prefix: Vec<u32>,
+    /// indices `index_prefix[i]..index_prefix[i + 1]`, so a retained span
+    /// draws `index_prefix[first]..index_prefix[first + count]` — one
+    /// `draw_indexed` per op, identical shape order, z untouched.
+    index_prefix: Vec<u32>,
 }
 
 /// Vertex of a retained slot's conservative arc mesh: capture-device-space
@@ -2255,15 +2326,25 @@ const ARC_MESH_MIN_SEGMENTS: usize = 4;
 #[cfg(not(target_arch = "wasm32"))]
 const ARC_MESH_MAX_SEGMENTS: usize = 64;
 
-/// Per-slot vertex budget: `48 * shape_count` (floored for tiny slots so a
-/// single huge ring still fits). MEGA's retained arcs average ~30 vertices
-/// each, so this bounds a slot's mesh at ~1 KB per shape while leaving real
-/// headroom. Overflow falls back to whole-slot passthrough WITH a warning —
+/// Per-slot geometry budget in BYTES: 48 vertex-equivalents (~1 KB) per
+/// shape, floored for tiny slots so a single huge ring still fits. The
+/// non-indexed mesh spent this entirely on 20-byte vertices; the indexed
+/// mesh counts vertices AND 4-byte indices against the same byte ceiling,
+/// which indexed geometry fits with more headroom (MEGA's retained arcs
+/// drop from ~30 vertices ≈ 600 B to ~12 unique vertices + ~30 indices
+/// ≈ 360 B). Overflow falls back to whole-slot passthrough WITH a warning —
 /// truncating silently would break the containment invariant.
 #[cfg(not(target_arch = "wasm32"))]
-const ARC_MESH_VERTEX_BUDGET_PER_SHAPE: usize = 48;
+const ARC_MESH_BUDGET_BYTES_PER_SHAPE: usize = 48 * std::mem::size_of::<MeshVertex>();
 #[cfg(not(target_arch = "wasm32"))]
-const ARC_MESH_VERTEX_BUDGET_FLOOR: usize = 4096;
+const ARC_MESH_BUDGET_FLOOR_BYTES: usize = 4096 * std::mem::size_of::<MeshVertex>();
+
+/// The budget-relevant size of an indexed mesh: what the GPU buffers will
+/// actually hold.
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_bytes(vertices: usize, indices: usize) -> usize {
+    vertices * std::mem::size_of::<MeshVertex>() + indices * std::mem::size_of::<u32>()
+}
 
 /// Band parameters of a captured arc that qualifies for a conservative mesh:
 /// solid brush, no clip, and a quad that is exactly — tolerance zero — the
@@ -2343,26 +2424,33 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     })
 }
 
-/// Emits the six vertices `vs_main` would expand for this shape — corner
-/// order (0, 1, 2)(2, 1, 3) and corner uvs, positions straight from the
-/// captured quad — so a passthrough shape rasterizes bit-identically to the
-/// quad-expansion indexless path.
+/// Emits the quad `vs_main` would expand for this shape as four shared
+/// vertices plus the index pattern (0, 1, 2)(2, 1, 3) — the identical corner
+/// order, corner uvs and positions straight from the captured quad, so a
+/// passthrough shape rasterizes bit-identically to the quad-expansion
+/// indexless path while spending four vertex executions instead of six.
 #[cfg(not(target_arch = "wasm32"))]
-fn emit_passthrough_quad(shape: &ShapeData, shape_idx: u32, out: &mut Vec<MeshVertex>) {
+fn emit_passthrough_quad(
+    shape: &ShapeData,
+    shape_idx: u32,
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let base = vertices.len() as u32;
     let corners = [
         ([shape.quad01[0], shape.quad01[1]], [0.0, 0.0]),
         ([shape.quad01[2], shape.quad01[3]], [1.0, 0.0]),
         ([shape.quad23[0], shape.quad23[1]], [0.0, 1.0]),
         ([shape.quad23[2], shape.quad23[3]], [1.0, 1.0]),
     ];
-    for corner in [0usize, 1, 2, 2, 1, 3] {
-        let (position, uv) = corners[corner];
-        out.push(MeshVertex {
+    for (position, uv) in corners {
+        vertices.push(MeshVertex {
             position,
             uv,
             shape_idx,
         });
     }
+    indices.extend([0u32, 1, 2, 2, 1, 3].map(|corner| base + corner));
 }
 
 /// One Sutherland–Hodgman pass against an axis-aligned half-plane.
@@ -2432,9 +2520,21 @@ fn clip_polygon_axis(
 /// bounded by the round-cap disc about the band endpoint (butt/square caps
 /// only cut that disc with planes — see `sdf_arc_band`), so padding the
 /// angular range by the disc's angular half-extent contains every cap. Each
-/// trapezoid is clipped to the quad box and fan-triangulated; boundary
-/// vertices are computed once and shared by both adjacent trapezoids so the
-/// strip stays bitwise watertight.
+/// trapezoid is clipped to the quad box and fan-triangulated IN INDEX SPACE:
+/// a trapezoid the clipper left untouched shares its two boundary vertices
+/// with each neighbor through the index list (closed rings wrap the sharing
+/// modulo the boundary count), so the strip is watertight by construction —
+/// the seam edge is one vertex pair, not two bitwise-equal copies — and the
+/// per-arc vertex count collapses from three-per-triangle to the unique
+/// boundary vertices. Clipped trapezoids cannot share boundary vertices (the
+/// clipper rewrote them), so their fan vertices are appended PRIVATELY after
+/// the shared block and indexed directly; seams against neighbors still hold
+/// because a boundary edge either survives the clip on both sides
+/// bitwise-identically (same input edge, same planes, same float ops — see
+/// `clip_polygon_axis`) or is cut on both sides identically. Triangles are
+/// emitted in exact segment order either way, so the indexed mesh's
+/// primitive stream is triangle-for-triangle the one the non-indexed
+/// emitter produced.
 ///
 /// Returns the emitted segment count, or `None` when the mesh came out empty
 /// — the caller emits the passthrough quad instead (never risk
@@ -2444,7 +2544,8 @@ fn emit_arc_band_mesh(
     shape: &ShapeData,
     shape_idx: u32,
     band: &ArcMeshBand,
-    out: &mut Vec<MeshVertex>,
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
 ) -> Option<usize> {
     let [cx, cy] = band.center;
     let ra = (band.outer + band.inner) * 0.5;
@@ -2494,12 +2595,26 @@ fn emit_arc_band_mesh(
 
     let quad_min = [shape.quad01[0], shape.quad01[1]];
     let quad_max = [shape.quad23[2], shape.quad23[3]];
-    let start_len = out.len();
+
+    /// One trapezoid's clip outcome (see the function docs): `Shared` means
+    /// the clip output is bitwise the input quad, so its corners index the
+    /// shared boundary block; `Fan` carries the clipped polygon for private
+    /// fan triangulation; `Empty` was clipped away entirely.
+    enum SegmentGeometry {
+        Shared,
+        Fan(Vec<[f32; 2]>),
+        Empty,
+    }
+
+    // Phase 1: clip every trapezoid and classify it.
     let mut polygon: Vec<[f32; 2]> = Vec::with_capacity(8);
     let mut scratch: Vec<[f32; 2]> = Vec::with_capacity(8);
+    let mut segment_geometry = Vec::with_capacity(segments);
+    let mut boundary_used = vec![false; boundary_count];
     for j in 0..segments {
+        let jb = (j + 1) % boundary_count;
         let (inner_a, outer_a) = boundaries[j];
-        let (inner_b, outer_b) = boundaries[(j + 1) % boundary_count];
+        let (inner_b, outer_b) = boundaries[jb];
         polygon.clear();
         polygon.extend_from_slice(&[inner_a, outer_a, outer_b, inner_b]);
         clip_polygon_axis(&polygon, 0, quad_min[0], false, &mut scratch);
@@ -2518,35 +2633,83 @@ fn emit_arc_band_mesh(
             scratch.pop();
         }
         if scratch.len() < 3 {
-            continue;
+            segment_geometry.push(SegmentGeometry::Empty);
+        } else if scratch[..] == [inner_a, outer_a, outer_b, inner_b] {
+            boundary_used[j] = true;
+            boundary_used[jb] = true;
+            segment_geometry.push(SegmentGeometry::Shared);
+        } else {
+            segment_geometry.push(SegmentGeometry::Fan(scratch.clone()));
         }
-        let anchor = scratch[0];
-        for pair in scratch[1..].windows(2) {
-            for position in [anchor, pair[0], pair[1]] {
-                out.push(MeshVertex {
-                    position,
-                    uv: [
-                        (position[0] - shape.rect[0]) / shape.rect[2],
-                        (position[1] - shape.rect[1]) / shape.rect[3],
-                    ],
-                    shape_idx,
-                });
+    }
+
+    let push_vertex = |vertices: &mut Vec<MeshVertex>, position: [f32; 2]| -> u32 {
+        let index = vertices.len() as u32;
+        vertices.push(MeshVertex {
+            position,
+            uv: [
+                (position[0] - shape.rect[0]) / shape.rect[2],
+                (position[1] - shape.rect[1]) / shape.rect[3],
+            ],
+            shape_idx,
+        });
+        index
+    };
+
+    // Shared block: every boundary referenced by a surviving whole trapezoid
+    // gets its (inner, outer) vertex pair exactly once, in boundary order.
+    let mut boundary_vertex = vec![[0u32; 2]; boundary_count];
+    for (j, used) in boundary_used.iter().enumerate() {
+        if *used {
+            let (inner, outer) = boundaries[j];
+            boundary_vertex[j] = [push_vertex(vertices, inner), push_vertex(vertices, outer)];
+        }
+    }
+
+    // Phase 2: indices in exact segment order — the primitive stream matches
+    // the non-indexed emitter triangle for triangle.
+    let start_len = indices.len();
+    for (j, geometry) in segment_geometry.iter().enumerate() {
+        match geometry {
+            SegmentGeometry::Empty => {}
+            SegmentGeometry::Shared => {
+                let jb = (j + 1) % boundary_count;
+                let [in_a, out_a] = boundary_vertex[j];
+                let [in_b, out_b] = boundary_vertex[jb];
+                // The fan the non-indexed emitter produced for an untouched
+                // trapezoid: (in_a, out_a, out_b)(in_a, out_b, in_b) — the
+                // same quad diagonal.
+                indices.extend_from_slice(&[in_a, out_a, out_b, in_a, out_b, in_b]);
+            }
+            SegmentGeometry::Fan(points) => {
+                let base = vertices.len() as u32;
+                for &point in points {
+                    push_vertex(vertices, point);
+                }
+                for i in 1..points.len() as u32 - 1 {
+                    indices.extend_from_slice(&[base, base + i, base + i + 1]);
+                }
             }
         }
     }
-    if out.len() == start_len {
+    if indices.len() == start_len {
         return None;
     }
     Some(segments)
 }
 
-/// Unsigned shoelace area of an emitted triangle list, for telemetry.
+/// Unsigned shoelace area of an emitted indexed triangle list, for
+/// telemetry.
 #[cfg(not(target_arch = "wasm32"))]
-fn triangles_shoelace_area(vertices: &[MeshVertex]) -> f64 {
-    vertices
+fn triangles_shoelace_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
+    indices
         .chunks_exact(3)
         .map(|tri| {
-            let [a, b, c] = [tri[0].position, tri[1].position, tri[2].position];
+            let [a, b, c] = [
+                vertices[tri[0] as usize].position,
+                vertices[tri[1] as usize].position,
+                vertices[tri[2] as usize].position,
+            ];
             let cross = (b[0] as f64 - a[0] as f64) * (c[1] as f64 - a[1] as f64)
                 - (b[1] as f64 - a[1] as f64) * (c[0] as f64 - a[0] as f64);
             cross.abs() * 0.5
@@ -2573,8 +2736,11 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
 #[cfg(not(target_arch = "wasm32"))]
 struct ArcMeshBuild {
     vertices: Vec<MeshVertex>,
-    /// `shape_count + 1` entries; shape `i` owns `prefix[i]..prefix[i + 1]`.
-    vertex_prefix: Vec<u32>,
+    /// Triangle-list indices into `vertices`; see [`ReplaySlotMesh`].
+    indices: Vec<u32>,
+    /// `shape_count + 1` entries; shape `i` owns triangles
+    /// `indices[index_prefix[i]..index_prefix[i + 1]]`.
+    index_prefix: Vec<u32>,
     meshed_arcs: usize,
     meshed_segments: usize,
     passthrough: usize,
@@ -2582,45 +2748,54 @@ struct ArcMeshBuild {
     mesh_area: f64,
 }
 
-/// Builds a slot's conservative mesh: arc bands become trapezoid strips,
-/// every other shape a passthrough quad, in the exact capture shape order.
-/// Returns `None` when the vertex budget overflows — the caller warns and the
-/// whole slot replays through the quad-expansion path (silent truncation would break
-/// the containment invariant).
+/// Builds a slot's conservative indexed mesh: arc bands become
+/// vertex-sharing trapezoid strips, every other shape a passthrough quad
+/// (four vertices, six indices), in the exact capture shape order. Returns
+/// `None` when the byte budget overflows — the caller warns and the whole
+/// slot replays through the quad-expansion path (silent truncation would
+/// break the containment invariant).
 #[cfg(not(target_arch = "wasm32"))]
 fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
-    let budget =
-        (shape_data.len() * ARC_MESH_VERTEX_BUDGET_PER_SHAPE).max(ARC_MESH_VERTEX_BUDGET_FLOOR);
+    let budget_bytes =
+        (shape_data.len() * ARC_MESH_BUDGET_BYTES_PER_SHAPE).max(ARC_MESH_BUDGET_FLOOR_BYTES);
     let mut build = ArcMeshBuild {
         vertices: Vec::new(),
-        vertex_prefix: Vec::with_capacity(shape_data.len() + 1),
+        indices: Vec::new(),
+        index_prefix: Vec::with_capacity(shape_data.len() + 1),
         meshed_arcs: 0,
         meshed_segments: 0,
         passthrough: 0,
         quad_area: 0.0,
         mesh_area: 0.0,
     };
-    build.vertex_prefix.push(0);
+    build.index_prefix.push(0);
     for (index, shape) in shape_data.iter().enumerate() {
-        let start = build.vertices.len();
-        let meshed = arc_mesh_band(shape)
-            .and_then(|band| emit_arc_band_mesh(shape, index as u32, &band, &mut build.vertices));
+        let start = build.indices.len();
+        let meshed = arc_mesh_band(shape).and_then(|band| {
+            emit_arc_band_mesh(
+                shape,
+                index as u32,
+                &band,
+                &mut build.vertices,
+                &mut build.indices,
+            )
+        });
         match meshed {
             Some(segments) => {
                 build.meshed_arcs += 1;
                 build.meshed_segments += segments;
             }
             None => {
-                emit_passthrough_quad(shape, index as u32, &mut build.vertices);
+                emit_passthrough_quad(shape, index as u32, &mut build.vertices, &mut build.indices);
                 build.passthrough += 1;
             }
         }
-        if build.vertices.len() > budget {
+        if arc_mesh_bytes(build.vertices.len(), build.indices.len()) > budget_bytes {
             return None;
         }
-        build.vertex_prefix.push(build.vertices.len() as u32);
+        build.index_prefix.push(build.indices.len() as u32);
         build.quad_area += quad_shoelace_area(shape);
-        build.mesh_area += triangles_shoelace_area(&build.vertices[start..]);
+        build.mesh_area += triangles_shoelace_area(&build.vertices, &build.indices[start..]);
     }
     Some(build)
 }
@@ -2664,6 +2839,38 @@ impl ReplaySlotStore {
 #[cfg(not(target_arch = "wasm32"))]
 fn retained_bundles_enabled() -> bool {
     std::env::var("CRANPOSE_RETAINED_BUNDLES").as_deref() != Ok("0")
+}
+
+/// Kill switch for instanced ordinary-shape quads: default ON,
+/// `CRANPOSE_INSTANCED_QUADS=0` (or the `debug.cranpose.instanced_quads`
+/// property on Android) reverts every ordinary shape draw to the six-vertex
+/// `vs_main` expansion. Unlike the per-partition bundle flag this is read
+/// ONCE per [`GpuRenderer`] construction into a field: cached retained
+/// bundles encode the selected pipeline, so a flag that moved per draw would
+/// let a cached bundle replay a selection the direct path no longer makes.
+#[cfg(not(target_arch = "wasm32"))]
+fn instanced_quads_enabled() -> bool {
+    std::env::var("CRANPOSE_INSTANCED_QUADS").as_deref() != Ok("0")
+}
+
+/// The index pattern of one instanced quad: the exact triangle pair
+/// `vs_main`'s six-slot corner mapping produces — (0, 1, 2)(2, 1, 3), same
+/// diagonal, same winding — shared by every instance.
+#[cfg(not(target_arch = "wasm32"))]
+const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
+
+/// The latched instanced-quad selection: `Some` exactly when the renderer
+/// was constructed in storage mode with [`instanced_quads_enabled`]. Both
+/// blend variants exist because ordinary batches draw SrcOver and DstOut;
+/// the `vs_main` pipelines coexist untouched so the `=0` revert (and the
+/// uniform-mode path) still has its six-vertex draws.
+#[cfg(not(target_arch = "wasm32"))]
+struct InstancedQuadPipelines {
+    pipeline: wgpu::RenderPipeline,
+    pipeline_dst_out: wgpu::RenderPipeline,
+    /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
+    /// by every instanced draw.
+    index_buffer: wgpu::Buffer,
 }
 
 /// Everything that decides the commands one retained op contributes to a
@@ -3535,6 +3742,13 @@ pub struct GpuRenderer {
     /// through. Uniform-mode devices never host retained slots.
     #[cfg(not(target_arch = "wasm32"))]
     mesh_pipeline: Option<wgpu::RenderPipeline>,
+    /// `Some` exactly when this renderer latched the instanced-quad path at
+    /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
+    /// ONCE per renderer lifetime — cached retained bundles encode the
+    /// selection, so it must never move under them (see
+    /// [`instanced_quads_enabled`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    instanced_quads: Option<InstancedQuadPipelines>,
     #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
@@ -3934,6 +4148,45 @@ impl GpuRenderer {
                 shape_batch_limits,
             )
         });
+        // The instanced-quad selection is LATCHED here, once per renderer:
+        // cached retained bundles encode whichever pipelines this resolves
+        // to, so a per-draw env read could let a bundle replay a selection
+        // the direct path no longer makes. Storage mode only — the
+        // uniform/WebGL path keeps `vs_main` and its plain draws untouched.
+        #[cfg(not(target_arch = "wasm32"))]
+        let instanced_quads =
+            (shape_batch_limits.storage && instanced_quads_enabled()).then(|| {
+                let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Instanced Quad Index Buffer"),
+                    size: std::mem::size_of_val(&INSTANCED_QUAD_INDICES) as u64,
+                    usage: wgpu::BufferUsages::INDEX,
+                    mapped_at_creation: true,
+                });
+                index_buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .copy_from_slice(bytemuck::cast_slice(&INSTANCED_QUAD_INDICES));
+                index_buffer.unmap();
+                InstancedQuadPipelines {
+                    pipeline: create_instanced_shape_pipeline(
+                        &device,
+                        surface_format,
+                        &uniform_bind_group_layout,
+                        &shape_bind_group_layout,
+                        BlendMode::SrcOver,
+                        shape_batch_limits,
+                    ),
+                    pipeline_dst_out: create_instanced_shape_pipeline(
+                        &device,
+                        surface_format,
+                        &uniform_bind_group_layout,
+                        &shape_bind_group_layout,
+                        BlendMode::DstOut,
+                        shape_batch_limits,
+                    ),
+                    index_buffer,
+                }
+            });
 
         let image_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4088,6 +4341,8 @@ impl GpuRenderer {
             pipeline_dst_out,
             #[cfg(not(target_arch = "wasm32"))]
             mesh_pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
+            instanced_quads,
             #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
@@ -9182,19 +9437,25 @@ impl GpuRenderer {
                     };
                     // Always-on warn: `log::info` is invisible on the desktop
                     // console, and captures are rare — one line per slot
-                    // lifetime.
+                    // lifetime. The unique-vert/index counts against the
+                    // six-per-shape quad baseline are the vertex-amplification
+                    // instrument P1b exists for.
                     log::warn!(
                         "[arc-mesh] slot {id}: {} arcs meshed ({} segs), {} passthrough; \
+                         {} unique verts / {} indices (quad path: {} verts); \
                          quad_px {:.0} -> mesh_px {:.0} (-{:.1}%)",
                         build.meshed_arcs,
                         build.meshed_segments,
                         build.passthrough,
+                        build.vertices.len(),
+                        build.indices.len(),
+                        shape_count * 6,
                         build.quad_area,
                         build.mesh_area,
                         cut,
                     );
                     // A slot that meshed nothing gains nothing over the
-                    // indexless quad path — skip the buffer.
+                    // indexless quad path — skip the buffers.
                     (build.meshed_arcs > 0).then(|| {
                         let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("Replay Mesh Vertex Buffer"),
@@ -9207,16 +9468,28 @@ impl GpuRenderer {
                             .get_mapped_range_mut()
                             .copy_from_slice(bytemuck::cast_slice(&build.vertices));
                         vertex_buffer.unmap();
+                        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Replay Mesh Index Buffer"),
+                            size: (std::mem::size_of::<u32>() * build.indices.len()) as u64,
+                            usage: wgpu::BufferUsages::INDEX,
+                            mapped_at_creation: true,
+                        });
+                        index_buffer
+                            .slice(..)
+                            .get_mapped_range_mut()
+                            .copy_from_slice(bytemuck::cast_slice(&build.indices));
+                        index_buffer.unmap();
                         ReplaySlotMesh {
                             vertex_buffer,
-                            vertex_prefix: build.vertex_prefix,
+                            index_buffer,
+                            index_prefix: build.index_prefix,
                         }
                     })
                 }
                 None => {
                     log::warn!(
-                        "[arc-mesh] slot {id}: vertex budget overflowed for {shape_count} \
-                         shapes; whole slot falls back to quad passthrough"
+                        "[arc-mesh] slot {id}: geometry byte budget overflowed for \
+                         {shape_count} shapes; whole slot falls back to quad passthrough"
                     );
                     None
                 }
@@ -9308,6 +9581,14 @@ impl GpuRenderer {
         }
     }
 
+    /// Test/diagnostic view of the latched instanced-quad selection: `true`
+    /// when this renderer's ordinary shape draws ride `vs_shape_instanced`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn instanced_quads_active(&self) -> bool {
+        self.instanced_quads.is_some()
+    }
+
     /// Test/diagnostic view of retained arc meshes: how many live replay
     /// slots hold a mesh, out of all live slots.
     #[cfg(not(target_arch = "wasm32"))]
@@ -9354,11 +9635,17 @@ impl GpuRenderer {
         // A captured mesh replaces the six-per-shape quad expansion with the
         // slot's conservative arc mesh — same bind groups, same SrcOver
         // blend, one draw per op over the identical shape range, so z order
-        // is untouched either way.
+        // is untouched either way. Slots without a mesh draw through the
+        // latched instanced-quad path when it exists (four vertex executions
+        // per shape, shape index from the instance index), else the plain
+        // six-vertex expansion.
         let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
         match &mesh {
             Some((_, mesh_pipeline)) => render_pass.set_pipeline(mesh_pipeline),
-            None => render_pass.set_pipeline(&self.pipeline),
+            None => match &self.instanced_quads {
+                Some(instanced) => render_pass.set_pipeline(&instanced.pipeline),
+                None => render_pass.set_pipeline(&self.pipeline),
+            },
         }
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_bind_group(
@@ -9369,12 +9656,24 @@ impl GpuRenderer {
         match mesh {
             Some((mesh, _)) => {
                 render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                render_pass.draw(
-                    mesh.vertex_prefix[first as usize]..mesh.vertex_prefix[last as usize],
+                render_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(
+                    mesh.index_prefix[first as usize]..mesh.index_prefix[last as usize],
+                    0,
                     0..1,
                 );
             }
-            None => render_pass.draw(first * 6..last * 6, 0..1),
+            None => match &self.instanced_quads {
+                Some(instanced) => {
+                    render_pass.set_index_buffer(
+                        instanced.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(0..6, 0, first..last);
+                }
+                None => render_pass.draw(first * 6..last * 6, 0..1),
+            },
         }
     }
 
@@ -9459,7 +9758,10 @@ impl GpuRenderer {
             let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
             match &mesh {
                 Some((_, mesh_pipeline)) => encoder.set_pipeline(mesh_pipeline),
-                None => encoder.set_pipeline(&self.pipeline),
+                None => match &self.instanced_quads {
+                    Some(instanced) => encoder.set_pipeline(&instanced.pipeline),
+                    None => encoder.set_pipeline(&self.pipeline),
+                },
             }
             encoder.set_bind_group(0, &self.uniform_bind_group, &[]);
             encoder.set_bind_group(
@@ -9470,12 +9772,28 @@ impl GpuRenderer {
             match mesh {
                 Some((mesh, _)) => {
                     encoder.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                    encoder.draw(
-                        mesh.vertex_prefix[op.first as usize]..mesh.vertex_prefix[op.last as usize],
+                    encoder
+                        .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    encoder.draw_indexed(
+                        mesh.index_prefix[op.first as usize]..mesh.index_prefix[op.last as usize],
+                        0,
                         0..1,
                     );
                 }
-                None => encoder.draw(op.first * 6..op.last * 6, 0..1),
+                // The latched selection is a per-renderer constant, so it
+                // needs no place in `RetainedBundleOpKey` — every cached
+                // bundle in this renderer's lifetime encodes the same choice
+                // the direct path makes.
+                None => match &self.instanced_quads {
+                    Some(instanced) => {
+                        encoder.set_index_buffer(
+                            instanced.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        encoder.draw_indexed(0..6, 0, op.first..op.last);
+                    }
+                    None => encoder.draw(op.first * 6..op.last * 6, 0..1),
+                },
             }
         }
         encoder.finish(&wgpu::RenderBundleDescriptor {
@@ -9545,10 +9863,6 @@ impl GpuRenderer {
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
         render_pass.set_scissor_rect(0, 0, width, height);
-        render_pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.pipeline_dst_out,
-            _ => &self.pipeline,
-        });
         #[cfg(not(target_arch = "wasm32"))]
         let (uniform_bind_group, shape_buffers) = (&self.uniform_bind_group, &self.shape_buffers);
         #[cfg(target_arch = "wasm32")]
@@ -9556,6 +9870,38 @@ impl GpuRenderer {
             &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
             &self.wasm_shape_batches[batch.shape_slot],
         );
+        // Latched instanced path (storage mode only): one instance per
+        // shape, four vertices through the static quad index buffer —
+        // identical triangles, identical bind groups, still one draw call.
+        // The uniform/WebGL path never latches it and stays on `vs_main`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(instanced) = &self.instanced_quads {
+            assert!(
+                batch.vertex_start.is_multiple_of(6) && batch.vertex_count.is_multiple_of(6),
+                "shape batches are whole shapes: vertex range {}..+{} must be \
+                 six-aligned to convert to an instance range",
+                batch.vertex_start,
+                batch.vertex_count,
+            );
+            render_pass.set_pipeline(match blend_mode {
+                BlendMode::DstOut => &instanced.pipeline_dst_out,
+                _ => &instanced.pipeline,
+            });
+            render_pass.set_bind_group(0, uniform_bind_group, &[]);
+            // Dynamic offset 0: ordinary batches read the identity
+            // similarity transform.
+            render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
+            let first_shape = batch.vertex_start / 6;
+            let shape_count = batch.vertex_count / 6;
+            render_pass
+                .set_index_buffer(instanced.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
+            return;
+        }
+        render_pass.set_pipeline(match blend_mode {
+            BlendMode::DstOut => &self.pipeline_dst_out,
+            _ => &self.pipeline,
+        });
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
         // Dynamic offset 0: ordinary batches read the identity similarity
         // transform.
@@ -17602,18 +17948,20 @@ mod tests {
                 let band = arc_mesh_band(&converted)
                     .unwrap_or_else(|| panic!("case {case} must qualify for meshing"));
                 let mut vertices = Vec::new();
-                let segments = emit_arc_band_mesh(&converted, 0, &band, &mut vertices)
-                    .unwrap_or_else(|| panic!("case {case} must produce a mesh"));
+                let mut indices = Vec::new();
+                let segments =
+                    emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+                        .unwrap_or_else(|| panic!("case {case} must produce a mesh"));
                 assert!(segments >= ARC_MESH_MIN_SEGMENTS);
-                let triangles: Vec<[[f64; 2]; 3]> = vertices
+                // The rasterized set is the indexed walk: triangles are index
+                // triples into the shared vertex list.
+                let position = |index: u32| {
+                    let p = vertices[index as usize].position;
+                    [p[0] as f64, p[1] as f64]
+                };
+                let triangles: Vec<[[f64; 2]; 3]> = indices
                     .chunks_exact(3)
-                    .map(|tri| {
-                        [
-                            [tri[0].position[0] as f64, tri[0].position[1] as f64],
-                            [tri[1].position[0] as f64, tri[1].position[1] as f64],
-                            [tri[2].position[0] as f64, tri[2].position[1] as f64],
-                        ]
-                    })
+                    .map(|tri| [position(tri[0]), position(tri[1]), position(tri[2])])
                     .collect();
 
                 // Sample the QUAD box, not `rect`: quad expansion rasterizes the
@@ -17669,28 +18017,170 @@ mod tests {
             build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
         assert_eq!(build.meshed_arcs, 0);
         assert_eq!(build.passthrough, 1);
-        assert_eq!(build.vertex_prefix, vec![0, 6]);
+        // Four shared corner vertices, six indices — amplification-free.
+        assert_eq!(build.vertices.len(), 4);
+        assert_eq!(build.index_prefix, vec![0, 6]);
+        assert_eq!(build.indices, vec![0, 1, 2, 2, 1, 3]);
         let corners = [
             ([converted.quad01[0], converted.quad01[1]], [0.0f32, 0.0]),
             ([converted.quad01[2], converted.quad01[3]], [1.0, 0.0]),
             ([converted.quad23[0], converted.quad23[1]], [0.0, 1.0]),
             ([converted.quad23[2], converted.quad23[3]], [1.0, 1.0]),
         ];
-        // vs_main's slot order: triangles (0, 1, 2) and (2, 1, 3).
-        for (vertex, corner) in build.vertices.iter().zip([0usize, 1, 2, 2, 1, 3]) {
-            assert_eq!(vertex.position, corners[corner].0);
-            assert_eq!(vertex.uv, corners[corner].1);
+        for (vertex, corner) in build.vertices.iter().zip(corners) {
+            assert_eq!(vertex.position, corner.0);
+            assert_eq!(vertex.uv, corner.1);
             assert_eq!(vertex.shape_idx, 0);
         }
+        // The indexed walk expands to vs_main's slot order: triangles
+        // (0, 1, 2) and (2, 1, 3).
+        for (index, corner) in build.indices.iter().zip([0usize, 1, 2, 2, 1, 3]) {
+            assert_eq!(build.vertices[*index as usize].position, corners[corner].0);
+            assert_eq!(build.vertices[*index as usize].uv, corners[corner].1);
+        }
+    }
+
+    /// The indexed-topology contract for arcs whose trapezoids survive
+    /// clipping whole: every band boundary contributes exactly one (inner,
+    /// outer) vertex pair, both adjacent trapezoids reference it through the
+    /// index list, and a closed ring's last segment wraps around to boundary
+    /// zero's pair — one seam vertex pair instead of bitwise-equal copies.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_indices_share_boundary_vertices_and_wrap_closed_rings() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        // (sweep, expected boundary count relation): a closed ring wraps
+        // (boundaries == segments), an open arc does not (segments + 1).
+        for (sweep, closed) in [(tau, true), (1.9f32, false)] {
+            let arc = ArcGeometry::new(
+                Point::new(250.0, 250.0),
+                80.0,
+                100.0,
+                0.7,
+                sweep,
+                StrokeCap::Round,
+            );
+            let mut converted = converted_arc_shape(arc, 1.0);
+            // Inflate the quad box (and rect, for uv) far beyond the dilated
+            // band so NO trapezoid is clipped: every segment must take the
+            // shared-boundary path.
+            converted.rect = [0.0, 0.0, 500.0, 500.0];
+            converted.quad01 = [0.0, 0.0, 500.0, 0.0];
+            converted.quad23 = [0.0, 500.0, 500.0, 500.0];
+            let band = arc_mesh_band(&converted).expect("arc must qualify");
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let segments = emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+                .expect("arc must mesh");
+            let boundary_count = if closed { segments } else { segments + 1 };
+            assert_eq!(
+                vertices.len(),
+                2 * boundary_count,
+                "closed={closed}: every boundary owns exactly one (inner, outer) pair"
+            );
+            assert_eq!(indices.len(), 6 * segments);
+            // Emission order is boundary order: boundary j's pair is
+            // (2j, 2j + 1). Each segment must reference its own boundary and
+            // its successor's — modulo the count exactly when closed.
+            for j in 0..segments {
+                let jb = (j + 1) % boundary_count;
+                let (in_a, out_a) = (2 * j as u32, 2 * j as u32 + 1);
+                let (in_b, out_b) = (2 * jb as u32, 2 * jb as u32 + 1);
+                assert_eq!(
+                    indices[6 * j..6 * j + 6],
+                    [in_a, out_a, out_b, in_a, out_b, in_b],
+                    "closed={closed}: segment {j} must share its boundary pairs"
+                );
+            }
+            if closed {
+                // The wrap made concrete: the final segment indexes boundary
+                // zero's vertices.
+                assert_eq!(indices[6 * segments - 1], 0);
+            }
+            // Inner vertices ride the dilated inner radius, outer vertices
+            // the pushed-out chord radius — sanity that pairs are ordered
+            // (inner, outer).
+            for pair in vertices.chunks_exact(2) {
+                let radius = |v: &MeshVertex| {
+                    let dx = v.position[0] - 250.0;
+                    let dy = v.position[1] - 250.0;
+                    (dx * dx + dy * dy).sqrt()
+                };
+                assert!(radius(&pair[0]) < radius(&pair[1]));
+            }
+        }
+    }
+
+    /// The private-vertex arm of the indexed topology: under the real
+    /// tight-AABB quad the pushed-out chord vertices near the box edges get
+    /// clipped, and those trapezoids must fan over vertices of their own —
+    /// appended after the shared block, carrying clip-plane coordinates —
+    /// while untouched diagonal trapezoids still share boundary pairs.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_clipped_segments_fan_over_private_vertices() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let arc = ArcGeometry::new(
+            Point::new(250.0, 250.0),
+            80.0,
+            100.0,
+            0.0,
+            cranpose_ui_graphics::TAU,
+            StrokeCap::Round,
+        );
+        let converted = converted_arc_shape(arc, 1.0);
+        let band = arc_mesh_band(&converted).expect("ring must qualify");
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+            .expect("ring must mesh");
+        // Sharing must actually happen: a shared boundary vertex is used by
+        // both of its trapezoids' fans (at least three triangle references).
+        let mut uses = vec![0usize; vertices.len()];
+        for &index in &indices {
+            uses[index as usize] += 1;
+        }
+        assert!(
+            uses.iter().any(|&count| count >= 3),
+            "some boundary vertices must be shared across trapezoids"
+        );
+        // Clipping must actually happen, and clipped polygons index private
+        // vertices lying bitwise ON the quad box (the clipper writes the
+        // bound coordinate exactly; boundary vertices never touch the box —
+        // inner ones sit strictly inside, pushed-out outer ones strictly
+        // outside near the extremes, where they are clipped).
+        let [left, top, ..] = converted.quad01;
+        let [.., right, bottom] = converted.quad23;
+        let clipped: Vec<&MeshVertex> = vertices
+            .iter()
+            .filter(|vertex| {
+                let [x, y] = vertex.position;
+                x == left || x == right || y == top || y == bottom
+            })
+            .collect();
+        assert!(
+            !clipped.is_empty(),
+            "the tight box must clip the pushed-out chord vertices"
+        );
+        // Fewer unique vertices than the non-indexed emitter's
+        // three-per-triangle — the amplification this change removes.
+        assert!(
+            vertices.len() < indices.len(),
+            "{} unique vertices should undercut {} triangle corners",
+            vertices.len(),
+            indices.len()
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn arc_mesh_budget_overflow_falls_back_to_whole_slot_passthrough() {
         use cranpose_ui_graphics::ArcGeometry;
-        // 100 large full rings mesh at the 64-segment ceiling (~384+ vertices
-        // each), far past max(48 * 100, 4096) — the builder must refuse the
-        // whole slot rather than truncate.
+        // 100 large full rings mesh at the 64-segment ceiling (well over
+        // 4 KB of vertices + indices each), far past the byte budget
+        // max(100 * ~960 B, ~80 KB) — the builder must refuse the whole
+        // slot rather than truncate.
         let arc = ArcGeometry::new(
             Point::new(2000.0, 2000.0),
             1690.0,
@@ -17816,12 +18306,18 @@ mod tests {
             source.contains("fn vs_mesh("),
             "the storage rewrite must leave the retained-mesh vertex entry intact"
         );
+        assert!(
+            source.contains("fn vs_shape_instanced("),
+            "the storage rewrite must leave the instanced-quad vertex entry intact"
+        );
         assert_eq!(
             source
                 .matches("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)")
                 .count(),
-            2,
-            "both vs_main and vs_mesh must read paint under the paint_select flag"
+            3,
+            "vs_main, vs_shape_instanced and vs_mesh must all read paint under \
+             the paint_select flag (meshless retained draws ride the instanced \
+             entry when the selection is latched on)"
         );
 
         // The storage variant is what native devices actually compile; it
