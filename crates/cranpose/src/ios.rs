@@ -23,6 +23,7 @@ use cranpose_ui::EdgeInsets;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -62,7 +63,14 @@ struct IosApp<F: FnMut() + 'static> {
     /// Maps winit's per-finger ids onto the shell's primary/secondary pointer
     /// ids so multi-touch gestures (pinch-zoom) see more than one pointer.
     touch_router: TouchPointerRouter,
+    /// When the next off-screen composition pass may run (see `pump_off_screen`).
+    next_off_screen_render: Option<Instant>,
 }
+
+/// Pace of composition passes while the app is off screen. Roughly a 60Hz
+/// frame, which is far more often than a queue of work needs and still cheap
+/// enough for an app the user cannot see.
+const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
 
 impl<F: FnMut() + 'static> IosApp<F> {
     fn new(
@@ -84,6 +92,47 @@ impl<F: FnMut() + 'static> IosApp<F> {
             event_proxy,
             launch_error,
             touch_router: TouchPointerRouter::default(),
+            next_off_screen_render: None,
+        }
+    }
+
+    /// Keeps composition turning while the app is off screen and holds a
+    /// background task.
+    ///
+    /// UIKit stops the display link once the app leaves the screen, so a redraw
+    /// request is never serviced and composition stops. Anything the app posted
+    /// to the UI dispatcher then waits for the user to come back, which is wrong
+    /// for an app that told iOS it has work to finish.
+    ///
+    /// Nothing is presented here (see `render`), so nothing paces this pass the
+    /// way a swapchain paces the on-screen path. `OFF_SCREEN_RENDER_PERIOD` is
+    /// that pace, held by a `WaitUntil` timer: an animation still running off
+    /// screen costs one composition per period instead of one per wake-up.
+    fn pump_off_screen(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if !cranpose_services::background_active() || !crate::ios_background::app_is_off_screen() {
+            if self.next_off_screen_render.take().is_some() {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            return;
+        }
+        if let Some(at) = self.next_off_screen_render {
+            if at > Instant::now() {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(at));
+                return;
+            }
+        }
+        self.render();
+        let more = self
+            .shell
+            .as_ref()
+            .is_some_and(|shell| shell.needs_update());
+        self.next_off_screen_render = match more {
+            true => Some(Instant::now() + OFF_SCREEN_RENDER_PERIOD),
+            false => None,
+        };
+        match self.next_off_screen_render {
+            Some(at) => event_loop.set_control_flow(ControlFlow::WaitUntil(at)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
@@ -198,6 +247,13 @@ impl<F: FnMut() + 'static> IosApp<F> {
         if let Some(accessibility) = self.accessibility.as_mut() {
             accessibility.sync(shell);
         }
+        // A Metal drawable must not be presented while the app is off screen:
+        // the composition pass above is what the background work needs, the
+        // present is not.
+        if crate::ios_background::app_is_off_screen() {
+            gpu.surface_dirty = true;
+            return;
+        }
         if !surface_present_required(
             dirty_before,
             update_result.visual_changed,
@@ -236,6 +292,13 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         // outside the redraw handler so it is actually serviced.
         if let Some(window) = &self.window {
             window.request_redraw();
+        }
+        self.pump_off_screen(_event_loop);
+    }
+
+    fn new_events(&mut self, event_loop: &dyn ActiveEventLoop, cause: winit::event::StartCause) {
+        if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
+            self.pump_off_screen(event_loop);
         }
     }
 

@@ -31,8 +31,9 @@ pub use audio::{
     ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
 };
 pub use background::{
-    background_activity, clear_platform_background_activity, set_background_active,
-    set_platform_background_activity, BackgroundActivity, BackgroundActivityRef,
+    background_active, background_activity, clear_platform_background_activity,
+    set_background_active, set_platform_background_activity, BackgroundActivity,
+    BackgroundActivityRef,
 };
 pub use camera::{
     camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame,
