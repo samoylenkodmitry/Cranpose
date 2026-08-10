@@ -255,6 +255,14 @@ fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bo
         || snapshot.text_glyph_atlas_misses > 0
 }
 
+fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::FrameStatsSnapshot) {
+    if *pending_frames > 0 {
+        *pending_frames = pending_frames.saturating_sub(1);
+    } else if frame_stats_need_warmup_frame(snapshot) {
+        *pending_frames = CACHE_MISS_WARMUP_FRAMES;
+    }
+}
+
 fn text_atlas_fallback_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG").is_some())
@@ -4393,11 +4401,7 @@ impl GpuRenderer {
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
         self.last_frame_stats = Some(snapshot);
-        if frame_stats_need_warmup_frame(&snapshot) {
-            self.pending_frame_warmup_frames = CACHE_MISS_WARMUP_FRAMES;
-        } else {
-            self.pending_frame_warmup_frames = self.pending_frame_warmup_frames.saturating_sub(1);
-        }
+        update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
         self.frame_stats.maybe_print_snapshot(
             snapshot,
             &mut self.frame_count,
@@ -10536,6 +10540,23 @@ mod tests {
 
         snapshot.text_glyph_atlas_misses = 1;
         assert!(frame_stats_need_warmup_frame(&snapshot));
+    }
+
+    #[test]
+    fn renderer_warmup_budget_is_consumed_by_a_repeated_cache_miss() {
+        let stats = gpu_stats::FrameStats::default();
+        let mut snapshot = stats.snapshot();
+        snapshot.layer_cache_misses = 1;
+        let mut pending_frames = 0;
+
+        update_frame_warmup_budget(&mut pending_frames, &snapshot);
+        assert_eq!(pending_frames, CACHE_MISS_WARMUP_FRAMES);
+
+        update_frame_warmup_budget(&mut pending_frames, &snapshot);
+        assert_eq!(
+            pending_frames, 0,
+            "a cache miss during the warmup frame must not replenish its budget"
+        );
     }
 
     #[test]
