@@ -68,6 +68,46 @@ fn direct_scene_range_cache_enable_all() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_ENABLE_DIRECT_SCENE_RANGE_CACHE").is_some())
 }
 
+fn direct_scene_range_coalesce_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("CRANPOSE_DIRECT_SCENE_RANGE_COALESCE").as_deref() != Ok("0")
+    })
+}
+
+/// Merges consecutive direct-rendered cache chunks into one flush range.
+///
+/// Chunk boundaries exist only so a chunk *could* become a scene-range cache
+/// entry. A chunk that ends up rendering directly — its content hash missed
+/// and admission refused it, or it never got a cache key — gains nothing from
+/// the boundary, and on a tile-based mobile GPU every extra render pass is a
+/// full tile store and reload of the target. An animated scene is the worst
+/// case: every chunk's key changes every frame, so every chunk misses, and a
+/// small-screen game frame was being cut into ~18 passes of 64 draw ops each.
+/// Absorbing consecutive direct chunks and flushing once — before a chunk
+/// that composites from the cache, or at the end of the walk — renders the
+/// same ops in the same order in a single pass.
+#[derive(Default)]
+struct DirectChunkRunCoalescer {
+    run_start: Option<usize>,
+}
+
+impl DirectChunkRunCoalescer {
+    fn absorb(&mut self, chunk_start: usize) {
+        self.run_start.get_or_insert(chunk_start);
+    }
+
+    fn flush_at(&mut self, boundary: usize) -> Option<(usize, usize)> {
+        match self.run_start {
+            Some(start) if start < boundary => {
+                self.run_start = None;
+                Some((start, boundary))
+            }
+            _ => None,
+        }
+    }
+}
+
 fn direct_scene_range_cache_enabled_for_entry_bytes(byte_size: u64) -> bool {
     direct_scene_range_cache_enabled_for_policy(
         direct_scene_range_cache_enable_all(),
@@ -3475,6 +3515,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<(), String> {
     let mut cursor_z = z_start;
+    let mut direct_run = DirectChunkRunCoalescer::default();
     while cursor_z < z_end {
         let mut chunk_end = direct_scene_range_cache_chunk_end(scene, cursor_z, z_end, root_scale);
         if chunk_end <= cursor_z {
@@ -3507,8 +3548,8 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             // animated game frame — just to be told no.
             chunk_can_cache = false;
         }
-        if !chunk_can_cache
-            || !queue_cached_direct_scene_range(
+        if chunk_can_cache
+            && queue_cached_direct_scene_range(
                 backend,
                 text_state,
                 scene,
@@ -3520,24 +3561,71 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 next_load_op,
             )?
         {
-            render_non_effect_range_with_pending_composites(
-                backend,
-                text_state,
-                target_view,
-                scene,
-                cursor_z,
-                chunk_end,
-                width,
-                height,
-                root_scale,
-                pending_composites,
-                pending_composite_load_op,
-                pending_shader_composites,
-                pending_shader_load_op,
-                next_load_op,
-            )?;
+            // The chunk composites from the cache. Any direct run absorbed so
+            // far sits below it in z; flushing now keeps painter's order — the
+            // just-queued composite rides along in the flush, interleaved
+            // after the run's lower-z draw ops.
+            if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
+                render_non_effect_range_with_pending_composites(
+                    backend,
+                    text_state,
+                    target_view,
+                    scene,
+                    run_start,
+                    run_end,
+                    width,
+                    height,
+                    root_scale,
+                    pending_composites,
+                    pending_composite_load_op,
+                    pending_shader_composites,
+                    pending_shader_load_op,
+                    next_load_op,
+                )?;
+            }
+            cursor_z = chunk_end;
+            continue;
         }
+        direct_run.absorb(cursor_z);
         cursor_z = chunk_end;
+        if !direct_scene_range_coalesce_enabled() {
+            if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
+                render_non_effect_range_with_pending_composites(
+                    backend,
+                    text_state,
+                    target_view,
+                    scene,
+                    run_start,
+                    run_end,
+                    width,
+                    height,
+                    root_scale,
+                    pending_composites,
+                    pending_composite_load_op,
+                    pending_shader_composites,
+                    pending_shader_load_op,
+                    next_load_op,
+                )?;
+            }
+        }
+    }
+    if let Some((run_start, run_end)) = direct_run.flush_at(z_end) {
+        render_non_effect_range_with_pending_composites(
+            backend,
+            text_state,
+            target_view,
+            scene,
+            run_start,
+            run_end,
+            width,
+            height,
+            root_scale,
+            pending_composites,
+            pending_composite_load_op,
+            pending_shader_composites,
+            pending_shader_load_op,
+            next_load_op,
+        )?;
     }
     Ok(())
 }
@@ -5226,7 +5314,8 @@ mod tests {
         render_string_scene_hash, retained_render_effect_hash, surface_target_size,
         visible_backdrop_capture_rect, BackdropPrefixChildContribution,
         DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        DirectChunkRunCoalescer, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
+        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::{
@@ -5250,6 +5339,44 @@ mod tests {
         RuntimeShader,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn direct_chunk_run_coalescer_merges_consecutive_direct_chunks() {
+        let mut run = DirectChunkRunCoalescer::default();
+        // Three consecutive direct chunks 0..64, 64..128, 128..192 absorb
+        // into one range flushed at the walk's end.
+        run.absorb(0);
+        run.absorb(64);
+        run.absorb(128);
+        assert_eq!(run.flush_at(192), Some((0, 192)));
+        // The flush drains the run: nothing left for a second boundary.
+        assert_eq!(run.flush_at(192), None);
+    }
+
+    #[test]
+    fn direct_chunk_run_coalescer_flushes_below_a_composited_chunk() {
+        let mut run = DirectChunkRunCoalescer::default();
+        run.absorb(0);
+        // A cached chunk at z 64..128 composites: the run below it flushes
+        // up to the composite's start.
+        assert_eq!(run.flush_at(64), Some((0, 64)));
+        // Direct chunks resume above the composite and flush independently.
+        run.absorb(128);
+        assert_eq!(run.flush_at(256), Some((128, 256)));
+    }
+
+    #[test]
+    fn direct_chunk_run_coalescer_is_quiet_without_direct_chunks() {
+        let mut run = DirectChunkRunCoalescer::default();
+        // An all-cached walk never absorbs, so no boundary flushes anything.
+        assert_eq!(run.flush_at(64), None);
+        assert_eq!(run.flush_at(128), None);
+        // A boundary that hasn't advanced past the run start must not emit a
+        // zero-length render call — and must keep the run for a later flush.
+        run.absorb(64);
+        assert_eq!(run.flush_at(64), None);
+        assert_eq!(run.flush_at(128), Some((64, 128)));
+    }
 
     #[test]
     fn direct_scene_range_cache_policy_keeps_default_entries_small() {
