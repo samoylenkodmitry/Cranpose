@@ -1730,39 +1730,6 @@ fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
     }
 }
 
-/// A gradient brush's stop entries exactly as [`convert_shape_into_slots`]
-/// would build them, for replay recolor patches. Empty for solid brushes.
-#[cfg(not(target_arch = "wasm32"))]
-fn replay_gradient_stops(brush: &Brush) -> Vec<GradientStop> {
-    let (colors, stops) = match brush {
-        Brush::Solid(_) => return Vec::new(),
-        Brush::LinearGradient { colors, stops, .. }
-        | Brush::RadialGradient { colors, stops, .. }
-        | Brush::SweepGradient { colors, stops, .. } => (colors, stops.as_deref()),
-    };
-    let count = colors.len();
-    let explicit_stops = stops.filter(|values| values.len() == count);
-    colors
-        .iter()
-        .enumerate()
-        .map(|(index, color)| {
-            let position = explicit_stops
-                .map(|values| values[index])
-                .unwrap_or_else(|| {
-                    if count <= 1 {
-                        0.0
-                    } else {
-                        index as f32 / (count - 1) as f32
-                    }
-                });
-            GradientStop {
-                color: [color.r(), color.g(), color.b(), color.a()],
-                position: [position, 0.0, 0.0, 0.0],
-            }
-        })
-        .collect()
-}
-
 /// Converts one [`DrawShape`] into its GPU representation, writing into
 /// pre-sized slots so a batch can convert in parallel across disjoint
 /// sub-slices. `gradient_start` is the shape's global offset into the batch
@@ -2212,11 +2179,10 @@ const REPLAY_TRANSFORM_STRIDE: u64 = 256;
 /// frame, kept on the GPU and re-drawn each frame under the similarity
 /// transform staged at `transform_offset`.
 ///
-/// The immutable `ShapeData` buffer holds no handle here: nothing addresses
-/// it after capture, and `bind_group` keeps it alive.
+/// The immutable `ShapeData` and gradient buffers hold no handle here:
+/// nothing addresses them after capture, and `bind_group` keeps them alive.
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlot {
-    gradient_buffer: wgpu::Buffer,
     /// One `vec4<f32>` color per shape — the mutable paint the shader reads
     /// under `paint_select`, split out so recolor patches upload 16 bytes
     /// per shape while the 160-byte `ShapeData` stays immutable on the GPU
@@ -2224,16 +2190,12 @@ struct ReplaySlot {
     paint_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     shape_count: u32,
-    /// Per-shape offsets into the gradient buffer (`shape_count + 1`
-    /// entries), so recolor patches can rewrite one shape's stop span.
-    gradient_offsets: Vec<u32>,
-    /// CPU mirrors of the mutable buffers. Recolor patches apply here
-    /// first and upload as one contiguous span per buffer per frame —
-    /// MEGA's twinkle field recolors ~1.7k dots a frame, and that many
-    /// individual copy commands stall a mobile GPU for longer than the
-    /// spans' extra bytes ever could.
+    /// CPU mirror of the paint buffer. Recolor patches apply here first
+    /// and upload as one contiguous span per slot per frame — MEGA's
+    /// twinkle field recolors ~1.7k dots a frame, and that many individual
+    /// copy commands stall a mobile GPU for longer than the spans' extra
+    /// bytes ever could.
     paint_mirror: Vec<[f32; 4]>,
-    gradient_mirror: Vec<GradientStop>,
     /// Conservative capture-space arc/ring mesh, built once at capture.
     /// `None` when the kill switch is off, the slot meshed no arcs, or the
     /// vertex budget overflowed — those slots replay through the quad-expansion
@@ -3390,9 +3352,6 @@ enum UploadTarget {
     /// A replay slot's retained paint buffer (color patches land here).
     #[cfg(not(target_arch = "wasm32"))]
     ReplayPaintData(u32),
-    /// A replay slot's retained gradient buffer (stop recolors land here).
-    #[cfg(not(target_arch = "wasm32"))]
-    ReplayGradientData(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3853,14 +3812,12 @@ pub struct GpuRenderer {
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
-    /// Drain arenas for the replay patch queues: `stage_replay_patches`
-    /// swaps the thread-local queues against these instead of `mem::take`,
+    /// Drain arena for the replay patch queue: `stage_replay_patches`
+    /// swaps the thread-local queue against this instead of `mem::take`,
     /// so both sides keep their high-water capacity across frames. Always
     /// empty between drains.
     #[cfg(not(target_arch = "wasm32"))]
     color_patch_scratch: Vec<crate::shape_replay::ColorPatch>,
-    #[cfg(not(target_arch = "wasm32"))]
-    brush_patch_scratch: Vec<crate::shape_replay::PendingBrushPatch>,
     /// Cached render bundles for maximal consecutive retained stretches in
     /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
@@ -4464,8 +4421,6 @@ impl GpuRenderer {
             replay_upload_stats: ReplayUploadStats::default(),
             #[cfg(not(target_arch = "wasm32"))]
             color_patch_scratch: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            brush_patch_scratch: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
         }
@@ -8287,12 +8242,6 @@ impl GpuRenderer {
                         };
                         &entry.paint_buffer
                     }
-                    UploadTarget::ReplayGradientData(slot) => {
-                        let Some(entry) = self.replay_slots.slots.get(&slot) else {
-                            continue;
-                        };
-                        &entry.gradient_buffer
-                    }
                 };
                 encoder.copy_buffer_to_buffer(
                     &self.upload_buffer,
@@ -9170,13 +9119,14 @@ impl GpuRenderer {
     pub(crate) fn replay_supported(&self) -> bool {
         // Deliberately not conditioned on free slot ids: an exhausted pool
         // only means new captures fail (handled per capture), while flipping
-        // this bit would retire every live segment.
+        // this bit would retire every live feed slot.
         self.shape_batch_limits.storage
     }
 
     /// Once-per-frame replay upkeep between scene collection and encoding:
-    /// frees slots whose segments retired, then honors capture requests
-    /// against the scene they were recorded for. Collection for this frame
+    /// ages out unreferenced feed slots, frees queued releases, then honors
+    /// capture requests against the scene they were recorded for. Collection
+    /// for this frame
     /// is done once this runs, so it also closes the replay window that
     /// [`ShapeReplayState::begin_frame`] opened — later collections this
     /// frame (overlays) build windowed scenes that cannot carry retained
@@ -9211,22 +9161,6 @@ impl GpuRenderer {
             }
             for slot in std::mem::take(&mut state.pending_releases) {
                 self.release_replay_slot(slot);
-            }
-            for capture in std::mem::take(&mut state.pending_captures) {
-                let end = capture.shape_start + capture.shape_count;
-                let Some(slice) = shapes.get(capture.shape_start..end) else {
-                    continue;
-                };
-                let refs: Vec<&DrawShape> = slice.iter().collect();
-                let slot = self.capture_replay_slot(&refs, root_scale);
-                if let Some(segment) = state.segments.get_mut(capture.segment) {
-                    segment.slot = slot;
-                    if let Some(slot) = slot {
-                        state.slot_refs.insert(slot, 1);
-                    }
-                } else if let Some(slot) = slot {
-                    self.release_replay_slot(slot);
-                }
             }
             for capture in std::mem::take(&mut state.pending_feed_captures) {
                 if capture.frame != frame {
@@ -9279,20 +9213,16 @@ impl GpuRenderer {
         });
     }
 
-    /// Stages every queued replay recolor patch, from both queues: flat
-    /// solid patches and Brush-carrying gradient patches. Every patch
-    /// rewrites the shape's 16-byte record in the slot's paint buffer (the
-    /// solid color, or the first gradient stop — what `ShapeData.color`
-    /// carried at capture); gradient brushes additionally rewrite their stop span in
-    /// the slot's gradient buffer. The captured `ShapeData` itself is
-    /// immutable, so a recolored frame uploads colors, not geometry. Runs
-    /// in the retained prepare arms so the writes land in the same
-    /// staged-upload flush that carries the frame's transforms; draining is
-    /// idempotent across arms.
+    /// Stages every queued replay recolor patch. Feed recolors are always
+    /// solid, so every patch rewrites the shape's 16-byte record in the
+    /// slot's paint buffer; the captured `ShapeData` itself is immutable, so
+    /// a recolored frame uploads colors, not geometry. Runs in the retained
+    /// prepare arms so the writes land in the same staged-upload flush that
+    /// carries the frame's transforms; draining is idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
-        // Capacity-retaining drain: swap the thread-local queues against the
-        // renderer's scratch arenas instead of `mem::take`, so both sides
+        // Capacity-retaining drain: swap the thread-local queue against the
+        // renderer's scratch arena instead of `mem::take`, so both sides
         // keep their high-water capacity across frames. The scratch is
         // cleared before every return, which preserves drain idempotence
         // across the retained prepare arms: a later drain in the same frame
@@ -9303,31 +9233,26 @@ impl GpuRenderer {
                 &mut state.pending_color_patches,
                 &mut self.color_patch_scratch,
             );
-            std::mem::swap(&mut state.pending_patches, &mut self.brush_patch_scratch);
         });
-        let total_patches = self.color_patch_scratch.len() + self.brush_patch_scratch.len();
+        let total_patches = self.color_patch_scratch.len();
         if total_patches == 0 {
             self.replay_upload_stats.note_frame(0, 0, 0, 0, 0);
             return;
         }
 
         // Patches land in the slot's CPU mirror and upload as one contiguous
-        // span per buffer per slot. Uploading each patch individually would
-        // record one copy command per patch, and MEGA's twinkle field recolors
-        // ~1.7k dots a frame — that many commands stall a mobile GPU for
-        // longer than the spans' untouched bytes ever cost.
+        // span per slot. Uploading each patch individually would record one
+        // copy command per patch, and MEGA's twinkle field recolors ~1.7k
+        // dots a frame — that many commands stall a mobile GPU for longer
+        // than the spans' untouched bytes ever cost.
         #[derive(Clone, Copy)]
         struct DirtySpan {
             paint_min: u32,
             paint_max: u32,
-            stop_min: u32,
-            stop_max: u32,
         }
         const CLEAN: DirtySpan = DirtySpan {
             paint_min: u32::MAX,
             paint_max: 0,
-            stop_min: u32::MAX,
-            stop_max: 0,
         };
         let mut dirty: std::collections::HashMap<
             u32,
@@ -9335,8 +9260,7 @@ impl GpuRenderer {
             cranpose_ui_graphics::FxBuildHasher,
         > = std::collections::HashMap::default();
 
-        // Solid patches: one bare 16-byte write into the slot's paint
-        // mirror — no gradient-stop lookup, no brush match.
+        // One bare 16-byte write into the slot's paint mirror per patch.
         for patch in &self.color_patch_scratch {
             let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
                 continue;
@@ -9346,46 +9270,6 @@ impl GpuRenderer {
             };
             *paint = patch.color;
             let span = dirty.entry(patch.slot).or_insert(CLEAN);
-            span.paint_min = span.paint_min.min(patch.shape_index);
-            span.paint_max = span.paint_max.max(patch.shape_index);
-        }
-
-        for patch in &self.brush_patch_scratch {
-            let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
-                continue;
-            };
-            let stops = replay_gradient_stops(&patch.brush);
-            let color = match (&patch.brush, stops.first()) {
-                (Brush::Solid(c), _) => [c.r(), c.g(), c.b(), c.a()],
-                (_, Some(first)) => first.color,
-                (_, None) => continue,
-            };
-            let index = patch.shape_index as usize;
-            let span = dirty.entry(patch.slot).or_insert(CLEAN);
-            if !stops.is_empty() {
-                let (Some(&start), Some(&end)) = (
-                    slot.gradient_offsets.get(index),
-                    slot.gradient_offsets.get(index + 1),
-                ) else {
-                    continue;
-                };
-                if (end - start) as usize != stops.len() {
-                    // The brush changed its stop count relative to the
-                    // capture; verification should have rejected this.
-                    continue;
-                }
-                let Some(mirror) = slot.gradient_mirror.get_mut(start as usize..end as usize)
-                else {
-                    continue;
-                };
-                mirror.copy_from_slice(&stops);
-                span.stop_min = span.stop_min.min(start);
-                span.stop_max = span.stop_max.max(end - 1);
-            }
-            let Some(paint) = slot.paint_mirror.get_mut(index) else {
-                continue;
-            };
-            *paint = color;
             span.paint_min = span.paint_min.min(patch.shape_index);
             span.paint_max = span.paint_max.max(patch.shape_index);
         }
@@ -9407,19 +9291,9 @@ impl GpuRenderer {
                     bytemuck::cast_slice(&slot.paint_mirror[range]),
                 );
             }
-            if span.stop_min <= span.stop_max {
-                let range = span.stop_min as usize..span.stop_max as usize + 1;
-                uploaded_bytes += (range.len() * std::mem::size_of::<GradientStop>()) as u64;
-                staged_uploads.stage_at(
-                    UploadTarget::ReplayGradientData(slot_id),
-                    range.start as u64 * std::mem::size_of::<GradientStop>() as u64,
-                    bytemuck::cast_slice(&slot.gradient_mirror[range]),
-                );
-            }
         }
         // A patched color is one 16-byte vec4; the staged bytes exceed this
-        // only by the untouched records inside each coalesced span (and by
-        // gradient-stop rewrites, which carry real data either way).
+        // only by the untouched records inside each coalesced span.
         let ideal_bytes = total_patches as u64 * 16;
         self.replay_upload_stats.note_frame(
             total_patches as u64,
@@ -9440,7 +9314,6 @@ impl GpuRenderer {
             );
         }
         self.color_patch_scratch.clear();
-        self.brush_patch_scratch.clear();
     }
 
     /// Converts `shape_refs` once and retains the result on the GPU as a
@@ -9625,13 +9498,10 @@ impl GpuRenderer {
         self.replay_slots.slots.insert(
             id,
             ReplaySlot {
-                gradient_buffer,
                 paint_buffer,
                 bind_group,
                 shape_count: shape_count as u32,
-                gradient_offsets,
                 paint_mirror: paint,
-                gradient_mirror: gradients,
                 mesh,
                 capture_epoch,
             },

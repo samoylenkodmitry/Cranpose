@@ -170,45 +170,8 @@ impl StageExecutor {
         result
     }
 
-    /// `output[i] = f(&input[i])` fanned out across the pool with an
-    /// explicit parallelism floor, for callers whose per-item work is far
-    /// heavier than the item count suggests (a replay "item" is a whole
-    /// segment's verification). Order is deterministic by construction.
-    pub(crate) fn map_into_min<I, O, F>(
-        &self,
-        stage: Stage,
-        input: &[I],
-        output: &mut [O],
-        min_items: usize,
-        f: F,
-    ) where
-        I: Sync,
-        O: Send,
-        F: Fn(&I) -> O + Send + Sync,
-    {
-        assert_eq!(input.len(), output.len());
-        let len = input.len();
-        if self.lanes == 1 || len < min_items {
-            for (slot, item) in output.iter_mut().zip(input) {
-                *slot = f(item);
-            }
-            return;
-        }
-        let chunk = self.chunk_len(stage, len);
-        self.run_pooled(|mark_first_chunk| {
-            output
-                .par_iter_mut()
-                .zip(input.par_iter())
-                .with_min_len(chunk)
-                .for_each(|(slot, item)| {
-                    mark_first_chunk();
-                    *slot = f(item);
-                });
-        });
-    }
-
     /// `out` becomes `input.iter().map(f).collect()`, preserving `out`'s
-    /// allocation, fanned out like [`StageExecutor::map_into`].
+    /// allocation, fanned out across the pool in deterministic order.
     pub(crate) fn map_fill<I, O, F>(&self, stage: Stage, input: &[I], out: &mut Vec<O>, f: F)
     where
         I: Sync,
@@ -272,32 +235,18 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn map_into_matches_serial_and_keeps_order() {
-        let executor = StageExecutor::new(4);
-        let input: Vec<u64> = (0..10_000).collect();
-        let mut output = vec![0u64; input.len()];
-        executor.map_into_min(Stage::Producer, &input, &mut output, 256, |value| {
-            value * 3 + 1
-        });
-        assert!(output
-            .iter()
-            .enumerate()
-            .all(|(i, &v)| v == i as u64 * 3 + 1));
-    }
-
-    #[test]
     fn small_inputs_stay_serial_but_correct() {
         let executor = StageExecutor::new(4);
         let input: Vec<u32> = (0..10).collect();
-        let mut output = vec![0u32; 10];
-        executor.map_into_min(Stage::Present, &input, &mut output, 256, |value| value + 7);
+        let mut output: Vec<u32> = Vec::new();
+        executor.map_fill(Stage::Present, &input, &mut output, |value| value + 7);
         assert_eq!(output, (7..17).collect::<Vec<_>>());
         // Serial short-circuits never touch the pool.
         assert_eq!(executor.telemetry().submissions, 0);
     }
 
     #[test]
-    fn map_fill_matches_map_into_and_reuses_capacity() {
+    fn map_fill_matches_serial_and_reuses_capacity() {
         let executor = StageExecutor::new(4);
         let input: Vec<u64> = (0..10_000).collect();
         let mut out: Vec<String> = Vec::new();
@@ -348,9 +297,9 @@ mod tests {
                 }
             });
             let present = scope.spawn(|| {
-                let mut out = vec![0u64; input.len()];
+                let mut out: Vec<u64> = Vec::new();
                 for round in 0..100u64 {
-                    executor.map_into_min(Stage::Present, &input, &mut out, 1, |v| v * 5 + round);
+                    executor.map_fill(Stage::Present, &input, &mut out, |v| v * 5 + round);
                     assert!(out
                         .iter()
                         .enumerate()
@@ -372,16 +321,16 @@ mod tests {
     fn panicking_job_propagates_and_the_executor_survives() {
         let executor = StageExecutor::new(4);
         let input: Vec<u32> = (0..5_000).collect();
-        let mut output = vec![0u32; input.len()];
+        let mut output: Vec<u32> = Vec::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            executor.map_into_min(Stage::Producer, &input, &mut output, 1, |value| {
+            executor.map_fill(Stage::Producer, &input, &mut output, |value| {
                 assert!(*value != 2_500, "poisoned item");
                 *value
             });
         }));
         assert!(result.is_err(), "the panic must reach the submitter");
         // The pool must keep serving submissions after a job panicked.
-        executor.map_into_min(Stage::Producer, &input, &mut output, 1, |value| value + 1);
+        executor.map_fill(Stage::Producer, &input, &mut output, |value| value + 1);
         assert!(output.iter().enumerate().all(|(i, &v)| v == i as u32 + 1));
     }
 
@@ -402,8 +351,8 @@ mod tests {
         // "jobs never nest" holding forever.
         let executor = StageExecutor::new(2);
         let outer: Vec<u32> = (0..600).collect();
-        let mut out = vec![0u32; outer.len()];
-        executor.map_into_min(Stage::Producer, &outer, &mut out, 1, |v| v * 2);
+        let mut out: Vec<u32> = Vec::new();
+        executor.map_fill(Stage::Producer, &outer, &mut out, |v| v * 2);
         assert!(out.iter().enumerate().all(|(i, &v)| v == i as u32 * 2));
     }
 

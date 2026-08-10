@@ -41,9 +41,6 @@ pub use scene::{ClickAction, HitRegion, Scene};
 pub use shape_replay::feed_live_stats as command_feed_live_stats;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::live_stats as shape_replay_live_stats;
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
 pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count_for_tests};
 
 use cranpose_core::{MemoryApplier, NodeId};
