@@ -1,28 +1,37 @@
-//! Producer frontend of the renderer (pipeline step 6a).
+//! Producer frontend of the renderer (pipeline steps 6a/6b).
 //!
 //! [`RendererFrontend`] owns everything the producer stage needs to lower a
 //! frame into a [`FramePacket`]: the retained scene graph, the text layout
 //! state, the producer-side lowering memos, and the direct-scene recycling
 //! pool. [`WgpuRenderer`](crate::WgpuRenderer) drives it as
-//! `build_frame_packet -> GpuRenderer::render(packet) -> apply_returns`, so
-//! the direct-root path lowers entirely before the present backend runs; the
-//! non-direct graph fallback and the dev overlay still lower backend-side
-//! (packetized in a later step).
+//! `build_frame_packet -> GpuRenderer::render(packet) -> apply_returns`.
+//! Every frame lowers entirely before the present backend runs: direct
+//! roots, non-direct root surfaces, and the dev overlay all become packet
+//! payloads here — the present backend never touches the retained graph.
 
-use crate::frame_packet::{FramePacket, RenderReturns, ReplayConfirmation};
-use crate::normalized_scene::collect_layer_contents_reusing;
+use crate::frame_packet::{
+    FramePacket, PacketRoot, RenderReturns, ReplayConfirmation, ReplayFrameOps, RootSurfacePacket,
+};
+use crate::normalized_scene::{
+    collect_layer_contents_reusing,
+    collect_layer_contents_with_translation_context_and_text_layout, lower_layer_node,
+};
 use crate::render::{
     direct_root_child_underlays_are_supported, instant_ms, should_log_wgpu_render_stage,
     RETAINED_LAYER_REQUIREMENTS_CAPACITY,
 };
 use crate::scene::{CompositorScene, Scene, SceneCapacityHint};
-use crate::surface_executor::root_direct_scene_events_are_supported;
+use crate::surface_executor::{
+    layer_surface_translation_context, root_direct_scene_events_are_supported,
+};
 use crate::surface_plan::{
+    effective_surface_requirements, layer_surface_requirements_cached,
     root_can_render_directly_cached, LayerSurfaceRequirements, TranslationRenderContext,
 };
+use crate::surface_requirements::SurfaceRequirement;
 use crate::TextSystemState;
 use cranpose_core::collections::map::HashMap;
-use cranpose_render_common::graph::RenderGraph;
+use cranpose_render_common::graph::{LayerNode, RenderGraph};
 use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
 use cranpose_ui_graphics::Rect;
 use std::rc::Weak;
@@ -54,10 +63,9 @@ pub(crate) struct RendererFrontend {
     pub(crate) direct_scene_capacity: SceneCapacityHint,
     /// Monotone id stamped on each [`FramePacket`] this producer publishes.
     pub(crate) frame_sequence: u64,
-    /// Producer-side lowering memos, cleared per frame. The present backend
-    /// keeps its own pair for the graph fallback and overlay paths; both
-    /// memoize the same deterministic functions, so the two instances cannot
-    /// diverge in value.
+    /// The renderer's only lowering-memo pair (the present backend lowers
+    /// nothing since step 6b), cleared per frame — the memos key on node
+    /// addresses and must never survive into a frame with another graph.
     pub(crate) layer_surface_rect_cache: HashMap<usize, Rect>,
     pub(crate) layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
 }
@@ -80,11 +88,11 @@ impl RendererFrontend {
         }
     }
 
-    /// Lower the current scene graph's direct root into a [`FramePacket`]
-    /// using the frontend's configured root scale.
+    /// Lower the current scene graph into a [`FramePacket`] using the
+    /// frontend's configured root scale.
     ///
-    /// `None` means the present backend must take the non-direct graph
-    /// fallback path (or there is no graph at all).
+    /// `None` means there is no graph at all; every frame with a graph
+    /// becomes a packet (direct or root-surface).
     pub(crate) fn build_frame_packet(
         &mut self,
         width: u32,
@@ -186,30 +194,79 @@ impl RendererFrontend {
         } else {
             None
         };
-        let after_root_collect = Instant::now();
         // The producer's complete output for this frame, owned and Send.
         // Built before the present backend runs so a later step can publish
-        // it to a present thread; consumed synchronously today. Building
-        // the packet closes the frame's replay window: the planner emits
+        // it to a present thread; consumed synchronously today. Building a
+        // direct packet closes the frame's replay window: the planner emits
         // its plan into `replay` and stops accepting retained ops.
-        let direct_packet = direct_root.map(|root| {
-            self.frame_sequence = self.frame_sequence.wrapping_add(1);
-            #[cfg(not(target_arch = "wasm32"))]
-            let replay = crate::shape_replay::SHAPE_REPLAY.with(|state| {
-                state
-                    .borrow_mut()
-                    .take_frame_ops(crate::pipeline::retained_feed_generation())
-            });
-            #[cfg(target_arch = "wasm32")]
-            let replay = crate::frame_packet::ReplayFrameOps::default();
-            FramePacket {
-                frame_id: self.frame_sequence,
-                viewport: (width, height),
-                root_scale,
-                root,
-                replay,
+        let (root, replay) = match direct_root {
+            Some(root) => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let replay = crate::shape_replay::SHAPE_REPLAY.with(|state| {
+                    state
+                        .borrow_mut()
+                        .take_frame_ops(crate::pipeline::retained_feed_generation())
+                });
+                #[cfg(target_arch = "wasm32")]
+                let replay = ReplayFrameOps::default();
+                (PacketRoot::Direct(Box::new(root)), replay)
             }
-        });
+            None => {
+                // A non-direct-eligible root and a rejected direct collect
+                // both used to render through the present backend's graph
+                // fallback; both now lower into a Surface packet here. A
+                // Surface frame never touches the planner: its pending
+                // queues simply wait for the next direct frame, as they
+                // always did, and the packet carries the empty default
+                // replay plan (generation 0), which the present store must
+                // not consume.
+                let surface = lower_root_surface_packet(
+                    &graph.root,
+                    &mut self.text_state,
+                    &mut self.layer_surface_rect_cache,
+                    &mut self.layer_surface_requirements_cache,
+                    width,
+                    height,
+                    root_scale,
+                );
+                (
+                    PacketRoot::Surface(Box::new(surface)),
+                    ReplayFrameOps::default(),
+                )
+            }
+        };
+        let after_root_collect = Instant::now();
+        let overlay = if let Some(overlay_graph) = self.dev_overlay_graph.as_ref() {
+            // The dev overlay is a different graph: the memos key on node
+            // addresses, so the root graph's entries must not leak into the
+            // overlay collect (mirrors the present backend's old per-path
+            // clears).
+            self.layer_surface_rect_cache.clear();
+            self.layer_surface_requirements_cache.clear();
+            Some(
+                collect_layer_contents_with_translation_context_and_text_layout(
+                    &overlay_graph.root,
+                    &mut self.text_state,
+                    None,
+                    None,
+                    TranslationRenderContext::default(),
+                    &mut self.layer_surface_rect_cache,
+                    &mut self.layer_surface_requirements_cache,
+                ),
+            )
+        } else {
+            None
+        };
+        self.frame_sequence = self.frame_sequence.wrapping_add(1);
+        let packet = FramePacket {
+            frame_id: self.frame_sequence,
+            viewport: (width, height),
+            root_scale,
+            root,
+            overlay,
+            replay,
+            text_cache_len: self.text_state.text_cache_len(),
+        };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {
             log::warn!(
@@ -217,7 +274,7 @@ impl RendererFrontend {
                 instant_ms(build_start, after_root_collect),
             );
         }
-        direct_packet
+        Some(packet)
     }
 
     /// Fold the present stage's [`RenderReturns`] back into producer state:
@@ -256,6 +313,73 @@ impl RendererFrontend {
     }
 }
 
+/// Lowers a non-direct root into a [`RootSurfacePacket`]: the producer-side
+/// equivalent of the present backend's old `render_root_layer_surface`
+/// prologue. The request context matches the old graph-fallback call exactly
+/// (`allow_runtime_cache=false`, `logical_rect_override=Some(viewport_rect)`,
+/// `activates_nested_capture=false`, default translation context), and the
+/// derivation mirrors its shadowing of the translation context BEFORE the
+/// collect; `target_scale` and the composite sample mode are recomputed
+/// present-side by `render_layer_surface` from the same snapshot.
+fn lower_root_surface_packet(
+    root: &LayerNode,
+    text_state: &mut TextSystemState,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+    width: u32,
+    height: u32,
+    root_scale: f32,
+) -> RootSurfacePacket {
+    // The root layer's visible area is always the viewport — content
+    // outside the screen is invisible regardless of scroll offsets or
+    // inflated scene bounds.  Pass the viewport rect as an explicit
+    // surface rect to prevent offscreen inflation on constrained GPUs.
+    let viewport_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: width as f32 / root_scale,
+        height: height as f32 / root_scale,
+    };
+    let translation_context = TranslationRenderContext::default();
+    let activates_nested_capture = false;
+    let surface_requirements =
+        layer_surface_requirements_cached(root, layer_surface_requirements_cache);
+    let direct_translated_content_context =
+        translation_context.inherited_content_translation || root.translated_content_context;
+    let effective_translated_content_context =
+        direct_translated_content_context || surface_requirements.contains_translated_content;
+    let effective_requirements = effective_surface_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    );
+    let translation_context = layer_surface_translation_context(
+        translation_context,
+        activates_nested_capture
+            && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
+    );
+    let (lowered, source) = lower_layer_node(
+        root,
+        text_state,
+        surface_requirements,
+        viewport_rect,
+        translation_context,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+    RootSurfacePacket {
+        lowered,
+        source,
+        transform_to_parent: root.transform_to_parent,
+        node_id: root.node_id,
+        backdrop: root.backdrop().cloned(),
+        graphics_layer: root.graphics_layer.clone(),
+        local_bounds: root.local_bounds,
+        clip_rect: root.clip_rect(),
+        shadow_clip: root.shadow_clip,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +411,20 @@ mod tests {
         ))
     }
 
+    fn direct_root(packet: &FramePacket) -> &crate::normalized_scene::CollectedLayer {
+        match &packet.root {
+            PacketRoot::Direct(root) => root,
+            PacketRoot::Surface(_) => panic!("expected a direct packet root"),
+        }
+    }
+
+    fn surface_root(packet: &FramePacket) -> &RootSurfacePacket {
+        match &packet.root {
+            PacketRoot::Surface(surface) => surface,
+            PacketRoot::Direct(_) => panic!("expected a surface packet root"),
+        }
+    }
+
     #[test]
     fn build_without_graph_produces_no_packet() {
         let mut frontend = frontend();
@@ -307,7 +445,8 @@ mod tests {
         assert_eq!(packet.frame_id, 1);
         assert_eq!(packet.viewport, (320, 240));
         assert_eq!(packet.root_scale, 2.0);
-        assert!(packet.root.child_layers.is_empty());
+        assert!(direct_root(&packet).child_layers.is_empty());
+        assert!(packet.overlay.is_none());
 
         let next = frontend
             .build_frame_packet_with_scale(320, 240, 1.0, false)
@@ -317,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn non_direct_root_produces_no_packet() {
+    fn non_direct_root_builds_surface_packet() {
         let mut frontend = frontend();
         let mut root = layer_node(
             bounds(240.0, 160.0),
@@ -327,24 +466,43 @@ mod tests {
         );
         root.graphics_layer.shadow_elevation = 4.0;
         frontend.scene.graph = Some(RenderGraph::new(root));
+        frontend.root_scale = 2.0;
 
-        assert!(frontend.build_frame_packet(320, 240, false).is_none());
+        let packet = frontend
+            .build_frame_packet(320, 240, false)
+            .expect("non-direct root must lower into a surface packet");
+        let surface = surface_root(&packet);
         assert_eq!(
-            frontend.frame_sequence, 0,
-            "a fallback frame must not consume a packet id"
+            surface.lowered.logical_rect,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 160.0,
+                height: 120.0,
+            },
+            "the root surface must be lowered against the viewport rect"
         );
+        assert_eq!(surface.graphics_layer.shadow_elevation, 4.0);
+        assert!(surface.backdrop.is_none());
+        assert_eq!(surface.local_bounds, bounds(240.0, 160.0));
+        assert_eq!(
+            packet.replay.generation, 0,
+            "a surface frame never touches the planner and carries the default plan"
+        );
+        assert_eq!(packet.frame_id, 1);
         assert!(
             frontend.retained_direct_scene.is_none(),
-            "the non-direct gate rejects before any scene is collected"
+            "the non-direct gate rejects before any direct scene is collected"
         );
     }
 
     #[test]
-    fn rejected_collect_stashes_scene_and_produces_no_packet() {
+    fn rejected_collect_stashes_scene_and_builds_surface_packet() {
         // A descendant backdrop passes the direct-eligibility gate but the
         // collected scene carries a root-local backdrop event, which the
         // direct path cannot render — the reject branch must recycle the
-        // collected scene.
+        // collected scene AND still lower the frame into a surface packet,
+        // matching the old rejected-direct → graph-fallback control flow.
         let mut frontend = frontend();
         let mut backdrop = layer_node(
             bounds(40.0, 40.0),
@@ -368,12 +526,59 @@ mod tests {
         );
         frontend.scene.graph = Some(RenderGraph::new(root));
 
-        assert!(frontend.build_frame_packet(320, 240, false).is_none());
+        let packet = frontend
+            .build_frame_packet(320, 240, false)
+            .expect("a rejected direct collect must fall through to a surface packet");
+        let surface = surface_root(&packet);
+        assert!(
+            surface.lowered.contains_descendant_backdrop,
+            "the surface lowering must carry the descendant backdrop the direct path rejected"
+        );
+        assert!(
+            !surface.source.scene.shapes.is_empty() || !surface.source.children.is_empty(),
+            "the surface source must carry the collected root content"
+        );
         assert!(
             frontend.retained_direct_scene.is_some(),
             "rejected collect must stash the scene for recycling"
         );
-        assert_eq!(frontend.frame_sequence, 0);
+        assert_eq!(packet.frame_id, 1);
+    }
+
+    #[test]
+    fn dev_overlay_lowers_into_packet_for_direct_and_surface_roots() {
+        let mut frontend = frontend();
+        frontend.scene.graph = Some(direct_graph());
+        frontend.dev_overlay_graph = Some(direct_graph());
+
+        let packet = frontend
+            .build_frame_packet(320, 240, false)
+            .expect("direct root must lower into a packet");
+        let overlay = packet
+            .overlay
+            .as_ref()
+            .expect("the dev overlay must be lowered producer-side");
+        assert!(
+            overlay.child_layers.is_empty(),
+            "the dev overlay stays directly renderable"
+        );
+
+        let mut shadowed_root = layer_node(
+            bounds(240.0, 160.0),
+            ProjectiveTransform::default(),
+            GraphicsLayer::default(),
+            vec![],
+        );
+        shadowed_root.graphics_layer.shadow_elevation = 4.0;
+        frontend.scene.graph = Some(RenderGraph::new(shadowed_root));
+        let packet = frontend
+            .build_frame_packet(320, 240, false)
+            .expect("non-direct root must lower into a surface packet");
+        assert!(matches!(packet.root, PacketRoot::Surface(_)));
+        assert!(
+            packet.overlay.is_some(),
+            "surface frames must carry the lowered dev overlay too"
+        );
     }
 
     #[test]
@@ -389,8 +594,12 @@ mod tests {
             "the packet owns the scene while the present stage renders it"
         );
 
+        let root = match packet.root {
+            PacketRoot::Direct(root) => root,
+            PacketRoot::Surface(_) => panic!("expected a direct packet root"),
+        };
         let confirmations = frontend.apply_returns(RenderReturns {
-            scene: Some(packet.root.scene),
+            scene: Some(root.scene),
             ack: None,
         });
         assert!(confirmations.is_none(), "no ack means nothing to recycle");

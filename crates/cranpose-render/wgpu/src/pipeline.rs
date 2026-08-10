@@ -18,6 +18,8 @@ use cranpose_render_common::primitive_emit::{
 use cranpose_render_common::Brush;
 use cranpose_render_common::RenderScene;
 #[cfg(test)]
+use cranpose_ui::layout_text;
+#[cfg(test)]
 use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
@@ -25,9 +27,9 @@ use cranpose_ui::prepare_text_layout;
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
 use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
 use cranpose_ui::text_layout_result::TextLayoutResult;
-use cranpose_ui::{layout_text, LayoutBox, TextLayoutOptions};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
+use cranpose_ui::{LayoutBox, TextLayoutOptions};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
     RoundedCornerShape, RuntimeShader, TileMode,
@@ -56,8 +58,10 @@ pub(crate) trait TextLayoutResolver {
     ) -> TextLayoutResult;
 }
 
+#[cfg(test)]
 pub(crate) struct UiTextLayoutResolver;
 
+#[cfg(test)]
 impl TextLayoutResolver for UiTextLayoutResolver {
     fn layout_text(
         &mut self,

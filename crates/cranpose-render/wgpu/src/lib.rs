@@ -57,7 +57,7 @@ use cranpose_ui_graphics::{Rect, Size};
 use frame_packet::RenderReturns;
 use frontend::{DevOverlayCache, RendererFrontend};
 use render::GpuRenderer;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
@@ -199,11 +199,10 @@ pub fn headless_text_measurer_with_fonts(fonts: &[&[u8]]) -> Rc<dyn TextMeasurer
 /// - GPU text rendering via retained raster image batches
 /// - Cross-platform support (Desktop, Web, Android)
 pub struct WgpuRenderer {
-    /// Producer stage: scene graph, text layout, direct-root lowering into
-    /// [`frame_packet::FramePacket`]s.
+    /// Producer stage: scene graph, text layout, and the lowering of every
+    /// frame into a [`frame_packet::FramePacket`].
     frontend: RendererFrontend,
-    /// Present stage: consumes packets (or lowers the graph fallback) and
-    /// draws.
+    /// Present stage: consumes packets and draws; it never lowers.
     gpu_renderer: Option<GpuRenderer>,
 }
 
@@ -280,9 +279,9 @@ impl WgpuRenderer {
 
     /// Render the scene to a texture view.
     ///
-    /// Producer first, present second: the frontend lowers the direct root
-    /// into a [`frame_packet::FramePacket`], the GPU renderer consumes it
-    /// (or takes the graph fallback path on `None`), and the present
+    /// Producer first, present second: the frontend lowers the frame into a
+    /// [`frame_packet::FramePacket`] (direct root, root surface, and dev
+    /// overlay alike), the GPU renderer consumes it, and the present
     /// stage's returns — the recycled scene and the replay ack — fold back
     /// into the frontend afterwards.
     pub fn render(
@@ -296,44 +295,16 @@ impl WgpuRenderer {
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
             ));
         };
-        let packet =
-            self.frontend
-                .build_frame_packet(width, height, gpu_renderer.replay_supported());
-        let frontend = &mut self.frontend;
-        let graph = frontend
-            .scene
-            .graph
-            .as_ref()
+        let packet = self
+            .frontend
+            .build_frame_packet(width, height, gpu_renderer.replay_supported())
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
+        let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
-        let app_context = frontend.app_context.as_ref().and_then(Weak::upgrade);
-        let result = if let Some(app_context) = app_context {
-            app_context.enter(|| {
-                gpu_renderer.render(
-                    &mut frontend.text_state,
-                    view,
-                    graph,
-                    frontend.dev_overlay_graph.as_ref(),
-                    width,
-                    height,
-                    frontend.root_scale,
-                    packet,
-                    &mut returns,
-                )
-            })
-        } else {
-            gpu_renderer.render(
-                &mut frontend.text_state,
-                view,
-                graph,
-                frontend.dev_overlay_graph.as_ref(),
-                width,
-                height,
-                frontend.root_scale,
-                packet,
-                &mut returns,
-            )
-        };
+        // Packet consumption runs OUTSIDE the producer's app context on
+        // purpose: the packet is the complete frame, so the present stage
+        // must never need the context — running bare proves it every frame.
+        let result = gpu_renderer.render(view, width, height, packet, &mut returns);
         if let Some(confirmations) = frontend.apply_returns(returns) {
             gpu_renderer.restore_replay_ack_confirmations(confirmations);
         }
@@ -363,45 +334,20 @@ impl WgpuRenderer {
                 "GPU renderer not initialized. Call init_gpu() first.".to_string(),
             ));
         };
-        let packet = self.frontend.build_frame_packet_with_scale(
-            width,
-            height,
-            root_scale,
-            gpu_renderer.replay_supported(),
-        );
-        let frontend = &mut self.frontend;
-        let graph = frontend
-            .scene
-            .graph
-            .as_ref()
-            .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
-        let mut returns = RenderReturns::default();
-        let app_context = frontend.app_context.as_ref().and_then(Weak::upgrade);
-        let result = if let Some(app_context) = app_context {
-            app_context.enter(|| {
-                gpu_renderer.render_to_rgba_pixels(
-                    &mut frontend.text_state,
-                    graph,
-                    frontend.dev_overlay_graph.as_ref(),
-                    width,
-                    height,
-                    root_scale,
-                    packet,
-                    &mut returns,
-                )
-            })
-        } else {
-            gpu_renderer.render_to_rgba_pixels(
-                &mut frontend.text_state,
-                graph,
-                frontend.dev_overlay_graph.as_ref(),
+        let packet = self
+            .frontend
+            .build_frame_packet_with_scale(
                 width,
                 height,
                 root_scale,
-                packet,
-                &mut returns,
+                gpu_renderer.replay_supported(),
             )
-        };
+            .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
+        let frontend = &mut self.frontend;
+        let mut returns = RenderReturns::default();
+        // Bare like `render`: the capture path consumes the packet with no
+        // producer app context current.
+        let result = gpu_renderer.render_to_rgba_pixels(width, height, packet, &mut returns);
         if let Some(confirmations) = frontend.apply_returns(returns) {
             gpu_renderer.restore_replay_ack_confirmations(confirmations);
         }
@@ -443,10 +389,9 @@ impl WgpuRenderer {
         stats.scene_hits_cap = self.frontend.scene.hits.capacity();
         stats.scene_node_index_len = self.frontend.scene.node_index.len();
         stats.scene_node_index_cap = self.frontend.scene.node_index.capacity();
-        // The producer frontend and the present backend each keep a
-        // lowering-memo pair (direct path vs. fallback/overlay paths);
-        // report the union so retained capacity on either side stays
-        // visible to leak tooling.
+        // The producer frontend owns the renderer's only lowering-memo
+        // pair (the present backend reports zeros); add it here so its
+        // retained capacity stays visible to leak tooling.
         stats.layer_surface_rect_cache_len += self.frontend.layer_surface_rect_cache.len();
         stats.layer_surface_rect_cache_cap += self.frontend.layer_surface_rect_cache.capacity();
         stats.layer_surface_requirements_cache_len +=
@@ -493,6 +438,19 @@ impl WgpuRenderer {
             .as_ref()
             .map(GpuRenderer::retained_bundle_stats)
             .unwrap_or((0, 0))
+    }
+
+    /// Test/diagnostic view of the present store's lifetime count of
+    /// replay-ops batches dropped by the generation check. Surface (non
+    /// direct) frames must never move it: their packets carry the default
+    /// plan, which the consume gate never feeds to the store.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_generation_drops_for_tests(&self) -> u64 {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::replay_generation_drops)
+            .unwrap_or(0)
     }
 
     /// Test hook for the replay message protocol: one planner→store→planner

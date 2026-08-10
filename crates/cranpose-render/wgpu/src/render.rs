@@ -8,7 +8,7 @@ use crate::effect_renderer::{
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
-use crate::frame_packet::{FramePacket, RenderReturns};
+use crate::frame_packet::{FramePacket, PacketRoot, RenderReturns, RootSurfacePacket};
 use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
@@ -18,29 +18,30 @@ use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
     filtered_effect_layer_index, scene_bounds, SceneWindowSource,
 };
-use crate::normalized_scene::{
-    collect_layer_contents_with_translation_context_and_text_layout,
-    estimate_layer_surface_rect_cached, translate_quad, ChildLayerComposite, CollectedLayer,
-};
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
+use crate::normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer};
 use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
+#[cfg(test)]
+use crate::scene::SnapAnchor;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    RetainedDraw, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+    RetainedDraw, ShadowDraw, SimilarityTransform, TextDraw,
 };
 use crate::shaders;
+#[cfg(test)]
+use crate::surface_executor::surface_target_size;
 use crate::surface_executor::{
     apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
     axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
     composite_surface_to_view as execute_composite_surface_to_view, device_pixel_bounds_for_rect,
     offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
-    render_root_direct as execute_render_root_direct,
-    render_root_layer_surface as execute_render_layer_surface,
-    root_direct_scene_events_are_supported, scaled_quad, snap_delta_for_anchor,
-    snap_motion_stable_dest_quad, surface_target_size, translation_stable_device_pixel_bounds,
-    DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
+    render_layer_surface as execute_render_layer_surface,
+    render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
+    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad,
+    translation_stable_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
+    SurfaceExecutionBackend,
 };
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
@@ -50,29 +51,28 @@ use crate::surface_plan::root_can_render_directly_cached;
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
-    layer_surface_requirements, layer_surface_scale, layer_surface_target_scale,
-    TranslatedContentAxes,
+    layer_surface_requirements, layer_surface_requirements_cached, layer_surface_scale,
+    layer_surface_target_scale, layer_uses_external_backdrop_input, TranslatedContentAxes,
 };
-use crate::surface_plan::{
-    layer_surface_requirements_cached, layer_uses_external_backdrop_input, LayerSurfaceRequest,
-    LayerSurfaceRequirements, TranslationRenderContext,
-};
+use crate::surface_plan::{LayerSurfaceRequest, TranslationRenderContext};
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
 use crate::surface_requirements::SurfaceRequirementSet;
 use crate::DebugCpuAllocationStats;
-use crate::TextSystemState;
 use bytemuck::{Pod, Zeroable};
 use cranpose_core::collections::map::HashMap;
 use cranpose_core::{hash::default as default_hash, NodeId};
 use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
 use cranpose_render_common::geometry::blur_extent_margin;
-use cranpose_render_common::graph::{quad_bounds, CachePolicy, LayerNode, RenderGraph};
+use cranpose_render_common::graph::quad_bounds;
 #[cfg(test)]
 use cranpose_render_common::graph::{
-    PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
 };
-use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+#[cfg(test)]
+use cranpose_render_common::raster_cache::ScaleBucket;
 use cranpose_render_common::software_text_raster::{
     collect_solid_text_atlas_run, measure_text_with_font,
     rasterize_annotated_text_to_image_with_glyph_cache, rasterize_text_to_image_with_glyph_cache,
@@ -3796,12 +3796,6 @@ pub struct GpuRenderer {
     observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
-    /// Present-side lowering memos for the graph fallback and overlay
-    /// paths, cleared per frame. The producer frontend keeps its own pair
-    /// for direct-root lowering; both memoize the same deterministic
-    /// functions, so the two instances cannot diverge in value.
-    layer_surface_rect_cache: HashMap<usize, Rect>,
-    layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
@@ -4423,8 +4417,6 @@ impl GpuRenderer {
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
             shadow_surface_cache_bytes: 0,
-            layer_surface_rect_cache: HashMap::new(),
-            layer_surface_requirements_cache: HashMap::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
             pending_frame_warmup_frames: 0,
@@ -4701,61 +4693,6 @@ impl GpuRenderer {
         self.shadow_surface_cache_bytes = self.shadow_surface_cache_bytes.saturating_add(byte_size);
     }
 
-    fn layer_raster_cache_candidate(
-        &mut self,
-        layer: &LayerNode,
-        root_scale: f32,
-        has_backdrop_underlay: bool,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
-    ) -> Option<(LayerRasterCacheKey, Rect)> {
-        let surface_requirements =
-            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
-        let runtime_cache_is_safe = allow_runtime_cache
-            && surface_requirements
-                .surface_requirements
-                .has_isolating_requirement()
-            && !layer
-                .effect()
-                .is_some_and(RenderEffect::contains_runtime_shader);
-        let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-            || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
-            || runtime_cache_is_safe;
-        if !cache_is_allowed {
-            return None;
-        }
-        if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
-            return None;
-        }
-        // RuntimeShader effects produce different output every frame (animated
-        // uniforms like time). Caching their layer surfaces is
-        // counterproductive: every frame generates a new unique cache key that
-        // fills the LRU with stale textures.
-        if layer.effect().is_some_and(|e| e.contains_runtime_shader()) {
-            return None;
-        }
-
-        let logical_rect = logical_rect_override.unwrap_or_else(|| {
-            estimate_layer_surface_rect_cached(
-                layer,
-                &mut self.layer_surface_rect_cache,
-                &mut self.layer_surface_requirements_cache,
-            )
-        });
-        let pixel_size = surface_target_size(logical_rect, root_scale, self.max_texture_dim());
-        Some((
-            LayerRasterCacheKey::new(
-                layer.node_id,
-                layer.target_content_hash(),
-                layer.effect_hash(),
-                logical_rect,
-                pixel_size,
-                ScaleBucket::from_scale(root_scale),
-            ),
-            logical_rect,
-        ))
-    }
-
     fn supports_render_effect(&self, effect: &RenderEffect) -> bool {
         is_render_effect_supported(effect)
     }
@@ -4770,7 +4707,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
     #[allow(clippy::too_many_arguments)]
     fn render_range_with_layer_events_to_target_recorded(
         &mut self,
-        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -4819,7 +4755,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
             for event in &events {
                 if event.z_index > cursor_z {
                     self.render_non_effect_segment(
-                        text_state,
                         &target.view,
                         shapes,
                         images,
@@ -4883,7 +4818,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         }
                         execute_render_effect_layer_to_target(
                             self,
-                            text_state,
                             target,
                             shapes,
                             images,
@@ -4905,7 +4839,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
 
             if cursor_z < z_end {
                 self.render_non_effect_segment(
-                    text_state,
                     &target.view,
                     shapes,
                     images,
@@ -5508,49 +5441,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             .insert_cached_layer_surface(key, target, logical_rect)
     }
 
-    fn layer_raster_cache_candidate(
-        &mut self,
-        layer: &LayerNode,
-        root_scale: f32,
-        has_backdrop_underlay: bool,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
-    ) -> Option<(LayerRasterCacheKey, Rect)> {
-        self.renderer.layer_raster_cache_candidate(
-            layer,
-            root_scale,
-            has_backdrop_underlay,
-            allow_runtime_cache,
-            logical_rect_override,
-        )
-    }
-
-    fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements {
-        layer_surface_requirements_cached(
-            layer,
-            &mut self.renderer.layer_surface_requirements_cache,
-        )
-    }
-
-    fn collect_layer_contents_with_translation_context(
-        &mut self,
-        text_state: &mut TextSystemState,
-        layer: &LayerNode,
-        inherited_clip: Option<Rect>,
-        inherited_translated_snap_anchor: Option<SnapAnchor>,
-        translation_context: TranslationRenderContext,
-    ) -> CollectedLayer {
-        collect_layer_contents_with_translation_context_and_text_layout(
-            layer,
-            text_state,
-            inherited_clip,
-            inherited_translated_snap_anchor,
-            translation_context,
-            &mut self.renderer.layer_surface_rect_cache,
-            &mut self.renderer.layer_surface_requirements_cache,
-        )
-    }
-
     fn clear_target_view_with_load_op(
         &mut self,
         target_view: &wgpu::TextureView,
@@ -5583,7 +5473,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -5600,7 +5489,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
         self.render_non_effect_segment_with_composites(
-            text_state,
             target_view,
             shapes,
             images,
@@ -5623,7 +5511,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment_with_composites(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -5734,7 +5621,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             Ok(SegmentCommandEncodeOutcome { first_batch: true })
         } else {
             self.renderer.encode_non_effect_segment_commands(
-                text_state,
                 self.recorder,
                 target_view,
                 &ordered_items,
@@ -5761,7 +5647,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 
     fn render_range_with_layer_events_to_target(
         &mut self,
-        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -5780,7 +5665,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
         self.render_range_with_layer_events_to_target_recorded(
-            text_state,
             target,
             shapes,
             images,
@@ -5802,7 +5686,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 
     fn render_shadow_draw(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
         width: u32,
@@ -5810,7 +5693,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         root_scale: f32,
     ) {
         self.renderer.encode_shadow_draw(
-            text_state,
             self.recorder,
             target_view,
             shadow,
@@ -6197,17 +6079,12 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 }
 
 impl GpuRenderer {
-    #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
-        text_state: &mut TextSystemState,
         view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
-        root_scale: f32,
-        packet: Option<FramePacket>,
+        packet: FramePacket,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
@@ -6224,17 +6101,11 @@ impl GpuRenderer {
             self.retained_glyph_uniform_cursor = 0;
         }
 
-        let result = self.render_graph(
-            text_state,
-            view,
-            graph,
-            overlay_graph,
-            width,
-            height,
-            root_scale,
-            packet,
-            returns,
-        );
+        // Producer-side text layout cache size, carried by the packet — the
+        // present call tree holds no text layout state, and no layout runs
+        // between packet build and the stats block below.
+        let text_cache_len = packet.text_cache_len;
+        let result = self.render_graph(view, packet, returns);
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
 
@@ -6253,12 +6124,6 @@ impl GpuRenderer {
                 self.wasm_image_batch_cursor
                     .saturating_add(WASM_BATCH_POOL_MARGIN),
             );
-        }
-        self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
-        if self.layer_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY {
-            self.layer_surface_requirements_cache
-                .shrink_to(RETAINED_LAYER_REQUIREMENTS_CAPACITY);
         }
         self.staged_uploads
             .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
@@ -6283,9 +6148,7 @@ impl GpuRenderer {
         self.frame_stats
             .image_cache_size
             .set(self.image_texture_cache.len() as u32);
-        self.frame_stats
-            .text_cache_size
-            .set(text_state.text_cache_len() as u32);
+        self.frame_stats.text_cache_size.set(text_cache_len as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();
@@ -6355,25 +6218,22 @@ impl GpuRenderer {
             layer_surface_cache_cap: layer_surface_cache_stats.entries_cap,
             layer_surface_cache_identity_len: layer_surface_cache_stats.identity_len,
             layer_surface_cache_identity_cap: layer_surface_cache_stats.identity_cap,
-            layer_surface_rect_cache_len: self.layer_surface_rect_cache.len(),
-            layer_surface_rect_cache_cap: self.layer_surface_rect_cache.capacity(),
-            layer_surface_requirements_cache_len: self.layer_surface_requirements_cache.len(),
-            layer_surface_requirements_cache_cap: self.layer_surface_requirements_cache.capacity(),
+            // The producer frontend owns the only lowering-memo pair since
+            // step 6b; the present backend contributes nothing.
+            layer_surface_rect_cache_len: 0,
+            layer_surface_rect_cache_cap: 0,
+            layer_surface_requirements_cache_len: 0,
+            layer_surface_requirements_cache_cap: 0,
             layer_cache_seen_this_frame_len: layer_surface_cache_stats.seen_this_frame_len,
             layer_cache_seen_this_frame_cap: layer_surface_cache_stats.seen_this_frame_cap,
         }
     }
 
-    #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
     pub fn render_to_rgba_pixels(
         &mut self,
-        text_state: &mut TextSystemState,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
-        root_scale: f32,
-        packet: Option<FramePacket>,
+        packet: FramePacket,
         returns: &mut RenderReturns,
     ) -> Result<Vec<u8>, String> {
         if width == 0 || height == 0 {
@@ -6396,17 +6256,7 @@ impl GpuRenderer {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render(
-            text_state,
-            &output_view,
-            graph,
-            overlay_graph,
-            width,
-            height,
-            root_scale,
-            packet,
-            returns,
-        )?;
+        self.render(&output_view, width, height, packet, returns)?;
 
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
@@ -6495,17 +6345,10 @@ impl GpuRenderer {
         Ok(pixels)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_graph(
         &mut self,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
-        width: u32,
-        height: u32,
-        root_scale: f32,
-        packet: Option<FramePacket>,
+        packet: FramePacket,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
         let device = self.device.clone();
@@ -6522,18 +6365,7 @@ impl GpuRenderer {
                 &[],
                 &[surface],
                 |frame_encoder| {
-                    self.render_graph_recorded(
-                        text_state,
-                        surface_view,
-                        graph,
-                        overlay_graph,
-                        width,
-                        height,
-                        root_scale,
-                        packet,
-                        returns,
-                        frame_encoder,
-                    )
+                    self.render_graph_recorded(surface_view, packet, returns, frame_encoder)
                 },
             );
             let after_build = Instant::now();
@@ -6567,18 +6399,8 @@ impl GpuRenderer {
                 let mut frame_encoder =
                     executor.begin(&device, &queue, Some("Renderer Frame Encoder"));
                 let initial_pass_count = frame_encoder.recorded_pass_count();
-                let result = self.render_graph_recorded(
-                    text_state,
-                    surface_view,
-                    graph,
-                    overlay_graph,
-                    width,
-                    height,
-                    root_scale,
-                    packet,
-                    returns,
-                    &mut frame_encoder,
-                );
+                let result =
+                    self.render_graph_recorded(surface_view, packet, returns, &mut frame_encoder);
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -6599,100 +6421,108 @@ impl GpuRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_graph_recorded<C: FrameCommandRecorder>(
         &mut self,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
-        width: u32,
-        height: u32,
-        root_scale: f32,
-        packet: Option<FramePacket>,
+        packet: FramePacket,
         returns: &mut RenderReturns,
         frame_encoder: &mut C,
     ) -> Result<(), String> {
         let recorded_start = Instant::now();
-        // Per-frame memos for the graph fallback and overlay paths below;
-        // the direct-root packet was lowered by the producer frontend with
-        // its own memo pair.
-        self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
 
         // Present-side consumption of the packet's replay plan, adjacent to
         // packet consumption: the store honors the ops just before the
-        // packet renders. The ack travels back through `returns` and the
-        // producer applies it right after this render call — equivalent to
-        // the in-store drain this replaces, because both application points
-        // sit after this frame's graph build and before the next collect,
-        // which is where the bypass gate and `feed_slots` are read.
+        // packet renders. Gated on a Direct root — a Surface packet never
+        // touched the planner and carries the empty default plan
+        // (generation 0), which the store must not consume: it would count
+        // a false generation drop. The ack travels back through `returns`
+        // and the producer applies it right after this render call —
+        // equivalent to the in-store drain this replaces, because both
+        // application points sit after this frame's graph build and before
+        // the next collect, which is where the bypass gate and `feed_slots`
+        // are read.
         #[cfg(not(target_arch = "wasm32"))]
-        let mut direct_packet = packet;
-        #[cfg(target_arch = "wasm32")]
-        let direct_packet = packet;
+        let mut packet = packet;
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(packet) = direct_packet.as_mut() {
+        if let PacketRoot::Direct(root) = &packet.root {
             let ops = std::mem::take(&mut packet.replay);
             let (ack, recycled) =
-                self.consume_replay_ops(ops, &packet.root.scene.shapes, packet.root_scale);
+                self.consume_replay_ops(ops, &root.scene.shapes, packet.root_scale);
             returns.ack = Some((ack, recycled));
         }
+
+        let FramePacket {
+            frame_id,
+            viewport: (width, height),
+            root_scale,
+            root,
+            overlay,
+            replay: _,
+            text_cache_len: _,
+        } = packet;
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
             recorder: frame_encoder,
         };
 
-        if let Some(packet) = direct_packet {
-            let direct_render_start = Instant::now();
-            let FramePacket {
-                frame_id,
-                viewport: (packet_width, packet_height),
-                root_scale: packet_root_scale,
-                root,
-                replay: _,
-            } = packet;
-            let result = execute_render_root_direct(
-                &mut backend,
-                text_state,
-                surface_view,
-                root,
-                packet_width,
-                packet_height,
-                packet_root_scale,
-                wgpu::LoadOp::Clear(CLEAR_COLOR),
-            )
-            .map(|scene| {
-                // Return the packet's scene buffers to the producer pool —
-                // for a heavy animated frame they are megabytes of Vec.
-                returns.scene = Some(scene);
-            });
-            if result.is_ok() {
-                if let Some(overlay_graph) = overlay_graph {
-                    Self::render_overlay_graph_recorded(
-                        &mut backend,
-                        text_state,
-                        surface_view,
-                        overlay_graph,
-                        width,
-                        height,
-                        root_scale,
-                    )?;
+        let surface_packet = match root {
+            PacketRoot::Direct(root) => {
+                let direct_render_start = Instant::now();
+                let result = execute_render_root_direct(
+                    &mut backend,
+                    surface_view,
+                    *root,
+                    width,
+                    height,
+                    root_scale,
+                    wgpu::LoadOp::Clear(CLEAR_COLOR),
+                )
+                .map(|scene| {
+                    // Return the packet's scene buffers to the producer pool —
+                    // for a heavy animated frame they are megabytes of Vec.
+                    returns.scene = Some(scene);
+                });
+                if result.is_ok() {
+                    if let Some(overlay) = overlay {
+                        Self::render_overlay_packet(
+                            &mut backend,
+                            surface_view,
+                            overlay,
+                            width,
+                            height,
+                            root_scale,
+                        )?;
+                    }
                 }
+                let after_direct_render = Instant::now();
+                if let Some(total_ms) =
+                    should_log_wgpu_render_stage(recorded_start, after_direct_render)
+                {
+                    log::warn!(
+                        "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} render_ms={:.2}",
+                        instant_ms(direct_render_start, after_direct_render),
+                    );
+                }
+                return result;
             }
-            let after_direct_render = Instant::now();
-            if let Some(total_ms) =
-                should_log_wgpu_render_stage(recorded_start, after_direct_render)
-            {
-                log::warn!(
-                    "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} render_ms={:.2}",
-                    instant_ms(direct_render_start, after_direct_render),
-                );
-            }
-            return result;
-        }
+            PacketRoot::Surface(surface_packet) => surface_packet,
+        };
         let after_root_collect = Instant::now();
+
+        let RootSurfacePacket {
+            lowered,
+            source,
+            transform_to_parent,
+            node_id,
+            backdrop,
+            graphics_layer,
+            local_bounds,
+            clip_rect,
+            shadow_clip,
+        } = *surface_packet;
+        let mut lowered = lowered;
+        lowered.source = source;
 
         // The root layer's visible area is always the viewport — content
         // outside the screen is invisible regardless of scroll offsets or
@@ -6706,8 +6536,7 @@ impl GpuRenderer {
         };
         let root_surface = execute_render_layer_surface(
             &mut backend,
-            text_state,
-            &graph.root,
+            &mut lowered,
             LayerSurfaceRequest {
                 root_scale,
                 backdrop_underlay: None,
@@ -6718,14 +6547,11 @@ impl GpuRenderer {
                 translation_context: TranslationRenderContext::default(),
             },
         )?;
-        let root_quad = graph
-            .root
-            .transform_to_parent
-            .map_rect(root_surface.logical_rect);
+        let root_quad = transform_to_parent.map_rect(root_surface.logical_rect);
         let root_dest_quad = scaled_quad(root_quad, root_scale);
 
         let needs_root_composite_target =
-            graph.root.backdrop().is_some() || graph.root.graphics_layer.shadow_elevation > 0.0;
+            backdrop.is_some() || graphics_layer.shadow_elevation > 0.0;
 
         if needs_root_composite_target {
             let composite_target = backend.acquire_frame_surface(width, height);
@@ -6734,22 +6560,14 @@ impl GpuRenderer {
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
             );
 
-            if let Some(backdrop) = graph.root.backdrop() {
+            if let Some(backdrop) = &backdrop {
                 execute_apply_backdrop_layer_to_target(
                     &mut backend,
                     &composite_target,
                     &BackdropLayer {
-                        node_id: graph.root.node_id,
-                        rect: quad_bounds(
-                            graph
-                                .root
-                                .transform_to_parent
-                                .map_rect(graph.root.local_bounds),
-                        ),
-                        clip: graph
-                            .root
-                            .clip_rect()
-                            .map(|clip| quad_bounds(graph.root.transform_to_parent.map_rect(clip))),
+                        node_id,
+                        rect: quad_bounds(transform_to_parent.map_rect(local_bounds)),
+                        clip: clip_rect.map(|clip| quad_bounds(transform_to_parent.map_rect(clip))),
                         effect: backdrop.clone(),
                         z_index: 0,
                     },
@@ -6762,25 +6580,17 @@ impl GpuRenderer {
             }
 
             let mut root_shadow_scene = CompositorScene::new();
-            let root_shadow_clip = graph
-                .root
-                .shadow_clip
-                .map(|clip| quad_bounds(graph.root.transform_to_parent.map_rect(clip)));
+            let root_shadow_clip =
+                shadow_clip.map(|clip| quad_bounds(transform_to_parent.map_rect(clip)));
             push_layer_shadow(
                 &mut root_shadow_scene,
-                &graph.root.graphics_layer,
-                graph.root.local_bounds,
-                quad_bounds(
-                    graph
-                        .root
-                        .transform_to_parent
-                        .map_rect(graph.root.local_bounds),
-                ),
+                &graphics_layer,
+                local_bounds,
+                quad_bounds(transform_to_parent.map_rect(local_bounds)),
                 root_shadow_clip,
             );
             for shadow in &root_shadow_scene.shadow_draws {
                 backend.render_shadow_draw(
-                    text_state,
                     &composite_target.view,
                     shadow,
                     width,
@@ -6832,12 +6642,11 @@ impl GpuRenderer {
             )?;
         }
         backend.release_layer_surface_target(root_surface.target);
-        if let Some(overlay_graph) = overlay_graph {
-            Self::render_overlay_graph_recorded(
+        if let Some(overlay) = overlay {
+            Self::render_overlay_packet(
                 &mut backend,
-                text_state,
                 surface_view,
-                overlay_graph,
+                overlay,
                 width,
                 height,
                 root_scale,
@@ -6854,38 +6663,27 @@ impl GpuRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_overlay_graph_recorded<C: FrameCommandRecorder>(
+    /// Renders the producer-lowered dev overlay on top of the frame. The
+    /// packet carries the collected overlay; the backend only validates
+    /// that it stayed directly renderable and draws it.
+    fn render_overlay_packet<C: FrameCommandRecorder>(
         backend: &mut RecordingSurfaceBackend<'_, '_, C>,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
+        overlay: CollectedLayer,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        backend.renderer.layer_surface_rect_cache.clear();
-        backend.renderer.layer_surface_requirements_cache.clear();
-        let collected = collect_layer_contents_with_translation_context_and_text_layout(
-            &graph.root,
-            text_state,
-            None,
-            None,
-            TranslationRenderContext::default(),
-            &mut backend.renderer.layer_surface_rect_cache,
-            &mut backend.renderer.layer_surface_requirements_cache,
-        );
-        if !collected.child_layers.is_empty()
-            || !root_direct_scene_events_are_supported(&collected.scene)
-            || !direct_root_child_underlays_are_supported(&collected)
+        if !overlay.child_layers.is_empty()
+            || !root_direct_scene_events_are_supported(&overlay.scene)
+            || !direct_root_child_underlays_are_supported(&overlay)
         {
             return Err("dev overlay graph must stay directly renderable".to_string());
         }
         execute_render_root_direct(
             backend,
-            text_state,
             surface_view,
-            collected,
+            overlay,
             width,
             height,
             root_scale,
@@ -6897,7 +6695,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn encode_non_effect_segment_commands<C: FrameCommandRecorder>(
         &mut self,
-        text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
@@ -6925,7 +6722,6 @@ impl GpuRenderer {
                         wgpu::LoadOp::Load
                     };
                     let outcome = self.render_segment_draw_chunk(
-                        text_state,
                         frame_encoder,
                         target_view,
                         ordered_items,
@@ -6973,7 +6769,6 @@ impl GpuRenderer {
                     }
                     let pass_count_before = frame_encoder.recorded_pass_count();
                     self.encode_shadow_draw(
-                        text_state,
                         frame_encoder,
                         target_view,
                         &shadow_draws[index],
@@ -7544,7 +7339,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_segment_draw_chunk<C: FrameCommandRecorder>(
         &mut self,
-        _text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
@@ -8252,7 +8046,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn encode_shadow_draw<C: FrameCommandRecorder>(
         &mut self,
-        _text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
@@ -9250,6 +9043,15 @@ impl GpuRenderer {
             },
             ops,
         )
+    }
+
+    /// Test/diagnostic view of the store's lifetime count of replay-ops
+    /// batches dropped whole by the generation check — the consume gate's
+    /// proof that Surface frames (default plans, generation 0) are never
+    /// fed to the store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_generation_drops(&self) -> u64 {
+        self.replay_generation_drops
     }
 
     /// Test hook for the message protocol: runs one planner→store→planner

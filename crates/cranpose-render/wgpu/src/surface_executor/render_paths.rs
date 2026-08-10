@@ -1,6 +1,4 @@
-use super::backend::{
-    LayerSurface, LayerSurfaceRoundedClip, LayerSurfaceTexture, SurfaceExecutionBackend,
-};
+use super::backend::{LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend};
 use super::geometry::{
     axis_aligned_quad_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
     device_pixel_exact_surface_rect, fit_capture_rect_to_scale_budget_for_axes,
@@ -31,19 +29,14 @@ use crate::scene::{
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
-    layer_contains_descendant_backdrop, layer_surface_scale, layer_surface_target_scale,
-    translated_content_axes_for_layer, LayerSurfaceRenderOptions, LayerSurfaceRequest,
-    LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
+    layer_surface_target_scale, LayerSurfaceRenderOptions, LayerSurfaceRequest,
+    TranslatedContentAxes, TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
-use crate::TextSystemState;
 use cranpose_core::collections::map::HashMap;
 use cranpose_core::NodeId;
 use cranpose_render_common::geometry::union_rect;
-use cranpose_render_common::graph::{CachePolicy, LayerNode, ProjectiveTransform};
-use cranpose_render_common::layer_composition::{
-    effective_layer_isolation, layer_composite_params,
-};
+use cranpose_render_common::graph::{CachePolicy, ProjectiveTransform};
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkKey;
 use cranpose_ui_graphics::{
@@ -912,7 +905,6 @@ fn pending_layer_underlay_batch_item<'a>(
 #[allow(clippy::too_many_arguments)]
 fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target: &OffscreenTarget,
     scene: &CompositorScene,
     z_start: usize,
@@ -931,7 +923,6 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
 
     if range_contains_layer_events(&scene.effect_layers, &scene.backdrop_layers, z_start, z_end) {
         backend.render_range_with_layer_events_to_target(
-            text_state,
             target,
             &scene.shapes,
             &scene.images,
@@ -951,7 +942,6 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
         )
     } else {
         backend.render_non_effect_segment(
-            text_state,
             &target.view,
             &scene.shapes,
             &scene.images,
@@ -1212,7 +1202,6 @@ fn flush_underlay_composite_batch<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     local_scene: &CompositorScene,
     child_logical_rect: Rect,
     child_dest_quad: [[f32; 2]; 4],
@@ -1266,7 +1255,6 @@ fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
                 );
                 render_scene_range_to_target(
                     backend,
-                    text_state,
                     &underlay,
                     &window_scene,
                     cursor_z,
@@ -1300,7 +1288,6 @@ fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
             );
             render_scene_range_to_target(
                 backend,
-                text_state,
                 &underlay,
                 &window_scene,
                 cursor_z,
@@ -1323,7 +1310,6 @@ fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
         } else {
             render_scene_range_to_target(
                 backend,
-                text_state,
                 &underlay,
                 &window_scene,
                 cursor_z,
@@ -1349,7 +1335,6 @@ pub(crate) fn root_direct_scene_events_are_supported(scene: &CompositorScene) ->
 #[allow(clippy::too_many_arguments)]
 fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target_view: &wgpu::TextureView,
     shapes: &[DrawShape],
     images: &[ImageDraw],
@@ -1428,7 +1413,6 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
 
     let source = backend.acquire_frame_surface(effect_width, effect_height);
     let render_result = backend.render_range_with_layer_events_to_target(
-        text_state,
         &source,
         &window_scene.shapes,
         &window_scene.images,
@@ -1597,7 +1581,6 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target_view: &wgpu::TextureView,
     scene: &CompositorScene,
     z_start: usize,
@@ -1638,7 +1621,6 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     for event in &events {
         if event.z_index > cursor_z {
             backend.render_non_effect_segment(
-                text_state,
                 target_view,
                 &scene.shapes,
                 &scene.images,
@@ -1678,7 +1660,6 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
                 }
                 render_effect_layer_to_view(
                     backend,
-                    text_state,
                     target_view,
                     &scene.shapes,
                     &scene.images,
@@ -1699,7 +1680,6 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
 
     if cursor_z < z_end {
         backend.render_non_effect_segment(
-            text_state,
             target_view,
             &scene.shapes,
             &scene.images,
@@ -1725,7 +1705,6 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     surface_view: &wgpu::TextureView,
     collected: CollectedLayer,
     width: u32,
@@ -1755,7 +1734,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 if range_has_events {
                     render_non_effect_range_with_pending_composites(
                         backend,
-                        text_state,
                         surface_view,
                         &local_scene,
                         cursor_z,
@@ -1771,7 +1749,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     )?;
                     render_range_with_layer_events_to_view(
                         backend,
-                        text_state,
                         surface_view,
                         &local_scene,
                         cursor_z,
@@ -1785,7 +1762,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 } else {
                     render_direct_scene_range_with_pending_composites(
                         backend,
-                        text_state,
                         surface_view,
                         &local_scene,
                         cursor_z,
@@ -1828,7 +1804,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             if !resolved_child.shadow_draws.is_empty() {
                 render_non_effect_range_with_pending_composites(
                     backend,
-                    text_state,
                     surface_view,
                     &local_scene,
                     child.z_index,
@@ -1845,14 +1820,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 flush_pending_clear(backend, surface_view, &mut next_load_op);
             }
             for shadow in &resolved_child.shadow_draws {
-                backend.render_shadow_draw(
-                    text_state,
-                    surface_view,
-                    shadow,
-                    width,
-                    height,
-                    root_scale,
-                );
+                backend.render_shadow_draw(surface_view, shadow, width, height, root_scale);
             }
 
             if child.needs_nested_underlay {
@@ -1869,7 +1837,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             let child_underlay = if child.needs_nested_underlay {
                 Some(create_direct_root_child_underlay(
                     backend,
-                    text_state,
                     &local_scene,
                     resolved_child.logical_rect,
                     resolved_child.dest_quad,
@@ -1883,7 +1850,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
 
             let child_surface_result = render_layer_surface(
                 backend,
-                text_state,
                 &mut child,
                 LayerSurfaceRequest {
                     root_scale,
@@ -1948,7 +1914,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     Err(child_surface) => {
                         render_non_effect_range_with_pending_composites(
                             backend,
-                            text_state,
                             surface_view,
                             &local_scene,
                             child.z_index,
@@ -1990,7 +1955,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             if range_has_events {
                 render_non_effect_range_with_pending_composites(
                     backend,
-                    text_state,
                     surface_view,
                     &local_scene,
                     cursor_z,
@@ -2006,7 +1970,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
                 render_range_with_layer_events_to_view(
                     backend,
-                    text_state,
                     surface_view,
                     &local_scene,
                     cursor_z,
@@ -2020,7 +1983,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             } else {
                 render_direct_scene_range_with_pending_composites(
                     backend,
-                    text_state,
                     surface_view,
                     &local_scene,
                     cursor_z,
@@ -2036,7 +1998,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
                 render_non_effect_range_with_pending_composites(
                     backend,
-                    text_state,
                     surface_view,
                     &local_scene,
                     local_scene.next_z,
@@ -2056,7 +2017,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         } else {
             render_non_effect_range_with_pending_composites(
                 backend,
-                text_state,
                 surface_view,
                 &local_scene,
                 local_scene.next_z,
@@ -2080,215 +2040,11 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     result.map(|()| local_scene)
 }
 
-/// Renders a surface for a layer that has no producer-side lowering — the
-/// root of a graph render. Reads the node directly (exactly the values the
-/// per-child path snapshots at collection) and collects the layer's content
-/// here, once, before handing off to the shared snapshot-consuming body.
-pub(crate) fn render_root_layer_surface<B: SurfaceExecutionBackend>(
-    backend: &mut B,
-    text_state: &mut TextSystemState,
-    layer: &LayerNode,
-    request: LayerSurfaceRequest<'_>,
-) -> Result<LayerSurface, String> {
-    let LayerSurfaceRequest {
-        root_scale,
-        backdrop_underlay,
-        allow_runtime_cache,
-        logical_rect_override,
-        capture_clip_override,
-        activates_nested_capture,
-        translation_context,
-    } = request;
-    let surface_requirements = backend.layer_surface_requirements(layer);
-    let direct_translated_content_context =
-        translation_context.inherited_content_translation || layer.translated_content_context;
-    let effective_translated_content_context =
-        direct_translated_content_context || surface_requirements.contains_translated_content;
-    let effective_requirements = effective_surface_requirements(
-        effective_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-    );
-    let composite_sample_mode = composite_sample_mode_for_requirements(
-        effective_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-    );
-    let target_scale = layer_surface_target_scale(
-        direct_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-        root_scale,
-        // A scaling layer is composited by mapping this surface through its own
-        // transform, so the texture has to carry that magnification's worth of
-        // detail or the composite just resamples a 1x raster upward.
-        layer_surface_scale(layer),
-    );
-    let translation_context = layer_surface_translation_context(
-        translation_context,
-        activates_nested_capture
-            && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
-    );
-    let cache_candidate = backend.layer_raster_cache_candidate(
-        layer,
-        target_scale,
-        backdrop_underlay.is_some(),
-        allow_runtime_cache,
-        logical_rect_override,
-    );
-    if let Some((cache_key, logical_rect)) = cache_candidate {
-        if let Some((target, logical_rect)) = backend.cached_layer_surface(&cache_key) {
-            let (composite_alpha, blend_mode) =
-                layer_composite_params(&layer.graphics_layer).unwrap_or((1.0, BlendMode::SrcOver));
-            return Ok(LayerSurface {
-                target: LayerSurfaceTexture::Cached(target),
-                logical_rect,
-                composite_alpha,
-                blend_mode,
-                rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
-                backdrop: layer.backdrop().cloned(),
-                deferred_effect: None,
-                effect_content_rect: None,
-                sample_mode: composite_sample_mode,
-            });
-        }
-        let (width, height) = cache_key.pixel_size();
-        backend.record_layer_cache_miss(width, height);
-        let (lowered, source) = lower_layer_node(
-            backend,
-            text_state,
-            layer,
-            surface_requirements,
-            logical_rect_override.unwrap_or(logical_rect),
-            translation_context,
-        );
-        return render_layer_surface_uncached(
-            backend,
-            text_state,
-            &lowered,
-            source,
-            LayerSurfaceRenderOptions {
-                target_scale,
-                backdrop_underlay,
-                allow_runtime_cache,
-                cache_candidate: Some((cache_key, logical_rect)),
-                logical_rect_override,
-                capture_clip_override,
-                composite_sample_mode,
-                translation_context,
-            },
-        );
-    }
-
-    let (lowered, source) = lower_layer_node(
-        backend,
-        text_state,
-        layer,
-        surface_requirements,
-        logical_rect_override.unwrap_or(layer.local_bounds),
-        translation_context,
-    );
-    render_layer_surface_uncached(
-        backend,
-        text_state,
-        &lowered,
-        source,
-        LayerSurfaceRenderOptions {
-            target_scale,
-            backdrop_underlay,
-            allow_runtime_cache,
-            cache_candidate: None,
-            logical_rect_override,
-            capture_clip_override,
-            composite_sample_mode,
-            translation_context,
-        },
-    )
-}
-
-/// Builds the snapshot + collected source a root-level layer needs to run the
-/// shared snapshot-consuming render body. The collect happens with the same
-/// post-transform translation context the old in-body re-collect used.
-fn lower_layer_node<B: SurfaceExecutionBackend>(
-    backend: &mut B,
-    text_state: &mut TextSystemState,
-    layer: &LayerNode,
-    surface_requirements: LayerSurfaceRequirements,
-    logical_rect: Rect,
-    translation_context: TranslationRenderContext,
-) -> (ChildLayerComposite, LoweredChildSource) {
-    let CollectedLayer {
-        scene,
-        child_layers,
-    } = backend.collect_layer_contents_with_translation_context(
-        text_state,
-        layer,
-        None,
-        None,
-        translation_context,
-    );
-    let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
-    // The body decides the source cache key with the effective requirements
-    // it recomputes from the post-transform context; the motion hash snapshot
-    // must exist exactly when that decision reads it.
-    let effective_translated_content_context = translation_context.inherited_content_translation
-        || layer.translated_content_context
-        || surface_requirements.contains_translated_content;
-    let motion_stable_source = effective_surface_requirements(
-        effective_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-    )
-    .contains(SurfaceRequirement::MotionStableCapture);
-    let lowered = ChildLayerComposite {
-        // Parent-space composite fields are meaningless for a root-level
-        // surface; the body never reads them.
-        z_index: 0,
-        logical_rect,
-        dest_quad: [[0.0; 2]; 4],
-        snap_anchor: None,
-        backdrop_rect: layer.local_bounds,
-        visual_clip: None,
-        surface_clip: None,
-        shadow_draws: Vec::new(),
-        needs_nested_underlay: contains_descendant_backdrop,
-        node_id: layer.node_id,
-        backdrop: layer.backdrop().cloned(),
-        has_effect: layer.effect().is_some(),
-        effect_contains_runtime_shader: layer
-            .effect()
-            .is_some_and(|effect| effect.contains_runtime_shader()),
-        target_content_hash: layer.target_content_hash(),
-        effect_hash: layer.effect_hash(),
-        motion_source_content_hash: motion_stable_source
-            .then(|| layer.motion_source_content_hash()),
-        contains_descendant_backdrop,
-        cache_policy: layer.cache_policy,
-        surface_requirements,
-        rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
-        isolation: effective_layer_isolation(&layer.graphics_layer),
-        translated_content_context: layer.translated_content_context,
-        own_translated_content_axes: translated_content_axes_for_layer(layer),
-        clip_rect: layer.clip_rect(),
-        local_bounds: layer.local_bounds,
-        surface_scale: layer_surface_scale(layer),
-        source: LoweredChildSource::default(),
-    };
-    (
-        lowered,
-        LoweredChildSource {
-            scene,
-            children: child_layers,
-        },
-    )
-}
-
 /// Renders the surface for a producer-lowered child layer. Every value the
 /// old `&LayerNode` path read off the node comes from the collection-time
 /// snapshot; the child's content is consumed from `child.source`.
 pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     child: &mut ChildLayerComposite,
     request: LayerSurfaceRequest<'_>,
 ) -> Result<LayerSurface, String> {
@@ -2365,7 +2121,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         backend.record_layer_cache_miss(width, height);
         return render_layer_surface_uncached(
             backend,
-            text_state,
             child,
             source,
             LayerSurfaceRenderOptions {
@@ -2383,7 +2138,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
 
     render_layer_surface_uncached(
         backend,
-        text_state,
         child,
         source,
         LayerSurfaceRenderOptions {
@@ -2449,7 +2203,7 @@ fn child_layer_raster_cache_candidate(
     ))
 }
 
-fn layer_surface_translation_context(
+pub(crate) fn layer_surface_translation_context(
     translation_context: TranslationRenderContext,
     surface_provides_motion_stable_capture: bool,
 ) -> TranslationRenderContext {
@@ -3465,7 +3219,6 @@ fn take_ordered_pending_composite_load_op(
 #[allow(clippy::too_many_arguments)]
 fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target_view: &wgpu::TextureView,
     scene: &CompositorScene,
     z_start: usize,
@@ -3481,7 +3234,6 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
 ) -> Result<(), String> {
     if pending_composites.is_empty() && pending_shader_composites.is_empty() {
         backend.render_non_effect_segment(
-            text_state,
             target_view,
             &scene.shapes,
             &scene.images,
@@ -3512,7 +3264,6 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
     let shader_composite_items =
         pending_shader_layer_composite_batch_items(pending_shader_composites);
     backend.render_non_effect_segment_with_composites(
-        text_state,
         target_view,
         &scene.shapes,
         &scene.images,
@@ -3553,7 +3304,6 @@ fn range_contains_layer_events(
 #[allow(clippy::too_many_arguments)]
 fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     scene: &CompositorScene,
     z_start: usize,
     z_end: usize,
@@ -3677,7 +3427,6 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
             logical_rect,
         );
         let render_result = backend.render_non_effect_segment(
-            text_state,
             &target.view,
             &window_scene.shapes,
             &window_scene.images,
@@ -3720,7 +3469,6 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     scene: &CompositorScene,
     z_start: usize,
     z_end: usize,
@@ -3734,7 +3482,7 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     }
 
     let Some(surface) =
-        cached_direct_scene_range_surface(backend, text_state, scene, z_start, z_end, root_scale)?
+        cached_direct_scene_range_surface(backend, scene, z_start, z_end, root_scale)?
     else {
         return Ok(false);
     };
@@ -3762,7 +3510,6 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target_view: &wgpu::TextureView,
     scene: &CompositorScene,
     z_start: usize,
@@ -3813,7 +3560,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         if chunk_can_cache
             && queue_cached_direct_scene_range(
                 backend,
-                text_state,
                 scene,
                 cursor_z,
                 chunk_end,
@@ -3830,7 +3576,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
                 render_non_effect_range_with_pending_composites(
                     backend,
-                    text_state,
                     target_view,
                     scene,
                     run_start,
@@ -3854,7 +3599,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
             if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
                 render_non_effect_range_with_pending_composites(
                     backend,
-                    text_state,
                     target_view,
                     scene,
                     run_start,
@@ -3874,7 +3618,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     if let Some((run_start, run_end)) = direct_run.flush_at(z_end) {
         render_non_effect_range_with_pending_composites(
             backend,
-            text_state,
             target_view,
             scene,
             run_start,
@@ -3895,7 +3638,6 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
 #[allow(clippy::too_many_arguments)]
 fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     local_scene: &CompositorScene,
     child_layers: Vec<ChildLayerComposite>,
     target_scale: f32,
@@ -3935,7 +3677,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 let load_op = pending_composite_load_op.take().unwrap_or(next_load_op);
                 let composite_items = pending_layer_composite_batch_items(&pending_composites);
                 backend.render_non_effect_segment_with_composites(
-                    text_state,
                     &target.view,
                     &local_scene.shapes,
                     &local_scene.images,
@@ -3964,7 +3705,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     &mut next_load_op,
                 );
                 backend.render_range_with_layer_events_to_target(
-                    text_state,
                     &target,
                     &local_scene.shapes,
                     &local_scene.images,
@@ -4038,7 +3778,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         });
         let child_surface = render_layer_surface(
             backend,
-            text_state,
             &mut child,
             LayerSurfaceRequest {
                 root_scale: target_scale,
@@ -4180,14 +3919,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
         for shadow in &resolved_child.shadow_draws {
-            backend.render_shadow_draw(
-                text_state,
-                &target.view,
-                shadow,
-                width,
-                height,
-                target_scale,
-            );
+            backend.render_shadow_draw(&target.view, shadow, width, height, target_scale);
         }
 
         let dest_quad = layer_surface_dest_quad(
@@ -4293,7 +4025,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             let load_op = pending_composite_load_op.take().unwrap_or(next_load_op);
             let composite_items = pending_layer_composite_batch_items(&pending_composites);
             backend.render_non_effect_segment_with_composites(
-                text_state,
                 &target.view,
                 &local_scene.shapes,
                 &local_scene.images,
@@ -4322,7 +4053,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &mut next_load_op,
             );
             backend.render_range_with_layer_events_to_target(
-                text_state,
                 &target,
                 &local_scene.shapes,
                 &local_scene.images,
@@ -4367,7 +4097,6 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
 
 fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     child: &ChildLayerComposite,
     source: LoweredChildSource,
     options: LayerSurfaceRenderOptions<'_>,
@@ -4554,7 +4283,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 backend.record_layer_cache_miss(width, height);
                 let rendered = render_layer_source_uncached(
                     backend,
-                    text_state,
                     &local_scene,
                     child_layers,
                     target_scale,
@@ -4578,7 +4306,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         } else {
             LayerSurfaceTexture::Owned(render_layer_source_uncached(
                 backend,
-                text_state,
                 &local_scene,
                 child_layers,
                 target_scale,
@@ -4719,7 +4446,6 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     backend: &mut B,
-    text_state: &mut TextSystemState,
     target: &OffscreenTarget,
     shapes: &[DrawShape],
     images: &[ImageDraw],
@@ -4813,7 +4539,6 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     };
 
     let render_result = backend.render_range_with_layer_events_to_target(
-        text_state,
         &source,
         &window_scene.shapes,
         &window_scene.images,

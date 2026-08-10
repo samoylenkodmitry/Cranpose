@@ -278,6 +278,7 @@ pub(crate) fn root_can_render_directly_cached(
         && layer.graphics_layer.shadow_elevation <= 0.0
 }
 
+#[cfg(test)]
 pub(crate) fn layer_uses_external_backdrop_input(
     layer: &LayerNode,
     has_backdrop_underlay: bool,

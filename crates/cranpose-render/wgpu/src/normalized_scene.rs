@@ -1,7 +1,9 @@
 use crate::effect_renderer::CompositeSampleMode;
+#[cfg(test)]
+use crate::pipeline::UiTextLayoutResolver;
 use crate::pipeline::{
     emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
-    scene_emission_counts, SceneEmissionCounts, TextLayoutResolver, UiTextLayoutResolver,
+    scene_emission_counts, SceneEmissionCounts, TextLayoutResolver,
 };
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
@@ -2103,6 +2105,88 @@ pub(crate) fn collect_layer_contents_reusing(
     }
 }
 
+/// Builds the snapshot + collected source a root-level layer needs to run the
+/// shared snapshot-consuming render body. The collect happens with the same
+/// post-transform translation context the old in-body re-collect used.
+/// Producer-side since step 6b: the caller supplies the text layout resolver
+/// and the frontend's lowering memos instead of a render backend.
+pub(crate) fn lower_layer_node(
+    layer: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    surface_requirements: LayerSurfaceRequirements,
+    logical_rect: Rect,
+    translation_context: TranslationRenderContext,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> (ChildLayerComposite, LoweredChildSource) {
+    let CollectedLayer {
+        scene,
+        child_layers,
+    } = collect_layer_contents_with_translation_context_and_text_layout(
+        layer,
+        text_layout,
+        None,
+        None,
+        translation_context,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+    let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
+    // The body decides the source cache key with the effective requirements
+    // it recomputes from the post-transform context; the motion hash snapshot
+    // must exist exactly when that decision reads it.
+    let effective_translated_content_context = translation_context.inherited_content_translation
+        || layer.translated_content_context
+        || surface_requirements.contains_translated_content;
+    let motion_stable_source = effective_surface_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    )
+    .contains(SurfaceRequirement::MotionStableCapture);
+    let lowered = ChildLayerComposite {
+        // Parent-space composite fields are meaningless for a root-level
+        // surface; the body never reads them.
+        z_index: 0,
+        logical_rect,
+        dest_quad: [[0.0; 2]; 4],
+        snap_anchor: None,
+        backdrop_rect: layer.local_bounds,
+        visual_clip: None,
+        surface_clip: None,
+        shadow_draws: Vec::new(),
+        needs_nested_underlay: contains_descendant_backdrop,
+        node_id: layer.node_id,
+        backdrop: layer.backdrop().cloned(),
+        has_effect: layer.effect().is_some(),
+        effect_contains_runtime_shader: layer
+            .effect()
+            .is_some_and(|effect| effect.contains_runtime_shader()),
+        target_content_hash: layer.target_content_hash(),
+        effect_hash: layer.effect_hash(),
+        motion_source_content_hash: motion_stable_source
+            .then(|| layer.motion_source_content_hash()),
+        contains_descendant_backdrop,
+        cache_policy: layer.cache_policy,
+        surface_requirements,
+        rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
+        isolation: effective_layer_isolation(&layer.graphics_layer),
+        translated_content_context: layer.translated_content_context,
+        own_translated_content_axes: translated_content_axes_for_layer(layer),
+        clip_rect: layer.clip_rect(),
+        local_bounds: layer.local_bounds,
+        surface_scale: layer_surface_scale(layer),
+        source: LoweredChildSource::default(),
+    };
+    (
+        lowered,
+        LoweredChildSource {
+            scene,
+            children: child_layers,
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_layer_contents_with_translation_context_into(
     layer: &LayerNode,
@@ -2144,6 +2228,7 @@ pub(crate) fn estimate_layer_surface_rect(layer: &LayerNode) -> Rect {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn estimate_layer_surface_rect_cached(
     layer: &LayerNode,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,

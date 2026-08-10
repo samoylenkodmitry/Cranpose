@@ -1510,7 +1510,7 @@ fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
             && source.contains("cranpose_ui::text::layout_text(text, style)")
             && source.contains("app_context.enter(|| {")
             && source.contains("gpu_renderer.render(")
-            && source.contains("frontend.dev_overlay_graph.as_ref()"),
+            && source.contains("self.dev_overlay_graph.as_ref()"),
         "WGPU render text layout should route through the attached AppContext text service"
     );
 }
