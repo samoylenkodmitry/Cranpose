@@ -30,10 +30,8 @@ const FRAMES: usize = 8;
 /// rotating at distinct speeds under a breathing scale, churning sparks,
 /// recoloring twinkles, movers whose count changes every frame.
 fn record_frame(frame: usize) -> DrawScopeDefault {
-    let mut scope = DrawScopeDefault::new(cranpose_ui_graphics::Size::new(
-        SIZE as f32,
-        SIZE as f32,
-    ));
+    let mut scope =
+        DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
     let breathing = 1.0 - 0.0005 * frame as f32;
     scope.draw_rect_at(
         Rect {
@@ -164,10 +162,7 @@ fn build_sequence(bypass: &mut dyn FnMut(u32) -> bool) -> Vec<RenderGraph> {
         .collect()
 }
 
-fn render_sequence(
-    renderer: &mut support::LockedRenderer,
-    graphs: &[RenderGraph],
-) -> Vec<Vec<u8>> {
+fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph]) -> Vec<Vec<u8>> {
     graphs
         .iter()
         .enumerate()
@@ -304,7 +299,10 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
              region x {min_x}..{max_x} y {min_y}..{max_y}"
         );
         if frame < 2 {
-            assert_eq!(differing, 0, "frame {frame}: dynamic and capture frames are byte-exact");
+            assert_eq!(
+                differing, 0,
+                "frame {frame}: dynamic and capture frames are byte-exact"
+            );
         } else {
             // Retained frames deviate only at shape edges: a transformed
             // capture quad crops the AA falloff slightly differently than a
@@ -338,5 +336,8 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
         eprintln!("bypassed frame {frame}: vs control differing {differing}");
         deviated |= differing != 0;
     }
-    assert!(!deviated, "bypassed render deviates from the control render");
+    assert!(
+        !deviated,
+        "bypassed render deviates from the control render"
+    );
 }

@@ -1083,6 +1083,7 @@ dependencies = [
  "log",
  "naga",
  "pollster",
+ "rayon",
  "web-time",
  "wgpu",
 ]

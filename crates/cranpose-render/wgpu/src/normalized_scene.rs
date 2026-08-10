@@ -902,9 +902,12 @@ fn flush_shape_run_parallel(
     let visual_clip = context.visual_clip;
     SHAPE_RUN_SCRATCH.with(|scratch| {
         let mut scratch = scratch.borrow_mut();
-        crate::worker_pool::frame_pool().map_fill(run, &mut scratch, |entry| {
-            emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion)
-        });
+        crate::stage_executor::stage_executor().map_fill(
+            crate::stage_executor::Stage::Producer,
+            run,
+            &mut scratch,
+            |entry| emit_shape_run_entry(entry, layer_bounds, layer, visual_clip, motion),
+        );
         for slot in scratch.iter_mut() {
             if let Some(params) = slot.take() {
                 push_shape_params(local_scene, params);
@@ -1493,7 +1496,12 @@ where
     'e: 'r,
 {
     let mut views: Vec<Option<(SnapshotShape, &Brush)>> = Vec::new();
-    crate::worker_pool::frame_pool().map_fill(run, &mut views, replay_entry_view);
+    crate::stage_executor::stage_executor().map_fill(
+        crate::stage_executor::Stage::Producer,
+        run,
+        &mut views,
+        replay_entry_view,
+    );
     views
 }
 
@@ -1615,7 +1623,8 @@ fn pre_verify_segments(
     verdicts.resize_with(segments.len(), || None);
     let mut job_results: Vec<Option<PreVerdict>> = Vec::new();
     job_results.resize_with(jobs.len(), || None);
-    crate::worker_pool::frame_pool().map_into_min(
+    crate::stage_executor::stage_executor().map_into_min(
+        crate::stage_executor::Stage::Producer,
         &jobs,
         &mut job_results,
         2,

@@ -22,13 +22,13 @@ mod shader_cache;
 mod shaders;
 #[cfg(not(target_arch = "wasm32"))]
 mod shape_replay;
+#[cfg(not(target_arch = "wasm32"))]
+mod stage_executor;
 mod surface_executor;
 mod surface_plan;
 mod surface_requirements;
 #[cfg(test)]
 mod test_support;
-#[cfg(not(target_arch = "wasm32"))]
-mod worker_pool;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 #[doc(hidden)]

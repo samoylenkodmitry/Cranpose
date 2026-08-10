@@ -70,9 +70,8 @@ fn direct_scene_range_cache_enable_all() -> bool {
 
 fn direct_scene_range_coalesce_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("CRANPOSE_DIRECT_SCENE_RANGE_COALESCE").as_deref() != Ok("0")
-    })
+    *ENABLED
+        .get_or_init(|| std::env::var("CRANPOSE_DIRECT_SCENE_RANGE_COALESCE").as_deref() != Ok("0"))
 }
 
 /// Merges consecutive direct-rendered cache chunks into one flush range.
@@ -5312,10 +5311,9 @@ mod tests {
         layer_surface_dest_quad, layer_surface_translation_context,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
         render_string_scene_hash, retained_render_effect_hash, surface_target_size,
-        visible_backdrop_capture_rect, BackdropPrefixChildContribution,
+        visible_backdrop_capture_rect, BackdropPrefixChildContribution, DirectChunkRunCoalescer,
         DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        DirectChunkRunCoalescer, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::scene::{

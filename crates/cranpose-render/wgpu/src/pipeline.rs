@@ -1954,7 +1954,7 @@ fn declare_retained_feed() {
         );
         cranpose_render_common::scene_builder::set_verify_executor(
             crate::shape_replay::command_feed_enabled().then(|| {
-                crate::worker_pool::frame_pool()
+                crate::stage_executor::stage_executor()
                     as &'static dyn cranpose_ui_graphics::VerifyExecutor
             }),
         );
