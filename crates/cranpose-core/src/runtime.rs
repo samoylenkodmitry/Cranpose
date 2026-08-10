@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::task::{Context, Poll, Waker};
 use std::thread::ThreadId;
@@ -410,6 +410,7 @@ struct RuntimeInner {
     tasks: RefCell<Vec<TaskEntry>>,
     next_task_id: Cell<u64>,
     task_waker: RefCell<Option<Waker>>,
+    task_awake: Arc<AtomicBool>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
@@ -452,6 +453,7 @@ impl RuntimeInner {
             tasks: RefCell::new(Vec::new()),
             next_task_id: Cell::new(1),
             task_waker: RefCell::new(None),
+            task_awake: Arc::new(AtomicBool::new(false)),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
@@ -462,6 +464,7 @@ impl RuntimeInner {
     fn init_task_waker(this: &Rc<Self>) {
         let waker = RuntimeTaskWaker::new(this).into_waker();
         *this.task_waker.borrow_mut() = Some(waker);
+        this.task_awake.store(true, Ordering::SeqCst);
     }
 
     fn schedule(&self) {
@@ -550,6 +553,7 @@ impl RuntimeInner {
     fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
         let id = self.next_task_id.get();
         self.next_task_id.set(id + 1);
+        self.task_awake.store(true, Ordering::SeqCst);
         let label = NEXT_TASK_LABEL
             .with(|held| held.borrow_mut().take())
             .unwrap_or_else(|| "unnamed".to_string());
@@ -572,6 +576,7 @@ impl RuntimeInner {
             Some(waker) => waker.clone(),
             None => return false,
         };
+        self.task_awake.store(false, Ordering::SeqCst);
         let mut cx = Context::from_waker(&waker);
         let mut tasks_ref = self.tasks.borrow_mut();
         let tasks = std::mem::take(&mut *tasks_ref);
@@ -653,6 +658,16 @@ impl RuntimeInner {
             .unwrap_or(true);
 
         local_pending || self.ui_dispatcher.has_pending() || async_pending
+    }
+
+    fn has_ui_work(&self) -> bool {
+        let local_pending = self
+            .local_tasks
+            .try_borrow()
+            .map(|tasks| !tasks.is_empty())
+            .unwrap_or(true);
+
+        local_pending || self.ui_dispatcher.has_pending() || self.task_awake.load(Ordering::SeqCst)
     }
 
     fn register_ui_cont<T: 'static>(&self, f: impl FnOnce(T) + 'static) -> u64 {
@@ -1129,6 +1144,21 @@ impl RuntimeHandle {
             .unwrap_or_else(|| self.dispatcher.has_pending())
     }
 
+    /// Work another thread handed to the UI thread and is waiting on: posted
+    /// tasks, continuations, and async tasks whose waker has fired.
+    ///
+    /// Narrower than [`has_pending_ui`](Self::has_pending_ui), which also counts
+    /// every parked async task and anything that only wants the screen redrawn.
+    /// An app with a live `LaunchedEffect` parks a task forever, so
+    /// `has_pending_ui` is true for its whole life and cannot tell a backend
+    /// whether there is anything to run right now.
+    pub fn has_ui_work(&self) -> bool {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.has_ui_work())
+            .unwrap_or_else(|| self.dispatcher.has_pending())
+    }
+
     pub fn register_frame_callback(
         &self,
         callback: impl FnOnce(u64) + 'static,
@@ -1282,24 +1312,28 @@ pub(crate) struct FrameCallbackEntry {
 #[cfg(not(target_arch = "wasm32"))]
 struct RuntimeTaskWaker {
     scheduler: Arc<dyn RuntimeScheduler>,
+    awake: Arc<AtomicBool>,
 }
 
 #[cfg(target_arch = "wasm32")]
 struct RuntimeTaskWaker {
     runtime_id: RuntimeId,
+    awake: Arc<AtomicBool>,
 }
 
 impl RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
     fn new(inner: &RuntimeInner) -> Self {
         let scheduler = inner.scheduler.clone();
-        Self { scheduler }
+        let awake = inner.task_awake.clone();
+        Self { scheduler, awake }
     }
 
     #[cfg(target_arch = "wasm32")]
     fn new(inner: &RuntimeInner) -> Self {
         let runtime_id = inner.runtime_id;
-        Self { runtime_id }
+        let awake = inner.task_awake.clone();
+        Self { runtime_id, awake }
     }
 
     fn into_waker(self) -> Waker {
@@ -1310,11 +1344,13 @@ impl RuntimeTaskWaker {
 impl futures_task::ArcWake for RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
     fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.awake.store(true, Ordering::SeqCst);
         arc_self.scheduler.schedule_frame();
     }
 
     #[cfg(target_arch = "wasm32")]
     fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.awake.store(true, Ordering::SeqCst);
         REGISTERED_RUNTIMES.with(|registry| {
             if let Some(handle) = registry.borrow().get(&arc_self.runtime_id).cloned() {
                 handle.schedule();

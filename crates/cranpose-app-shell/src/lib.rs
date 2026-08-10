@@ -666,15 +666,15 @@ where
     }
 
     /// Returns true when the runtime holds work for the UI thread: posted tasks,
-    /// continuations from worker threads, or async tasks ready to poll.
+    /// continuations from worker threads, or async tasks whose waker has fired.
     ///
     /// This is the part of [`needs_update`](Self::needs_update) that another
     /// thread is waiting on, told apart from the part that only wants the screen
     /// redrawn. A platform backend running with no surface uses it to compose
     /// for work and stay asleep for animation.
-    pub fn has_pending_ui(&self) -> bool {
+    pub fn has_ui_work(&self) -> bool {
         let app_context = Rc::clone(&self.app_context);
-        app_context.enter(|| self.composition.runtime_handle().has_pending_ui())
+        app_context.enter(|| self.composition.runtime_handle().has_ui_work())
     }
 
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).

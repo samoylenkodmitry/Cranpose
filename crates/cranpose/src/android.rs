@@ -1380,10 +1380,8 @@ pub fn run(
         if !offscreen {
             next_offscreen_update = None;
         }
-        let offscreen_pending_ui = offscreen
-            && app_shell
-                .as_ref()
-                .is_some_and(|shell| shell.has_pending_ui());
+        let offscreen_pending_ui =
+            offscreen && app_shell.as_ref().is_some_and(|shell| shell.has_ui_work());
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
         // Off screen the frame deadline asks for a frame nothing will draw, and
         // an app with a running animation asks for one every turn of the loop.
