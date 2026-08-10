@@ -665,6 +665,18 @@ where
         app_context.enter(|| self.needs_ui_update_in_context())
     }
 
+    /// Returns true when the runtime holds work for the UI thread: posted tasks,
+    /// continuations from worker threads, or async tasks ready to poll.
+    ///
+    /// This is the part of [`needs_update`](Self::needs_update) that another
+    /// thread is waiting on, told apart from the part that only wants the screen
+    /// redrawn. A platform backend running with no surface uses it to compose
+    /// for work and stay asleep for animation.
+    pub fn has_pending_ui(&self) -> bool {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| self.composition.runtime_handle().has_pending_ui())
+    }
+
     /// Returns true if the shell needs to redraw (dirty flag, layout dirty, active animations).
     /// Note: Cursor blink is now timer-based and uses WaitUntil scheduling, not continuous redraw.
     pub fn needs_redraw(&self) -> bool {

@@ -553,9 +553,8 @@ impl PlatformFrameDriver for AndroidFrameDriver {
     }
 }
 
-/// Pace of composition passes while the app runs with no surface (see the main
-/// loop). Roughly a 60Hz frame, which is far more often than a queue of work
-/// needs and still cheap enough for an app that is off screen.
+/// Delay of the follow-up composition pass after one that carried work while
+/// the app runs with no surface (see the main loop).
 const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
 
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
@@ -1381,16 +1380,28 @@ pub fn run(
         if !offscreen {
             next_offscreen_update = None;
         }
+        let offscreen_pending_ui = offscreen
+            && app_shell
+                .as_ref()
+                .is_some_and(|shell| shell.has_pending_ui());
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
-        let idle_timeout = earliest_android_poll_timeout(
-            earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout),
-            offscreen_timeout,
-        );
+        // Off screen the frame deadline asks for a frame nothing will draw, and
+        // an app with a running animation asks for one every turn of the loop.
+        // Only work waiting on the UI thread is worth a wake there.
+        let idle_timeout = match offscreen {
+            true => earliest_android_poll_timeout(pending_confirmation_timeout, offscreen_timeout),
+            false => {
+                earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout)
+            }
+        };
 
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
-        } else if let Some(wait) = offscreen_timeout {
-            Some(wait)
+        } else if offscreen {
+            match offscreen_pending_ui {
+                true => Some(Duration::ZERO),
+                false => idle_timeout,
+            }
         } else if android_frame_driver.frame_requested() {
             Some(Duration::ZERO)
         } else {
@@ -1954,23 +1965,22 @@ pub fn run(
         // service has told the OS it has work to finish, so keep composition
         // turning; there is no surface, so nothing is presented.
         //
-        // Nothing is presented, so nothing paces this pass the way a swapchain
-        // paces the render path. `OFFSCREEN_UPDATE_PERIOD` is that pace: an
-        // animation still running off screen costs one composition per period
-        // instead of one per loop turn. The next pass is armed only while the
-        // shell asks for one, so a settled app goes back to a long poll.
-        if offscreen && next_offscreen_update.is_none_or(|at| at <= web_time::Instant::now()) {
-            let mut composed = false;
+        // Work waiting on the UI thread earns a pass. A running animation does
+        // not: nothing is drawn, and paying for a composition per animation
+        // frame off screen is how an app burns a core behind the user's back.
+        // One follow-up pass is armed after a pass that carried work, so a
+        // recomposition that work asked for still runs.
+        let offscreen_due = next_offscreen_update.is_some_and(|at| at <= web_time::Instant::now());
+        if offscreen && (offscreen_pending_ui || offscreen_due) {
             if let Some(shell) = &mut app_shell {
                 if shell.needs_update() {
                     android_host_window::with_android_host_window_registry(
                         &host_window_registry,
                         || shell.update(),
                     );
-                    composed = true;
                 }
             }
-            next_offscreen_update = match composed {
+            next_offscreen_update = match offscreen_pending_ui {
                 true => Some(web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD),
                 false => None,
             };
