@@ -67,9 +67,8 @@ struct IosApp<F: FnMut() + 'static> {
     next_off_screen_render: Option<Instant>,
 }
 
-/// Pace of composition passes while the app is off screen. Roughly a 60Hz
-/// frame, which is far more often than a queue of work needs and still cheap
-/// enough for an app the user cannot see.
+/// Delay of the follow-up composition pass after one that carried work while
+/// the app is off screen (see `pump_off_screen`).
 const OFF_SCREEN_RENDER_PERIOD: Duration = Duration::from_millis(16);
 
 impl<F: FnMut() + 'static> IosApp<F> {
@@ -104,10 +103,11 @@ impl<F: FnMut() + 'static> IosApp<F> {
     /// to the UI dispatcher then waits for the user to come back, which is wrong
     /// for an app that told iOS it has work to finish.
     ///
-    /// Nothing is presented here (see `render`), so nothing paces this pass the
-    /// way a swapchain paces the on-screen path. `OFF_SCREEN_RENDER_PERIOD` is
-    /// that pace, held by a `WaitUntil` timer: an animation still running off
-    /// screen costs one composition per period instead of one per wake-up.
+    /// Work waiting on the UI thread earns a pass. A running animation does not:
+    /// nothing is drawn, and paying for a composition per animation frame off
+    /// screen is how an app burns a core behind the user's back. One follow-up
+    /// pass is armed after a pass that carried work, held by a `WaitUntil`
+    /// timer, so a recomposition that work asked for still runs.
     fn pump_off_screen(&mut self, event_loop: &dyn ActiveEventLoop) {
         if !cranpose_services::background_active() || !crate::ios_background::app_is_off_screen() {
             if self.next_off_screen_render.take().is_some() {
@@ -115,18 +115,18 @@ impl<F: FnMut() + 'static> IosApp<F> {
             }
             return;
         }
-        if let Some(at) = self.next_off_screen_render {
-            if at > Instant::now() {
-                event_loop.set_control_flow(ControlFlow::WaitUntil(at));
-                return;
-            }
-        }
-        self.render();
-        let more = self
+        let pending_ui = self
             .shell
             .as_ref()
-            .is_some_and(|shell| shell.needs_update());
-        self.next_off_screen_render = match more {
+            .is_some_and(|shell| shell.has_pending_ui());
+        let due = self
+            .next_off_screen_render
+            .is_some_and(|at| at <= Instant::now());
+        if !pending_ui && !due {
+            return;
+        }
+        self.render();
+        self.next_off_screen_render = match pending_ui {
             true => Some(Instant::now() + OFF_SCREEN_RENDER_PERIOD),
             false => None,
         };
