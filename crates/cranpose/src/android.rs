@@ -553,6 +553,11 @@ impl PlatformFrameDriver for AndroidFrameDriver {
     }
 }
 
+/// Pace of composition passes while the app runs with no surface (see the main
+/// loop). Roughly a 60Hz frame, which is far more often than a queue of work
+/// needs and still cheap enough for an app that is off screen.
+const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
+
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
     deadline
         .checked_duration_since(web_time::Instant::now())
@@ -1355,6 +1360,8 @@ pub fn run(
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
     // The soft-keyboard handler is installed once the app shell exists
     let mut soft_keyboard_installed = false;
+    // When the next off-screen composition pass may run (see below).
+    let mut next_offscreen_update: Option<web_time::Instant> = None;
 
     // Main event loop
     loop {
@@ -1370,11 +1377,20 @@ pub fn run(
             android_frame_driver.clear_wake();
         }
         let frame_deadline_timeout = android_frame_driver.deadline_timeout();
-        let idle_timeout =
-            earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout);
+        let offscreen = gpu_resources.is_none() && cranpose_services::background_active();
+        if !offscreen {
+            next_offscreen_update = None;
+        }
+        let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
+        let idle_timeout = earliest_android_poll_timeout(
+            earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout),
+            offscreen_timeout,
+        );
 
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
+        } else if let Some(wait) = offscreen_timeout {
+            Some(wait)
         } else if android_frame_driver.frame_requested() {
             Some(Duration::ZERO)
         } else {
@@ -1929,6 +1945,35 @@ pub fn run(
         if should_exit.load(Ordering::Relaxed) {
             log::info!("Exiting cleanly after Destroy event");
             break;
+        }
+
+        // With the activity off screen the window is gone (`TerminateWindow`
+        // drops the GPU resources), so the render block below is skipped and
+        // composition stops. Anything the app posted to the UI dispatcher then
+        // waits for the user to come back. An app that holds a foreground
+        // service has told the OS it has work to finish, so keep composition
+        // turning; there is no surface, so nothing is presented.
+        //
+        // Nothing is presented, so nothing paces this pass the way a swapchain
+        // paces the render path. `OFFSCREEN_UPDATE_PERIOD` is that pace: an
+        // animation still running off screen costs one composition per period
+        // instead of one per loop turn. The next pass is armed only while the
+        // shell asks for one, so a settled app goes back to a long poll.
+        if offscreen && next_offscreen_update.is_none_or(|at| at <= web_time::Instant::now()) {
+            let mut composed = false;
+            if let Some(shell) = &mut app_shell {
+                if shell.needs_update() {
+                    android_host_window::with_android_host_window_registry(
+                        &host_window_registry,
+                        || shell.update(),
+                    );
+                    composed = true;
+                }
+            }
+            next_offscreen_update = match composed {
+                true => Some(web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD),
+                false => None,
+            };
         }
 
         // Render outside event callback if needed

@@ -553,7 +553,9 @@ impl RuntimeInner {
         let label = NEXT_TASK_LABEL
             .with(|held| held.borrow_mut().take())
             .unwrap_or_else(|| "unnamed".to_string());
-        self.tasks.borrow_mut().push(TaskEntry { id, label, future });
+        self.tasks
+            .borrow_mut()
+            .push(TaskEntry { id, label, future });
         self.schedule();
         id
     }
