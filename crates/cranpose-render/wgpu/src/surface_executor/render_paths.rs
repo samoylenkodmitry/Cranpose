@@ -18,9 +18,9 @@ use crate::layer_surface_cache::{
 };
 use crate::normalized_scene::{
     build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
-    motion_stable_capture_bounds, resolved_child_surface_composite, resolved_layer_surface_rect,
-    translate_quad, visible_draw_rect, ChildLayerComposite, CollectedLayer, SceneWindowSource,
-    TranslateBy,
+    motion_stable_capture_bounds_from_parts, resolved_child_surface_composite,
+    resolved_layer_surface_rect_from_parts, translate_quad, visible_draw_rect, ChildLayerComposite,
+    CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
 };
 use crate::offscreen::OffscreenTarget;
 use crate::render::{has_backdrop_layer_in_range, scissor_rect_for_rect};
@@ -32,9 +32,8 @@ use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
     layer_contains_descendant_backdrop, layer_surface_scale, layer_surface_target_scale,
-    layer_uses_external_backdrop_input, translated_content_axes_for_layer,
-    LayerSurfaceRenderOptions, LayerSurfaceRequest, LayerSurfaceRequirements,
-    TranslatedContentAxes, TranslationRenderContext,
+    translated_content_axes_for_layer, LayerSurfaceRenderOptions, LayerSurfaceRequest,
+    LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use crate::TextSystemState;
@@ -451,7 +450,7 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
 
 fn layer_source_uses_external_backdrop_underlay(
     local_scene: &CompositorScene,
-    child_layers: &[ChildLayerComposite<'_>],
+    child_layers: &[ChildLayerComposite],
     has_backdrop_underlay: bool,
 ) -> bool {
     if !has_backdrop_underlay {
@@ -459,16 +458,16 @@ fn layer_source_uses_external_backdrop_underlay(
     }
 
     child_layers.iter().any(|child| {
-        if layer_contains_descendant_backdrop(child.layer) {
+        if child.contains_descendant_backdrop {
             return true;
         }
 
-        let Some(effect) = child.layer.backdrop() else {
+        let Some(effect) = child.backdrop.as_ref() else {
             return false;
         };
 
         let backdrop_layer = BackdropLayer {
-            node_id: child.layer.node_id,
+            node_id: child.node_id,
             rect: child.backdrop_rect,
             clip: child.visual_clip,
             effect: effect.clone(),
@@ -1728,7 +1727,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     backend: &mut B,
     text_state: &mut TextSystemState,
     surface_view: &wgpu::TextureView,
-    collected: CollectedLayer<'_>,
+    collected: CollectedLayer,
     width: u32,
     height: u32,
     root_scale: f32,
@@ -1745,7 +1744,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         let mut pending_composite_load_op = None;
         let mut pending_shader_composites = Vec::new();
         let mut pending_shader_load_op = None;
-        for child in child_layers {
+        for mut child in child_layers {
             if cursor_z < child.z_index {
                 let range_has_events = range_contains_layer_events(
                     &local_scene.effect_layers,
@@ -1885,7 +1884,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             let child_surface_result = render_layer_surface(
                 backend,
                 text_state,
-                child.layer,
+                &mut child,
                 LayerSurfaceRequest {
                     root_scale,
                     backdrop_underlay: child_underlay.as_ref(),
@@ -2081,7 +2080,11 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     result.map(|()| local_scene)
 }
 
-pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
+/// Renders a surface for a layer that has no producer-side lowering — the
+/// root of a graph render. Reads the node directly (exactly the values the
+/// per-child path snapshots at collection) and collects the layer's content
+/// here, once, before handing off to the shared snapshot-consuming body.
+pub(crate) fn render_root_layer_surface<B: SurfaceExecutionBackend>(
     backend: &mut B,
     text_state: &mut TextSystemState,
     layer: &LayerNode,
@@ -2151,10 +2154,220 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         }
         let (width, height) = cache_key.pixel_size();
         backend.record_layer_cache_miss(width, height);
-        return render_layer_surface_uncached(
+        let (lowered, source) = lower_layer_node(
             backend,
             text_state,
             layer,
+            surface_requirements,
+            logical_rect_override.unwrap_or(logical_rect),
+            translation_context,
+        );
+        return render_layer_surface_uncached(
+            backend,
+            text_state,
+            &lowered,
+            source,
+            LayerSurfaceRenderOptions {
+                target_scale,
+                backdrop_underlay,
+                allow_runtime_cache,
+                cache_candidate: Some((cache_key, logical_rect)),
+                logical_rect_override,
+                capture_clip_override,
+                composite_sample_mode,
+                translation_context,
+            },
+        );
+    }
+
+    let (lowered, source) = lower_layer_node(
+        backend,
+        text_state,
+        layer,
+        surface_requirements,
+        logical_rect_override.unwrap_or(layer.local_bounds),
+        translation_context,
+    );
+    render_layer_surface_uncached(
+        backend,
+        text_state,
+        &lowered,
+        source,
+        LayerSurfaceRenderOptions {
+            target_scale,
+            backdrop_underlay,
+            allow_runtime_cache,
+            cache_candidate: None,
+            logical_rect_override,
+            capture_clip_override,
+            composite_sample_mode,
+            translation_context,
+        },
+    )
+}
+
+/// Builds the snapshot + collected source a root-level layer needs to run the
+/// shared snapshot-consuming render body. The collect happens with the same
+/// post-transform translation context the old in-body re-collect used.
+fn lower_layer_node<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    text_state: &mut TextSystemState,
+    layer: &LayerNode,
+    surface_requirements: LayerSurfaceRequirements,
+    logical_rect: Rect,
+    translation_context: TranslationRenderContext,
+) -> (ChildLayerComposite, LoweredChildSource) {
+    let CollectedLayer {
+        scene,
+        child_layers,
+    } = backend.collect_layer_contents_with_translation_context(
+        text_state,
+        layer,
+        None,
+        None,
+        translation_context,
+    );
+    let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
+    // The body decides the source cache key with the effective requirements
+    // it recomputes from the post-transform context; the motion hash snapshot
+    // must exist exactly when that decision reads it.
+    let effective_translated_content_context = translation_context.inherited_content_translation
+        || layer.translated_content_context
+        || surface_requirements.contains_translated_content;
+    let motion_stable_source = effective_surface_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    )
+    .contains(SurfaceRequirement::MotionStableCapture);
+    let lowered = ChildLayerComposite {
+        // Parent-space composite fields are meaningless for a root-level
+        // surface; the body never reads them.
+        z_index: 0,
+        logical_rect,
+        dest_quad: [[0.0; 2]; 4],
+        snap_anchor: None,
+        backdrop_rect: layer.local_bounds,
+        visual_clip: None,
+        surface_clip: None,
+        shadow_draws: Vec::new(),
+        needs_nested_underlay: contains_descendant_backdrop,
+        node_id: layer.node_id,
+        backdrop: layer.backdrop().cloned(),
+        has_effect: layer.effect().is_some(),
+        effect_contains_runtime_shader: layer
+            .effect()
+            .is_some_and(|effect| effect.contains_runtime_shader()),
+        target_content_hash: layer.target_content_hash(),
+        effect_hash: layer.effect_hash(),
+        motion_source_content_hash: motion_stable_source
+            .then(|| layer.motion_source_content_hash()),
+        contains_descendant_backdrop,
+        cache_policy: layer.cache_policy,
+        surface_requirements,
+        rounded_clip: LayerSurfaceRoundedClip::from_layer(layer),
+        isolation: effective_layer_isolation(&layer.graphics_layer),
+        translated_content_context: layer.translated_content_context,
+        own_translated_content_axes: translated_content_axes_for_layer(layer),
+        clip_rect: layer.clip_rect(),
+        local_bounds: layer.local_bounds,
+        surface_scale: layer_surface_scale(layer),
+        source: LoweredChildSource::default(),
+    };
+    (
+        lowered,
+        LoweredChildSource {
+            scene,
+            children: child_layers,
+        },
+    )
+}
+
+/// Renders the surface for a producer-lowered child layer. Every value the
+/// old `&LayerNode` path read off the node comes from the collection-time
+/// snapshot; the child's content is consumed from `child.source`.
+pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    text_state: &mut TextSystemState,
+    child: &mut ChildLayerComposite,
+    request: LayerSurfaceRequest<'_>,
+) -> Result<LayerSurface, String> {
+    let LayerSurfaceRequest {
+        root_scale,
+        backdrop_underlay,
+        allow_runtime_cache,
+        logical_rect_override,
+        capture_clip_override,
+        activates_nested_capture,
+        translation_context,
+    } = request;
+    // Taken up front: on a cache hit the collected source is dropped unused,
+    // matching the old lazy path that never collected it.
+    let source = std::mem::take(&mut child.source);
+    let surface_requirements = child.surface_requirements;
+    let direct_translated_content_context =
+        translation_context.inherited_content_translation || child.translated_content_context;
+    let effective_translated_content_context =
+        direct_translated_content_context || surface_requirements.contains_translated_content;
+    let effective_requirements = effective_surface_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    );
+    let composite_sample_mode = composite_sample_mode_for_requirements(
+        effective_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+    );
+    let target_scale = layer_surface_target_scale(
+        direct_translated_content_context,
+        translation_context.surface_capture_active,
+        surface_requirements,
+        root_scale,
+        // A scaling layer is composited by mapping this surface through its own
+        // transform, so the texture has to carry that magnification's worth of
+        // detail or the composite just resamples a 1x raster upward.
+        child.surface_scale,
+    );
+    let translation_context = layer_surface_translation_context(
+        translation_context,
+        activates_nested_capture
+            && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
+    );
+    let cache_candidate = child_layer_raster_cache_candidate(
+        child,
+        target_scale,
+        backdrop_underlay.is_some(),
+        allow_runtime_cache,
+        logical_rect_override,
+        backend.max_texture_dim(),
+    );
+    if let Some((cache_key, logical_rect)) = cache_candidate {
+        if let Some((target, logical_rect)) = backend.cached_layer_surface(&cache_key) {
+            let (composite_alpha, blend_mode) = child
+                .isolation
+                .as_ref()
+                .map(|isolation| (isolation.composite_alpha, isolation.blend_mode))
+                .unwrap_or((1.0, BlendMode::SrcOver));
+            return Ok(LayerSurface {
+                target: LayerSurfaceTexture::Cached(target),
+                logical_rect,
+                composite_alpha,
+                blend_mode,
+                rounded_clip: child.rounded_clip,
+                backdrop: child.backdrop.clone(),
+                deferred_effect: None,
+                effect_content_rect: None,
+                sample_mode: composite_sample_mode,
+            });
+        }
+        let (width, height) = cache_key.pixel_size();
+        backend.record_layer_cache_miss(width, height);
+        return render_layer_surface_uncached(
+            backend,
+            text_state,
+            child,
+            source,
             LayerSurfaceRenderOptions {
                 target_scale,
                 backdrop_underlay,
@@ -2171,7 +2384,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     render_layer_surface_uncached(
         backend,
         text_state,
-        layer,
+        child,
+        source,
         LayerSurfaceRenderOptions {
             target_scale,
             backdrop_underlay,
@@ -2183,6 +2397,56 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             translation_context,
         },
     )
+}
+
+/// Snapshot-consuming twin of the backend's `layer_raster_cache_candidate`:
+/// the same admission rules and key, decided from the values captured at
+/// collection time. `child.logical_rect` stands in for the memoized estimate
+/// the node-based path re-reads — it is that memoized value.
+fn child_layer_raster_cache_candidate(
+    child: &ChildLayerComposite,
+    root_scale: f32,
+    has_backdrop_underlay: bool,
+    allow_runtime_cache: bool,
+    logical_rect_override: Option<Rect>,
+    max_texture_dim: u32,
+) -> Option<(LayerRasterCacheKey, Rect)> {
+    let surface_requirements = child.surface_requirements;
+    let runtime_cache_is_safe = allow_runtime_cache
+        && surface_requirements
+            .surface_requirements
+            .has_isolating_requirement()
+        && !child.effect_contains_runtime_shader;
+    let cache_is_allowed = child.cache_policy == CachePolicy::Auto
+        || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
+        || runtime_cache_is_safe;
+    if !cache_is_allowed {
+        return None;
+    }
+    if has_backdrop_underlay && child.contains_descendant_backdrop {
+        return None;
+    }
+    // RuntimeShader effects produce different output every frame (animated
+    // uniforms like time). Caching their layer surfaces is
+    // counterproductive: every frame generates a new unique cache key that
+    // fills the LRU with stale textures.
+    if child.effect_contains_runtime_shader {
+        return None;
+    }
+
+    let logical_rect = logical_rect_override.unwrap_or(child.logical_rect);
+    let pixel_size = surface_target_size(logical_rect, root_scale, max_texture_dim);
+    Some((
+        LayerRasterCacheKey::new(
+            child.node_id,
+            child.target_content_hash,
+            child.effect_hash,
+            logical_rect,
+            pixel_size,
+            ScaleBucket::from_scale(root_scale),
+        ),
+        logical_rect,
+    ))
 }
 
 fn layer_surface_translation_context(
@@ -2258,8 +2522,7 @@ fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
 
 #[allow(clippy::too_many_arguments)]
 fn layer_source_cache_key(
-    layer: &LayerNode,
-    surface_requirements: LayerSurfaceRequirements,
+    child: &ChildLayerComposite,
     effective_requirements: SurfaceRequirementSet,
     surface_rect: Rect,
     pixel_size: (u32, u32),
@@ -2267,32 +2530,32 @@ fn layer_source_cache_key(
     has_backdrop_underlay: bool,
     allow_runtime_cache: bool,
 ) -> Option<LayerRasterCacheKey> {
-    let runtime_shader_source = layer
-        .effect()
-        .is_some_and(|effect| effect.contains_runtime_shader());
+    let runtime_shader_source = child.effect_contains_runtime_shader;
     let motion_stable_source =
         effective_requirements.contains(SurfaceRequirement::MotionStableCapture);
-    let backdrop_local_source = layer.backdrop().is_some();
+    let backdrop_local_source = child.backdrop.is_some();
     if !runtime_shader_source && !motion_stable_source && !backdrop_local_source {
         return None;
     }
 
-    let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
+    let cache_is_allowed = child.cache_policy == CachePolicy::Auto
         || allow_runtime_cache
-        || surface_requirements.has_renderer_forced_surface()
+        || child.surface_requirements.has_renderer_forced_surface()
         || motion_stable_source;
-    if !cache_is_allowed || layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
+    if !cache_is_allowed || (has_backdrop_underlay && child.contains_descendant_backdrop) {
         return None;
     }
 
     let content_hash = if motion_stable_source {
-        layer.motion_source_content_hash()
+        child
+            .motion_source_content_hash
+            .expect("motion-stable source snapshots its motion content hash at collection")
     } else {
-        layer.target_content_hash()
+        child.target_content_hash
     };
 
     Some(LayerRasterCacheKey::source_content(
-        layer.node_id,
+        child.node_id,
         content_hash,
         surface_rect,
         pixel_size,
@@ -2317,16 +2580,16 @@ struct BackdropPrefixChildContribution {
 }
 
 fn backdrop_prefix_child_contribution(
-    child: &ChildLayerComposite<'_>,
+    child: &ChildLayerComposite,
     surface: &LayerSurface,
     dest_quad: [[f32; 2]; 4],
     scissor: Option<(u32, u32, u32, u32)>,
 ) -> BackdropPrefixChildContribution {
     BackdropPrefixChildContribution {
         z_index: child.z_index,
-        node_id: child.layer.node_id,
-        content_hash: child.layer.target_content_hash(),
-        effect_hash: child.layer.effect_hash(),
+        node_id: child.node_id,
+        content_hash: child.target_content_hash,
+        effect_hash: child.effect_hash,
         backdrop_hash: surface
             .backdrop
             .as_ref()
@@ -3634,7 +3897,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     backend: &mut B,
     text_state: &mut TextSystemState,
     local_scene: &CompositorScene,
-    child_layers: Vec<ChildLayerComposite<'_>>,
+    child_layers: Vec<ChildLayerComposite>,
     target_scale: f32,
     backdrop_underlay: Option<&OffscreenTarget>,
     width: u32,
@@ -3651,7 +3914,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     let mut pending_shader_composites = Vec::new();
     let mut pending_shader_load_op = None;
     let mut prior_child_contributions = Vec::new();
-    for child in child_layers {
+    for mut child in child_layers {
         if cursor_z < child.z_index {
             flush_pending_shader_layer_composites(
                 backend,
@@ -3776,7 +4039,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
         let child_surface = render_layer_surface(
             backend,
             text_state,
-            child.layer,
+            &mut child,
             LayerSurfaceRequest {
                 root_scale: target_scale,
                 backdrop_underlay: child_underlay.as_ref(),
@@ -3841,7 +4104,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             )?;
             flush_pending_clear(backend, &target.view, &mut next_load_op);
             let backdrop_layer = BackdropLayer {
-                node_id: child.layer.node_id,
+                node_id: child.node_id,
                 rect: resolved_child.backdrop_rect,
                 clip: child.visual_clip,
                 effect: backdrop.clone(),
@@ -4105,7 +4368,8 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
 fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
     backend: &mut B,
     text_state: &mut TextSystemState,
-    layer: &LayerNode,
+    child: &ChildLayerComposite,
+    source: LoweredChildSource,
     options: LayerSurfaceRenderOptions<'_>,
 ) -> Result<LayerSurface, String> {
     let LayerSurfaceRenderOptions {
@@ -4118,59 +4382,67 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         composite_sample_mode,
         translation_context,
     } = options;
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let CollectedLayer {
+    let isolation = child.isolation.clone();
+    let LoweredChildSource {
         scene: mut local_scene,
-        child_layers,
-    } = backend.collect_layer_contents_with_translation_context(
-        text_state,
-        layer,
-        None,
-        None,
-        translation_context,
-    );
+        children: child_layers,
+    } = source;
     let result = (|| -> Result<LayerSurface, String> {
-        let surface_requirements = backend.layer_surface_requirements(layer);
+        let surface_requirements = child.surface_requirements;
         let effective_translated_content_context = translation_context
             .inherited_content_translation
-            || layer.translated_content_context
+            || child.translated_content_context
             || surface_requirements.contains_translated_content;
         let effective_translated_content_axes = translation_context
             .translated_content_axes
-            .union(translated_content_axes_for_layer(layer))
+            .union(child.own_translated_content_axes)
             .union(surface_requirements.translated_content_axes);
         let effective_requirements = effective_surface_requirements(
             effective_translated_content_context,
             translation_context.surface_capture_active,
             surface_requirements,
         );
-        let capture_clip = combined_capture_clip(layer.clip_rect(), capture_clip_override);
+        let capture_clip = combined_capture_clip(child.clip_rect, capture_clip_override);
         let estimated_surface_rect = cache_candidate
             .as_ref()
             .map(|(_, logical_rect)| *logical_rect)
             .or(logical_rect_override)
             .unwrap_or_else(|| {
-                let bounds = motion_stable_capture_bounds(
-                    layer,
+                let bounds = motion_stable_capture_bounds_from_parts(
+                    child.clip_rect,
+                    child.backdrop.is_some(),
+                    child.own_translated_content_axes,
                     &local_scene,
                     &child_layers,
                     effective_requirements,
                     effective_translated_content_axes,
                     capture_clip,
                 );
-                resolved_layer_surface_rect(layer, bounds)
+                resolved_layer_surface_rect_from_parts(
+                    child.local_bounds,
+                    child.has_effect,
+                    child.backdrop.is_some(),
+                    bounds,
+                )
             });
         let mut surface_rect =
             if effective_requirements.contains(SurfaceRequirement::MotionStableCapture) {
-                let bounds = motion_stable_capture_bounds(
-                    layer,
+                let bounds = motion_stable_capture_bounds_from_parts(
+                    child.clip_rect,
+                    child.backdrop.is_some(),
+                    child.own_translated_content_axes,
                     &local_scene,
                     &child_layers,
                     effective_requirements,
                     effective_translated_content_axes,
                     capture_clip,
                 );
-                resolved_layer_surface_rect(layer, bounds)
+                resolved_layer_surface_rect_from_parts(
+                    child.local_bounds,
+                    child.has_effect,
+                    child.backdrop.is_some(),
+                    bounds,
+                )
             } else {
                 estimated_surface_rect
             };
@@ -4185,7 +4457,12 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             if let Some(visible_bounds) = collected_layer_bounds(&local_scene, &child_layers, true)
                 .and_then(|bounds| visible_draw_rect(bounds, capture_clip))
             {
-                let required_rect = resolved_layer_surface_rect(layer, Some(visible_bounds));
+                let required_rect = resolved_layer_surface_rect_from_parts(
+                    child.local_bounds,
+                    child.has_effect,
+                    child.backdrop.is_some(),
+                    Some(visible_bounds),
+                );
                 let desired_scale =
                     quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
                 surface_rect = fit_capture_rect_to_scale_budget_for_axes(
@@ -4229,23 +4506,13 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         local_scene.translate_by(shift);
 
         let mut child_layers = child_layers;
-        for child in &mut child_layers {
-            for point in &mut child.dest_quad {
-                point[0] += shift.x;
-                point[1] += shift.y;
-            }
-            child.backdrop_rect.x += shift.x;
-            child.backdrop_rect.y += shift.y;
-            if let Some(clip) = child.visual_clip.as_mut() {
-                clip.x += shift.x;
-                clip.y += shift.y;
-            }
-            child.shadow_draws.translate_by(shift);
+        for nested_child in &mut child_layers {
+            nested_child.translate_by(shift);
         }
         backend.record_isolated_layer_render(
             width,
             height,
-            layer.node_id,
+            child.node_id,
             surface_rect,
             effective_requirements,
         );
@@ -4255,8 +4522,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             backdrop_underlay.is_some(),
         );
         let source_cache_key = layer_source_cache_key(
-            layer,
-            surface_requirements,
+            child,
             effective_requirements,
             surface_rect,
             (width, height),
@@ -4267,7 +4533,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         if layer_render_diag_enabled() {
             log::warn!(
                 "[layer-render-diag] node={:?} size={}x{} scale={:.3} rect=({:.1},{:.1},{:.1},{:.1}) requirements={:?} cache_candidate={} backdrop_underlay={} external_backdrop_input={}",
-                layer.node_id,
+                child.node_id,
                 width,
                 height,
                 target_scale,
@@ -4341,8 +4607,8 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             .as_ref()
             .map(|params| params.blend_mode)
             .unwrap_or(BlendMode::SrcOver);
-        let backdrop = layer.backdrop().cloned();
-        let rounded_clip = LayerSurfaceRoundedClip::from_layer(layer);
+        let backdrop = child.backdrop.clone();
+        let rounded_clip = child.rounded_clip;
 
         if let Some(effect) = deferred_effect.as_ref() {
             if can_materialize_cached_effect(effect, backdrop.as_ref())
@@ -4356,7 +4622,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                         effect,
                         &effect_target,
                         content_effect_pixel_rect(
-                            Some(layer.local_bounds),
+                            Some(child.local_bounds),
                             logical_rect,
                             width,
                             height,
@@ -4390,7 +4656,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     &effect,
                     &effect_target,
                     content_effect_pixel_rect(
-                        Some(layer.local_bounds),
+                        Some(child.local_bounds),
                         surface_rect,
                         width,
                         height,
@@ -4442,7 +4708,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             rounded_clip,
             backdrop,
             deferred_effect,
-            effect_content_rect: Some(layer.local_bounds),
+            effect_content_rect: Some(child.local_bounds),
             sample_mode: composite_sample_mode,
         })
     })();
@@ -5571,14 +5837,62 @@ mod tests {
         layer
     }
 
-    fn child_layer_composite<'a>(
-        layer: &'a LayerNode,
+    /// Snapshots a `LayerNode` into the owned child struct the way the
+    /// collection site does, with an empty source; tests that used to hand
+    /// the borrowed node to the render path build their input through this.
+    fn lower_test_layer(layer: &LayerNode) -> crate::normalized_scene::ChildLayerComposite {
+        use crate::surface_plan::{
+            layer_contains_descendant_backdrop, layer_surface_scale,
+            translated_content_axes_for_layer,
+        };
+        use cranpose_render_common::layer_composition::effective_layer_isolation;
+
+        let mut requirements_cache = HashMap::new();
+        let surface_requirements =
+            layer_surface_requirements_cached(layer, &mut requirements_cache);
+        let contains_descendant_backdrop = layer_contains_descendant_backdrop(layer);
+        crate::normalized_scene::ChildLayerComposite {
+            z_index: 0,
+            logical_rect: layer.local_bounds,
+            dest_quad: crate::rect_to_quad(layer.local_bounds),
+            snap_anchor: None,
+            backdrop_rect: layer.local_bounds,
+            visual_clip: None,
+            surface_clip: None,
+            shadow_draws: Vec::new(),
+            needs_nested_underlay: false,
+            node_id: layer.node_id,
+            backdrop: layer.backdrop().cloned(),
+            has_effect: layer.effect().is_some(),
+            effect_contains_runtime_shader: layer
+                .effect()
+                .is_some_and(|effect| effect.contains_runtime_shader()),
+            target_content_hash: layer.target_content_hash(),
+            effect_hash: layer.effect_hash(),
+            motion_source_content_hash: Some(layer.motion_source_content_hash()),
+            contains_descendant_backdrop,
+            cache_policy: layer.cache_policy,
+            surface_requirements,
+            rounded_clip: crate::surface_executor::backend::LayerSurfaceRoundedClip::from_layer(
+                layer,
+            ),
+            isolation: effective_layer_isolation(&layer.graphics_layer),
+            translated_content_context: layer.translated_content_context,
+            own_translated_content_axes: translated_content_axes_for_layer(layer),
+            clip_rect: layer.clip_rect(),
+            local_bounds: layer.local_bounds,
+            surface_scale: layer_surface_scale(layer),
+            source: crate::normalized_scene::LoweredChildSource::default(),
+        }
+    }
+
+    fn child_layer_composite(
+        layer: &LayerNode,
         z_index: usize,
         rect: Rect,
-    ) -> crate::normalized_scene::ChildLayerComposite<'a> {
+    ) -> crate::normalized_scene::ChildLayerComposite {
         crate::normalized_scene::ChildLayerComposite {
             z_index,
-            layer,
             logical_rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -5592,6 +5906,7 @@ mod tests {
             surface_clip: None,
             shadow_draws: Vec::new(),
             needs_nested_underlay: false,
+            ..lower_test_layer(layer)
         }
     }
 
@@ -6613,13 +6928,11 @@ mod tests {
     #[test]
     fn runtime_shader_layers_reuse_source_content_without_user_cache_policy() {
         let layer = default_cache_runtime_shader_layer();
-        let mut cache = HashMap::new();
-        let requirements = layer_surface_requirements_cached(&layer, &mut cache);
+        let lowered = lower_test_layer(&layer);
         assert!(
             layer_source_cache_key(
-                &layer,
-                requirements,
-                requirements.surface_requirements,
+                &lowered,
+                lowered.surface_requirements.surface_requirements,
                 layer.local_bounds,
                 (32, 24),
                 1.0,
@@ -6634,15 +6947,13 @@ mod tests {
     #[test]
     fn backdrop_layers_reuse_static_local_source_without_user_cache_policy() {
         let layer = backdrop_child_layer(98);
-        let mut cache = HashMap::new();
-        let requirements = layer_surface_requirements_cached(&layer, &mut cache);
+        let lowered = lower_test_layer(&layer);
 
         assert!(layer.backdrop().is_some());
         assert!(
             layer_source_cache_key(
-                &layer,
-                requirements,
-                requirements.surface_requirements,
+                &lowered,
+                lowered.surface_requirements.surface_requirements,
                 layer.local_bounds,
                 (80, 40),
                 1.0,
@@ -6657,14 +6968,12 @@ mod tests {
     #[test]
     fn backdrop_layers_reuse_static_local_source_with_external_underlay() {
         let layer = backdrop_child_layer(99);
-        let mut cache = HashMap::new();
-        let requirements = layer_surface_requirements_cached(&layer, &mut cache);
+        let lowered = lower_test_layer(&layer);
 
         assert!(
             layer_source_cache_key(
-                &layer,
-                requirements,
-                requirements.surface_requirements,
+                &lowered,
+                lowered.surface_requirements.surface_requirements,
                 layer.local_bounds,
                 (80, 40),
                 1.0,
@@ -6695,14 +7004,12 @@ mod tests {
         );
         layer.node_id = Some(101);
         layer.recompute_raster_cache_hashes();
-        let mut cache = HashMap::new();
-        let requirements = layer_surface_requirements_cached(&layer, &mut cache);
+        let lowered = lower_test_layer(&layer);
 
         assert_eq!(
             layer_source_cache_key(
-                &layer,
-                requirements,
-                requirements.surface_requirements,
+                &lowered,
+                lowered.surface_requirements.surface_requirements,
                 layer.local_bounds,
                 (120, 90),
                 1.0,
@@ -6760,18 +7067,16 @@ mod tests {
             moved.motion_source_content_hash()
         );
 
-        let mut base_cache = HashMap::new();
-        let base_requirements = layer_surface_requirements_cached(&base, &mut base_cache);
-        assert!(base_requirements
+        let base_lowered = lower_test_layer(&base);
+        assert!(base_lowered
+            .surface_requirements
             .surface_requirements
             .contains(SurfaceRequirement::MotionStableCapture));
 
-        let mut moved_cache = HashMap::new();
-        let moved_requirements = layer_surface_requirements_cached(&moved, &mut moved_cache);
+        let moved_lowered = lower_test_layer(&moved);
         let base_key = layer_source_cache_key(
-            &base,
-            base_requirements,
-            base_requirements.surface_requirements,
+            &base_lowered,
+            base_lowered.surface_requirements.surface_requirements,
             base.local_bounds,
             (220, 96),
             1.0,
@@ -6779,9 +7084,8 @@ mod tests {
             true,
         );
         let moved_key = layer_source_cache_key(
-            &moved,
-            moved_requirements,
-            moved_requirements.surface_requirements,
+            &moved_lowered,
+            moved_lowered.surface_requirements.surface_requirements,
             moved.local_bounds,
             (220, 96),
             1.0,

@@ -7,26 +7,32 @@ use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
     SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
 };
+use crate::surface_executor::backend::LayerSurfaceRoundedClip;
 use crate::surface_plan::{
     composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
     layer_contains_descendant_backdrop, layer_needs_rigid_snap, layer_surface_requirements_cached,
-    translated_content_axes_for_layer, LayerSurfaceRequirements, TranslatedContentAxes,
-    TranslationRenderContext,
+    layer_surface_scale, translated_content_axes_for_layer, LayerSurfaceRequirements,
+    TranslatedContentAxes, TranslationRenderContext,
 };
 use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_core::collections::map::HashMap;
+use cranpose_core::NodeId;
 use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
 use cranpose_render_common::graph::DrawRunNode;
 use cranpose_render_common::graph::{
-    quad_bounds, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderNode,
+    quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+    ProjectiveTransform, RenderNode,
 };
-use cranpose_render_common::layer_composition::local_content_layer_for;
+use cranpose_render_common::layer_composition::{
+    effective_layer_isolation, local_content_layer_for, LayerIsolation,
+};
 use cranpose_render_common::primitive_emit::{
     arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
     round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_ui_graphics::{BlendMode, Brush, DrawPrimitive, GraphicsLayer, Point, Rect};
+use cranpose_ui_graphics::{
+    BlendMode, Brush, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect,
+};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -38,9 +44,13 @@ const TRANSLATED_LOCAL_CAPTURE_STABLE_GUARD: f32 = 64.0;
 const MOTION_STABLE_CAPTURE_CROSS_AXIS_LEADING_GUARD: f32 = 96.0;
 const CLIPPED_TEXT_PREWARM_VIEWPORT_MULTIPLIER: f32 = 2.0;
 
-pub(crate) struct ChildLayerComposite<'a> {
+/// A fully owned lowering of an isolating child layer: the POD composite
+/// fields, a snapshot of every scalar the render path used to read off
+/// `&LayerNode`, and the child's own collected content (`source`). All
+/// snapshot values are captured at collection time so rendering never has to
+/// reach back into the retained graph.
+pub(crate) struct ChildLayerComposite {
     pub(crate) z_index: usize,
-    pub(crate) layer: &'a LayerNode,
     pub(crate) logical_rect: Rect,
     pub(crate) dest_quad: [[f32; 2]; 4],
     pub(crate) snap_anchor: Option<SnapAnchor>,
@@ -49,6 +59,43 @@ pub(crate) struct ChildLayerComposite<'a> {
     pub(crate) surface_clip: Option<Rect>,
     pub(crate) shadow_draws: Vec<ShadowDraw>,
     pub(crate) needs_nested_underlay: bool,
+    // --- snapshot of the layer node (captured at collection) ---
+    pub(crate) node_id: Option<NodeId>,
+    pub(crate) backdrop: Option<RenderEffect>,
+    pub(crate) has_effect: bool,
+    pub(crate) effect_contains_runtime_shader: bool,
+    pub(crate) target_content_hash: u64,
+    pub(crate) effect_hash: u64,
+    /// Present exactly when the render body's source-cache-key decision reads
+    /// it (a motion-stable source); the hash walks the subtree, so it is not
+    /// computed for layers that can never consume it.
+    pub(crate) motion_source_content_hash: Option<u64>,
+    /// Same value as `needs_nested_underlay` (both snapshot
+    /// `layer_contains_descendant_backdrop`); kept separate because the two
+    /// fields serve different contracts (compositing vs. cache admission).
+    pub(crate) contains_descendant_backdrop: bool,
+    pub(crate) cache_policy: CachePolicy,
+    pub(crate) surface_requirements: LayerSurfaceRequirements,
+    pub(crate) rounded_clip: Option<LayerSurfaceRoundedClip>,
+    pub(crate) isolation: Option<LayerIsolation>,
+    pub(crate) translated_content_context: bool,
+    /// `translated_content_axes_for_layer` of the child itself.
+    pub(crate) own_translated_content_axes: TranslatedContentAxes,
+    pub(crate) clip_rect: Option<Rect>,
+    pub(crate) local_bounds: Rect,
+    /// `layer_surface_scale` of the child (uniform transform scale).
+    pub(crate) surface_scale: f32,
+    /// The child's own collected content, in the child's local space. The
+    /// parent's post-build shift must never translate it.
+    pub(crate) source: LoweredChildSource,
+}
+
+/// The owned, recursive lowering of a child layer's content: its collected
+/// scene plus the lowered isolating children found inside it.
+#[derive(Default)]
+pub(crate) struct LoweredChildSource {
+    pub(crate) scene: CompositorScene,
+    pub(crate) children: Vec<ChildLayerComposite>,
 }
 
 #[derive(Clone)]
@@ -61,9 +108,9 @@ pub(crate) struct ResolvedChildSurfaceComposite {
     pub(crate) shadow_draws: Vec<ShadowDraw>,
 }
 
-pub(crate) struct CollectedLayer<'a> {
+pub(crate) struct CollectedLayer {
     pub(crate) scene: CompositorScene,
-    pub(crate) child_layers: Vec<ChildLayerComposite<'a>>,
+    pub(crate) child_layers: Vec<ChildLayerComposite>,
 }
 
 pub(crate) fn visible_draw_rect(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
@@ -209,7 +256,7 @@ fn shadow_draws_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
 
 pub(crate) fn collected_layer_bounds(
     scene: &CompositorScene,
-    child_layers: &[ChildLayerComposite<'_>],
+    child_layers: &[ChildLayerComposite],
     apply_clip: bool,
 ) -> Option<Rect> {
     let mut bounds = if apply_clip {
@@ -473,16 +520,40 @@ fn combined_capture_clip(layer_clip: Option<Rect>, capture_clip: Option<Rect>) -
 pub(crate) fn motion_stable_capture_bounds(
     layer: &LayerNode,
     scene: &CompositorScene,
-    child_layers: &[ChildLayerComposite<'_>],
+    child_layers: &[ChildLayerComposite],
     requirements: SurfaceRequirementSet,
     translated_content_axes: TranslatedContentAxes,
     capture_clip_override: Option<Rect>,
 ) -> Option<Rect> {
-    let capture_clip = combined_capture_clip(layer.clip_rect(), capture_clip_override);
+    motion_stable_capture_bounds_from_parts(
+        layer.clip_rect(),
+        layer.backdrop().is_some(),
+        translated_content_axes_for_layer(layer),
+        scene,
+        child_layers,
+        requirements,
+        translated_content_axes,
+        capture_clip_override,
+    )
+}
+
+/// [`motion_stable_capture_bounds`] over collection-time snapshots of the
+/// layer scalars it reads, for callers that no longer hold a `&LayerNode`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn motion_stable_capture_bounds_from_parts(
+    layer_clip_rect: Option<Rect>,
+    layer_has_backdrop: bool,
+    own_translated_content_axes: TranslatedContentAxes,
+    scene: &CompositorScene,
+    child_layers: &[ChildLayerComposite],
+    requirements: SurfaceRequirementSet,
+    translated_content_axes: TranslatedContentAxes,
+    capture_clip_override: Option<Rect>,
+) -> Option<Rect> {
+    let capture_clip = combined_capture_clip(layer_clip_rect, capture_clip_override);
     let visible_bounds = collected_layer_bounds(scene, child_layers, true)
         .and_then(|bounds| visible_draw_rect(bounds, capture_clip));
-    if !requirements.contains(SurfaceRequirement::MotionStableCapture) || layer.backdrop().is_some()
-    {
+    if !requirements.contains(SurfaceRequirement::MotionStableCapture) || layer_has_backdrop {
         return visible_bounds;
     }
 
@@ -492,7 +563,7 @@ pub(crate) fn motion_stable_capture_bounds(
             if hidden_content_precedes_visible_bounds(visible_bounds, full_bounds) =>
         {
             let translated_content_axes =
-                translated_content_axes.union(translated_content_axes_for_layer(layer));
+                translated_content_axes.union(own_translated_content_axes);
             let preserve_leading_x = translated_content_axes.x;
             let preserve_leading_y = translated_content_axes.y;
             if preserve_leading_x || preserve_leading_y {
@@ -678,7 +749,7 @@ fn flush_translated_local_picture(
 }
 
 pub(crate) fn resolved_child_surface_composite(
-    child: &ChildLayerComposite<'_>,
+    child: &ChildLayerComposite,
 ) -> ResolvedChildSurfaceComposite {
     ResolvedChildSurfaceComposite {
         logical_rect: child.logical_rect,
@@ -2509,15 +2580,43 @@ pub(crate) fn translate_quad(quad: [[f32; 2]; 4], delta: Point) -> [[f32; 2]; 4]
 }
 
 #[allow(clippy::too_many_arguments)]
-fn collect_layer_contents_into<'a>(
-    layer: &'a LayerNode,
+/// The request context `render_layer_surface` will receive for every
+/// isolating child collected under `layer` — the flat child list is rendered
+/// by the surface layer's uncached body, which derives one request context
+/// from its own effective translation values and hands it to every child
+/// (`render_layer_source_uncached`'s recursion). Collecting a child's
+/// `source` with anything else would diverge from what the old render-time
+/// re-collect produced.
+pub(crate) fn derived_child_surface_context(
+    layer: &LayerNode,
+    translation_context: TranslationRenderContext,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) -> TranslationRenderContext {
+    let requirements = layer_surface_requirements_cached(layer, layer_surface_requirements_cache);
+    TranslationRenderContext {
+        inherited_content_translation: translation_context.inherited_content_translation
+            || layer.translated_content_context
+            || requirements.contains_translated_content,
+        translated_content_axes: translation_context
+            .translated_content_axes
+            .union(translated_content_axes_for_layer(layer))
+            .union(requirements.translated_content_axes),
+        surface_capture_active: translation_context.surface_capture_active,
+        local_picture_capture_active: translation_context.local_picture_capture_active,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_layer_contents_into(
+    layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     layer_offset: Point,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
+    child_surface_ctx: TranslationRenderContext,
     local_scene: &mut CompositorScene,
-    child_layers: &mut Vec<ChildLayerComposite<'a>>,
+    child_layers: &mut Vec<ChildLayerComposite>,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) {
@@ -2689,6 +2788,10 @@ fn collect_layer_contents_into<'a>(
                             child_offset,
                             child_translated_snap_anchor,
                             child_translation_context,
+                            // The flat child list still belongs to the same
+                            // surface layer, so its render request context is
+                            // unchanged.
+                            child_surface_ctx,
                             local_scene,
                             child_layers,
                             layer_surface_rect_cache,
@@ -2704,12 +2807,99 @@ fn collect_layer_contents_into<'a>(
                     layer_snap_anchor,
                 );
                 let mut shadow_scene = CompositorScene::new();
-                let child_logical_rect = estimate_layer_surface_rect_cached_with_text_layout(
+                // Collect the child's content ONCE, at producer time, with the
+                // exact translation context the render path used to re-collect
+                // it with: the request context every consumer passes
+                // (`child_surface_ctx`), post-transformed the way
+                // `render_layer_surface` does for a nested capture
+                // (`layer_surface_translation_context` with
+                // `activates_nested_capture` true).
+                let child_effective_translated_content_context = child_surface_ctx
+                    .inherited_content_translation
+                    || child_layer.translated_content_context
+                    || child_requirements.contains_translated_content;
+                let child_source_ctx = {
+                    let child_effective_requirements = effective_surface_requirements(
+                        child_effective_translated_content_context,
+                        child_surface_ctx.surface_capture_active,
+                        child_requirements,
+                    );
+                    TranslationRenderContext {
+                        surface_capture_active: child_surface_ctx.surface_capture_active
+                            || child_effective_requirements
+                                .contains(SurfaceRequirement::MotionStableCapture),
+                        ..child_surface_ctx
+                    }
+                };
+                // Mirrors the effective requirements the render body
+                // recomputes from the post-transform context; the motion hash
+                // snapshot must exist exactly when its source-cache-key
+                // decision reads it.
+                let child_motion_stable_source = effective_surface_requirements(
+                    child_effective_translated_content_context,
+                    child_source_ctx.surface_capture_active,
+                    child_requirements,
+                )
+                .contains(SurfaceRequirement::MotionStableCapture);
+                let mut source_scene = CompositorScene::new();
+                let mut source_children = Vec::new();
+                collect_layer_contents_into(
                     child_layer.as_ref(),
                     text_layout,
+                    None,
+                    Point::default(),
+                    None,
+                    child_source_ctx,
+                    derived_child_surface_context(
+                        child_layer.as_ref(),
+                        child_source_ctx,
+                        layer_surface_requirements_cache,
+                    ),
+                    &mut source_scene,
+                    &mut source_children,
                     layer_surface_rect_cache,
                     layer_surface_requirements_cache,
                 );
+                // The per-frame rect memo may short-circuit the bounds math.
+                // On a miss the rect must match what the estimate path (a
+                // default-context collect) computes: when the source context
+                // IS the default context the source is that same collect, so
+                // derive the rect from it directly; otherwise fall back to the
+                // estimate so the memoized value stays identical.
+                let rect_cache_key = layer_cache_key(child_layer.as_ref());
+                let child_logical_rect =
+                    if let Some(cached_rect) = layer_surface_rect_cache.get(&rect_cache_key) {
+                        *cached_rect
+                    } else if child_source_ctx == TranslationRenderContext::default() {
+                        let estimate_translated_content_context = child_layer
+                            .translated_content_context
+                            || child_requirements.contains_translated_content;
+                        let estimate_effective_requirements = effective_surface_requirements(
+                            estimate_translated_content_context,
+                            false,
+                            child_requirements,
+                        );
+                        let estimate_axes = translated_content_axes_for_layer(child_layer.as_ref())
+                            .union(child_requirements.translated_content_axes);
+                        let bounds = motion_stable_capture_bounds(
+                            child_layer.as_ref(),
+                            &source_scene,
+                            &source_children,
+                            estimate_effective_requirements,
+                            estimate_axes,
+                            None,
+                        );
+                        let rect = resolved_layer_surface_rect(child_layer.as_ref(), bounds);
+                        layer_surface_rect_cache.insert(rect_cache_key, rect);
+                        rect
+                    } else {
+                        estimate_layer_surface_rect_cached_with_text_layout(
+                            child_layer.as_ref(),
+                            text_layout,
+                            layer_surface_rect_cache,
+                            layer_surface_requirements_cache,
+                        )
+                    };
                 let child_bounds = quad_bounds(
                     child_layer
                         .transform_to_parent
@@ -2768,9 +2958,10 @@ fn collect_layer_contents_into<'a>(
                         child_layer.transform_to_parent,
                     );
                 }
+                let child_contains_descendant_backdrop =
+                    layer_contains_descendant_backdrop(child_layer.as_ref());
                 child_layers.push(ChildLayerComposite {
                     z_index: local_scene.next_z,
-                    layer: child_layer.as_ref(),
                     logical_rect: child_logical_rect,
                     dest_quad: translate_quad(
                         child_layer.transform_to_parent.map_rect(child_logical_rect),
@@ -2786,7 +2977,33 @@ fn collect_layer_contents_into<'a>(
                     visual_clip,
                     surface_clip,
                     shadow_draws: std::mem::take(&mut shadow_scene.shadow_draws),
-                    needs_nested_underlay: layer_contains_descendant_backdrop(child_layer.as_ref()),
+                    needs_nested_underlay: child_contains_descendant_backdrop,
+                    node_id: child_layer.node_id,
+                    backdrop: child_layer.backdrop().cloned(),
+                    has_effect: child_layer.effect().is_some(),
+                    effect_contains_runtime_shader: child_layer
+                        .effect()
+                        .is_some_and(|effect| effect.contains_runtime_shader()),
+                    target_content_hash: child_layer.target_content_hash(),
+                    effect_hash: child_layer.effect_hash(),
+                    motion_source_content_hash: child_motion_stable_source
+                        .then(|| child_layer.motion_source_content_hash()),
+                    contains_descendant_backdrop: child_contains_descendant_backdrop,
+                    cache_policy: child_layer.cache_policy,
+                    surface_requirements: child_requirements,
+                    rounded_clip: LayerSurfaceRoundedClip::from_layer(child_layer.as_ref()),
+                    isolation: effective_layer_isolation(&child_layer.graphics_layer),
+                    translated_content_context: child_layer.translated_content_context,
+                    own_translated_content_axes: translated_content_axes_for_layer(
+                        child_layer.as_ref(),
+                    ),
+                    clip_rect: child_layer.clip_rect(),
+                    local_bounds: child_layer.local_bounds,
+                    surface_scale: layer_surface_scale(child_layer.as_ref()),
+                    source: LoweredChildSource {
+                        scene: source_scene,
+                        children: source_children,
+                    },
                 });
                 local_scene.next_z += 1;
                 if translated_local_picture_state.is_some() {
@@ -2835,13 +3052,13 @@ fn collect_layer_contents_into<'a>(
 }
 
 #[cfg(test)]
-pub(crate) fn collect_layer_contents<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents(
+    layer: &LayerNode,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> CollectedLayer<'a> {
+) -> CollectedLayer {
     let mut text_layout = UiTextLayoutResolver;
     collect_layer_contents_with_translation_context_and_text_layout(
         layer,
@@ -2855,14 +3072,14 @@ pub(crate) fn collect_layer_contents<'a>(
 }
 
 #[cfg(test)]
-pub(crate) fn collect_layer_contents_with_translation_context<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents_with_translation_context(
+    layer: &LayerNode,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> CollectedLayer<'a> {
+) -> CollectedLayer {
     let mut text_layout = UiTextLayoutResolver;
     collect_layer_contents_with_translation_context_and_text_layout(
         layer,
@@ -2875,15 +3092,15 @@ pub(crate) fn collect_layer_contents_with_translation_context<'a>(
     )
 }
 
-pub(crate) fn collect_layer_contents_with_translation_context_and_text_layout<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents_with_translation_context_and_text_layout(
+    layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
-) -> CollectedLayer<'a> {
+) -> CollectedLayer {
     collect_layer_contents_with_capacity(
         layer,
         text_layout,
@@ -2897,8 +3114,8 @@ pub(crate) fn collect_layer_contents_with_translation_context_and_text_layout<'a
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_layer_contents_with_capacity<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents_with_capacity(
+    layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
@@ -2906,13 +3123,16 @@ pub(crate) fn collect_layer_contents_with_capacity<'a>(
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
     capacity: SceneCapacityHint,
-) -> CollectedLayer<'a> {
+) -> CollectedLayer {
+    let child_surface_ctx =
+        derived_child_surface_context(layer, translation_context, layer_surface_requirements_cache);
     collect_layer_contents_reusing(
         layer,
         text_layout,
         inherited_clip,
         inherited_translated_snap_anchor,
         translation_context,
+        child_surface_ctx,
         layer_surface_rect_cache,
         layer_surface_requirements_cache,
         CompositorScene::with_capacity(capacity),
@@ -2924,17 +3144,23 @@ pub(crate) fn collect_layer_contents_with_capacity<'a>(
 /// each frame, and its draw-op vector is megabytes — large enough that a
 /// fresh allocation goes straight to mmap and back every frame. Reusing the
 /// buffers keeps the steady-state frame allocation-free.
+/// Like [`collect_layer_contents_with_capacity`], but the caller supplies the
+/// request context its children will be rendered with (`child_surface_ctx`).
+/// The direct-root path hands its children to `render_layer_surface` with the
+/// root request context as-is, not the surface-derived one, so it must pass
+/// `translation_context` here unchanged.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_layer_contents_reusing<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents_reusing(
+    layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
+    child_surface_ctx: TranslationRenderContext,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
     scene: CompositorScene,
-) -> CollectedLayer<'a> {
+) -> CollectedLayer {
     let mut local_scene = scene;
     local_scene.clear();
     let mut child_layers = Vec::new();
@@ -2944,6 +3170,7 @@ pub(crate) fn collect_layer_contents_reusing<'a>(
         inherited_clip,
         inherited_translated_snap_anchor,
         translation_context,
+        child_surface_ctx,
         &mut local_scene,
         &mut child_layers,
         layer_surface_rect_cache,
@@ -2957,14 +3184,15 @@ pub(crate) fn collect_layer_contents_reusing<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn collect_layer_contents_with_translation_context_into<'a>(
-    layer: &'a LayerNode,
+pub(crate) fn collect_layer_contents_with_translation_context_into(
+    layer: &LayerNode,
     text_layout: &mut impl TextLayoutResolver,
     inherited_clip: Option<Rect>,
     inherited_translated_snap_anchor: Option<SnapAnchor>,
     translation_context: TranslationRenderContext,
+    child_surface_ctx: TranslationRenderContext,
     local_scene: &mut CompositorScene,
-    child_layers: &mut Vec<ChildLayerComposite<'a>>,
+    child_layers: &mut Vec<ChildLayerComposite>,
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) {
@@ -2977,6 +3205,7 @@ pub(crate) fn collect_layer_contents_with_translation_context_into<'a>(
         Point::default(),
         inherited_translated_snap_anchor,
         translation_context,
+        child_surface_ctx,
         local_scene,
         child_layers,
         layer_surface_rect_cache,
@@ -3051,9 +3280,25 @@ pub(crate) fn estimate_layer_surface_rect_cached_with_text_layout(
 }
 
 pub(crate) fn resolved_layer_surface_rect(layer: &LayerNode, bounds: Option<Rect>) -> Rect {
-    let rect = bounds.unwrap_or(layer.local_bounds);
-    if layer.effect().is_some() || layer.backdrop().is_some() {
-        union_rect(Some(rect), layer.local_bounds).unwrap_or(rect)
+    resolved_layer_surface_rect_from_parts(
+        layer.local_bounds,
+        layer.effect().is_some(),
+        layer.backdrop().is_some(),
+        bounds,
+    )
+}
+
+/// [`resolved_layer_surface_rect`] over collection-time snapshots of the
+/// layer scalars it reads.
+pub(crate) fn resolved_layer_surface_rect_from_parts(
+    local_bounds: Rect,
+    has_effect: bool,
+    has_backdrop: bool,
+    bounds: Option<Rect>,
+) -> Rect {
+    let rect = bounds.unwrap_or(local_bounds);
+    if has_effect || has_backdrop {
+        union_rect(Some(rect), local_bounds).unwrap_or(rect)
     } else {
         rect
     }
@@ -3161,6 +3406,25 @@ impl TranslateBy for CompositorScene {
         self.shadow_draws.translate_by(delta);
         self.effect_layers.translate_by(delta);
         self.backdrop_layers.translate_by(delta);
+    }
+}
+
+impl TranslateBy for ChildLayerComposite {
+    /// The parent-space composite fields shift with the parent's surface
+    /// origin. `logical_rect`, `surface_clip`, `snap_anchor`, and the whole
+    /// `source` tree are expressed in the child's own space and must stay
+    /// put — the child's render applies its own shift when it builds its
+    /// surface.
+    fn translate_by(&mut self, delta: Point) {
+        for point in &mut self.dest_quad {
+            point[0] += delta.x;
+            point[1] += delta.y;
+        }
+        self.backdrop_rect.translate_by(delta);
+        if let Some(clip) = self.visual_clip.as_mut() {
+            clip.translate_by(delta);
+        }
+        self.shadow_draws.translate_by(delta);
     }
 }
 

@@ -152,14 +152,14 @@ pub(crate) trait SurfaceExecutionBackend {
         logical_rect_override: Option<Rect>,
     ) -> Option<(LayerRasterCacheKey, Rect)>;
     fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements;
-    fn collect_layer_contents_with_translation_context<'a>(
+    fn collect_layer_contents_with_translation_context(
         &mut self,
         text_state: &mut TextSystemState,
-        layer: &'a LayerNode,
+        layer: &LayerNode,
         inherited_clip: Option<Rect>,
         inherited_translated_snap_anchor: Option<SnapAnchor>,
         translation_context: TranslationRenderContext,
-    ) -> CollectedLayer<'a>;
+    ) -> CollectedLayer;
     fn clear_target_view_with_load_op(
         &mut self,
         target_view: &wgpu::TextureView,

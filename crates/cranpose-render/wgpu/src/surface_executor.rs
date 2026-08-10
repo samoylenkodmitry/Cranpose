@@ -1,4 +1,4 @@
-mod backend;
+pub(crate) mod backend;
 mod geometry;
 mod render_paths;
 
@@ -15,6 +15,6 @@ pub(crate) use geometry::{
 };
 pub(crate) use render_paths::{
     apply_backdrop_layer_to_target, backdrop_underlay_is_covered_by_local_content,
-    composite_surface_to_view, render_effect_layer_to_target, render_layer_surface,
-    render_root_direct, root_direct_scene_events_are_supported,
+    composite_surface_to_view, render_effect_layer_to_target, render_root_direct,
+    render_root_layer_surface, root_direct_scene_events_are_supported,
 };

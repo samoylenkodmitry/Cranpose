@@ -36,11 +36,11 @@ use crate::surface_executor::{
     axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
     composite_surface_to_view as execute_composite_surface_to_view, device_pixel_bounds_for_rect,
     offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
-    render_layer_surface as execute_render_layer_surface,
-    render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
-    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
-    translation_stable_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
-    SurfaceExecutionBackend,
+    render_root_direct as execute_render_root_direct,
+    render_root_layer_surface as execute_render_layer_surface,
+    root_direct_scene_events_are_supported, scaled_quad, snap_delta_for_anchor,
+    snap_motion_stable_dest_quad, surface_target_size, translation_stable_device_pixel_bounds,
+    DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
 };
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
@@ -370,9 +370,9 @@ fn scene_layer_events_precede_z(scene: &CompositorScene, z_index: usize) -> bool
             .any(|layer| layer.z_index < z_index)
 }
 
-fn direct_root_child_can_be_replayed_into_later_underlay(child: &ChildLayerComposite<'_>) -> bool {
-    child.layer.backdrop().is_none()
-        && child.layer.effect().is_none()
+fn direct_root_child_can_be_replayed_into_later_underlay(child: &ChildLayerComposite) -> bool {
+    child.backdrop.is_none()
+        && !child.has_effect
         && child.shadow_draws.is_empty()
         && axis_aligned_quad_rect(child.dest_quad).is_some()
 }
@@ -385,13 +385,13 @@ fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b_right && b.x < a_right && a.y < b_bottom && b.y < a_bottom
 }
 
-fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> bool {
+fn direct_root_child_underlays_are_supported(collected: &CollectedLayer) -> bool {
     for (child_index, child) in collected.child_layers.iter().enumerate() {
-        if child.layer.backdrop().is_some() {
+        if child.backdrop.is_some() {
             if root_direct_diag_enabled() {
                 log::warn!(
                     "[root-direct-diag] reject self-backdrop child node={:?}",
-                    child.layer.node_id
+                    child.node_id
                 );
             }
             return false;
@@ -401,7 +401,7 @@ fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> 
                 if root_direct_diag_enabled() {
                     log::warn!(
                         "[root-direct-diag] reject projective underlay child node={:?}",
-                        child.layer.node_id
+                        child.node_id
                     );
                 }
                 return false;
@@ -423,7 +423,7 @@ fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> 
                 if root_direct_diag_enabled() {
                     log::warn!(
                         "[root-direct-diag] reject underlay child node={:?} unsupported_preceding_child_layer={} preceding_scene_events={} translation_only={} dest=({:.1},{:.1},{:.1},{:.1}) logical=({:.1},{:.1},{:.1},{:.1})",
-                        child.layer.node_id,
+                        child.node_id,
                         unsupported_preceding_child_layer,
                         preceding_scene_events,
                         translation_only,
@@ -5553,14 +5553,14 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         )
     }
 
-    fn collect_layer_contents_with_translation_context<'a>(
+    fn collect_layer_contents_with_translation_context(
         &mut self,
         text_state: &mut TextSystemState,
-        layer: &'a LayerNode,
+        layer: &LayerNode,
         inherited_clip: Option<Rect>,
         inherited_translated_snap_anchor: Option<SnapAnchor>,
         translation_context: TranslationRenderContext,
-    ) -> CollectedLayer<'a> {
+    ) -> CollectedLayer {
         collect_layer_contents_with_translation_context_and_text_layout(
             layer,
             text_state,
@@ -6640,6 +6640,11 @@ impl GpuRenderer {
                 text_state,
                 None,
                 None,
+                TranslationRenderContext::default(),
+                // The direct-root path renders each collected child with the
+                // default request context (see `render_root_direct`), so the
+                // child sources must be collected under it as-is rather than
+                // the surface-derived context.
                 TranslationRenderContext::default(),
                 &mut self.layer_surface_rect_cache,
                 &mut self.layer_surface_requirements_cache,
@@ -14861,15 +14866,17 @@ mod tests {
         assert!(layer_contains_descendant_backdrop(&parent));
     }
 
-    fn child_layer_composite<'a>(
-        layer: &'a LayerNode,
+    fn child_layer_composite(
+        layer: &LayerNode,
         z_index: usize,
         rect: Rect,
         needs_nested_underlay: bool,
-    ) -> crate::normalized_scene::ChildLayerComposite<'a> {
+    ) -> crate::normalized_scene::ChildLayerComposite {
+        let mut requirements_cache = cranpose_core::collections::map::HashMap::new();
+        let surface_requirements =
+            crate::surface_plan::layer_surface_requirements_cached(layer, &mut requirements_cache);
         crate::normalized_scene::ChildLayerComposite {
             z_index,
-            layer,
             logical_rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -14883,6 +14890,32 @@ mod tests {
             surface_clip: None,
             shadow_draws: Vec::new(),
             needs_nested_underlay,
+            node_id: layer.node_id,
+            backdrop: layer.backdrop().cloned(),
+            has_effect: layer.effect().is_some(),
+            effect_contains_runtime_shader: layer
+                .effect()
+                .is_some_and(|effect| effect.contains_runtime_shader()),
+            target_content_hash: layer.target_content_hash(),
+            effect_hash: layer.effect_hash(),
+            motion_source_content_hash: Some(layer.motion_source_content_hash()),
+            contains_descendant_backdrop: layer_contains_descendant_backdrop(layer),
+            cache_policy: layer.cache_policy,
+            surface_requirements,
+            rounded_clip: crate::surface_executor::backend::LayerSurfaceRoundedClip::from_layer(
+                layer,
+            ),
+            isolation: cranpose_render_common::layer_composition::effective_layer_isolation(
+                &layer.graphics_layer,
+            ),
+            translated_content_context: layer.translated_content_context,
+            own_translated_content_axes: crate::surface_plan::translated_content_axes_for_layer(
+                layer,
+            ),
+            clip_rect: layer.clip_rect(),
+            local_bounds: layer.local_bounds,
+            surface_scale: crate::surface_plan::layer_surface_scale(layer),
+            source: crate::normalized_scene::LoweredChildSource::default(),
         }
     }
 
