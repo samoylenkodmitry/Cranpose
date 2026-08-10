@@ -8,7 +8,7 @@ use crate::effect_renderer::{
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
-use crate::frame_packet::FramePacket;
+use crate::frame_packet::{FramePacket, RenderReturns};
 use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
@@ -19,7 +19,6 @@ use crate::normalized_scene::{
     filtered_effect_layer_index, scene_bounds, SceneWindowSource,
 };
 use crate::normalized_scene::{
-    collect_layer_contents_reusing,
     collect_layer_contents_with_translation_context_and_text_layout,
     estimate_layer_surface_rect_cached, translate_quad, ChildLayerComposite, CollectedLayer,
 };
@@ -29,7 +28,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    RetainedDraw, SceneCapacityHint, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+    RetainedDraw, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
 };
 use crate::shaders;
 use crate::surface_executor::{
@@ -46,6 +45,8 @@ use crate::surface_executor::{
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 #[cfg(test)]
+use crate::surface_plan::root_can_render_directly_cached;
+#[cfg(test)]
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
@@ -53,9 +54,8 @@ use crate::surface_plan::{
     TranslatedContentAxes,
 };
 use crate::surface_plan::{
-    layer_surface_requirements_cached, layer_uses_external_backdrop_input,
-    root_can_render_directly_cached, LayerSurfaceRequest, LayerSurfaceRequirements,
-    TranslationRenderContext,
+    layer_surface_requirements_cached, layer_uses_external_backdrop_input, LayerSurfaceRequest,
+    LayerSurfaceRequirements, TranslationRenderContext,
 };
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
@@ -280,7 +280,7 @@ const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
 const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
-const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
+pub(crate) const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 #[cfg(not(target_arch = "wasm32"))]
 static SEGMENT_DIAG_LINES: AtomicUsize = AtomicUsize::new(0);
@@ -302,11 +302,11 @@ fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
     })
 }
 
-fn instant_ms(start: Instant, end: Instant) -> f64 {
+pub(crate) fn instant_ms(start: Instant, end: Instant) -> f64 {
     end.duration_since(start).as_secs_f64() * 1000.0
 }
 
-fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
+pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
     let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
     let total_ms = instant_ms(start, end);
     (total_ms >= threshold_ms).then_some(total_ms)
@@ -386,7 +386,7 @@ fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b_right && b.x < a_right && a.y < b_bottom && b.y < a_bottom
 }
 
-fn direct_root_child_underlays_are_supported(collected: &CollectedLayer) -> bool {
+pub(crate) fn direct_root_child_underlays_are_supported(collected: &CollectedLayer) -> bool {
     for (child_index, child) in collected.child_layers.iter().enumerate() {
         if child.backdrop.is_some() {
             if root_direct_diag_enabled() {
@@ -3796,14 +3796,12 @@ pub struct GpuRenderer {
     observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
+    /// Present-side lowering memos for the graph fallback and overlay
+    /// paths, cleared per frame. The producer frontend keeps its own pair
+    /// for direct-root lowering; both memoize the same deterministic
+    /// functions, so the two instances cannot diverge in value.
     layer_surface_rect_cache: HashMap<usize, Rect>,
     layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
-    direct_scene_capacity: SceneCapacityHint,
-    /// Last frame's direct-root scene, kept so its (potentially multi-MB)
-    /// draw vectors are reused instead of reallocated every frame.
-    retained_direct_scene: Option<CompositorScene>,
-    /// Monotone id stamped on each [`FramePacket`] the producer publishes.
-    frame_sequence: u64,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
@@ -4426,9 +4424,6 @@ impl GpuRenderer {
             ),
             shadow_surface_cache_bytes: 0,
             layer_surface_rect_cache: HashMap::new(),
-            direct_scene_capacity: SceneCapacityHint::default(),
-            retained_direct_scene: None,
-            frame_sequence: 0,
             layer_surface_requirements_cache: HashMap::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
@@ -6212,6 +6207,8 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        packet: Option<FramePacket>,
+        returns: &mut RenderReturns,
     ) -> Result<(), String> {
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
         let render_start = Instant::now();
@@ -6235,6 +6232,8 @@ impl GpuRenderer {
             width,
             height,
             root_scale,
+            packet,
+            returns,
         );
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
@@ -6374,6 +6373,8 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        packet: Option<FramePacket>,
+        returns: &mut RenderReturns,
     ) -> Result<Vec<u8>, String> {
         if width == 0 || height == 0 {
             return Err("Screenshot size must be non-zero".to_string());
@@ -6403,6 +6404,8 @@ impl GpuRenderer {
             width,
             height,
             root_scale,
+            packet,
+            returns,
         )?;
 
         let bytes_per_pixel = 4u32;
@@ -6502,6 +6505,8 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        packet: Option<FramePacket>,
+        returns: &mut RenderReturns,
     ) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.queue.clone();
@@ -6525,6 +6530,8 @@ impl GpuRenderer {
                         width,
                         height,
                         root_scale,
+                        packet,
+                        returns,
                         frame_encoder,
                     )
                 },
@@ -6568,6 +6575,8 @@ impl GpuRenderer {
                     width,
                     height,
                     root_scale,
+                    packet,
+                    returns,
                     &mut frame_encoder,
                 );
                 let execution =
@@ -6600,99 +6609,34 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         root_scale: f32,
+        packet: Option<FramePacket>,
+        returns: &mut RenderReturns,
         frame_encoder: &mut C,
     ) -> Result<(), String> {
         let recorded_start = Instant::now();
+        // Per-frame memos for the graph fallback and overlay paths below;
+        // the direct-root packet was lowered by the producer frontend with
+        // its own memo pair.
         self.layer_surface_rect_cache.clear();
         self.layer_surface_requirements_cache.clear();
-        let direct_root = if root_can_render_directly_cached(
-            &graph.root,
-            &mut self.layer_surface_requirements_cache,
-        ) {
-            let recycled_scene = self
-                .retained_direct_scene
-                .take()
-                .unwrap_or_else(|| CompositorScene::with_capacity(self.direct_scene_capacity));
-            #[cfg(not(target_arch = "wasm32"))]
-            crate::shape_replay::SHAPE_REPLAY.with(|state| {
-                state
-                    .borrow_mut()
-                    .begin_frame(self.replay_supported(), root_scale)
-            });
-            let collected = collect_layer_contents_reusing(
-                &graph.root,
-                text_state,
-                None,
-                None,
-                TranslationRenderContext::default(),
-                // The direct-root path renders each collected child with the
-                // default request context (see `render_root_direct`), so the
-                // child sources must be collected under it as-is rather than
-                // the surface-derived context.
-                TranslationRenderContext::default(),
-                &mut self.layer_surface_rect_cache,
-                &mut self.layer_surface_requirements_cache,
-                recycled_scene,
-            );
-            self.direct_scene_capacity = collected.scene.capacity_hint();
-            if root_direct_scene_events_are_supported(&collected.scene)
-                && direct_root_child_underlays_are_supported(&collected)
-            {
-                Some(collected)
-            } else {
-                // The collected scene will not render this frame, so any
-                // capture requests recorded against its shape indices are
-                // void; the replay state re-bootstraps on the next direct
-                // frame.
-                #[cfg(not(target_arch = "wasm32"))]
-                crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().retire_all());
-                self.retained_direct_scene = Some(collected.scene);
-                None
-            }
-        } else {
-            None
-        };
-        let after_root_collect = Instant::now();
-        // The producer's complete output for this frame, owned and Send.
-        // Built before the backend borrow so a later step can publish it to
-        // a present thread; consumed synchronously below today. Building
-        // the packet closes the frame's replay window: the planner emits
-        // its plan into `replay` and stops accepting retained ops.
-        let mut direct_packet = direct_root.map(|root| {
-            self.frame_sequence = self.frame_sequence.wrapping_add(1);
-            #[cfg(not(target_arch = "wasm32"))]
-            let replay = crate::shape_replay::SHAPE_REPLAY.with(|state| {
-                state
-                    .borrow_mut()
-                    .take_frame_ops(crate::pipeline::retained_feed_generation())
-            });
-            #[cfg(target_arch = "wasm32")]
-            let replay = crate::frame_packet::ReplayFrameOps::default();
-            FramePacket {
-                frame_id: self.frame_sequence,
-                viewport: (width, height),
-                root_scale,
-                root,
-                replay,
-            }
-        });
 
         // Present-side consumption of the packet's replay plan, adjacent to
         // packet consumption: the store honors the ops just before the
-        // packet renders and the producer applies the ack straight away.
-        // Ack application BEFORE render is required to keep observable
-        // timing identical to the old in-store drain: confirmations gate
-        // the NEXT build's bypass and `feed_slots` is served at collect
-        // time, so both sides must settle before the next collection —
-        // and did, at exactly this point, when the drain lived in the
-        // store.
+        // packet renders. The ack travels back through `returns` and the
+        // producer applies it right after this render call — equivalent to
+        // the in-store drain this replaces, because both application points
+        // sit after this frame's graph build and before the next collect,
+        // which is where the bypass gate and `feed_slots` are read.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut direct_packet = packet;
+        #[cfg(target_arch = "wasm32")]
+        let direct_packet = packet;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(packet) = direct_packet.as_mut() {
             let ops = std::mem::take(&mut packet.replay);
             let (ack, recycled) =
                 self.consume_replay_ops(ops, &packet.root.scene.shapes, packet.root_scale);
-            self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
-                .with(|state| state.borrow_mut().apply_ack(ack, recycled));
+            returns.ack = Some((ack, recycled));
         }
 
         let mut backend = RecordingSurfaceBackend {
@@ -6722,7 +6666,7 @@ impl GpuRenderer {
             .map(|scene| {
                 // Return the packet's scene buffers to the producer pool —
                 // for a heavy animated frame they are megabytes of Vec.
-                backend.renderer.retained_direct_scene = Some(scene);
+                returns.scene = Some(scene);
             });
             if result.is_ok() {
                 if let Some(overlay_graph) = overlay_graph {
@@ -6742,13 +6686,13 @@ impl GpuRenderer {
                 should_log_wgpu_render_stage(recorded_start, after_direct_render)
             {
                 log::warn!(
-                    "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
-                    instant_ms(recorded_start, after_root_collect),
+                    "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} render_ms={:.2}",
                     instant_ms(direct_render_start, after_direct_render),
                 );
             }
             return result;
         }
+        let after_root_collect = Instant::now();
 
         // The root layer's visible area is always the viewport — content
         // outside the screen is invisible regardless of scroll offsets or
@@ -9166,12 +9110,38 @@ impl GpuRenderer {
 
     /// Whether retained replay batches can exist on this device: they bind
     /// unsized buffers, so they ride the storage-buffer batch mode only.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Always `false` on wasm, which has no retained replay path — the
+    /// method exists on both arches so the packet producer has one
+    /// architecture.
     pub(crate) fn replay_supported(&self) -> bool {
         // Deliberately not conditioned on free slot ids: an exhausted pool
         // only means new captures fail (handled per capture), while flipping
         // this bit would retire every live feed slot.
-        self.shape_batch_limits.storage
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.shape_batch_limits.storage
+        }
+    }
+
+    /// Return the planner-drained ack confirmations buffer (capacity
+    /// intact) to the store after the producer applied a frame's
+    /// [`crate::frame_packet::ReplayAck`] — the ack channel's half of the
+    /// P4b no-allocation contract, closed by the caller now that ack
+    /// application lives producer-side. No-op on wasm.
+    pub(crate) fn restore_replay_ack_confirmations(
+        &mut self,
+        confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.replay_ack_confirmations = confirmations;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = confirmations;
     }
 
     /// Present-side consumption of one frame's [`ReplayFrameOps`]: frees

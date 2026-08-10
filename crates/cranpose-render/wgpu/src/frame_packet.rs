@@ -74,6 +74,23 @@ pub(crate) struct FramePacket {
     pub(crate) replay: ReplayFrameOps,
 }
 
+/// What the present stage hands back to the producer after consuming a
+/// frame: the rendered packet's scene buffers for recycling and the store's
+/// [`ReplayAck`] (with the batch's emptied op buffers) for the planner.
+/// The producer folds it in via `RendererFrontend::apply_returns`; the
+/// present backend fills it instead of writing producer state itself.
+#[derive(Default)]
+pub(crate) struct RenderReturns {
+    /// The rendered direct-root scene, returned so its draw vectors are
+    /// reused instead of reallocated every frame. `None` when the frame
+    /// took the graph fallback path or the direct draw failed.
+    pub(crate) scene: Option<CompositorScene>,
+    /// The store's answer to the packet's replay plan plus the recycled
+    /// op buffers. `None` when no packet was consumed; always `None` on
+    /// wasm, which has no retained replay path.
+    pub(crate) ack: Option<(ReplayAck, ReplayFrameOps)>,
+}
+
 /// Compile-time proof that the packet and every member chain can cross a
 /// thread boundary. Listed individually so a regression names the exact
 /// type that broke instead of one opaque `FramePacket: !Send` error.
@@ -94,6 +111,7 @@ const _: () = {
     assert_send::<RetainedDraw>();
     assert_send::<ReplayFrameOps>();
     assert_send::<ReplayAck>();
+    assert_send::<RenderReturns>();
     assert_send::<ColorPatch>();
     assert_send::<PendingFeedCapture>();
 };

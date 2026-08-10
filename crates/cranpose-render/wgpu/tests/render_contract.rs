@@ -1461,8 +1461,14 @@ fn text_rendering_uses_cached_raster_image_batches() {
 #[test]
 fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source =
-        std::fs::read_to_string(crate_dir.join("src/lib.rs")).expect("failed to read lib.rs");
+    // The renderer's producer half lives in frontend.rs (text state, app
+    // context, scene); the shared-text-state contract spans both files.
+    let source = format!(
+        "{}{}",
+        std::fs::read_to_string(crate_dir.join("src/lib.rs")).expect("failed to read lib.rs"),
+        std::fs::read_to_string(crate_dir.join("src/frontend.rs"))
+            .expect("failed to read frontend.rs"),
+    );
     let cargo_toml =
         std::fs::read_to_string(crate_dir.join("Cargo.toml")).expect("failed to read Cargo.toml");
 
@@ -1496,7 +1502,7 @@ fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
     );
     assert!(
         source.contains("SoftwareTextMeasurer::from_font_set(")
-            && source.contains("self.text_fonts.clone()"),
+            && source.contains("self.frontend.text_fonts.clone()"),
         "AppContext text measurer should use the same software font set as WGPU raster text rendering"
     );
     assert!(
@@ -1504,7 +1510,7 @@ fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
             && source.contains("cranpose_ui::text::layout_text(text, style)")
             && source.contains("app_context.enter(|| {")
             && source.contains("gpu_renderer.render(")
-            && source.contains("self.dev_overlay_graph.as_ref()"),
+            && source.contains("frontend.dev_overlay_graph.as_ref()"),
         "WGPU render text layout should route through the attached AppContext text service"
     );
 }
