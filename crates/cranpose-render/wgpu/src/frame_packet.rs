@@ -15,9 +15,46 @@
 
 use crate::normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource};
 use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
-    ShadowDraw, TextDraw,
+    BackdropLayer, ColorPatch, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw,
+    PendingFeedCapture, RetainedDraw, ShadowDraw, TextDraw,
 };
+use cranpose_render_common::graph::DrawCommandId;
+
+/// One frame's replay plan, emitted by the producer-side planner
+/// ([`ShapeReplayState::take_frame_ops`](crate::shape_replay::ShapeReplayState))
+/// when the packet is built and consumed by the present-side store
+/// (`GpuRenderer::consume_replay_ops`) just before the packet renders. This
+/// is the ONLY producer→store replay channel; the store answers with a
+/// [`ReplayAck`].
+#[derive(Default)]
+pub(crate) struct ReplayFrameOps {
+    /// The retained-feed generation the plan was made under. The store
+    /// drops the batch whole on a mismatch: every capture/patch/release in
+    /// it names slots of a universe the store no longer holds.
+    pub(crate) generation: u64,
+    /// The planner's frame ordinal at plan time; the store's defensive
+    /// staleness reference for `captures` (each capture is stamped with the
+    /// ordinal it was queued on).
+    pub(crate) frame: u64,
+    pub(crate) captures: Vec<PendingFeedCapture>,
+    pub(crate) color_patches: Vec<ColorPatch>,
+    pub(crate) releases: Vec<u32>,
+}
+
+/// One confirmed capture: the span's identity key `(command, span slot)`
+/// mapped to the physical GPU slot the store retained it in.
+pub(crate) type ReplayConfirmation = ((DrawCommandId, u32), u32);
+
+/// The store's answer to one [`ReplayFrameOps`] batch, applied by the
+/// planner ([`ShapeReplayState::apply_ack`](crate::shape_replay::ShapeReplayState))
+/// before the next frame's planning. Travels with the batch's emptied
+/// buffers (capacity intact) so neither side allocates per frame.
+pub(crate) struct ReplayAck {
+    /// The generation the confirmations are stamped with — the slot
+    /// universe they verifiably exist in.
+    pub(crate) generation: u64,
+    pub(crate) confirmations: Vec<ReplayConfirmation>,
+}
 
 /// One frame's producer output for the direct-root path.
 pub(crate) struct FramePacket {
@@ -31,6 +68,10 @@ pub(crate) struct FramePacket {
     pub(crate) root_scale: f32,
     /// The lowered root scene plus owned child-layer composites.
     pub(crate) root: CollectedLayer,
+    /// The frame's replay plan. Unconditional so the packet has one
+    /// architecture; wasm has no retained replay path and always carries
+    /// the empty default.
+    pub(crate) replay: ReplayFrameOps,
 }
 
 /// Compile-time proof that the packet and every member chain can cross a
@@ -51,4 +92,8 @@ const _: () = {
     assert_send::<EffectLayer>();
     assert_send::<BackdropLayer>();
     assert_send::<RetainedDraw>();
+    assert_send::<ReplayFrameOps>();
+    assert_send::<ReplayAck>();
+    assert_send::<ColorPatch>();
+    assert_send::<PendingFeedCapture>();
 };

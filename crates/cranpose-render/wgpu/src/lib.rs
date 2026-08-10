@@ -264,17 +264,7 @@ impl WgpuRenderer {
     ) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.gpu_renderer.is_some() {
-            crate::shape_replay::SHAPE_REPLAY.with(|state| {
-                let mut state = state.borrow_mut();
-                state.retire_feed();
-                state.retire_all();
-                // Queued releases name the OLD renderer's slot ids. The new
-                // store starts fully free, so draining them there is at
-                // best a no-op today (release is guarded on the id being
-                // live) — clear the queue instead of relying on that,
-                // so ids never cross renderers.
-                state.pending_releases.clear();
-            });
+            crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().renderer_replaced());
             log::warn!(
                 "[command-feed] renderer replaced: retained slots retired, \
                  confirmations revoked, feed generation bumped"
@@ -473,6 +463,20 @@ impl WgpuRenderer {
             .as_ref()
             .map(GpuRenderer::retained_bundle_stats)
             .unwrap_or((0, 0))
+    }
+
+    /// Test hook for the replay message protocol: one planner→store→planner
+    /// cycle outside a frame, the batch's generation skewed by
+    /// `generation_skew`; returns how many captures the store confirmed. A
+    /// nonzero skew manufactures the generation-mismatch drop, which the
+    /// public render path cannot produce synchronously.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
+        self.gpu_renderer
+            .as_mut()
+            .expect("GPU renderer not initialized")
+            .replay_ops_roundtrip_for_tests(generation_skew)
     }
 }
 

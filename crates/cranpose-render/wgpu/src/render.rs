@@ -3812,12 +3812,31 @@ pub struct GpuRenderer {
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
-    /// Drain arena for the replay patch queue: `stage_replay_patches`
-    /// swaps the thread-local queue against this instead of `mem::take`,
-    /// so both sides keep their high-water capacity across frames. Always
-    /// empty between drains.
+    /// The frame's replay recolor patches, parked here by
+    /// `consume_replay_ops` until the retained prepare arms drain them
+    /// (`stage_replay_patches`). The vec this frame's ops displace is last
+    /// frame's, already drained empty, and returns to the producer with
+    /// the ack — capacity ping-pongs planner queue → packet ops → here →
+    /// ack return, so neither side allocates per frame (P4b).
     #[cfg(not(target_arch = "wasm32"))]
-    color_patch_scratch: Vec<crate::shape_replay::ColorPatch>,
+    replay_color_patches: Vec<crate::scene::ColorPatch>,
+    /// Drain arena for `replay_color_patches`: `stage_replay_patches`
+    /// swaps against this instead of `mem::take`, so both keep their
+    /// high-water capacity across frames. Always empty between drains.
+    #[cfg(not(target_arch = "wasm32"))]
+    color_patch_scratch: Vec<crate::scene::ColorPatch>,
+    /// Recycled confirmations buffer for the next [`crate::frame_packet::ReplayAck`]:
+    /// `consume_replay_ops` fills it, the planner drains it in `apply_ack`,
+    /// and the render loop hands the emptied vec (capacity intact) back
+    /// here — the ack channel's half of the P4b no-allocation contract.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_ack_confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
+    /// Lifetime count of replay-ops batches dropped whole by the
+    /// generation check in `consume_replay_ops` — fail-closed against ops
+    /// planned under a slot universe this store no longer holds.
+    /// Synchronously impossible today; structural for the pipeline split.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_generation_drops: u64,
     /// Cached render bundles for maximal consecutive retained stretches in
     /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
@@ -4420,7 +4439,13 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             replay_upload_stats: ReplayUploadStats::default(),
             #[cfg(not(target_arch = "wasm32"))]
+            replay_color_patches: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
             color_patch_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_ack_confirmations: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_generation_drops: 0,
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
         }
@@ -6628,22 +6653,47 @@ impl GpuRenderer {
             None
         };
         let after_root_collect = Instant::now();
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(collected) = &direct_root {
-            self.process_shape_replay(&collected.scene.shapes, root_scale);
-        }
         // The producer's complete output for this frame, owned and Send.
         // Built before the backend borrow so a later step can publish it to
-        // a present thread; consumed synchronously below today.
-        let direct_packet = direct_root.map(|root| {
+        // a present thread; consumed synchronously below today. Building
+        // the packet closes the frame's replay window: the planner emits
+        // its plan into `replay` and stops accepting retained ops.
+        let mut direct_packet = direct_root.map(|root| {
             self.frame_sequence = self.frame_sequence.wrapping_add(1);
+            #[cfg(not(target_arch = "wasm32"))]
+            let replay = crate::shape_replay::SHAPE_REPLAY.with(|state| {
+                state
+                    .borrow_mut()
+                    .take_frame_ops(crate::pipeline::retained_feed_generation())
+            });
+            #[cfg(target_arch = "wasm32")]
+            let replay = crate::frame_packet::ReplayFrameOps::default();
             FramePacket {
                 frame_id: self.frame_sequence,
                 viewport: (width, height),
                 root_scale,
                 root,
+                replay,
             }
         });
+
+        // Present-side consumption of the packet's replay plan, adjacent to
+        // packet consumption: the store honors the ops just before the
+        // packet renders and the producer applies the ack straight away.
+        // Ack application BEFORE render is required to keep observable
+        // timing identical to the old in-store drain: confirmations gate
+        // the NEXT build's bypass and `feed_slots` is served at collect
+        // time, so both sides must settle before the next collection —
+        // and did, at exactly this point, when the drain lived in the
+        // store.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(packet) = direct_packet.as_mut() {
+            let ops = std::mem::take(&mut packet.replay);
+            let (ack, recycled) =
+                self.consume_replay_ops(ops, &packet.root.scene.shapes, packet.root_scale);
+            self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
+                .with(|state| state.borrow_mut().apply_ack(ack, recycled));
+        }
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
@@ -6657,6 +6707,7 @@ impl GpuRenderer {
                 viewport: (packet_width, packet_height),
                 root_scale: packet_root_scale,
                 root,
+                replay: _,
             } = packet;
             let result = execute_render_root_direct(
                 &mut backend,
@@ -9123,94 +9174,130 @@ impl GpuRenderer {
         self.shape_batch_limits.storage
     }
 
-    /// Once-per-frame replay upkeep between scene collection and encoding:
-    /// ages out unreferenced feed slots, frees queued releases, then honors
-    /// capture requests against the scene they were recorded for. Collection
-    /// for this frame
-    /// is done once this runs, so it also closes the replay window that
-    /// [`ShapeReplayState::begin_frame`] opened — later collections this
-    /// frame (overlays) build windowed scenes that cannot carry retained
-    /// ops.
+    /// Present-side consumption of one frame's [`ReplayFrameOps`]: frees
+    /// the plan's releases, then honors its capture requests against the
+    /// scene they were recorded for, answering with a [`ReplayAck`] of
+    /// (identity, gpu slot) confirmations plus the batch's emptied buffers
+    /// for recycling. This is the store half of the split — it touches NO
+    /// planner state: `feed_slots`, confirmation stamping, displaced-slot
+    /// release, and age eviction all live in the planner
+    /// (`take_frame_ops`/`apply_ack`).
     ///
-    /// Ordering is what makes slot release safe: a slot queued for release
-    /// during collection is never referenced by a retained op of the same
-    /// frame (misses release before their op would have been pushed, and
-    /// rebuild frames release at flush start), so freeing it here — before
-    /// any encoding — cannot orphan a draw.
+    /// Ordering is what makes slot release safe: a slot the plan releases
+    /// is never referenced by a retained op of the same frame (misses
+    /// release before their op would have been pushed, and rebuild frames
+    /// release at flush start), so freeing it here — before any encoding —
+    /// cannot orphan a draw.
     #[cfg(not(target_arch = "wasm32"))]
-    fn process_shape_replay(&mut self, shapes: &[DrawShape], root_scale: f32) {
-        crate::shape_replay::SHAPE_REPLAY.with(|state| {
-            let mut state = state.borrow_mut();
-            // Identity-fed slots whose spans stopped arriving age out first,
-            // so their buffers are free before this frame's captures ask.
-            let frame = state.frame;
-            let stale: Vec<_> = state
-                .feed_slots
-                .iter()
-                .filter(|(_, slot)| {
-                    frame.wrapping_sub(slot.last_referenced)
-                        > crate::shape_replay::FEED_SLOT_IDLE_FRAMES
-                })
-                .map(|(key, _)| *key)
-                .collect();
-            for key in stale {
-                if let Some(slot) = state.feed_slots.remove(&key) {
-                    state.pending_releases.push(slot.gpu_slot);
-                    cranpose_render_common::scene_builder::revoke_retained_slot(key.0, key.1);
-                }
-            }
-            for slot in std::mem::take(&mut state.pending_releases) {
-                self.release_replay_slot(slot);
-            }
-            for capture in std::mem::take(&mut state.pending_feed_captures) {
-                if capture.frame != frame {
-                    // A capture that outlived its frame (aborted collection
-                    // that skipped this drain) references shape indices of a
-                    // scene that never rendered; honoring it against THIS
-                    // frame's shapes would retain wrong content under a
-                    // confirmed identity. Categorically drop it.
-                    log::warn!(
-                        "[command-feed] dropping stale capture for slot {} of {:?} \
-                         (queued frame {}, draining frame {})",
-                        capture.key.1,
-                        capture.key.0,
-                        capture.frame,
-                        frame,
-                    );
-                    continue;
-                }
-                let end = capture.shape_start + capture.shape_count;
-                let Some(slice) = shapes.get(capture.shape_start..end) else {
-                    continue;
-                };
-                let refs: Vec<&DrawShape> = slice.iter().collect();
-                let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
-                    continue;
-                };
-                // A recaptured identity replaces its old buffers whole.
-                if let Some(old) = state.feed_slots.insert(
-                    capture.key,
-                    crate::shape_replay::FeedSlot {
-                        gpu_slot,
-                        fingerprint: capture.fingerprint,
-                        capture_clip: capture.capture_clip,
-                        last_referenced: frame,
-                    },
-                ) {
-                    self.release_replay_slot(old.gpu_slot);
-                }
-                // Only now may scene building skip materializing this span:
-                // the retained buffer verifiably exists — in THIS feed
-                // generation's slot universe, which the confirmation is
-                // stamped with so a later universe never trusts it.
-                cranpose_render_common::scene_builder::confirm_retained_slot(
-                    capture.key.0,
+    fn consume_replay_ops(
+        &mut self,
+        mut ops: crate::frame_packet::ReplayFrameOps,
+        shapes: &[DrawShape],
+        root_scale: f32,
+    ) -> (
+        crate::frame_packet::ReplayAck,
+        crate::frame_packet::ReplayFrameOps,
+    ) {
+        let generation = crate::pipeline::retained_feed_generation();
+        if ops.generation != generation {
+            // Fail-closed: ops planned under another slot universe name
+            // slots this store does not hold. Drop the batch whole —
+            // captures unconfirmed self-heal (the planner never serves
+            // them), and stale releases must not free live ids.
+            // Synchronously impossible today; structural for the split.
+            self.replay_generation_drops += 1;
+            log::warn!(
+                "[command-feed] dropping replay ops of generation {} against store \
+                 generation {} ({} captures, {} patches, {} releases; lifetime drops {})",
+                ops.generation,
+                generation,
+                ops.captures.len(),
+                ops.color_patches.len(),
+                ops.releases.len(),
+                self.replay_generation_drops,
+            );
+            ops.captures.clear();
+            ops.color_patches.clear();
+            ops.releases.clear();
+            return (
+                crate::frame_packet::ReplayAck {
+                    generation,
+                    confirmations: Vec::new(),
+                },
+                ops,
+            );
+        }
+        // Queued releases free first, so their buffers are available before
+        // this frame's captures ask.
+        for slot in ops.releases.drain(..) {
+            self.release_replay_slot(slot);
+        }
+        // `take` leaves `Vec::new()` behind (no allocation); the render
+        // loop restores the vec after the planner drains the ack.
+        let mut confirmations = std::mem::take(&mut self.replay_ack_confirmations);
+        debug_assert!(confirmations.is_empty());
+        for capture in ops.captures.drain(..) {
+            if capture.frame != ops.frame {
+                // Defensive: a capture that outlived its frame references
+                // shape indices of a scene that never rendered; honoring it
+                // against THIS frame's shapes would retain wrong content
+                // under a confirmed identity. Categorically drop it. Should
+                // never fire now that ops travel inside the frame's own
+                // packet.
+                log::warn!(
+                    "[command-feed] dropping stale capture for slot {} of {:?} \
+                     (queued frame {}, ops frame {})",
                     capture.key.1,
-                    crate::pipeline::retained_feed_generation(),
+                    capture.key.0,
+                    capture.frame,
+                    ops.frame,
                 );
+                continue;
             }
-            state.supported = false;
-        });
+            let end = capture.shape_start + capture.shape_count;
+            let Some(slice) = shapes.get(capture.shape_start..end) else {
+                continue;
+            };
+            let refs: Vec<&DrawShape> = slice.iter().collect();
+            let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
+                continue;
+            };
+            confirmations.push((capture.key, gpu_slot));
+        }
+        // Park the frame's recolor patches for the retained prepare arms
+        // (`stage_replay_patches`); the vec swapped out is last frame's,
+        // already drained empty, and returns to the producer with the ack.
+        // The defensive clear only bites when no prepare arm ran last
+        // frame (aborted render): those patches targeted a frame that
+        // never encoded, and their spans re-queue fresh recolors each
+        // served frame.
+        self.replay_color_patches.clear();
+        std::mem::swap(&mut self.replay_color_patches, &mut ops.color_patches);
+        (
+            crate::frame_packet::ReplayAck {
+                generation,
+                confirmations,
+            },
+            ops,
+        )
+    }
+
+    /// Test hook for the message protocol: runs one planner→store→planner
+    /// replay cycle outside a frame, with the batch stamped
+    /// `generation + generation_skew`, and returns how many captures the
+    /// store confirmed. A nonzero skew manufactures the
+    /// generation-mismatch drop, which is synchronously impossible through
+    /// the public render path today.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
+        let generation = crate::pipeline::retained_feed_generation().wrapping_add(generation_skew);
+        let ops = crate::shape_replay::SHAPE_REPLAY
+            .with(|state| state.borrow_mut().take_frame_ops(generation));
+        let (ack, recycled) = self.consume_replay_ops(ops, &[], 1.0);
+        let confirmed = ack.confirmations.len();
+        self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
+            .with(|state| state.borrow_mut().apply_ack(ack, recycled));
+        confirmed
     }
 
     /// Stages every queued replay recolor patch. Feed recolors are always
@@ -9221,19 +9308,17 @@ impl GpuRenderer {
     /// carries the frame's transforms; draining is idempotent across arms.
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
-        // Capacity-retaining drain: swap the thread-local queue against the
-        // renderer's scratch arena instead of `mem::take`, so both sides
-        // keep their high-water capacity across frames. The scratch is
-        // cleared before every return, which preserves drain idempotence
-        // across the retained prepare arms: a later drain in the same frame
-        // swaps one empty-with-capacity arena for another and stages nothing.
-        crate::shape_replay::SHAPE_REPLAY.with(|state| {
-            let mut state = state.borrow_mut();
-            std::mem::swap(
-                &mut state.pending_color_patches,
-                &mut self.color_patch_scratch,
-            );
-        });
+        // Capacity-retaining drain: swap the frame's parked patch buffer
+        // (see `consume_replay_ops`) against the scratch arena instead of
+        // `mem::take`, so both keep their high-water capacity across
+        // frames. The scratch is cleared before every return, which
+        // preserves drain idempotence across the retained prepare arms: a
+        // later drain in the same frame swaps one empty-with-capacity
+        // arena for another and stages nothing.
+        std::mem::swap(
+            &mut self.replay_color_patches,
+            &mut self.color_patch_scratch,
+        );
         let total_patches = self.color_patch_scratch.len();
         if total_patches == 0 {
             self.replay_upload_stats.note_frame(0, 0, 0, 0, 0);

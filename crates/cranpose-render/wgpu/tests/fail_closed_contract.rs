@@ -565,6 +565,46 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     assert_byte_exact("self-heal-vs-control", &control, &healed);
 }
 
+/// 5b: a replay-ops batch stamped with a foreign feed generation must be
+/// dropped whole at the store — empty ack, nothing captured, nothing
+/// confirmed, no GPU slot allocated. Synchronously impossible through the
+/// public render path today (planner and store read the same thread-local
+/// generation), so the roundtrip hook skews the batch's stamp directly.
+#[test]
+fn mismatched_generation_replay_ops_drop_whole() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping fail-closed generation mismatch: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    let command = command_for(36);
+    cranpose_render_wgpu::inject_feed_capture_for_tests(command, 0, 0, 4);
+    let confirmed = renderer.replay_ops_roundtrip_for_tests(1);
+    assert_eq!(confirmed, 0, "a mismatched batch must confirm nothing");
+    assert_eq!(
+        cranpose_render_wgpu::pending_feed_capture_count_for_tests(),
+        0,
+        "the batch is consumed whole, never requeued"
+    );
+    let (_, live_slots) = renderer.replay_slot_mesh_stats();
+    assert_eq!(
+        live_slots, 0,
+        "no GPU slot may be captured from a dropped batch"
+    );
+    let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
+    assert_eq!(
+        feed_slots, 0,
+        "a dropped capture must never become a feed slot"
+    );
+    declare_current_epoch();
+    assert!(
+        !cranpose_render_common::scene_builder::retained_slot_confirmed(command, 0),
+        "a dropped capture must never confirm its slot"
+    );
+}
+
 /// T5: a feed capture that outlives the frame it was queued on (aborted
 /// collection) must be dropped at the drain — never captured against
 /// another frame's shapes, never confirmed. (That `retire_all` also clears

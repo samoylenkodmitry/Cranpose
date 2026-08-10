@@ -1024,7 +1024,8 @@ fn try_command_feed<'a>(
     shape_run: &mut Vec<ShapeRunEntry<'a>>,
     context: &LocalPrimitiveContext<'_>,
 ) -> bool {
-    use crate::shape_replay::{command_feed_enabled, ColorPatch, PendingFeedCapture};
+    use crate::scene::{ColorPatch, PendingFeedCapture};
+    use crate::shape_replay::command_feed_enabled;
     // Guard order and content are the happy path's exact current checks —
     // when they all pass, nothing below this block costs anything new.
     let feed_ready = command_feed_enabled()

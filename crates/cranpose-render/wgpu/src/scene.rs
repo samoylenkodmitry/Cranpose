@@ -25,6 +25,34 @@ impl SnapAnchor {
     }
 }
 
+/// A pending solid recolor of one retained replay shape: a bare 16-byte
+/// color write into the slot's paint mirror. Planned producer-side, applied
+/// by the present-side replay store; crosses the frame boundary inside
+/// [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
+#[derive(Clone, Copy)]
+pub(crate) struct ColorPatch {
+    pub slot: u32,
+    pub shape_index: u32,
+    pub color: [f32; 4],
+}
+
+/// A capture request from the identity feed: the shape range this frame's
+/// ordinary emission pushed for one capture-marked span. Planned
+/// producer-side, honored by the present-side replay store; crosses the
+/// frame boundary inside [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
+pub(crate) struct PendingFeedCapture {
+    pub key: (cranpose_render_common::graph::DrawCommandId, u32),
+    pub shape_start: usize,
+    pub shape_count: usize,
+    pub fingerprint: u64,
+    pub capture_clip: Option<Rect>,
+    /// Frame ordinal at queue time. The store honors a capture only against
+    /// that same frame's scene — its shape indices are meaningless in any
+    /// other, and capturing there would retain wrong content under a
+    /// confirmed identity.
+    pub frame: u64,
+}
+
 #[derive(Clone)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
