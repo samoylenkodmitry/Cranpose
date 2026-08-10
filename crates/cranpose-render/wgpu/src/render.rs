@@ -8,6 +8,7 @@ use crate::effect_renderer::{
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
+use crate::frame_packet::FramePacket;
 use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
@@ -3842,6 +3843,8 @@ pub struct GpuRenderer {
     /// Last frame's direct-root scene, kept so its (potentially multi-MB)
     /// draw vectors are reused instead of reallocated every frame.
     retained_direct_scene: Option<CompositorScene>,
+    /// Monotone id stamped on each [`FramePacket`] the producer publishes.
+    frame_sequence: u64,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
@@ -4449,6 +4452,7 @@ impl GpuRenderer {
             layer_surface_rect_cache: HashMap::new(),
             direct_scene_capacity: SceneCapacityHint::default(),
             retained_direct_scene: None,
+            frame_sequence: 0,
             layer_surface_requirements_cache: HashMap::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
@@ -6673,25 +6677,45 @@ impl GpuRenderer {
         if let Some(collected) = &direct_root {
             self.process_shape_replay(&collected.scene.shapes, root_scale);
         }
+        // The producer's complete output for this frame, owned and Send.
+        // Built before the backend borrow so a later step can publish it to
+        // a present thread; consumed synchronously below today.
+        let direct_packet = direct_root.map(|root| {
+            self.frame_sequence = self.frame_sequence.wrapping_add(1);
+            FramePacket {
+                frame_id: self.frame_sequence,
+                viewport: (width, height),
+                root_scale,
+                root,
+            }
+        });
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
             recorder: frame_encoder,
         };
 
-        if let Some(collected) = direct_root {
+        if let Some(packet) = direct_packet {
             let direct_render_start = Instant::now();
+            let FramePacket {
+                frame_id,
+                viewport: (packet_width, packet_height),
+                root_scale: packet_root_scale,
+                root,
+            } = packet;
             let result = execute_render_root_direct(
                 &mut backend,
                 text_state,
                 surface_view,
-                collected,
-                width,
-                height,
-                root_scale,
+                root,
+                packet_width,
+                packet_height,
+                packet_root_scale,
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
             )
             .map(|scene| {
+                // Return the packet's scene buffers to the producer pool —
+                // for a heavy animated frame they are megabytes of Vec.
                 backend.renderer.retained_direct_scene = Some(scene);
             });
             if result.is_ok() {
@@ -6712,7 +6736,7 @@ impl GpuRenderer {
                 should_log_wgpu_render_stage(recorded_start, after_direct_render)
             {
                 log::warn!(
-                    "[wgpu-render-stage:recorded-direct-root] total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
+                    "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
                     instant_ms(recorded_start, after_root_collect),
                     instant_ms(direct_render_start, after_direct_render),
                 );

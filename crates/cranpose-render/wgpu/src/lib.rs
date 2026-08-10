@@ -9,6 +9,7 @@
 mod cost_tuner;
 mod effect_renderer;
 mod frame_graph;
+mod frame_packet;
 pub(crate) mod gpu_stats;
 mod layer_events;
 mod layer_surface_cache;
