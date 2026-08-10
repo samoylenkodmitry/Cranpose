@@ -381,9 +381,19 @@ fn android_idle_does_not_poll_16ms() {
         source.contains("app_waker.wake()"),
         "android runtime frame waker should wake the Android looper"
     );
+    let offscreen_period = "const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);";
     assert!(
-        !source.contains("Duration::from_millis(16)") && !source.contains("from_millis(16)"),
-        "android runtime must not poll at 16 ms while idle"
+        source.contains(offscreen_period),
+        "the off-screen work pace is the one 16 ms period this file may hold"
+    );
+    assert_eq!(
+        source.matches("from_millis(16)").count(),
+        1,
+        "android runtime must not poll at 16 ms while idle; the only 16 ms period is OFFSCREEN_UPDATE_PERIOD, which paces work for an app that asked to keep running off screen"
+    );
+    assert!(
+        source.contains("let offscreen = no_surface && cranpose_services::background_active();"),
+        "the off-screen pass must run only when an app asked to keep working with no surface"
     );
     assert!(
         source.contains("struct AndroidFrameDriver")
