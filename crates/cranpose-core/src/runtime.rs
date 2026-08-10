@@ -418,7 +418,16 @@ struct RuntimeInner {
 
 struct TaskEntry {
     id: u64,
+    label: String,
     future: Pin<Box<dyn Future<Output = ()> + 'static>>,
+}
+
+thread_local! {
+    static NEXT_TASK_LABEL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+pub fn label_next_ui_task(label: impl Into<String>) {
+    NEXT_TASK_LABEL.with(|held| *held.borrow_mut() = Some(label.into()));
 }
 
 impl RuntimeInner {
@@ -541,7 +550,10 @@ impl RuntimeInner {
     fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
         let id = self.next_task_id.get();
         self.next_task_id.set(id + 1);
-        self.tasks.borrow_mut().push(TaskEntry { id, future });
+        let label = NEXT_TASK_LABEL
+            .with(|held| held.borrow_mut().take())
+            .unwrap_or_else(|| "unnamed".to_string());
+        self.tasks.borrow_mut().push(TaskEntry { id, label, future });
         self.schedule();
         id
     }
@@ -1016,6 +1028,20 @@ impl RuntimeHandle {
         self.inner
             .upgrade()
             .map(|inner| inner.debug_stats())
+            .unwrap_or_default()
+    }
+
+    pub fn live_ui_task_labels(&self) -> Vec<(u64, String)> {
+        self.inner
+            .upgrade()
+            .map(|inner| {
+                inner
+                    .tasks
+                    .borrow()
+                    .iter()
+                    .map(|entry| (entry.id, entry.label.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 

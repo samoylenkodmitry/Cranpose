@@ -24,6 +24,7 @@ mod surface_requirements;
 mod test_support;
 
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+pub use render::frames_presented;
 pub use scene::{ClickAction, HitRegion, Scene};
 
 use cranpose_core::{MemoryApplier, NodeId};

@@ -179,9 +179,14 @@ unsafe extern "C" fn on_message(
                 state.events.pop_front();
             }
             state.events.push_back(event);
+            drop(state);
+            cranpose_services::note_store_news();
+            return;
         }
         _ => {}
     }
+    drop(state);
+    cranpose_services::note_store_news();
 }
 
 // ------------------------------------------------------------------ backend
