@@ -1593,13 +1593,18 @@ pub fn run(
                 .unwrap_or(Duration::ZERO)
         });
 
-        if let Some(shell) = app_shell.as_ref() {
-            shell.schedule_platform_frame(&android_frame_driver);
-        } else {
-            android_frame_driver.clear_wake();
+        // A frame deadline with no surface asks for a frame nothing will draw,
+        // and an app with a running animation asks for one every turn of the
+        // loop, which is a spun core for as long as the app is off screen.
+        let no_surface = gpu_resources.is_none();
+        match app_shell.as_ref() {
+            Some(shell) if !no_surface => {
+                shell.schedule_platform_frame(&android_frame_driver);
+            }
+            _ => android_frame_driver.clear_wake(),
         }
         let frame_deadline_timeout = android_frame_driver.deadline_timeout();
-        let offscreen = gpu_resources.is_none() && cranpose_services::background_active();
+        let offscreen = no_surface && cranpose_services::background_active();
         if !offscreen {
             next_offscreen_update = None;
         }
@@ -1608,10 +1613,7 @@ pub fn run(
                 .as_ref()
                 .is_some_and(|shell| shell.has_pending_ui());
         let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
-        // Off screen the frame deadline asks for a frame nothing will draw, and
-        // an app with a running animation asks for one every turn of the loop.
-        // Only work waiting on the UI thread is worth a wake there.
-        let idle_timeout = match offscreen {
+        let idle_timeout = match no_surface {
             true => earliest_android_poll_timeout(pending_confirmation_timeout, offscreen_timeout),
             false => {
                 earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout)
@@ -1647,7 +1649,7 @@ pub fn run(
 
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
-        } else if offscreen {
+        } else if no_surface {
             match offscreen_pending_ui {
                 true => Some(Duration::ZERO),
                 false => idle_timeout,
