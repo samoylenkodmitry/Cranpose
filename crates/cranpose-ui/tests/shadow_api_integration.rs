@@ -1,7 +1,6 @@
 use cranpose_ui::{
-    collect_slices_from_modifier, command_draw_scope, AppContext, BlendMode, Brush, Dp,
-    DpOffset, DrawCommand, DrawCommandFn, LayerShape, Modifier, Point, RoundedCornerShape,
-    Shadow, Size,
+    collect_slices_from_modifier, command_draw_scope, AppContext, BlendMode, Brush, Dp, DpOffset,
+    DrawCommand, DrawCommandFn, LayerShape, Modifier, Point, RoundedCornerShape, Shadow, Size,
 };
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, ShadowPrimitive};
 

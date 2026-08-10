@@ -227,8 +227,14 @@ pub fn primitives_for_placement_reusing(
     size: Size,
     storage: Vec<DrawPrimitive>,
 ) -> Vec<DrawPrimitive> {
-    primitives_for_placement_retained(command, placement, size, CommandRecording::default(), storage)
-        .0
+    primitives_for_placement_retained(
+        command,
+        placement,
+        size,
+        CommandRecording::default(),
+        storage,
+    )
+    .0
 }
 
 /// The full retained form: the compact recording buffers come from and
@@ -392,8 +398,7 @@ pub fn primitives_for_placement_verified(
         let markers = scope.content_marker_count();
         let mut bypass = |slot: u32| {
             markers == 0
-                && command
-                    .is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
+                && command.is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
         };
         let (finished, frame) = scope.finish_replay(center, outcome, &mut bypass);
         if let Some((records, retained, dynamic, segments, (deaths, splits))) = diag {
@@ -413,8 +418,7 @@ pub fn primitives_for_placement_verified(
     }
     match (placement, command) {
         (DrawPlacement::Behind, DrawCommand::Behind(func)) => {
-            let (finished, frame) =
-                record_into(func, size, recording, storage, replay, command_id);
+            let (finished, frame) = record_into(func, size, recording, storage, replay, command_id);
             let frame = (finished.content_markers == 0).then_some(frame).flatten();
             (
                 filter_content(finished.primitives, finished.content_markers),
@@ -423,8 +427,7 @@ pub fn primitives_for_placement_verified(
             )
         }
         (DrawPlacement::Overlay, DrawCommand::Overlay(func)) => {
-            let (finished, frame) =
-                record_into(func, size, recording, storage, replay, command_id);
+            let (finished, frame) = record_into(func, size, recording, storage, replay, command_id);
             let frame = (finished.content_markers == 0).then_some(frame).flatten();
             (
                 filter_content(finished.primitives, finished.content_markers),

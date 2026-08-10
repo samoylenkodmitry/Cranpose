@@ -497,7 +497,10 @@ pub struct DrawRunSummary {
 impl DrawRunSummary {
     pub fn scan(primitives: &[DrawPrimitive]) -> Self {
         fn unwrap_blend(mut primitive: &DrawPrimitive) -> &DrawPrimitive {
-            while let DrawPrimitive::Blend { primitive: inner, .. } = primitive {
+            while let DrawPrimitive::Blend {
+                primitive: inner, ..
+            } = primitive
+            {
                 primitive = inner;
             }
             primitive

@@ -593,21 +593,19 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     // Convert background + shape into a draw command
     if let Some(color) = background_color {
-        let draw_cmd = Rc::new(
-            move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-                use crate::modifier::Brush;
-                use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
+        let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+            use crate::modifier::Brush;
+            use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
 
-                let size = scope.size();
-                let brush = Brush::solid(color);
-                if let Some(shape) = corner_shape {
-                    let radii: CornerRadii = shape.resolve(size.width, size.height);
-                    scope.draw_round_rect(brush, radii);
-                } else {
-                    scope.draw_rect(brush);
-                }
-            },
-        );
+            let size = scope.size();
+            let brush = Brush::solid(color);
+            if let Some(shape) = corner_shape {
+                let radii: CornerRadii = shape.resolve(size.width, size.height);
+                scope.draw_round_rect(brush, radii);
+            } else {
+                scope.draw_rect(brush);
+            }
+        });
 
         let insert_index = background_insert_index
             .unwrap_or(0)

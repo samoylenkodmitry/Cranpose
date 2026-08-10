@@ -675,8 +675,7 @@ mod tests {
                 }
             }
         }
-        const AXIS_DIRECTIONS: [(f32, f32); 4] =
-            [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)];
+        const AXIS_DIRECTIONS: [(f32, f32); 4] = [(0.0, 1.0), (1.0, 0.0), (0.0, -1.0), (-1.0, 0.0)];
         for (quadrant, (sin, cos)) in AXIS_DIRECTIONS.into_iter().enumerate() {
             let angle = quadrant as f32 * FRAC_PI_2;
             if arc.contains_angle(angle) {
