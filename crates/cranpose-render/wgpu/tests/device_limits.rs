@@ -68,6 +68,7 @@ fn solid_rect(rect: Rect, color: Color) -> RenderNode {
             primitive: DrawPrimitive::Rect {
                 rect,
                 brush: Brush::solid(color),
+                stroke: None,
             },
             clip: None,
         }),

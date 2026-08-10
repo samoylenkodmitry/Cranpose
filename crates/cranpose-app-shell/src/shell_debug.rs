@@ -66,6 +66,36 @@ where
         self.layout_tree.as_ref()
     }
 
+    /// Whether a semantics snapshot could contain anything at all. Reading the
+    /// flag costs nothing, unlike collecting the layout-bounds map only to find
+    /// semantics tracking disabled.
+    pub fn semantics_active(&self) -> bool {
+        self.semantics_enabled
+    }
+
+    /// Monotonic revision of the accessibility-relevant state. It moves when a
+    /// layout pass invalidated the cached snapshots, when semantics tracking is
+    /// toggled, and when any node marked its semantics dirty since the last
+    /// look. A bridge that stored the revision it last projected can skip the
+    /// whole snapshot-and-compare while this still reads the same — which on an
+    /// animation-only frame is every frame.
+    pub fn semantics_snapshot_revision(&mut self) -> u64 {
+        if self.semantics_enabled {
+            let app_context = std::rc::Rc::clone(&self.app_context);
+            let semantics_dirty = app_context.enter(|| {
+                let Some(root) = self.composition.root() else {
+                    return false;
+                };
+                let mut applier = self.composition.applier_mut();
+                cranpose_ui::tree_needs_semantics(&mut *applier, root).unwrap_or(true)
+            });
+            if semantics_dirty {
+                self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
+            }
+        }
+        self.semantics_snapshot_revision
+    }
+
     /// Get the current semantics tree (for robot/testing)
     pub fn semantics_tree(&mut self) -> Option<&SemanticsTree> {
         let app_context = std::rc::Rc::clone(&self.app_context);

@@ -121,7 +121,7 @@ fn max_layer_translation_y(layer: &LayerNode) -> f32 {
         |max_value, child| {
             let child_value = match child {
                 RenderNode::Layer(child_layer) => max_layer_translation_y(child_layer),
-                RenderNode::Primitive(_) => 0.0,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => 0.0,
             };
             max_value.max(child_value)
         },

@@ -17,6 +17,10 @@ pub use android_file_picker::open_content_uri;
 mod accessibility;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_frame_rate;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_frame_telemetry;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 mod android_input;
@@ -24,14 +28,34 @@ mod android_input;
 mod android_jni;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_keyboard;
+/// The Android intent-extra wire format behind `cranpose_services::launch_args`.
+/// Built on the host as well so its decoding tests run everywhere.
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod android_launch_args;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
+/// The Play Billing wire format behind `cranpose_services::purchases`. Built on
+/// the host as well so its decoding tests run everywhere.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "playbilling", target_os = "android")
+))]
+mod android_purchase_wire;
+#[cfg(all(
+    feature = "android",
+    feature = "playbilling",
+    feature = "renderer-wgpu",
+    target_os = "android"
+))]
+mod android_purchases;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_services;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_surface;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_text_input;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_vsync;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_writable_folder;
 mod launcher;
@@ -40,6 +64,13 @@ mod native_window;
 pub use android_host_window::{
     rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
     AndroidHostWindowSizeStatus, AndroidHostWindowState,
+};
+/// Font registration vocabulary named by [`AppLauncher`]'s font methods:
+/// the platform font directory [`AppLauncher::with_system_font_family`] wants,
+/// the weight set it registers, and the registry and error
+/// [`AppLauncher::with_fonts_from`] hands out.
+pub use cranpose_render_common::font_source::{
+    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
 };
 #[cfg(all(
     feature = "renderer-wgpu",
@@ -92,8 +123,13 @@ pub use cranpose_ui::*;
 /// (`use cranpose::liquid::prelude::*;`).
 pub use cranpose_liquid as liquid;
 
+/// The real-time audio engine that backs `cranpose_services::audio`. Call
+/// [`install_audio`] once at startup; Android installs it automatically.
+#[cfg(feature = "audio")]
+pub use cranpose_audio::{install as install_audio, AudioEngine};
+
 /// Core runtime helpers commonly used by applications.
-pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState, useStateRaw};
 
 #[doc(hidden)]
 pub use cranpose_core::{
@@ -121,7 +157,9 @@ pub mod prelude {
         WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode,
         WindowNode, WindowResizeDirection, WindowState,
     };
-    pub use cranpose_core::{mutableStateOf, remember, rememberUpdatedState, useState};
+    pub use cranpose_core::{
+        mutableStateOf, remember, rememberUpdatedState, useState, useStateRaw,
+    };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 }
@@ -163,6 +201,11 @@ mod winit_pointer;
 #[cfg(any(feature = "desktop-shell", all(feature = "ios", target_os = "ios")))]
 #[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
 mod winit_touch;
+
+/// Mouse-wheel to rotary-input translation, so Wear OS rotary handling is
+/// developable and testable on the desktop.
+#[cfg(feature = "desktop-shell")]
+mod winit_rotary;
 
 /// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(

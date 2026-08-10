@@ -2,6 +2,7 @@ use std::rc::Rc;
 
 use cranpose_render_common::brush_sampling::sample_brush_rgba;
 use cranpose_render_common::graph_scene::RenderDiagnostics;
+use cranpose_render_common::shape_sdf;
 use cranpose_render_common::software_text_raster::rasterize_text_to_image;
 use cranpose_render_common::text_measure::SoftwareTextResources;
 #[cfg(test)]
@@ -134,7 +135,9 @@ fn draw_raster_scene(
     for (index, text) in scene.texts.iter().enumerate() {
         ordered_items.push((text.z_index, RenderItem::Text(index)));
     }
-    ordered_items.sort_by_key(|(z, _)| *z);
+    // Unique z per item (the scene's `next_z` counter), so unstable sorting is
+    // order-identical and avoids the stable sort's per-frame scratch allocation.
+    ordered_items.sort_unstable_by_key(|(z, _)| *z);
 
     for (_, item) in ordered_items {
         match item {
@@ -198,6 +201,15 @@ fn draw_shape(
     } else {
         rect
     };
+    // Empty geometry draws nothing. The shared lowering already drops these,
+    // but a `DrawShape` can also be built directly (shadow casters, caches), so
+    // guard here too rather than emitting a hairline for a zero-area band.
+    if draw.arc.is_some_and(|arc| arc.is_degenerate())
+        || draw.stroke.is_some_and(|stroke| !stroke.is_visible())
+    {
+        return;
+    }
+
     let clip_bounds = match clip_rect_to_bounds(rect, clip, width, height) {
         Some(bounds) => bounds,
         None => return,
@@ -207,9 +219,27 @@ fn draw_shape(
         height: rect_height,
         ..
     } = rect;
-    let resolved_shape = draw
-        .shape
-        .map(|shape| shape.resolve(rect_width, rect_height));
+
+    // Stroked outlines and arcs are rasterized from the very same signed
+    // distance functions the GPU shader evaluates (see
+    // `cranpose_render_common::shape_sdf`), so the software backend draws the
+    // real shape instead of degrading a stroke to a filled box.
+    let arc = draw.arc.map(|mut arc| {
+        arc.center.x += snap_delta.x;
+        arc.center.y += snap_delta.y;
+        arc
+    });
+    let stroke = draw.stroke;
+    // For a stroked shape `rect` is already inflated by half the stroke width,
+    // so corner radii must resolve against the geometry that was asked for.
+    let stroke_outset = stroke.map(|stroke| stroke.half_width()).unwrap_or(0.0);
+    let resolved_shape = draw.shape.map(|shape| {
+        shape.resolve(
+            (rect_width - stroke_outset * 2.0).max(0.0),
+            (rect_height - stroke_outset * 2.0).max(0.0),
+        )
+    });
+
     for py in clip_bounds.min_y..clip_bounds.max_y {
         if py < 0 || py >= height as i32 {
             continue;
@@ -220,12 +250,31 @@ fn draw_shape(
             }
             let center_x = px as f32 + 0.5;
             let center_y = py as f32 + 0.5;
-            if let Some(ref radii) = resolved_shape {
-                if !point_in_resolved_rounded_rect(center_x, center_y, rect, radii) {
-                    continue;
+
+            let coverage = if let Some(arc) = arc.as_ref() {
+                shape_sdf::arc_coverage(Point::new(center_x, center_y), arc)
+            } else if let Some(stroke) = stroke {
+                shape_sdf::stroked_rect_coverage(
+                    Point::new(center_x, center_y),
+                    rect,
+                    resolved_shape,
+                    stroke.half_width(),
+                    stroke.join,
+                )
+            } else {
+                if let Some(ref radii) = resolved_shape {
+                    if !point_in_resolved_rounded_rect(center_x, center_y, rect, radii) {
+                        continue;
+                    }
                 }
+                1.0
+            };
+            if coverage <= 0.0 {
+                continue;
             }
-            let sample = sample_brush_rgba(&draw.brush, rect, center_x, center_y);
+
+            let mut sample = sample_brush_rgba(&draw.brush, rect, center_x, center_y);
+            sample[3] *= coverage;
             let alpha = sample[3];
             if alpha <= 0.0 {
                 continue;
@@ -705,6 +754,8 @@ mod tests {
             snap_to_pixel_grid: false,
             brush: Brush::solid(Color::WHITE),
             shape: None,
+            stroke: None,
+            arc: None,
             z_index: 0,
             clip: Some(Rect {
                 x: 2.0,
@@ -942,6 +993,7 @@ mod tests {
                             height: 5.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -1107,6 +1159,211 @@ mod tests {
         assert_ne!(
             static_frame, animated_frame,
             "TextMotion::Static and TextMotion::Animated should not rasterize identically"
+        );
+    }
+
+    // ── Stroke / arc rasterization ──────────────────────────────────────────
+    //
+    // The software backend must draw the real stroked/arc shape. Falling back
+    // to a filled rect would look plausible in a screenshot diff but is simply
+    // the wrong picture, so these assert the defining properties: a stroke is
+    // hollow, an arc is a band, and an annular sector has flat radial edges.
+
+    const CANVAS: u32 = 64;
+
+    fn blank_frame() -> Vec<u8> {
+        vec![0u8; (CANVAS * CANVAS * 4) as usize]
+    }
+
+    fn is_background(frame: &[u8], x: u32, y: u32) -> bool {
+        let idx = ((y * CANVAS + x) * 4) as usize;
+        frame[idx..idx + 4] == [18, 18, 24, 255]
+    }
+
+    fn is_inked(frame: &[u8], x: u32, y: u32) -> bool {
+        !is_background(frame, x, y)
+    }
+
+    fn render_shape(shape: crate::scene::DrawShape) -> Vec<u8> {
+        let mut scene = RasterScene::new();
+        scene.shapes.push(shape);
+        let mut frame = blank_frame();
+        draw_raster_scene_for_test(&mut frame, CANVAS, CANVAS, &scene);
+        frame
+    }
+
+    fn shape_template(rect: Rect) -> crate::scene::DrawShape {
+        crate::scene::DrawShape {
+            rect,
+            snap_anchor: None,
+            snap_to_pixel_grid: false,
+            brush: Brush::solid(Color::WHITE),
+            shape: None,
+            stroke: None,
+            arc: None,
+            z_index: 0,
+            clip: None,
+            blend_mode: BlendMode::SrcOver,
+        }
+    }
+
+    #[test]
+    fn stroked_rect_rasterizes_hollow() {
+        // Geometry (16,16)-(48,48) stroked at width 4 => bounds (14,14)-(50,50).
+        let mut shape = shape_template(Rect {
+            x: 14.0,
+            y: 14.0,
+            width: 36.0,
+            height: 36.0,
+        });
+        shape.stroke = Some(cranpose_ui_graphics::Stroke::new(4.0));
+        let frame = render_shape(shape);
+
+        assert!(is_inked(&frame, 32, 16), "top edge must be stroked");
+        assert!(is_inked(&frame, 16, 32), "left edge must be stroked");
+        assert!(is_inked(&frame, 48, 32), "right edge must be stroked");
+        assert!(is_inked(&frame, 32, 48), "bottom edge must be stroked");
+        assert!(
+            is_background(&frame, 32, 32),
+            "the interior of a stroked rect must stay empty — a silent fallback \
+             to a filled rect would fill it"
+        );
+        assert!(is_background(&frame, 32, 8), "outside must stay empty");
+    }
+
+    #[test]
+    fn stroked_rect_differs_from_the_filled_rect_of_the_same_bounds() {
+        let rect = Rect {
+            x: 14.0,
+            y: 14.0,
+            width: 36.0,
+            height: 36.0,
+        };
+        let filled = render_shape(shape_template(rect));
+        let mut stroked_shape = shape_template(rect);
+        stroked_shape.stroke = Some(cranpose_ui_graphics::Stroke::new(4.0));
+        let stroked = render_shape(stroked_shape);
+        assert_ne!(filled, stroked);
+    }
+
+    #[test]
+    fn arc_band_rasterizes_between_the_two_radii() {
+        // Full ring, inner 10, outer 16, centered at (32, 32).
+        let mut shape = shape_template(Rect {
+            x: 16.0,
+            y: 16.0,
+            width: 32.0,
+            height: 32.0,
+        });
+        shape.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+            Point::new(32.0, 32.0),
+            10.0,
+            16.0,
+            0.0,
+            cranpose_ui_graphics::TAU,
+            cranpose_ui_graphics::StrokeCap::Butt,
+        ));
+        let frame = render_shape(shape);
+
+        assert!(is_background(&frame, 32, 32), "the hole must stay empty");
+        // Centerline radius 13 in each cardinal direction.
+        assert!(is_inked(&frame, 45, 32), "+X band");
+        assert!(is_inked(&frame, 19, 32), "-X band");
+        assert!(is_inked(&frame, 32, 45), "+Y band");
+        assert!(
+            is_inked(&frame, 32, 19),
+            "-Y band — a seam here would mean the full-turn wrap is mishandled"
+        );
+    }
+
+    #[test]
+    fn annular_sector_has_flat_radial_edges_and_respects_the_sweep() {
+        // 0 -> 90 degrees (i.e. +X sweeping down to +Y in screen space),
+        // inner 8, outer 16, centered at (32, 32).
+        let mut shape = shape_template(Rect {
+            x: 32.0,
+            y: 32.0,
+            width: 16.0,
+            height: 16.0,
+        });
+        shape.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+            Point::new(32.0, 32.0),
+            8.0,
+            16.0,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            cranpose_ui_graphics::StrokeCap::Butt,
+        ));
+        let frame = render_shape(shape);
+
+        // Inside the sweep, between the radii.
+        assert!(is_inked(&frame, 44, 33), "inside the sector near 0 degrees");
+        assert!(
+            is_inked(&frame, 33, 44),
+            "inside the sector near 90 degrees"
+        );
+        // Outside the sweep at the same radius: the radial edge is flat, so
+        // one pixel the other side of the start angle is empty.
+        assert!(
+            is_background(&frame, 44, 30),
+            "past the flat radial start edge must be empty"
+        );
+        assert!(
+            is_background(&frame, 30, 44),
+            "past the flat radial end edge must be empty"
+        );
+        // Inside the hole and outside the outer radius.
+        assert!(is_background(&frame, 35, 35), "inner hole");
+        assert!(is_background(&frame, 52, 33), "beyond the outer radius");
+    }
+
+    #[test]
+    fn arc_and_stroke_rasterization_never_writes_nan_or_panics() {
+        // Degenerate geometry can reach the rasterizer through a translated or
+        // cached scene; it must simply draw nothing.
+        for arc in [
+            cranpose_ui_graphics::ArcGeometry::new(
+                Point::new(32.0, 32.0),
+                10.0,
+                10.0,
+                0.0,
+                1.0,
+                cranpose_ui_graphics::StrokeCap::Butt,
+            ),
+            cranpose_ui_graphics::ArcGeometry::new(
+                Point::new(32.0, 32.0),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                cranpose_ui_graphics::StrokeCap::Round,
+            ),
+        ] {
+            let mut shape = shape_template(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 64.0,
+                height: 64.0,
+            });
+            shape.arc = Some(arc);
+            let frame = render_shape(shape);
+            assert!(
+                (0..CANVAS).all(|y| (0..CANVAS).all(|x| is_background(&frame, x, y))),
+                "a degenerate arc must draw nothing"
+            );
+        }
+
+        let mut zero_width = shape_template(Rect {
+            x: 8.0,
+            y: 8.0,
+            width: 32.0,
+            height: 32.0,
+        });
+        zero_width.stroke = Some(cranpose_ui_graphics::Stroke::new(0.0));
+        let frame = render_shape(zero_width);
+        assert!(
+            (0..CANVAS).all(|y| (0..CANVAS).all(|x| is_background(&frame, x, y))),
+            "a zero-width stroke must draw nothing"
         );
     }
 }

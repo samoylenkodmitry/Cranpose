@@ -3,8 +3,7 @@ use super::font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
 use super::unit::TextUnit;
 use crate::modifier::{Brush, Color};
-use cranpose_core::hash::default;
-use cranpose_ui_graphics::RenderHash;
+use cranpose_ui_graphics::{FxHasher, RenderHash};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -251,7 +250,7 @@ impl SpanStyle {
     }
 
     pub fn render_hash(&self) -> u64 {
-        let mut hasher = default::new();
+        let mut hasher = FxHasher::default();
         hash_span_style(self, &mut hasher);
         hasher.finish()
     }
@@ -306,7 +305,7 @@ impl ParagraphStyle {
     }
 
     pub fn render_hash(&self) -> u64 {
-        let mut hasher = default::new();
+        let mut hasher = FxHasher::default();
         hash_paragraph_style(self, &mut hasher);
         hasher.finish()
     }
@@ -401,7 +400,7 @@ impl TextStyle {
     }
 
     pub fn measurement_hash(&self) -> u64 {
-        let mut hasher = default::new();
+        let mut hasher = FxHasher::default();
         let span = &self.span_style;
         let paragraph = &self.paragraph_style;
 
@@ -434,7 +433,7 @@ impl TextStyle {
     /// measurement inputs plus the visual-only properties
     /// (color/brush/alpha, decorations, shadow, draw style).
     pub fn raster_hash(&self) -> u64 {
-        let mut hasher = default::new();
+        let mut hasher = FxHasher::default();
         self.measurement_hash().hash(&mut hasher);
         let span = &self.span_style;
         if let Some(color) = span.color {
@@ -466,7 +465,7 @@ impl TextStyle {
     }
 
     pub fn render_hash(&self) -> u64 {
-        let mut hasher = default::new();
+        let mut hasher = FxHasher::default();
         hash_span_style(&self.span_style, &mut hasher);
         hash_paragraph_style(&self.paragraph_style, &mut hasher);
         hasher.finish()

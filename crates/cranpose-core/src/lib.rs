@@ -10,6 +10,7 @@ mod composition;
 mod composition_locals;
 mod debug_trace;
 mod emit;
+pub mod env_flags;
 #[cfg(any(feature = "internal", test))]
 mod frame_clock;
 mod hooks;
@@ -51,7 +52,7 @@ pub use debug_trace::{
 pub use hooks::{
     derivedStateOf, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
     mutableStateOf, ownedMutableStateOf, remember, rememberUpdatedState, remember_keyed,
-    try_mutableStateOf, useState,
+    try_mutableStateOf, useState, useStateRaw,
 };
 #[cfg(feature = "internal")]
 #[doc(hidden)]
@@ -268,7 +269,7 @@ fn register_location_key_debug_info(key: Key, file: &str, line: u32, column: u32
 
 #[cfg(all(debug_assertions, not(test)))]
 fn location_key_diagnostics_enabled() -> bool {
-    std::env::var_os("CRANPOSE_LOCATION_KEY_DIAGNOSTICS").is_some()
+    crate::env_flag!("CRANPOSE_LOCATION_KEY_DIAGNOSTICS")
 }
 
 #[cfg(test)]
@@ -298,7 +299,7 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
 
 #[cfg(all(debug_assertions, not(test)))]
 pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
-    std::env::var_os("CRANPOSE_VALIDATE_SLOTS").is_some()
+    crate::env_flag!("CRANPOSE_VALIDATE_SLOTS")
 }
 
 fn source_location_key(file: &str, line: u32, column: u32) -> Key {

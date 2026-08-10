@@ -1,4 +1,6 @@
-use cranpose_render_common::render_contract::{RenderedFrame, ALL_SHARED_RENDER_CASES};
+use cranpose_render_common::render_contract::{
+    RenderedFrame, SharedRenderCase, ALL_SHARED_RENDER_CASES,
+};
 use cranpose_render_pixels::{draw_scene, Scene};
 
 #[test]
@@ -39,6 +41,34 @@ fn pixels_text_font_state_is_renderer_owned() {
 fn pixels_renderer_matches_shared_render_contracts() {
     let app_context = cranpose_ui::AppContext::new();
     for case in ALL_SHARED_RENDER_CASES {
+        let mut frames = Vec::new();
+        for fixture in case.fixtures() {
+            let mut scene = Scene::new();
+            scene.graph = Some(fixture.graph);
+            let mut frame = vec![0u8; (fixture.width * fixture.height * 4) as usize];
+            app_context.enter(|| draw_scene(&mut frame, fixture.width, fixture.height, &scene));
+            frames.push(RenderedFrame {
+                width: fixture.width,
+                height: fixture.height,
+                pixels: frame,
+                normalized_rect: fixture.normalized_rect,
+            });
+        }
+        case.assert_frames(&frames);
+    }
+}
+
+/// The stroke/arc contract, isolated from the font-dependent text cases so a
+/// missing system font can never mask a geometry regression. Both backends run
+/// the same assertions; a backend that filled these shapes instead of stroking
+/// them fails here.
+#[test]
+fn pixels_renderer_matches_shared_stroke_and_arc_contracts() {
+    let app_context = cranpose_ui::AppContext::new();
+    for case in [
+        SharedRenderCase::StrokedRoundRect,
+        SharedRenderCase::AnnularSector,
+    ] {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
             let mut scene = Scene::new();

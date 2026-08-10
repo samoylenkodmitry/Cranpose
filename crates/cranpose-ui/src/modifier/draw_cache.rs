@@ -1,4 +1,4 @@
-use super::{DrawCacheBuilder, DrawCommand, Modifier, Size};
+use super::{DrawCacheBuilder, DrawCommand, Modifier};
 use crate::modifier_nodes::DrawCommandElement;
 use cranpose_ui_graphics::{DrawScope, DrawScopeDefault};
 use std::rc::Rc;
@@ -12,14 +12,8 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().draw_with_content(|scope| { ... })`
     pub fn draw_with_content(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
-        let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
-            f(&mut scope);
-            scope.into_primitives()
-        });
-        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::WithContent(
-            func.clone(),
-        )));
+        let func = Rc::new(move |scope: &mut DrawScopeDefault| f(scope));
+        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::WithContent(func)));
         self.then(modifier)
     }
 
@@ -27,13 +21,8 @@ impl Modifier {
     ///
     /// Example: `Modifier::empty().draw_behind(|scope| { ... })`
     pub fn draw_behind(self, f: impl Fn(&mut dyn DrawScope) + 'static) -> Self {
-        let func = Rc::new(move |size: Size| {
-            let mut scope = DrawScopeDefault::new(size);
-            f(&mut scope);
-            scope.into_primitives()
-        });
-        let modifier =
-            Self::with_element(DrawCommandElement::new(DrawCommand::Behind(func.clone())));
+        let func = Rc::new(move |scope: &mut DrawScopeDefault| f(scope));
+        let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(func)));
         self.then(modifier)
     }
 

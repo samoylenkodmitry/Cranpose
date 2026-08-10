@@ -552,6 +552,14 @@ impl<T> MutationPolicy<T> for NeverEqual {
     }
 }
 
+pub(crate) struct StructuralEqual;
+
+impl<T: PartialEq> MutationPolicy<T> for StructuralEqual {
+    fn equivalent(&self, a: &T, b: &T) -> bool {
+        a == b
+    }
+}
+
 pub trait StateObject: Any {
     fn object_id(&self) -> ObjectId;
     fn first_record(&self) -> Rc<StateRecord>;
@@ -644,7 +652,7 @@ fn should_check_chain_integrity() -> bool {
 
     #[cfg(not(debug_assertions))]
     {
-        std::env::var_os("CRANPOSE_ASSERT_STATE_CHAIN").is_some()
+        crate::env_flag!("CRANPOSE_ASSERT_STATE_CHAIN")
     }
 }
 
@@ -1595,6 +1603,13 @@ impl<T: Clone + 'static> OwnedMutableState<T> {
             _lease: lease,
             _marker: PhantomData,
         }
+    }
+
+    pub fn with_runtime_structural_eq(value: T, runtime: RuntimeHandle) -> Self
+    where
+        T: PartialEq,
+    {
+        Self::with_runtime_and_policy(value, runtime, Arc::new(StructuralEqual))
     }
 
     pub(crate) fn with_runtime_and_policy(

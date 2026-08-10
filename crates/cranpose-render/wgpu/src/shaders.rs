@@ -178,4 +178,62 @@ mod tests {
     fn offset_shader_validates_for_webgpu() {
         assert!(validate_wgsl_module(&super::offset_shader()).is_ok());
     }
+
+    // ── Shape shader (stroke + arc primitives) ──────────────────────────────
+    //
+    // The shape shader has to keep validating for BOTH WebGPU and WebGL/GLSL
+    // ES 3.00 after the stroke/arc additions. GLSL ES is the strict one: no
+    // unbounded loops, no dynamic indexing beyond what the gradient sampler
+    // already does. These tests are the guard.
+
+    #[test]
+    fn shape_shader_validates_for_webgpu() {
+        if let Err(err) = validate_wgsl_module(super::SHADER) {
+            panic!("shape.wgsl must validate for WebGPU: {err}");
+        }
+    }
+
+    #[test]
+    fn shape_shader_validates_for_webgl() {
+        if let Err(err) = validate_glsl_portability(super::SHADER, "vs_main", ShaderStage::Vertex) {
+            panic!("shape.wgsl vertex stage must lower to GLSL ES 300: {err}");
+        }
+        if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
+        {
+            panic!("shape.wgsl fragment stage must lower to GLSL ES 300: {err}");
+        }
+    }
+
+    #[test]
+    fn shape_shader_declares_the_stroke_and_arc_parameters() {
+        // Cheap structural guard: the Rust `ShapeData` mirror is `Pod` and
+        // uploaded by raw bytes, so a field that exists on one side only would
+        // shift every subsequent field without any compiler complaint.
+        for needle in [
+            "stroke_params: vec4<f32>",
+            "arc_params: vec4<f32>",
+            "fn sdf_arc_band(",
+            "fn sdf_stroked_rounded_rect(",
+        ] {
+            assert!(
+                super::SHADER.contains(needle),
+                "shape.wgsl must declare `{needle}`"
+            );
+        }
+    }
+
+    #[test]
+    fn resized_shape_shader_still_validates_for_both_targets() {
+        // Native pipelines rewrite the uniform array lengths; the rewritten
+        // source is what actually gets compiled, so validate that shape too.
+        let resized = super::SHADER
+            .replace("array<ShapeData, 102>", "array<ShapeData, 409>")
+            .replace("array<GradientStop, 256>", "array<GradientStop, 1024>");
+        assert!(
+            resized.contains("array<ShapeData, 409>"),
+            "array length literal drifted from `shape_shader_source`"
+        );
+        assert!(validate_wgsl_module(&resized).is_ok());
+        assert!(validate_glsl_portability(&resized, "fs_main", ShaderStage::Fragment).is_ok());
+    }
 }

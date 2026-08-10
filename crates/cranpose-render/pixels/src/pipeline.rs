@@ -16,7 +16,7 @@ use cranpose_render_common::layer_transform::{
 };
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
-    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams,
+    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
 };
 use cranpose_render_common::Brush;
 #[cfg(test)]
@@ -355,6 +355,8 @@ fn push_layer_shadow(
             snap_to_pixel_grid: false,
             brush: Brush::solid(color),
             shape,
+            stroke: None,
+            arc: None,
             z_index: 0,
             clip: None,
             blend_mode: BlendMode::SrcOver,
@@ -395,6 +397,9 @@ fn push_layer_shadow(
 }
 
 pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
+    // This backend draws every primitive; graphs built for it must not
+    // carry retained-span structure (and must not pay for verification).
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, 1.0);
     collect_hits_from_graph(&graph.root, ProjectiveTransform::identity(), scene, None);
     scene.replace_graph(graph);
@@ -721,6 +726,7 @@ fn resolve_text_horizontal_offset(
 /// Renders the scene by traversing the LayoutNode tree directly via Applier.
 /// This eliminates the need for per-frame LayoutTree reconstruction.
 pub(crate) fn render_from_applier(applier: &mut MemoryApplier, root: NodeId, scene: &mut Scene) {
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
     let Some(graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, 1.0)
     else {
@@ -951,7 +957,7 @@ fn populate_draws_from_graph(
         shadow_clip,
     );
 
-    let mut deferred_primitives = Vec::new();
+    let mut deferred_draws: Vec<&RenderNode> = Vec::new();
     for child in &layer.children {
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
@@ -967,7 +973,23 @@ fn populate_draws_from_graph(
                     render_graph_primitive(scene, primitive, primitive_context);
                 }
                 PrimitivePhase::AfterChildren => {
-                    deferred_primitives.push(primitive);
+                    deferred_draws.push(child);
+                }
+            },
+            RenderNode::DrawRun(run) => match run.phase {
+                PrimitivePhase::BeforeChildren => {
+                    let primitive_context = PrimitiveRenderContext {
+                        layer_bounds: mapping.layer_bounds,
+                        node_layer: &mapping.raster_content_layer,
+                        visual_clip,
+                        motion_context_animated: layer.motion_context_animated,
+                        content_offset_translation: effective_translated_content_context,
+                        layer_snap_anchor,
+                    };
+                    render_graph_draw_run(scene, run, primitive_context);
+                }
+                PrimitivePhase::AfterChildren => {
+                    deferred_draws.push(child);
                 }
             },
             RenderNode::Layer(child_layer) => {
@@ -987,7 +1009,7 @@ fn populate_draws_from_graph(
         }
     }
 
-    for primitive in deferred_primitives {
+    for child in deferred_draws {
         let primitive_context = PrimitiveRenderContext {
             layer_bounds: mapping.layer_bounds,
             node_layer: &mapping.raster_content_layer,
@@ -996,8 +1018,40 @@ fn populate_draws_from_graph(
             content_offset_translation: effective_translated_content_context,
             layer_snap_anchor,
         };
-        render_graph_primitive(scene, primitive, primitive_context);
+        match child {
+            RenderNode::Primitive(primitive) => {
+                render_graph_primitive(scene, primitive, primitive_context);
+            }
+            RenderNode::DrawRun(run) => {
+                render_graph_draw_run(scene, run, primitive_context);
+            }
+            // Only primitive and run nodes are ever deferred.
+            RenderNode::Layer(_) => {}
+        }
     }
+}
+
+/// [`render_graph_primitive`]'s draw arm for every primitive of a
+/// [`DrawRunNode`] — run draws never carry a per-primitive clip.
+fn render_graph_draw_run(
+    scene: &mut RasterScene,
+    run: &cranpose_render_common::graph::DrawRunNode,
+    context: PrimitiveRenderContext<'_>,
+) {
+    let rect = context.layer_bounds.raster_rect();
+    let counts_before = scene_counts(scene);
+    for primitive in run.primitives.iter() {
+        push_draw_primitive(
+            primitive,
+            rect,
+            context.node_layer,
+            context.visual_clip,
+            scene,
+            None,
+            context.motion_context_animated || context.content_offset_translation,
+        );
+    }
+    assign_snap_anchor_since(scene, counts_before, context.layer_snap_anchor);
 }
 
 fn render_graph_primitive(
@@ -1020,7 +1074,7 @@ fn render_graph_primitive(
                 return;
             }
             push_draw_primitive(
-                draw.primitive.clone(),
+                &draw.primitive,
                 rect,
                 context.node_layer,
                 effective_clip,
@@ -1081,8 +1135,12 @@ fn render_graph_text(
     );
 }
 
-fn push_draw_primitive(
-    primitive: DrawPrimitive,
+/// Node id recorded for text that came from a draw primitive rather than a
+/// `Text` node — a draw primitive belongs to its layer, not to a text node.
+const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
+
+pub(crate) fn push_draw_primitive(
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -1096,12 +1154,12 @@ fn push_draw_primitive(
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
         fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_geometry(
+            self.scene.push_shape_with_stroke_and_arc(
                 params.rect,
-                params.local_rect,
-                params.quad,
                 params.brush,
                 params.shape,
+                params.stroke,
+                params.arc,
                 params.clip,
                 params.blend_mode,
             );
@@ -1130,6 +1188,22 @@ fn push_draw_primitive(
             clip: Option<Rect>,
         ) {
             push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+        }
+
+        fn push_text(&mut self, params: TextDrawParams) {
+            // Same list `Text` nodes land in, so the run goes through the
+            // backend's own glyph raster cache rather than a second path.
+            self.scene.push_text(
+                DRAW_PRIMITIVE_TEXT_NODE_ID,
+                params.rect,
+                params.text,
+                params.color,
+                params.text_style,
+                params.font_size,
+                params.scale,
+                params.layout_options,
+                params.clip,
+            );
         }
     }
 
@@ -1166,6 +1240,9 @@ fn push_shadow_primitive(
                 snap_to_pixel_grid: false,
                 brush: params.brush,
                 shape: params.shape,
+                // A stroked or arc caster must cast a stroked or arc shadow.
+                stroke: params.stroke,
+                arc: params.arc,
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
@@ -1393,6 +1470,7 @@ mod tests {
                             },
                             brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
                             radii: CornerRadii::uniform(6.0),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -1434,7 +1512,7 @@ mod tests {
                             width: 36.0,
                             height: 16.0,
                         },
-                        text: cranpose_ui::text::AnnotatedString::from("48 px"),
+                        text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("48 px")),
                         text_style: TextStyle::default(),
                         font_size: 14.0,
                         layout_options: TextLayoutOptions::default(),
@@ -1632,6 +1710,7 @@ mod tests {
                                 height: 6.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -2213,6 +2292,7 @@ mod tests {
                         height: 8.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 cutout: None,
                 blur_radius: 6.0,
@@ -2250,6 +2330,7 @@ mod tests {
                         height: 16.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 cutout: Box::new(DrawPrimitive::Rect {
                     rect: Rect {
@@ -2259,6 +2340,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 }),
                 blur_radius: 5.0,
                 blend_mode: BlendMode::SrcOver,

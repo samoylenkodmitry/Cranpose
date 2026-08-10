@@ -45,6 +45,33 @@ fn state_update_schedules_render() {
 }
 
 #[test]
+fn an_armed_frame_callback_is_not_a_reason_to_recompose() {
+    let mut composition = test_composition();
+    composition
+        .render(location_key(file!(), line!(), column!()), || {
+            let state = cranpose_core::useState(|| 10);
+            let _ = state.value();
+        })
+        .expect("render succeeds");
+    assert!(!composition.should_render());
+
+    let handle = composition.runtime_handle();
+    handle
+        .register_frame_callback(|_| {})
+        .expect("runtime is alive");
+
+    assert!(
+        composition.should_render(),
+        "an armed frame callback still owes the app a tick"
+    );
+    assert!(
+        !composition.should_recompose(),
+        "but nothing invalidated a scope, so running the tree again cannot \
+         produce a different result"
+    );
+}
+
+#[test]
 fn returned_composable_state_change_recomposes_parent_consumer() {
     thread_local! {
         static OBSERVED_RETURNS: RefCell<Vec<i32>> = const { RefCell::new(Vec::new()) };

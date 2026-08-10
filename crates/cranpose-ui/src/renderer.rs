@@ -169,19 +169,25 @@ fn collect_primitives_from_commands(
             .collect()
     };
 
+    let run = |func: &crate::draw::DrawCommandFn| {
+        use cranpose_ui_graphics::DrawScope as _;
+        let mut scope = crate::draw::command_draw_scope(size);
+        func(&mut scope);
+        scope.into_primitives()
+    };
     let mut ops = Vec::new();
     for command in commands {
         let primitives = match (layer, command) {
-            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => func(size)
+            (PaintLayer::Behind, ModifierDrawCommand::Behind(func)) => run(func)
                 .into_iter()
                 .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
                 .collect(),
-            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => func(size)
+            (PaintLayer::Overlay, ModifierDrawCommand::Overlay(func)) => run(func)
                 .into_iter()
                 .filter(|primitive| !matches!(primitive, DrawPrimitive::Content))
                 .collect(),
             (PaintLayer::Behind | PaintLayer::Overlay, ModifierDrawCommand::WithContent(func)) => {
-                split_with_content(func(size), layer)
+                split_with_content(run(func), layer)
             }
             _ => Vec::new(),
         };
@@ -206,14 +212,47 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             primitive: Box::new(translate_primitive(*primitive, dx, dy)),
             blend_mode,
         },
-        DrawPrimitive::Rect { rect, brush } => DrawPrimitive::Rect {
+        DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke,
+        } => DrawPrimitive::Rect {
             rect: rect.translate(dx, dy),
             brush,
+            stroke,
         },
-        DrawPrimitive::RoundRect { rect, brush, radii } => DrawPrimitive::RoundRect {
+        DrawPrimitive::RoundRect {
+            rect,
+            brush,
+            radii,
+            stroke,
+        } => DrawPrimitive::RoundRect {
             rect: rect.translate(dx, dy),
             brush,
             radii,
+            stroke,
+        },
+        DrawPrimitive::Arc {
+            rect,
+            brush,
+            center,
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
+        } => DrawPrimitive::Arc {
+            rect: rect.translate(dx, dy),
+            brush,
+            // The arc center lives in the same local space as `rect`, so it
+            // must move with it — translating only the bounding box would
+            // silently shear the arc out of its box.
+            center: Point::new(center.x + dx, center.y + dy),
+            radius,
+            start_angle,
+            sweep_angle,
+            stroke,
+            inner_radius,
         },
         DrawPrimitive::Image {
             rect,
@@ -230,6 +269,10 @@ fn translate_primitive(primitive: DrawPrimitive, dx: f32, dy: f32) -> DrawPrimit
             sampling,
             src_rect,
         },
+        DrawPrimitive::Text(mut text) => {
+            text.rect = text.rect.translate(dx, dy);
+            DrawPrimitive::Text(text)
+        }
         DrawPrimitive::Shadow(shadow) => {
             use cranpose_ui_graphics::ShadowPrimitive;
             DrawPrimitive::Shadow(match shadow {

@@ -37,13 +37,16 @@ pub(crate) fn sync(
     shell: &mut AppShell<WgpuRenderer>,
     density: f32,
     previous: &mut Vec<AccessibilityElement>,
+    seen_revision: &mut Option<u64>,
 ) -> Result<(), String> {
-    let elements = accessibility::snapshot(shell);
+    let Some(elements) = accessibility::snapshot_if_changed(shell, seen_revision) else {
+        return Ok(());
+    };
     if elements == *previous {
         return Ok(());
     }
-    previous.clone_from(&elements);
-    let payload = encode_elements(&elements, density);
+    *previous = elements;
+    let payload = encode_elements(previous, density);
     with_android_activity_env(app, |env, activity| {
         let payload = env.new_string(payload).map_err(|error| {
             clear_pending_android_jni_exception(env);

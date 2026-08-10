@@ -202,6 +202,13 @@ pub struct FrameStatsSnapshot {
     pub shape_passes: u32,
     pub image_passes: u32,
     pub text_passes: u32,
+    /// Shape, image and glyph `draw_indexed` calls recorded this frame. The
+    /// `*_passes` counters above count *batches*, so a single image batch
+    /// reports `image_passes=1` however many images it draws; this counts what
+    /// the driver actually sees. Composite and effect quads are not included —
+    /// they are one draw each and already counted by `composite_passes`,
+    /// `blur_passes` and `effect_applies`.
+    pub draw_calls: u32,
     pub text_image_cache_hits: u32,
     pub text_image_cache_misses: u32,
     pub text_image_cache_hit_pixels: u64,
@@ -270,7 +277,7 @@ impl FrameStatsSnapshot {
              isolated_layers={} area={:.2}MP | \
              layer_cache: hit={} miss={} {:.1}% evict={} hit_px={:.2}MP miss_px={:.2}MP size={}({:.1}MB) | \
              shadow_cache: shape_hit={} shape_miss={} hit_px={:.2}MP miss_px={:.2}MP text_blur_fallback={} | \
-             blur={} composite={} effect={} | shape={} image={} text={} | \
+             blur={} composite={} effect={} | shape={} image={} text={} draws={} | \
              text_img_cache: hit={} miss={} hit_px={:.2}MP miss_px={:.2}MP raster={:.2}MB | \
              text_glyph_atlas: hit={} miss={} miss_px={:.2}MP | \
              caches: text_pool={} img={} txt={}",
@@ -306,6 +313,7 @@ impl FrameStatsSnapshot {
             self.shape_passes,
             self.image_passes,
             self.text_passes,
+            self.draw_calls,
             self.text_image_cache_hits,
             self.text_image_cache_misses,
             self.text_image_cache_hit_pixels as f64 / 1_000_000.0,
@@ -367,6 +375,7 @@ pub(crate) struct FrameStats {
     pub shape_passes: Cell<u32>,
     pub image_passes: Cell<u32>,
     pub text_passes: Cell<u32>,
+    pub draw_calls: Cell<u32>,
     pub text_image_cache_hits: Cell<u32>,
     pub text_image_cache_misses: Cell<u32>,
     pub text_image_cache_hit_pixels: Cell<u64>,
@@ -562,6 +571,14 @@ impl FrameStats {
         self.image_passes.set(self.image_passes.get() + 1);
     }
 
+    /// Records `count` `draw`/`draw_indexed` calls. Call sites bump this once
+    /// per batch with the batch's draw count rather than once per draw, so the
+    /// counter costs one `Cell` update per batch rather than one per primitive.
+    pub fn add_draw_calls(&self, count: u32) {
+        self.draw_calls
+            .set(self.draw_calls.get().saturating_add(count));
+    }
+
     pub fn bump_text(&self) {
         self.text_passes.set(self.text_passes.get() + 1);
     }
@@ -648,6 +665,7 @@ impl FrameStats {
             shape_passes: self.shape_passes.get(),
             image_passes: self.image_passes.get(),
             text_passes: self.text_passes.get(),
+            draw_calls: self.draw_calls.get(),
             text_image_cache_hits: self.text_image_cache_hits.get(),
             text_image_cache_misses: self.text_image_cache_misses.get(),
             text_image_cache_hit_pixels: self.text_image_cache_hit_pixels.get(),
@@ -698,6 +716,7 @@ impl FrameStats {
         self.shape_passes.set(0);
         self.image_passes.set(0);
         self.text_passes.set(0);
+        self.draw_calls.set(0);
         self.text_image_cache_hits.set(0);
         self.text_image_cache_misses.set(0);
         self.text_image_cache_hit_pixels.set(0);
@@ -767,6 +786,48 @@ pub(crate) fn gpu_stats_enabled() -> bool {
     std::env::var("CRANPOSE_GPU_STATS")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
+}
+
+/// Prints the backend allocator's block/allocation report on the same cadence
+/// as the per-frame counters.
+///
+/// The other counters measure what the renderer *asked for*; this one measures
+/// what the driver is actually holding. Vulkan and D3D12 sub-allocate every
+/// buffer and texture out of large device-memory blocks whose size comes from
+/// `wgpu::MemoryHints`, so a renderer that has asked for a couple of megabytes
+/// can still be sitting on a block tens of megabytes wide. That reserved-but-
+/// unused remainder is invisible to every other counter here and to
+/// `wgpu::Device`'s own `Counters`, but it is exactly what Android's
+/// `gpu_mem`/`dumpsys meminfo` attribute to the process — so when the two
+/// disagree, this line is the one that explains the gap.
+///
+/// `generate_allocator_report()` returns `None` on backends that do not
+/// sub-allocate through `gpu-allocator` (GL, Metal, WebGPU), where the blocks
+/// this line exists to expose do not exist either.
+pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
+    let Some(report) = device.generate_allocator_report() else {
+        return;
+    };
+
+    const MB: f64 = 1024.0 * 1024.0;
+    let mut blocks = String::new();
+    for block in &report.blocks {
+        if !blocks.is_empty() {
+            blocks.push('+');
+        }
+        blocks.push_str(&format!("{:.1}", block.size as f64 / MB));
+    }
+
+    eprintln!(
+        "[GPU-MEM f#{}] reserved={:.1}MB allocated={:.1}MB blocks={}[{}MB] allocations={} | largest={:.6?}",
+        frame_count,
+        report.total_reserved_bytes as f64 / MB,
+        report.total_allocated_bytes as f64 / MB,
+        report.blocks.len(),
+        blocks,
+        report.allocations.len(),
+        report,
+    );
 }
 
 fn shadow_cache_diagnostics_enabled() -> bool {

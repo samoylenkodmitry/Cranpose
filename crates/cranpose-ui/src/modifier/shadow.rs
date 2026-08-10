@@ -3,7 +3,7 @@ use super::{
     ShadowScope, Size,
 };
 use crate::modifier_nodes::DrawCommandElement;
-use cranpose_ui_graphics::{DrawPrimitive, ShadowPrimitive};
+use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive};
 use std::rc::Rc;
 
 impl Modifier {
@@ -19,10 +19,11 @@ impl Modifier {
         block: impl Fn(&mut ShadowScope) + 'static,
     ) -> Self {
         let block = Rc::new(block);
-        let draw = Rc::new(move |size: Size| {
-            let mut scope = ShadowScope::default();
-            block(&mut scope);
-            build_drop_shadow_primitives(size, shape, &scope)
+        let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
+            let mut shadow = ShadowScope::default();
+            block(&mut shadow);
+            let primitives = build_drop_shadow_primitives(scope.size(), shape, &shadow);
+            scope.push_recorded(primitives);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(draw)))
             .with_inspector_metadata(inspector_metadata("dropShadow", move |info| {
@@ -35,9 +36,10 @@ impl Modifier {
     /// Static shadow configuration variant mirroring Compose's `dropShadow(shape, shadow)`.
     pub fn drop_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
         let shadow_value = shadow.clone();
-        let draw = Rc::new(move |size: Size| {
-            let scope = shadow_value.to_scope(crate::render_state::current_density());
-            build_drop_shadow_primitives(size, shape, &scope)
+        let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
+            let shadow = shadow_value.to_scope(crate::render_state::current_density());
+            let primitives = build_drop_shadow_primitives(scope.size(), shape, &shadow);
+            scope.push_recorded(primitives);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Behind(draw)))
             .with_inspector_metadata(inspector_metadata("dropShadow", move |info| {
@@ -59,10 +61,11 @@ impl Modifier {
         block: impl Fn(&mut ShadowScope) + 'static,
     ) -> Self {
         let block = Rc::new(block);
-        let draw = Rc::new(move |size: Size| {
-            let mut scope = ShadowScope::default();
-            block(&mut scope);
-            build_inner_shadow_primitives(size, shape, &scope)
+        let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
+            let mut shadow = ShadowScope::default();
+            block(&mut shadow);
+            let primitives = build_inner_shadow_primitives(scope.size(), shape, &shadow);
+            scope.push_recorded(primitives);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(draw)))
             .with_inspector_metadata(inspector_metadata("innerShadow", move |info| {
@@ -75,9 +78,10 @@ impl Modifier {
     /// Static shadow configuration variant mirroring Compose's `innerShadow(shape, shadow)`.
     pub fn inner_shadow_value(self, shape: LayerShape, shadow: Shadow) -> Self {
         let shadow_value = shadow.clone();
-        let draw = Rc::new(move |size: Size| {
-            let scope = shadow_value.to_scope(crate::render_state::current_density());
-            build_inner_shadow_primitives(size, shape, &scope)
+        let draw = Rc::new(move |scope: &mut DrawScopeDefault| {
+            let shadow = shadow_value.to_scope(crate::render_state::current_density());
+            let primitives = build_inner_shadow_primitives(scope.size(), shape, &shadow);
+            scope.push_recorded(primitives);
         });
         let modifier = Self::with_element(DrawCommandElement::new(DrawCommand::Overlay(draw)))
             .with_inspector_metadata(inspector_metadata("innerShadow", move |info| {
@@ -248,10 +252,19 @@ fn primitive_for_shape(shape: LayerShape, rect: Rect, brush: Brush) -> Option<Dr
     }
 
     Some(match shape {
-        LayerShape::Rectangle => DrawPrimitive::Rect { rect, brush },
+        LayerShape::Rectangle => DrawPrimitive::Rect {
+            rect,
+            brush,
+            stroke: None,
+        },
         LayerShape::Rounded(shape) => {
             let radii = shape.resolve(rect.width, rect.height);
-            DrawPrimitive::RoundRect { rect, brush, radii }
+            DrawPrimitive::RoundRect {
+                rect,
+                brush,
+                radii,
+                stroke: None,
+            }
         }
     })
 }

@@ -20,14 +20,42 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
+
+type BackListener = Box<dyn Fn() + Send + Sync + 'static>;
 
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
+static BACK_LISTENER: OnceLock<BackListener> = OnceLock::new();
 
 /// Record a system back request (called by the platform backend's gesture /
 /// button handler).
 pub fn push_back_request() {
     BACK_REQUESTS.fetch_add(1, Ordering::SeqCst);
+    if let Some(listener) = BACK_LISTENER.get() {
+        listener();
+    }
+}
+
+/// Registers a callback run whenever a back request arrives, so an app can be
+/// told rather than having to ask.
+///
+/// [`take_back_requests`] alone is a polling API, which quietly assumes the app
+/// is already running a frame loop to poll from. An app that has gone idle —
+/// the correct thing to do on a screen where nothing moves — has no such loop,
+/// and a back gesture would sit in the counter until something unrelated woke
+/// it. The listener closes that gap: it is the nudge, the counter is still the
+/// source of truth, and the app drains it as before.
+///
+/// Called from whatever thread the platform reports back on, which is not
+/// necessarily the UI thread, so the callback must be `Send + Sync`. It should
+/// do as little as possible — waking a parked task is the intended use.
+///
+/// Only the first registration takes effect; a second is ignored, since two
+/// owners of the app's back handling would each see a request the other also
+/// consumed.
+pub fn set_back_request_listener(listener: impl Fn() + Send + Sync + 'static) {
+    let _ = BACK_LISTENER.set(Box::new(listener));
 }
 
 /// Take (and clear) the number of pending back requests. Polled by the app; a
@@ -53,6 +81,7 @@ pub fn back_interception_enabled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn requests_accumulate_and_drain() {
@@ -61,6 +90,20 @@ mod tests {
         push_back_request();
         assert_eq!(take_back_requests(), 2);
         assert_eq!(take_back_requests(), 0);
+    }
+
+    #[test]
+    fn a_registered_listener_hears_every_request() {
+        let heard = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&heard);
+        set_back_request_listener(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        });
+        let before = heard.load(Ordering::SeqCst);
+        push_back_request();
+        push_back_request();
+        assert_eq!(heard.load(Ordering::SeqCst), before + 2);
+        let _ = take_back_requests();
     }
 
     #[test]

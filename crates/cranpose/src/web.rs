@@ -264,10 +264,10 @@ pub async fn run(
         scale_factor
     );
 
-    // Create renderer with fonts from settings
-    let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
-    log::info!("Web renderer startup: {} font(s)", fonts.len());
-    let mut renderer = WgpuRenderer::new(fonts);
+    // Create renderer with the app's fonts: registered families first,
+    // then the static `with_fonts()` slices, then the embedded fallback.
+    let fonts = settings.resolve_font_set();
+    let mut renderer = WgpuRenderer::with_font_set(fonts);
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),

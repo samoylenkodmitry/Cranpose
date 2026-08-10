@@ -26,6 +26,7 @@ mod local;
 mod offset;
 mod padding;
 pub(crate) mod pointer_input;
+mod rotary_input;
 mod scroll;
 mod semantics;
 mod shadow;
@@ -38,7 +39,7 @@ pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub use cranpose_foundation::{
     modifier_element, AnyModifierElement, DynModifierElement, FocusState, PointerEvent,
-    PointerEventKind, PointerSource, SemanticsConfiguration,
+    PointerEventKind, PointerSource, RotaryScrollEvent, SemanticsConfiguration,
 };
 use cranpose_foundation::{ModifierNodeElement, NodeCapabilities};
 #[allow(unused_imports)]
@@ -59,6 +60,7 @@ pub(crate) use local::{
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
+pub use rotary_input::RotaryInputModifierNode;
 pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
 pub use slices::{
     collect_modifier_slices, collect_modifier_slices_into, collect_slices_from_modifier,
@@ -188,7 +190,7 @@ where
 pub(crate) fn modifier_debug_enabled() -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::env::var_os("COMPOSE_DEBUG_MODIFIERS").is_some()
+        cranpose_core::env_flag!("COMPOSE_DEBUG_MODIFIERS")
     }
     #[cfg(target_arch = "wasm32")]
     {

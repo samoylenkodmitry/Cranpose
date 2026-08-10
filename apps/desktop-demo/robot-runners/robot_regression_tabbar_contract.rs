@@ -168,18 +168,26 @@ fn main() {
                 if visible_in_root(hacker_news, root) {
                     break;
                 }
-                // Wheel (momentum-free) toward the target from a tab that is
-                // actually on screen: right of the viewport → scroll left;
-                // left of it (the row can overshoot once enough tabs exist,
-                // and a drag's release fling slams it end to end) → scroll
-                // right. Keeps the contract independent of the tab count.
-                let anchor = tabs
+                // Wheel (momentum-free) toward the target: right of the
+                // viewport → scroll left; left of it (the row can overshoot
+                // once enough tabs exist, and a drag's release fling slams it
+                // end to end) → scroll right. Keeps the contract independent
+                // of the tab count.
+                //
+                // The wheel is aimed at the middle of the tab row rather than
+                // at whichever tab happens to be on screen. After a long fling
+                // the first visible tab can be one whose centre sits a few
+                // pixels from the window edge, and a horizontal wheel there
+                // does not reach the row at all — the recovery would then spin
+                // out its whole budget without moving a pixel.
+                let row_y = tab_row_y(&tabs);
+                let row_height = tabs
                     .iter()
-                    .find(|(_, bounds)| visible_in_root(*bounds, root))
-                    .map(|(_, bounds)| *bounds)
-                    .unwrap_or(hacker_news);
+                    .map(|(_, (_, _, _, height))| *height)
+                    .fold(0.0f32, f32::max);
                 let delta = if hacker_news.0 < root.0 { 220.0 } else { -220.0 };
-                let (anchor_x, anchor_y) = center(anchor);
+                let anchor_x = root.0 + root.2 * 0.5;
+                let anchor_y = row_y + row_height * 0.5;
                 robot.mouse_move(anchor_x, anchor_y).expect("move to tab row");
                 std::thread::sleep(Duration::from_millis(30));
                 robot

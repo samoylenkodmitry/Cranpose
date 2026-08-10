@@ -5,7 +5,9 @@
 //! generators are main-thread objects; haptics are triggered from UI event
 //! handlers, so they run on the main thread.
 
-use cranpose_services::{set_platform_haptics, HapticFeedback, Haptics};
+use cranpose_services::{
+    set_platform_haptics, HapticEffect, HapticFeedback, HapticPattern, Haptics,
+};
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_ui_kit::{
     UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,
@@ -37,6 +39,61 @@ impl Haptics for IosHaptics {
             HapticFeedback::Warning => notify(mtm, UINotificationFeedbackType::Warning),
             HapticFeedback::Error => notify(mtm, UINotificationFeedbackType::Error),
         }
+    }
+
+    /// `UIFeedbackGenerator` has no duration control, but it does take an
+    /// intensity, so the amplitude is honoured and the duration is not.
+    fn vibrate(&self, _duration_ms: u32, amplitude: u8) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        #[allow(deprecated)]
+        let generator = UIImpactFeedbackGenerator::initWithStyle(
+            UIImpactFeedbackGenerator::alloc(mtm),
+            UIImpactFeedbackStyle::Medium,
+        );
+        let intensity = f64::from(amplitude.max(1)) / 255.0;
+        generator.impactOccurredWithIntensity(intensity);
+    }
+
+    /// UIKit exposes no arbitrary waveform, so each step of the pattern that
+    /// asks for vibration becomes one impact at its own intensity. Long
+    /// patterns are truncated rather than run as a timed sequence: scheduling
+    /// them would need a run-loop timer the framework does not own here.
+    fn play_pattern(&self, pattern: &HapticPattern) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let Some(amplitude) = pattern
+            .amplitudes()
+            .iter()
+            .copied()
+            .find(|level| *level > 0)
+            .or(Some(pattern.peak_amplitude()))
+            .filter(|level| *level > 0)
+        else {
+            return;
+        };
+        let style = if amplitude >= 200 {
+            UIImpactFeedbackStyle::Heavy
+        } else if amplitude >= 110 {
+            UIImpactFeedbackStyle::Medium
+        } else {
+            UIImpactFeedbackStyle::Light
+        };
+        impact(mtm, style);
+    }
+
+    fn perform_effect(&self, effect: HapticEffect) {
+        self.perform(effect.closest_feedback());
+    }
+
+    /// `UIFeedbackGenerator` events are instantaneous, so there is nothing
+    /// running to cancel.
+    fn cancel(&self) {}
+
+    fn has_amplitude_control(&self) -> bool {
+        true
     }
 }
 

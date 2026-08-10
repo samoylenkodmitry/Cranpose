@@ -174,6 +174,10 @@ impl Purchases for NoPurchases {
 
 thread_local! {
     static PLATFORM_PURCHASES: RefCell<Option<PurchasesRef>> = const { RefCell::new(None) };
+    /// The no-store backend, created once per thread. [`purchases`] is on the
+    /// frame path — an app polls the snapshot every frame — so the fallback
+    /// must be a reference-count bump, not a fresh allocation each call.
+    static NO_PURCHASES: PurchasesRef = Rc::new(NoPurchases);
 }
 
 /// Installs a platform purchase backend, replacing any previous one.
@@ -191,7 +195,7 @@ pub fn clear_platform_purchases() {
 pub fn purchases() -> PurchasesRef {
     PLATFORM_PURCHASES
         .with(|cell| cell.borrow().clone())
-        .unwrap_or_else(|| Rc::new(NoPurchases))
+        .unwrap_or_else(|| NO_PURCHASES.with(Rc::clone))
 }
 
 /// Whether a real store backend is installed on this platform.

@@ -257,7 +257,7 @@ pub(crate) fn enter_app_context_by_id<R>(id: AppContextId, f: impl FnOnce() -> R
     with_app_context_by_id(id, |context| context.enter(f))
 }
 
-fn current_app_context() -> Option<Rc<AppContext>> {
+pub(crate) fn current_app_context() -> Option<Rc<AppContext>> {
     CURRENT_APP_CONTEXT
         .try_with(|stack| {
             let mut stack = stack.borrow_mut();

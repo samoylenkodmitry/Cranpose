@@ -1,22 +1,52 @@
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect, RenderEffect, RenderHash};
+use cranpose_ui_graphics::{
+    BlendMode, ColorFilter, FxHasher, Point, Rect, RenderEffect, RenderHash,
+};
 
 use crate::graph::{
-    LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
 };
-use crate::layer_composition::{effective_layer_isolation, layer_for_content, local_content_layer};
+use crate::layer_composition::{layer_composite_params, local_content_layer_for};
 use crate::raster_cache::LayerRasterCacheHashes;
 
 pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
+    recompute_layer_raster_cache_hashes_inner(layer, false);
+}
+
+/// True when some consumer might read this layer's stored hashes this frame:
+/// the raster-cache candidate checks and the child-surface composite paths all
+/// key off cache policy or an isolating property. A plain content layer (the
+/// common case for a full-screen game canvas) has no reader, and eagerly
+/// hashing its whole subtree is a pure walk over every primitive per frame.
+fn layer_hashes_have_consumers(layer: &LayerNode) -> bool {
+    layer.cache_policy != CachePolicy::None
+        || layer.isolation.has_any()
+        || layer.effect().is_some()
+        || layer.backdrop().is_some()
+        || layer.blend_mode() != BlendMode::SrcOver
+        || layer.opacity() < 1.0
+}
+
+fn recompute_layer_raster_cache_hashes_inner(layer: &mut LayerNode, ancestor_hashed: bool) {
+    // A hashed parent folds `child.target_content_hash()` into its own hash,
+    // so every descendant of a hashed layer must stay eagerly hashed or each
+    // parent recompute would re-walk the child subtree through the lazy path.
+    let eager = ancestor_hashed || layer_hashes_have_consumers(layer);
     for child in &mut layer.children {
         if let RenderNode::Layer(child_layer) = child {
-            recompute_layer_raster_cache_hashes(child_layer);
+            recompute_layer_raster_cache_hashes_inner(child_layer, eager);
         }
     }
-    layer.cache_hashes = layer_raster_cache_hashes(layer);
-    layer.cache_hashes_valid = true;
+    if eager {
+        layer.cache_hashes = layer_raster_cache_hashes(layer);
+        layer.cache_hashes_valid = true;
+    } else {
+        // Readers fall back to computing on demand (`target_content_hash`),
+        // which keeps correctness if a consumer shows up unexpectedly.
+        layer.cache_hashes_valid = false;
+    }
 }
 
 pub(crate) fn layer_raster_cache_hashes(layer: &LayerNode) -> LayerRasterCacheHashes {
@@ -30,8 +60,8 @@ pub(crate) fn layer_motion_source_content_hash(layer: &LayerNode) -> u64 {
     finish_hash(|state| hash_layer_content(layer, state, false))
 }
 
-fn finish_hash(write: impl FnOnce(&mut DefaultHasher)) -> u64 {
-    let mut hasher = DefaultHasher::new();
+fn finish_hash(write: impl FnOnce(&mut FxHasher)) -> u64 {
+    let mut hasher = FxHasher::default();
     write(&mut hasher);
     hasher.finish()
 }
@@ -48,9 +78,7 @@ fn hash_layer_content<H: Hasher>(
     layer.local_bounds.render_hash().hash(state);
     layer.translated_content_context.hash(state);
     hash_optional_rect(layer.clip_rect(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let content_layer = layer_for_content(&layer.graphics_layer, isolation.as_ref());
-    let local_layer = local_content_layer(&content_layer);
+    let local_layer = local_content_layer_for(&layer.graphics_layer);
     hash_f32_bits(local_layer.alpha, state);
     hash_optional_color_filter(local_layer.color_filter, state);
     layer.motion_context_animated.hash(state);
@@ -66,6 +94,64 @@ fn hash_layer_content<H: Hasher>(
             RenderNode::Primitive(primitive) => {
                 0u8.hash(state);
                 hash_primitive_entry(primitive, state);
+            }
+            RenderNode::DrawRun(run) => {
+                2u8.hash(state);
+                match run.phase {
+                    PrimitivePhase::BeforeChildren => 0u8.hash(state),
+                    PrimitivePhase::AfterChildren => 1u8.hash(state),
+                }
+                run.primitives.len().hash(state);
+                for primitive in run.primitives.iter() {
+                    primitive.render_hash().hash(state);
+                }
+                // Bypassed retained spans carry frame content the primitive
+                // vector no longer shows; without them two frames differing
+                // only in retained motion would hash identical.
+                if let Some(frame) = &run.replay {
+                    frame.spans.len().hash(state);
+                    frame.center.x.to_bits().hash(state);
+                    frame.center.y.to_bits().hash(state);
+                    for span in &frame.spans {
+                        match span {
+                            cranpose_ui_graphics::FrameSpan::Dynamic { range } => {
+                                0u8.hash(state);
+                                range.hash(state);
+                            }
+                            cranpose_ui_graphics::FrameSpan::Retained {
+                                slot,
+                                capture,
+                                slot_offset,
+                                range,
+                                tape_range,
+                                transform,
+                                recolors,
+                                bounds,
+                            } => {
+                                1u8.hash(state);
+                                slot.hash(state);
+                                capture.hash(state);
+                                slot_offset.hash(state);
+                                range.hash(state);
+                                tape_range.hash(state);
+                                transform.scale.to_bits().hash(state);
+                                transform.angle.to_bits().hash(state);
+                                recolors.len().hash(state);
+                                for (offset, color) in recolors {
+                                    offset.hash(state);
+                                    color.0.to_bits().hash(state);
+                                    color.1.to_bits().hash(state);
+                                    color.2.to_bits().hash(state);
+                                    color.3.to_bits().hash(state);
+                                }
+                                bounds.x.to_bits().hash(state);
+                                bounds.y.to_bits().hash(state);
+                                bounds.width.to_bits().hash(state);
+                                bounds.height.to_bits().hash(state);
+                            }
+                        }
+                    }
+                }
             }
             RenderNode::Layer(child_layer) => {
                 1u8.hash(state);
@@ -93,15 +179,8 @@ fn hash_child_layer_contribution<H: Hasher>(
     layer.graphics_layer.clip.hash(state);
     hash_optional_render_effect_to(layer.effect(), state);
     hash_optional_render_effect_to(layer.backdrop(), state);
-    let isolation = effective_layer_isolation(&layer.graphics_layer);
-    let composite_alpha = isolation
-        .as_ref()
-        .map(|params| params.composite_alpha)
-        .unwrap_or(1.0);
-    let blend_mode = isolation
-        .as_ref()
-        .map(|params| params.blend_mode)
-        .unwrap_or(BlendMode::SrcOver);
+    let (composite_alpha, blend_mode) =
+        layer_composite_params(&layer.graphics_layer).unwrap_or((1.0, BlendMode::SrcOver));
     hash_f32_bits(composite_alpha, state);
     blend_mode.hash(state);
     layer.target_content_hash().hash(state);

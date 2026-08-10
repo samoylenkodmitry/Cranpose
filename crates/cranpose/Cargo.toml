@@ -90,6 +90,14 @@ web = [
     "cranpose-services/file-picker-web",
     "cranpose-services/system-theme-web",
 ]
+# The real-time audio engine (`cranpose_audio`), registered into
+# `cranpose_services::audio`. Off by default: an app that plays no sound should
+# not carry a mixer or an output device. On Android this is the AAudio backend,
+# which needs no Java glue.
+audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
+# Adds the desktop output device (cpal) so sound works while developing on
+# macOS, Windows or Linux. Linux builds need the ALSA development headers.
+audio-desktop = ["audio", "cranpose-audio/cpal-backend"]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
@@ -101,9 +109,17 @@ robot = ["cranpose-app-shell/test-support"] # Enable robot testing support (cran
 # framework and compiles a Swift shim, which an app that sells nothing should
 # not pay for. Harmless to enable on non-Apple targets — it compiles away.
 storekit = ["dep:cranpose-storekit"]
+# In-app purchases through Google Play Billing on Android and Wear OS,
+# registered into `cranpose_services::purchases`. Off by default: the bridge
+# expects the app's Gradle build to add the Play Billing dependency and the
+# `crates/cranpose/android/java-billing` source directory, which an app that
+# sells nothing should not carry. Harmless to enable on other targets — the
+# whole backend is Android-only and compiles away.
+playbilling = []
 
 [dependencies]
 cranpose-app-shell = { workspace = true }
+cranpose-audio = { workspace = true, optional = true }
 cranpose-core = { workspace = true }
 cranpose-ui = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }
@@ -178,7 +194,11 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
 android-activity = { workspace = true }
 android_logger = "0.15"
 jni = "0.22.4"
+libc = "0.2"
 ndk = "0.9.0"
+# Raw AChoreographer bindings for the vsync-phase probe in
+# `android_frame_telemetry`; the safe `ndk` crate does not wrap it.
+ndk-sys = "0.6.0"
 raw-window-handle = "0.6"
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",

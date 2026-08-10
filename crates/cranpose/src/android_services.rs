@@ -1,7 +1,7 @@
 //! Android backends for the cranpose service registry: haptics, share sheet,
-//! notifications (with deep-links), network status, clipboard, and window
-//! insets — the JNI counterparts of the capability hooks in
-//! `dev.cranpose.android.CranposeActivity`.
+//! notifications (with deep-links), network status, clipboard, window insets,
+//! and the launching intent's extras — the JNI counterparts of the capability
+//! hooks in `dev.cranpose.android.CranposeActivity`.
 //!
 //! Rust → Java goes through the activity over JNI (each Java method hops to
 //! the UI thread itself). Java → Rust arrives on the Android UI thread via
@@ -12,14 +12,17 @@
 #![allow(unsafe_code)]
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
+use crate::android_launch_args::decode_launch_arguments;
 use cranpose_services::{
-    push_notification_deeplink, set_platform_haptics, set_platform_network_monitor,
-    set_platform_notifier, set_platform_share_sheet, HapticFeedback, Haptics, NetworkMonitor,
-    NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
+    push_notification_deeplink, set_platform_haptics, set_platform_launch_args,
+    set_platform_network_monitor, set_platform_notifier, set_platform_share_sheet, HapticEffect,
+    HapticFeedback, HapticPattern, Haptics, LaunchArgs, NetworkMonitor, NetworkStatus, Notifier,
+    NotifyRequest, ShareContent, ShareError, ShareSheet,
 };
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -35,10 +38,14 @@ static INSETS_RIGHT_PX: AtomicI32 = AtomicI32::new(0);
 static INSETS_BOTTOM_PX: AtomicI32 = AtomicI32::new(0);
 static INSETS_CHANGED: AtomicBool = AtomicBool::new(false);
 
+/// Re-encoded intent extras parked by `onNewIntent`, waiting for the native
+/// loop to swap in the new snapshot.
+static PENDING_LAUNCH_ARGS: Mutex<Option<String>> = Mutex::new(None);
+
 /// Wakes the native event loop so parked signals are applied promptly.
 static LOOP_WAKER: OnceLock<Mutex<Option<android_activity::AndroidAppWaker>>> = OnceLock::new();
 
-fn wake_native_loop() {
+pub(crate) fn wake_native_loop() {
     if let Some(waker) = LOOP_WAKER.get() {
         if let Ok(waker) = waker.lock() {
             if let Some(waker) = waker.as_ref() {
@@ -52,19 +59,91 @@ fn wake_native_loop() {
 /// activity handle.
 pub(crate) fn register(app: android_activity::AndroidApp) {
     let _ = LOOP_WAKER.set(Mutex::new(Some(app.create_waker())));
-    set_platform_haptics(Rc::new(AndroidHaptics { app: app.clone() }));
+    set_platform_haptics(Rc::new(AndroidHaptics {
+        app: app.clone(),
+        amplitude_control: Cell::new(None),
+    }));
     set_platform_share_sheet(Rc::new(AndroidShareSheet { app: app.clone() }));
     set_platform_notifier(Rc::new(AndroidNotifier { app: app.clone() }));
     set_platform_network_monitor(Rc::new(AndroidNetworkMonitor));
+    // Pulled rather than pushed from `onCreate`: `getIntent()` is populated
+    // before the native thread starts, so reading it here is deterministic,
+    // whereas a push would race the thread that consumes it.
+    set_platform_launch_args(Rc::new(read_launch_arguments(&app)));
+    #[cfg(feature = "playbilling")]
+    {
+        // Unlike audio, Play Billing needs the activity: the payment sheet is
+        // an activity result, so the backend keeps the handle and passes it to
+        // the Java bridge on every call.
+        crate::android_purchases::register(app.clone());
+    }
+    #[cfg(feature = "audio")]
+    {
+        // AAudio is a pure-NDK API, so the engine needs nothing from the
+        // activity. The output device itself opens on the first sound.
+        cranpose_audio::install();
+    }
+}
+
+/// Reads the launching intent's extras through `CranposeActivity`.
+///
+/// A launch without extras, or a host activity that is not a
+/// `CranposeActivity`, yields empty arguments rather than an error: the app
+/// still runs, it simply has nothing to read.
+fn read_launch_arguments(app: &android_activity::AndroidApp) -> LaunchArgs {
+    match with_android_activity_env(app, |env, activity| {
+        let payload = env
+            .call_method(
+                &activity,
+                jni_str!("cranposeEncodeLaunchArguments"),
+                jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                format!("failed to read the Android launch arguments: {error}")
+            })?;
+        if payload.is_null() {
+            return Ok(String::new());
+        }
+        JString::cast_local(env, payload)
+            .and_then(|payload| payload.try_to_string(env))
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                format!("failed to decode the Android launch arguments: {error}")
+            })
+    }) {
+        Ok(payload) => decode_launch_arguments(&payload),
+        Err(error) => {
+            // Worth a warning, not a debug line: an app whose debug/bench
+            // flags silently read as absent is measurably indistinguishable
+            // from one that ignores them, and that cost a device session once.
+            log::warn!("Android launch arguments unavailable: {error}");
+            LaunchArgs::default()
+        }
+    }
 }
 
 /// Applies signals parked by the UI-thread callbacks: window insets flow into
-/// the platform environment (safe area), forcing a root render when they
-/// changed. Called from the native event loop.
+/// the platform environment (safe area) and a replacement launch intent swaps
+/// in new launch arguments, forcing a root render when they changed. Called
+/// from the native event loop.
 pub(crate) fn apply_pending_platform_signals(
     density: f32,
     shell: &mut Option<cranpose_app_shell::AppShell<cranpose_render_wgpu::WgpuRenderer>>,
 ) {
+    if let Some(payload) = PENDING_LAUNCH_ARGS
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+    {
+        set_platform_launch_args(Rc::new(decode_launch_arguments(&payload)));
+        if let Some(shell) = shell {
+            shell.request_root_render();
+        }
+    }
+
     if INSETS_CHANGED.swap(false, Ordering::AcqRel) {
         let density = density.max(f32::EPSILON);
         let insets = cranpose_ui::EdgeInsets {
@@ -83,8 +162,31 @@ pub(crate) fn apply_pending_platform_signals(
 
 // --- Haptics ------------------------------------------------------------------
 
+/// The Android vibrator, reached through `CranposeActivity`.
+///
+/// `perform` routes through `View.performHapticFeedback` so the OS's own
+/// feedback settings apply. The amplitude, waveform and predefined-effect
+/// paths address `Vibrator`/`VibrationEffect` directly, which is what a game
+/// designing its own set of distinct feels needs; each one is a single JNI
+/// call carrying primitives or a primitive array.
 struct AndroidHaptics {
     app: android_activity::AndroidApp,
+    /// `Vibrator.hasAmplitudeControl()`, queried once and cached: the answer
+    /// cannot change for the life of the process, and the query costs a JNI
+    /// round trip that UI code should not repeat.
+    amplitude_control: Cell<Option<bool>>,
+}
+
+impl AndroidHaptics {
+    fn call(
+        &self,
+        what: &'static str,
+        run: impl FnOnce(&mut jni::Env<'_>, JObject<'_>) -> Result<(), String>,
+    ) {
+        if let Err(error) = with_android_activity_env(&self.app, run) {
+            log::debug!("Android {what} failed: {error}");
+        }
+    }
 }
 
 impl Haptics for AndroidHaptics {
@@ -96,7 +198,7 @@ impl Haptics for AndroidHaptics {
             HapticFeedback::Success => 3,
             HapticFeedback::Warning | HapticFeedback::Error => 4,
         };
-        let result = with_android_activity_env(&self.app, |env, activity| {
+        self.call("haptic", |env, activity| {
             env.call_method(
                 &activity,
                 jni_str!("cranposeHaptic"),
@@ -109,9 +211,145 @@ impl Haptics for AndroidHaptics {
             })?;
             Ok(())
         });
-        if let Err(error) = result {
-            log::debug!("Android haptic failed: {error}");
+    }
+
+    fn vibrate(&self, duration_ms: u32, amplitude: u8) {
+        if duration_ms == 0 {
+            return;
         }
+        // `VibrationEffect.createOneShot` takes DEFAULT_AMPLITUDE (-1) or
+        // 1..=255; 0 means "device default" in the framework API, so it is
+        // translated here rather than rejected by the platform.
+        let amplitude: jint = if amplitude == 0 {
+            -1
+        } else {
+            jint::from(amplitude)
+        };
+        let duration = jlong::from(duration_ms);
+        self.call("haptic one-shot", move |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeHapticOneShot"),
+                jni_sig!("(JI)V"),
+                &[JValue::Long(duration), JValue::Int(amplitude)],
+            )
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })?;
+            Ok(())
+        });
+    }
+
+    fn play_pattern(&self, pattern: &HapticPattern) {
+        let timings: Vec<jlong> = pattern
+            .timings_ms()
+            .iter()
+            .map(|step| jlong::from(*step))
+            .collect();
+        let amplitudes: Vec<jint> = pattern
+            .amplitudes()
+            .iter()
+            .map(|level| jint::from(*level))
+            .collect();
+        let repeat: jint = pattern
+            .repeat()
+            .and_then(|index| jint::try_from(index).ok())
+            .unwrap_or(-1);
+
+        self.call("haptic waveform", move |env, activity| {
+            let timing_array = env
+                .new_long_array(timings.len())
+                .map_err(|error| error.to_string())?;
+            timing_array
+                .set_region(env, 0, &timings)
+                .map_err(|error| error.to_string())?;
+            let amplitude_array = env
+                .new_int_array(amplitudes.len())
+                .map_err(|error| error.to_string())?;
+            amplitude_array
+                .set_region(env, 0, &amplitudes)
+                .map_err(|error| error.to_string())?;
+            let timing_obj: &JObject = timing_array.as_ref();
+            let amplitude_obj: &JObject = amplitude_array.as_ref();
+            env.call_method(
+                &activity,
+                jni_str!("cranposeHapticWaveform"),
+                jni_sig!("([J[II)V"),
+                &[
+                    JValue::Object(timing_obj),
+                    JValue::Object(amplitude_obj),
+                    JValue::Int(repeat),
+                ],
+            )
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })?;
+            Ok(())
+        });
+    }
+
+    fn perform_effect(&self, effect: HapticEffect) {
+        // Matches `VibrationEffect.EFFECT_*`, which the activity re-maps by
+        // name so the constants stay owned by the platform.
+        let id: jint = match effect {
+            HapticEffect::Click => 0,
+            HapticEffect::DoubleClick => 1,
+            HapticEffect::Tick => 2,
+            HapticEffect::HeavyClick => 3,
+        };
+        self.call("haptic effect", move |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeHapticPredefined"),
+                jni_sig!("(I)V"),
+                &[JValue::Int(id)],
+            )
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })?;
+            Ok(())
+        });
+    }
+
+    fn cancel(&self) {
+        self.call("haptic cancel", |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeHapticCancel"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })?;
+            Ok(())
+        });
+    }
+
+    fn has_amplitude_control(&self) -> bool {
+        if let Some(known) = self.amplitude_control.get() {
+            return known;
+        }
+        let supported = with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeHapticHasAmplitudeControl"),
+                jni_sig!("()Z"),
+                &[],
+            )
+            .and_then(|value| value.z())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        })
+        .unwrap_or(false);
+        self.amplitude_control.set(Some(supported));
+        supported
     }
 }
 
@@ -374,6 +612,32 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotifica
         push_notification_deeplink(deeplink);
         wake_native_loop();
     }
+}
+
+/// A replacement launch intent arrived. The extras are parked and applied by
+/// the native loop, which is the thread that owns the launch-argument
+/// snapshot; the payload replaces the previous one wholesale, matching
+/// `setIntent` replacing what a Compose activity reads from `getIntent`.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    payload: JString<'local>,
+) {
+    let payload = match env
+        .with_env(|env| -> jni::errors::Result<String> { payload.try_to_string(env) })
+        .into_outcome()
+    {
+        Outcome::Ok(payload) => payload,
+        Outcome::Err(_) | Outcome::Panic(_) => return,
+    };
+    if let Ok(mut slot) = PENDING_LAUNCH_ARGS.lock() {
+        *slot = Some(payload);
+    }
+    wake_native_loop();
 }
 
 #[doc(hidden)]

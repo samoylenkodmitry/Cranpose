@@ -1239,6 +1239,8 @@ impl ClickableNode {
                 }
                 PointerEventKind::Scroll
                 | PointerEventKind::Zoom
+                | PointerEventKind::RotaryScrollPre
+                | PointerEventKind::RotaryScroll
                 | PointerEventKind::Enter
                 | PointerEventKind::Exit => {
                     // These events don't affect click press state.
@@ -1826,16 +1828,16 @@ fn observe_draw_command(
     let Some(node_id) = node_id else {
         return command;
     };
-    let scope = crate::render_state::DrawObservationScope::new(node_id, command_index);
+    let observation = crate::render_state::DrawObservationScope::new(node_id, command_index);
     match command {
-        DrawCommand::Behind(draw) => DrawCommand::Behind(Rc::new(move |size| {
-            crate::render_state::observe_draw_reads(scope, || draw(size))
+        DrawCommand::Behind(draw) => DrawCommand::Behind(Rc::new(move |scope| {
+            crate::render_state::observe_draw_reads(observation, || draw(scope))
         })),
-        DrawCommand::WithContent(draw) => DrawCommand::WithContent(Rc::new(move |size| {
-            crate::render_state::observe_draw_reads(scope, || draw(size))
+        DrawCommand::WithContent(draw) => DrawCommand::WithContent(Rc::new(move |scope| {
+            crate::render_state::observe_draw_reads(observation, || draw(scope))
         })),
-        DrawCommand::Overlay(draw) => DrawCommand::Overlay(Rc::new(move |size| {
-            crate::render_state::observe_draw_reads(scope, || draw(size))
+        DrawCommand::Overlay(draw) => DrawCommand::Overlay(Rc::new(move |scope| {
+            crate::render_state::observe_draw_reads(observation, || draw(scope))
         })),
     }
 }

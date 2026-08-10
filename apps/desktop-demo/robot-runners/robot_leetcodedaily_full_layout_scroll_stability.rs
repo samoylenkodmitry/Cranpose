@@ -649,7 +649,7 @@ struct UiPreferences {
     interactive_queue: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct PreviewState {
     bitmap: ImageBitmap,
     last_saved_webp_path: Option<String>,

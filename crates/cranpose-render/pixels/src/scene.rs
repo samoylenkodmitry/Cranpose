@@ -4,8 +4,8 @@ use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
-    RoundedCornerShape,
+    ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
+    RoundedCornerShape, Stroke,
 };
 
 #[derive(Clone)]
@@ -15,6 +15,11 @@ pub(crate) struct DrawShape {
     pub snap_to_pixel_grid: bool,
     pub brush: Brush,
     pub shape: Option<RoundedCornerShape>,
+    /// `Some` strokes the outline of `rect`/`shape` instead of filling it.
+    /// `rect` is already inflated by half the stroke width.
+    pub stroke: Option<Stroke>,
+    /// `Some` replaces the rect geometry with a circular band, in `rect` units.
+    pub arc: Option<ArcGeometry>,
     pub z_index: usize,
     pub clip: Option<Rect>,
     pub blend_mode: BlendMode,
@@ -83,6 +88,8 @@ impl RasterScene {
             snap_to_pixel_grid: false,
             brush,
             shape,
+            stroke: None,
+            arc: None,
             z_index,
             clip,
             blend_mode,
@@ -105,6 +112,8 @@ impl RasterScene {
             snap_to_pixel_grid: true,
             brush,
             shape,
+            stroke: None,
+            arc: None,
             z_index,
             clip,
             blend_mode,
@@ -112,17 +121,30 @@ impl RasterScene {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn push_shape_with_geometry(
+    pub fn push_shape_with_stroke_and_arc(
         &mut self,
         rect: Rect,
-        _local_rect: Rect,
-        _quad: [[f32; 2]; 4],
         brush: Brush,
         shape: Option<RoundedCornerShape>,
+        stroke: Option<Stroke>,
+        arc: Option<ArcGeometry>,
         clip: Option<Rect>,
         blend_mode: BlendMode,
     ) {
-        self.push_shape(rect, brush, shape, clip, blend_mode);
+        let z_index = self.next_z;
+        self.next_z += 1;
+        self.shapes.push(DrawShape {
+            rect,
+            snap_anchor: None,
+            snap_to_pixel_grid: false,
+            brush,
+            shape,
+            stroke,
+            arc,
+            z_index,
+            clip,
+            blend_mode,
+        });
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -13,10 +13,12 @@ use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::primitive_emit::{
     draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
-    ShapeDrawParams,
+    ShapeDrawParams, TextDrawParams,
 };
 use cranpose_render_common::Brush;
 use cranpose_render_common::RenderScene;
+#[cfg(test)]
+use cranpose_ui::layout_text;
 #[cfg(test)]
 use cranpose_ui::measure_text;
 #[cfg(test)]
@@ -25,9 +27,9 @@ use cranpose_ui::prepare_text_layout;
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
 use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
 use cranpose_ui::text_layout_result::TextLayoutResult;
-use cranpose_ui::{layout_text, LayoutBox, TextLayoutOptions};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
+use cranpose_ui::{LayoutBox, TextLayoutOptions};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
     RoundedCornerShape, RuntimeShader, TileMode,
@@ -56,8 +58,10 @@ pub(crate) trait TextLayoutResolver {
     ) -> TextLayoutResult;
 }
 
+#[cfg(test)]
 pub(crate) struct UiTextLayoutResolver;
 
+#[cfg(test)]
 impl TextLayoutResolver for UiTextLayoutResolver {
     fn layout_text(
         &mut self,
@@ -93,6 +97,8 @@ fn shadow_shape(
             snap_anchor: None,
             brush: Brush::solid(color),
             shape,
+            stroke: None,
+            arc: None,
             z_index: 0, // populated by CompositorScene::push_shadow_draw()
             clip: None,
             blend_mode: BlendMode::SrcOver,
@@ -160,6 +166,7 @@ pub(crate) fn render_layout_tree(root: &LayoutBox, scene: &mut Scene) {
 }
 
 pub(crate) fn render_layout_tree_with_scale(root: &LayoutBox, scene: &mut Scene, scale: f32) {
+    declare_retained_feed();
     let graph = cranpose_render_common::scene_builder::build_graph_from_layout_tree(root, scale);
     collect_hits_from_graph(
         &graph.root,
@@ -819,7 +826,7 @@ impl TextStyleDrawSink for CompositorScene {
                 rect,
                 snap_anchor: None,
                 translated_content_context: false,
-                text,
+                text: crate::scene::render_string_for(&text),
                 color,
                 text_style,
                 font_size,
@@ -1035,7 +1042,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
     text_style: &TextStyle,
     font_size: f32,
     options: TextLayoutOptions,
@@ -1095,7 +1102,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         sink.push_shadow_text(
             node_id,
             apply_layer_to_rect(shadow_rect, rect, content_layer),
-            Rc::new(text.clone()),
+            Rc::clone(text),
             apply_layer_to_color(shadow.color, content_layer),
             shadow_text_style,
             font_size,
@@ -1216,7 +1223,7 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         sink,
         node_id,
         transformed_shifted_text_rect,
-        Rc::new(text.clone()),
+        Rc::clone(text),
         transformed_text_color,
         transformed_text_style,
         font_size,
@@ -1272,7 +1279,7 @@ pub(crate) fn push_text_style_draws(
     rect: Rect,
     text_rect: Rect,
     content_layer: &GraphicsLayer,
-    text: &cranpose_ui::text::AnnotatedString,
+    text: &Rc<cranpose_ui::text::AnnotatedString>,
     text_style: &TextStyle,
     font_size: f32,
     options: TextLayoutOptions,
@@ -1397,6 +1404,7 @@ pub(crate) fn push_translated_text_style_draws(
     let counts = scene_emission_counts(scene);
     let z_start = scene.current_z();
     let mut text_layout = UiTextLayoutResolver;
+    let text = Rc::new(text.clone());
     emit_text_style_draws(
         scene,
         &mut text_layout,
@@ -1404,7 +1412,7 @@ pub(crate) fn push_translated_text_style_draws(
         rect,
         text_rect,
         content_layer,
-        text,
+        &text,
         text_style,
         font_size,
         options,
@@ -1442,6 +1450,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
 ) -> Option<Rect> {
     let mut collector = TextBoundsCollector::default();
     let mut text_layout = UiTextLayoutResolver;
+    let text = Rc::new(text.clone());
     emit_text_style_draws(
         &mut collector,
         &mut text_layout,
@@ -1449,7 +1458,7 @@ pub(crate) fn estimate_text_style_draw_bounds(
         rect,
         text_rect,
         content_layer,
-        text,
+        &text,
         text_style,
         font_size,
         options,
@@ -1908,6 +1917,56 @@ fn resolve_text_horizontal_offset(
     }
 }
 
+// The retained-slot universe graphs built by this crate feed into. Bumped
+// whenever the renderer drops retained slots wholesale (device loss, scale
+// change); scene building resets per-command verification state when the
+// epoch moves, so no graph references slots from a dead universe.
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    static RETAINED_FEED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Moves the retained feed to a fresh epoch after the renderer dropped its
+/// identity-fed slots wholesale; the next scene build restarts every
+/// command's verification state.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn bump_retained_feed_generation() {
+    RETAINED_FEED_GENERATION.with(|cell| cell.set(cell.get().wrapping_add(1)));
+}
+
+/// The current retained-feed generation: the slot universe confirmations
+/// are stamped with when the renderer honors a capture, and the epoch
+/// [`declare_retained_feed`] declares to scene building. Public (hidden)
+/// so the fail-closed contract tests can assert revocation bumped it.
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub fn retained_feed_generation() -> u64 {
+    RETAINED_FEED_GENERATION.with(std::cell::Cell::get)
+}
+
+/// Declares to scene building that the wgpu renderer consumes retained
+/// draw-run spans by identity. wasm has no storage-buffer retained path, so
+/// it declares nothing and scene building skips verification entirely. With
+/// the feed flag off nothing consumes the spans either — declaring an epoch
+/// there would let bypass skip primitives no path redraws.
+fn declare_retained_feed() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        cranpose_render_common::scene_builder::set_retained_feed_epoch(
+            crate::shape_replay::command_feed_enabled()
+                .then(|| RETAINED_FEED_GENERATION.with(std::cell::Cell::get)),
+        );
+        cranpose_render_common::scene_builder::set_verify_executor(
+            crate::shape_replay::command_feed_enabled().then(|| {
+                crate::stage_executor::stage_executor()
+                    as &'static dyn cranpose_ui_graphics::VerifyExecutor
+            }),
+        );
+    }
+    #[cfg(target_arch = "wasm32")]
+    cranpose_render_common::scene_builder::set_retained_feed_epoch(None);
+}
+
 /// Renders the scene by traversing the LayoutNode tree directly via Applier.
 pub(crate) fn render_from_applier(
     applier: &mut MemoryApplier,
@@ -1915,6 +1974,7 @@ pub(crate) fn render_from_applier(
     scene: &mut Scene,
     scale: f32,
 ) {
+    declare_retained_feed();
     let Some(graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
     else {
@@ -1937,6 +1997,7 @@ pub(crate) fn update_from_applier(
     dirty_nodes: &[NodeId],
     refresh_hits: bool,
 ) {
+    declare_retained_feed();
     let Some(update_report) = scene.graph.as_mut().map(|graph| {
         cranpose_render_common::scene_builder::update_graph_from_applier_report(
             applier,
@@ -2014,8 +2075,13 @@ fn collect_hits_from_graph(
     collect_common_hits(layer, parent_transform, &mut sink, parent_hit_clip);
 }
 
+/// Node id recorded for text that came from a draw primitive rather than a
+/// `Text` node. Text draws only carry a node id for per-node prewarm
+/// bookkeeping, and a draw primitive belongs to its layer, not to a text node.
+const DRAW_PRIMITIVE_TEXT_NODE_ID: cranpose_core::NodeId = 0;
+
 pub(crate) fn push_draw_primitive(
-    primitive: DrawPrimitive,
+    primitive: &DrawPrimitive,
     layer_bounds: Rect,
     layer: &GraphicsLayer,
     clip: Option<Rect>,
@@ -2029,12 +2095,14 @@ pub(crate) fn push_draw_primitive(
 
     impl DrawPrimitiveSink for SceneEmitter<'_> {
         fn push_shape(&mut self, params: ShapeDrawParams) {
-            self.scene.push_shape_with_geometry(
+            self.scene.push_shape_with_stroke_and_arc(
                 params.rect,
                 params.local_rect,
                 params.quad,
                 params.brush,
                 params.shape,
+                params.stroke,
+                params.arc,
                 params.clip,
                 params.blend_mode,
                 params.motion_context_animated,
@@ -2065,6 +2133,25 @@ pub(crate) fn push_draw_primitive(
             clip: Option<Rect>,
         ) {
             push_shadow_primitive(shadow_primitive, layer_bounds, layer, clip, self.scene);
+        }
+
+        fn push_text(&mut self, params: TextDrawParams) {
+            // Straight into the compositor's text list — the same one `Text`
+            // nodes land in, so the run shares its glyph atlas, run cache and
+            // pipeline. `emit_text_style_draws` is skipped deliberately: a draw
+            // primitive carries no spans, background, shadow or decoration for
+            // it to expand.
+            self.scene.push_text(
+                DRAW_PRIMITIVE_TEXT_NODE_ID,
+                params.rect,
+                params.text,
+                params.color,
+                params.text_style,
+                params.font_size,
+                params.scale,
+                params.layout_options,
+                params.clip,
+            );
         }
     }
 
@@ -2102,6 +2189,10 @@ fn push_shadow_primitive(
                 snap_anchor: None,
                 brush: params.brush,
                 shape: params.shape,
+                // Shadows silhouette the *rendered* shape, so a stroked or arc
+                // caster must cast a stroked or arc shadow, not a filled box.
+                stroke: params.stroke,
+                arc: params.arc,
                 z_index: 0,
                 clip: params.clip,
                 blend_mode: params.blend_mode,
@@ -2260,6 +2351,7 @@ mod tests {
     ) {
         with_test_app_context(|| {
             let mut text_layout = UiTextLayoutResolver;
+            let text = Rc::new(text.clone());
             push_text_style_draws(
                 scene,
                 &mut text_layout,
@@ -2267,7 +2359,7 @@ mod tests {
                 rect,
                 text_rect,
                 content_layer,
-                text,
+                &text,
                 text_style,
                 font_size,
                 options,
@@ -4657,6 +4749,107 @@ mod tests {
             prepared.text.text.contains('\u{2026}'),
             "ellipsis should remain active: {:?}",
             prepared.text
+        );
+    }
+
+    // ── DrawScope text ──────────────────────────────────────────────────────
+
+    fn text_draw_primitive(rect: Rect, text: &str) -> DrawPrimitive {
+        DrawPrimitive::Text(Box::new(cranpose_ui_graphics::TextPrimitive {
+            rect,
+            text: std::rc::Rc::from(text),
+            style: cranpose_ui_graphics::TextStyle::new(16.0),
+            color: cranpose_ui_graphics::Color::WHITE,
+        }))
+    }
+
+    #[test]
+    fn a_text_draw_primitive_joins_the_scene_text_list_the_text_nodes_use() {
+        let mut scene = Scene::new();
+        push_draw_primitive(
+            &text_draw_primitive(
+                Rect {
+                    x: 4.0,
+                    y: 5.0,
+                    width: 60.0,
+                    height: 20.0,
+                },
+                "SCORE",
+            ),
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            &GraphicsLayer::default(),
+            None,
+            &mut scene,
+            None,
+            false,
+        );
+
+        assert_eq!(scene.texts.len(), 1, "text must reach the glyph-atlas path");
+        assert!(
+            scene.shapes.is_empty() && scene.images.is_empty(),
+            "text must not be lowered into a shape or a rasterized image"
+        );
+        let text = &scene.texts[0];
+        assert_eq!(text.text.text, "SCORE");
+        assert_eq!(text.rect.x, 14.0);
+        assert_eq!(text.rect.y, 25.0);
+        assert_eq!(text.color, cranpose_ui_graphics::Color::WHITE);
+        assert!(
+            scene
+                .draw_ops
+                .iter()
+                .any(|op| matches!(op.kind, crate::scene::DrawOpKind::Text(0))),
+            "the run must be ordered with the rest of the layer's draws"
+        );
+    }
+
+    #[test]
+    fn text_draw_primitives_keep_their_z_order_against_the_shapes_around_them() {
+        let mut scene = Scene::new();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let backdrop = DrawPrimitive::Rect {
+            rect: bounds,
+            brush: Brush::solid(cranpose_ui_graphics::Color::BLACK),
+            stroke: None,
+        };
+        for primitive in [
+            backdrop.clone(),
+            text_draw_primitive(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 40.0,
+                    height: 20.0,
+                },
+                "HUD",
+            ),
+        ] {
+            push_draw_primitive(
+                &primitive,
+                bounds,
+                &GraphicsLayer::default(),
+                None,
+                &mut scene,
+                None,
+                false,
+            );
+        }
+
+        assert_eq!(scene.shapes.len(), 1);
+        assert_eq!(scene.texts.len(), 1);
+        assert!(
+            scene.texts[0].z_index > scene.shapes[0].z_index,
+            "text drawn after a rect must composite above it"
         );
     }
 }

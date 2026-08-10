@@ -284,7 +284,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                 required_features: wgpu::Features::empty(),
                 required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                memory_hints: wgpu::MemoryHints::default(),
+                memory_hints: crate::gpu_limits::mobile_memory_hints(),
                 trace: wgpu::Trace::Off,
             })) {
                 Ok(pair) => pair,
@@ -314,8 +314,8 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         self.platform.set_scale_factor(scale_factor);
         self.refresh_environment(&window);
 
-        let fonts: &[&[u8]] = self.settings.fonts.unwrap_or(&[]);
-        let mut renderer = WgpuRenderer::new(fonts);
+        let fonts = self.settings.resolve_font_set();
+        let mut renderer = WgpuRenderer::with_font_set(fonts);
         renderer.init_gpu(
             Arc::clone(&device),
             Arc::clone(&queue),

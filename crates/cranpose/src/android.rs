@@ -71,6 +71,11 @@ enum PendingInput {
     SecondaryPointerDown(u64, f32, f32, Option<i64>),
     SecondaryPointerUp(u64, f32, f32, Option<i64>),
     SecondaryPointerMove(u64, f32, f32, Option<i64>),
+    /// Rotary encoder step (Wear OS crown / rotating bezel). The first field is
+    /// the raw `AXIS_SCROLL` value in detents (converted to pixels by the shell
+    /// using its rotary scroll factor); the second is the event's uptime in
+    /// milliseconds.
+    RotaryScroll(f32, u64),
 }
 
 /// Converts an Android event time (nanoseconds, `java.lang.System.nanoTime()`
@@ -457,8 +462,62 @@ fn push_pending_inputs_from_android_event(
             *primary_pointer_id = None;
             true
         }
+        // Rotary input (Pixel Watch crown, Galaxy Watch rotating bezel) arrives
+        // as a *generic* motion event with ACTION_SCROLL from the
+        // SOURCE_ROTARY_ENCODER class, carrying its delta on AXIS_SCROLL in
+        // detents. NativeActivity's AInputQueue delivers generic motion events
+        // through the same queue as touch, so no extra plumbing is needed --
+        // but the activity's view must be focusable and focused or the platform
+        // never dispatches them at all (see the module docs on
+        // `push_rotary_pending_input`).
+        android_activity::input::MotionAction::Scroll => {
+            push_rotary_pending_input(motion_event, event_source, time_ms, pending_inputs)
+        }
         _ => false,
     }
+}
+
+/// Translates an Android rotary `ACTION_SCROLL` motion event into a pending
+/// rotary input.
+///
+/// Returns `true` only when the event really came from a rotary encoder, so a
+/// mouse-wheel `ACTION_SCROLL` stays unhandled and keeps its default platform
+/// behavior.
+///
+/// # Host requirements
+///
+/// Wear OS delivers rotary events **only to a focused, focusable view**. The
+/// host activity must, on its `NativeActivity` content view:
+/// `setFocusable(true)`, `setFocusableInTouchMode(true)`, and `requestFocus()`.
+/// Without focus, `AInputQueue` receives nothing and this function is never
+/// reached.
+fn push_rotary_pending_input(
+    motion_event: &android_activity::input::MotionEvent<'_>,
+    event_source: android_activity::input::Source,
+    time_ms: Option<i64>,
+    pending_inputs: &mut Vec<PendingInput>,
+) -> bool {
+    use crate::android_input::is_rotary_encoder_source;
+
+    if !is_rotary_encoder_source(u32::from(event_source)) {
+        // A non-rotary scroll (mouse wheel); leave it to the platform.
+        return false;
+    }
+
+    // The rotary delta lives on AXIS_SCROLL of pointer 0, in detents.
+    let Some(pointer) = motion_event.pointers().next() else {
+        return true;
+    };
+    let detents = pointer.axis_value(android_activity::input::Axis::Scroll);
+    if !detents.is_finite() || detents == 0.0 {
+        return true;
+    }
+
+    pending_inputs.push(PendingInput::RotaryScroll(
+        detents,
+        time_ms.unwrap_or(0).max(0) as u64,
+    ));
+    true
 }
 
 fn drain_android_input_events(
@@ -504,6 +563,9 @@ struct PendingHostWindowSizeRequest {
 struct AndroidFrameDriver {
     need_frame: Arc<AtomicBool>,
     app_waker: android_activity::AndroidAppWaker,
+    /// The thread running the frame loop, so a request raised *by* the loop can
+    /// be told apart from one raised by a worker. Only the latter needs a wake.
+    loop_thread: std::thread::ThreadId,
     next_deadline: Cell<Option<web_time::Instant>>,
 }
 
@@ -512,11 +574,46 @@ impl AndroidFrameDriver {
         Self {
             need_frame: Arc::new(AtomicBool::new(false)),
             app_waker,
+            loop_thread: std::thread::current().id(),
             next_deadline: Cell::new(None),
         }
     }
 
+    /// Raises a frame request, waking the looper only when the request came
+    /// from somewhere other than the frame loop itself.
+    ///
+    /// A request raised on the loop's own thread - the shell re-arming its
+    /// frame callback, an input handler, an effect resuming inside `update` -
+    /// is picked up by the very iteration that raised it. Waking the looper for
+    /// it leaves a byte in `android-activity`'s wake pipe that makes the next
+    /// poll return instantly, which cancels the vsync wait the loop was about
+    /// to enter and turns an idle app into a busy loop.
+    fn raise_frame_request(
+        need_frame: &AtomicBool,
+        app_waker: &android_activity::AndroidAppWaker,
+        loop_thread: std::thread::ThreadId,
+    ) {
+        need_frame.store(true, Ordering::Relaxed);
+        if std::thread::current().id() != loop_thread {
+            app_waker.wake();
+        }
+    }
+
     fn frame_waker(&self) -> impl Fn() + Send + Sync + 'static {
+        let need_frame = self.need_frame.clone();
+        let app_waker = self.app_waker.clone();
+        let loop_thread = self.loop_thread;
+        move || Self::raise_frame_request(&need_frame, &app_waker, loop_thread)
+    }
+
+    /// The waker for the display's own frame callback, which always wakes.
+    ///
+    /// The choreographer delivers on the looper of the thread that posted, so
+    /// this fires on the frame loop's thread - and it is the one same-thread
+    /// request that must *not* be folded into the current iteration, because
+    /// the loop is asleep waiting for exactly this and has no iteration left to
+    /// fold it into.
+    fn vsync_waker(&self) -> impl Fn() + Send + Sync + 'static {
         let need_frame = self.need_frame.clone();
         let app_waker = self.app_waker.clone();
         move || {
@@ -540,8 +637,7 @@ impl AndroidFrameDriver {
 
 impl PlatformFrameDriver for AndroidFrameDriver {
     fn request_frame(&self) {
-        self.need_frame.store(true, Ordering::Relaxed);
-        self.app_waker.wake();
+        Self::raise_frame_request(&self.need_frame, &self.app_waker, self.loop_thread);
     }
 
     fn request_wake_at(&self, deadline: web_time::Instant) {
@@ -645,6 +741,11 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
+    // Rotary detents are reported in device-independent units; the shell needs
+    // a pixels-per-detent factor to match Compose. Approximates
+    // `ViewConfiguration.getScaledVerticalScrollFactor()`; a host that reads
+    // the exact platform value over JNI can overwrite this afterwards.
+    shell.set_rotary_scroll_factor(crate::android_input::android_rotary_scroll_factor(density));
 
     let (width, height) = shell.buffer_size();
     if width > 0 && height > 0 {
@@ -660,9 +761,15 @@ fn update_android_shell_geometry(
 }
 
 /// Renders a single frame. Returns true if out of memory (should exit).
-fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>) -> bool {
+fn render_once(
+    resources: &mut GpuResources,
+    shell: &mut AppShell<WgpuRenderer>,
+    telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
+    timings: &mut crate::android_frame_telemetry::FrameTimings,
+) -> bool {
     match current_surface_texture(&resources.surface, "android") {
         SurfaceFrame::Ready(frame) => {
+            timings.after_acquire_ns = telemetry.now();
             let view = frame
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
@@ -672,11 +779,15 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
                 log::error!("Render error: {:?}", e);
             }
 
+            timings.after_render_ns = telemetry.now();
             frame.present();
+            timings.after_present_ns = telemetry.now();
+            telemetry.record_frame(timings);
             resources.surface_dirty = false;
             false
         }
         SurfaceFrame::Reconfigure => {
+            telemetry.note_idle_iteration();
             let (width, height) = shell.buffer_size();
             resources.config.width = width;
             resources.config.height = height;
@@ -693,6 +804,7 @@ fn render_once(resources: &mut GpuResources, shell: &mut AppShell<WgpuRenderer>)
         }
         // Surface unavailable this tick; retry the present on the next frame.
         SurfaceFrame::Skip => {
+            telemetry.note_idle_iteration();
             resources.surface_dirty = true;
             false
         }
@@ -716,6 +828,68 @@ impl AndroidGpuBackend {
             Self::Vulkan => wgpu::Backends::VULKAN,
             Self::Gl => wgpu::Backends::GL,
         }
+    }
+
+    /// The backend to probe first, honouring `CRANPOSE_ANDROID_GPU_BACKEND`.
+    ///
+    /// Vulkan is the default and the only backend the fallback below can arrive
+    /// at on its own, which makes the two impossible to compare on one device:
+    /// whichever one Vulkan probing picks is the one you measure. The two have
+    /// genuinely different CPU costs per frame — a Mali Vulkan driver rebuilds
+    /// its command list every submit, where the GLES driver keeps more state —
+    /// so which is cheaper is a question about the device, not one we can settle
+    /// by reasoning. This switch exists so it can be measured instead.
+    ///
+    /// Unrecognised values fall back to Vulkan rather than failing, since a
+    /// mistyped diagnostic should not stop an app from starting.
+    fn preferred() -> Self {
+        Self::preferred_from(
+            std::env::var("CRANPOSE_ANDROID_GPU_BACKEND")
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    fn preferred_from(value: Option<&str>) -> Self {
+        match value
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("gl") | Some("gles") | Some("opengl") => Self::Gl,
+            _ => Self::Vulkan,
+        }
+    }
+}
+
+#[cfg(test)]
+mod gpu_backend_tests {
+    use super::AndroidGpuBackend;
+
+    #[test]
+    fn vulkan_is_what_an_app_gets_without_asking() {
+        assert_eq!(
+            AndroidGpuBackend::preferred_from(None),
+            AndroidGpuBackend::Vulkan
+        );
+    }
+
+    #[test]
+    fn the_switch_names_gl_however_it_is_spelled() {
+        for spelling in ["gl", "GL", " gles ", "OpenGL"] {
+            assert_eq!(
+                AndroidGpuBackend::preferred_from(Some(spelling)),
+                AndroidGpuBackend::Gl,
+                "{spelling:?} should select the GL backend"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mistyped_value_still_starts_the_app() {
+        assert_eq!(
+            AndroidGpuBackend::preferred_from(Some("vulkan2")),
+            AndroidGpuBackend::Vulkan
+        );
     }
 }
 
@@ -764,8 +938,8 @@ where
     )?;
 
     if app_shell.is_none() {
-        let fonts: &[&[u8]] = settings.fonts.unwrap_or(&[]);
-        let mut renderer = WgpuRenderer::new(fonts);
+        let fonts = settings.resolve_font_set();
+        let mut renderer = WgpuRenderer::with_font_set(fonts);
         renderer.init_gpu(
             setup.resources.device.clone(),
             setup.resources.queue.clone(),
@@ -954,7 +1128,7 @@ fn create_android_gpu_resources(
         required_features: wgpu::Features::empty(),
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
+        memory_hints: crate::gpu_limits::mobile_memory_hints(),
         trace: wgpu::Trace::Off,
     }))?;
 
@@ -1025,7 +1199,19 @@ fn create_android_surface_config(
         .first()
         .copied()
         .ok_or(AndroidSurfaceError::NoAlphaMode)?;
-    let present_mode = crate::present_mode::select_present_mode(&surface_caps);
+    let present_mode = crate::present_mode::select_android_present_mode(&surface_caps);
+    // `debug.cranpose.frame_latency` lets the swapchain depth be A/B'd on device.
+    let desired_maximum_frame_latency =
+        crate::android_frame_telemetry::system_property("debug.cranpose.frame_latency")
+            .and_then(|value| value.parse::<u32>().ok())
+            .filter(|latency| (1..=3).contains(latency))
+            .unwrap_or(2);
+    log::info!(
+        "Android surface: supported present modes {:?}, selected {:?}, desired_maximum_frame_latency {}",
+        surface_caps.present_modes,
+        present_mode,
+        desired_maximum_frame_latency,
+    );
     Ok(wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
@@ -1034,7 +1220,7 @@ fn create_android_surface_config(
         present_mode,
         alpha_mode,
         view_formats: vec![],
-        desired_maximum_frame_latency: 2,
+        desired_maximum_frame_latency,
     })
 }
 
@@ -1247,6 +1433,38 @@ pub fn run(
 ) {
     use android_activity::{MainEvent, PollEvent};
 
+    // Logging first: the registrations below already have failure paths worth
+    // hearing about (a launch-args read that fails here is otherwise silent).
+    android_logger::init_once(
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Info)
+            .with_tag("ComposeRS")
+            .with_filter(
+                android_logger::FilterBuilder::new()
+                    .filter_level(log::LevelFilter::Info)
+                    .filter_module("wgpu_core", log::LevelFilter::Warn)
+                    .filter_module("wgpu_hal", log::LevelFilter::Warn)
+                    .filter_module("naga", log::LevelFilter::Warn)
+                    // `AChoreographer` registers its display-event fd with this
+                    // thread's looper, so every vsync makes `ALooper_pollOnce`
+                    // return `ALOOPER_POLL_CALLBACK`. android-activity 0.6.1
+                    // believes that return value is impossible and logs it at
+                    // `error!` — once per frame, which is a synchronous
+                    // `writev` to logd plus a tag property lookup 60 times a
+                    // second. The event is genuinely harmless (the crate
+                    // ignores it and polls again), but the logging is not, so
+                    // the module stays quiet. Frame pacing lives in
+                    // `android_vsync`, which reports its own failures.
+                    .filter_module("android_activity::activity_impl", log::LevelFilter::Off)
+                    .build(),
+            ),
+    );
+
+    // Mirror the `debug.cranpose.*` diagnostic properties into the environment
+    // before anything reads it, so the renderer's and app shell's existing
+    // environment-gated telemetry is reachable on device.
+    crate::android_frame_telemetry::seed_env_from_system_properties();
+
     // Register the SAF document picker as the platform file picker. Requires the
     // app's activity to be `dev.cranpose.android.CranposeActivity`.
     crate::android_file_picker::register(app.clone());
@@ -1288,25 +1506,21 @@ pub fn run(
     // App shell (created once, persists across window recreations)
     let mut app_shell: Option<AppShell<WgpuRenderer>> = None;
     let mut accessibility_elements = Vec::new();
-
-    // Initialize logging
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("ComposeRS")
-            .with_filter(
-                android_logger::FilterBuilder::new()
-                    .filter_level(log::LevelFilter::Info)
-                    .filter_module("wgpu_core", log::LevelFilter::Warn)
-                    .filter_module("wgpu_hal", log::LevelFilter::Warn)
-                    .filter_module("naga", log::LevelFilter::Warn)
-                    .build(),
-            ),
-    );
+    let mut accessibility_revision = None;
 
     log::info!("Starting Compose Android Application");
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
+    let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
+    // How long after the last input event the Auto frame-rate vote keeps the
+    // panel's fast rate. SurfaceFlinger's own touch boost holds for seconds,
+    // and a shorter hold-off measurably hurts: at 1 s the display mode
+    // flip-flopped between gestures and the switch hiccups pulled presented
+    // fps *below* 60 (55.9 measured); at 3 s a continuously-driven scene
+    // holds the fast rate while an untouched animation still settles quickly.
+    const FRAME_RATE_BOOST_HOLD_OFF: Duration = Duration::from_secs(3);
+    let mut last_interaction: Option<Instant> = None;
+    crate::android_vsync::install_waker(android_frame_driver.vsync_waker());
     crate::android_accessibility::set_waker(app.create_waker());
     let host_window_registry = Rc::new(android_host_window::AndroidHostWindowRegistry::default());
     let overlay_event_queue = Arc::new(android_overlay_window::AndroidOverlayEventQueue::default());
@@ -1325,7 +1539,7 @@ pub fn run(
     // adapter exists. Keeping the backends separate is important on emulators:
     // a failed Vulkan probe can otherwise leave the ANativeWindow connected and
     // make EGL surface creation abort with `EGL_BAD_ALLOC`.
-    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::Vulkan);
+    let mut wgpu_context = AndroidWgpuContext::new(AndroidGpuBackend::preferred());
 
     // Platform abstraction for density/pointer conversion
     let mut android_platform = AndroidPlatform::new();
@@ -1356,8 +1570,17 @@ pub fn run(
     // The soft-keyboard handler is installed once the app shell exists
     let mut soft_keyboard_installed = false;
 
+    // Per-stage frame telemetry (system-property gated; free when off).
+    let mut frame_telemetry =
+        crate::android_frame_telemetry::AndroidFrameTelemetry::from_system_properties();
+    crate::android_frame_telemetry::start_vsync_probe_if_enabled();
+
     // Main event loop
     loop {
+        let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
+            iteration_start_ns: frame_telemetry.now(),
+            ..Default::default()
+        };
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
                 .checked_sub(pending.requested_at.elapsed())
@@ -1373,10 +1596,48 @@ pub fn run(
         let idle_timeout =
             earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout);
 
+        // Vote the display frame rate the way HWUI does: the panel's fastest
+        // rate while the user is interacting, the quiet rate while an
+        // untouched animation runs, no preference when still. The interaction
+        // gate matters for fidelity both ways — Compose runs an untouched
+        // infinite animation at the display's quiet rate (measured: its
+        // spinning title holds 60 on a 120 Hz panel) and bursts on touch, so
+        // a vote tied to animation alone would overshoot it. Without any vote
+        // at all, SurfaceFlinger infers a rate from our cadence and pins us
+        // via frameRateOverride, choreographer included, so the inferred 60
+        // is self-reinforcing and even SF's own touch boost cannot lift it.
+        if let Some(shell) = app_shell.as_ref() {
+            let preference = shell.frame_rate_preference();
+            let producing_frames = android_frame_driver.frame_requested();
+            let interacting =
+                last_interaction.is_some_and(|at| at.elapsed() < FRAME_RATE_BOOST_HOLD_OFF);
+            let panel_max = match preference {
+                cranpose_app_shell::FrameRatePreference::Auto if interacting => {
+                    crate::android_frame_rate::panel_max_refresh_rate(&app)
+                }
+                _ => None,
+            };
+            frame_rate_voter.apply(
+                &app,
+                preference.desired_rate_hz(producing_frames, interacting, panel_max),
+            );
+        }
+
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
         } else if android_frame_driver.frame_requested() {
-            Some(Duration::ZERO)
+            // A frame request is satisfied at the next vsync, not immediately.
+            // Spinning here is only invisible while every iteration ends in a
+            // blocking `Fifo` present; the moment the loop starts skipping
+            // presents for frames identical to the one on screen, a zero poll
+            // turns an idle app into a busy loop. Fall back to the zero poll
+            // when the display cannot wake us, so a device without a
+            // choreographer keeps the behaviour it had.
+            if crate::android_vsync::request_wake_at_next_vsync() {
+                idle_timeout
+            } else {
+                Some(Duration::ZERO)
+            }
         } else {
             idle_timeout
         };
@@ -1665,6 +1926,7 @@ pub fn run(
                 }
             }
         });
+        frame_timings.after_poll_ns = frame_telemetry.now();
 
         for event in
             android_overlay_window::drain_android_overlay_window_events(&overlay_event_queue)
@@ -1856,6 +2118,7 @@ pub fn run(
 
         // Process pending input events outside poll_events to prevent ANR
         if !pending_inputs.is_empty() {
+            last_interaction = Some(Instant::now());
             if let Some(shell) = &mut app_shell {
                 for input in pending_inputs.drain(..) {
                     match input {
@@ -1898,6 +2161,11 @@ pub fn run(
                             shell.set_pointer_source(PointerSource::Touch);
                             shell.secondary_pointer_moved(id, x, y, time_ms);
                         }
+                        PendingInput::RotaryScroll(detents, uptime_ms) => {
+                            // Detents -> pixels happens in the shell so the
+                            // scroll factor can be refined at runtime.
+                            shell.rotary_scrolled_by_detents(detents, uptime_ms);
+                        }
                     }
                 }
             }
@@ -1938,11 +2206,13 @@ pub fn run(
                     &host_window_registry,
                     || shell.update(),
                 );
+                frame_timings.after_update_ns = frame_telemetry.now();
                 if let Err(error) = crate::android_accessibility::sync(
                     &app,
                     shell,
                     android_platform.scale_factor() as f32,
                     &mut accessibility_elements,
+                    &mut accessibility_revision,
                 ) {
                     log::warn!("{error}");
                 }
@@ -1954,15 +2224,23 @@ pub fn run(
                     &mut last_dispatched_host_window_request,
                     &mut pending_host_window_confirmation,
                 );
+                frame_timings.after_sync_ns = frame_telemetry.now();
                 if surface_present_required(
                     resources.surface_dirty,
                     update_result.visual_changed,
                     shell.needs_redraw(),
-                ) && render_once(resources, shell)
-                {
-                    break; // Out of memory, exit
+                ) {
+                    if render_once(resources, shell, &mut frame_telemetry, &mut frame_timings) {
+                        break; // Out of memory, exit
+                    }
+                } else {
+                    frame_telemetry.note_idle_iteration();
                 }
+            } else {
+                frame_telemetry.note_idle_iteration();
             }
+        } else {
+            frame_telemetry.note_idle_iteration();
         }
     }
 }

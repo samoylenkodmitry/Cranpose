@@ -1461,8 +1461,14 @@ fn text_rendering_uses_cached_raster_image_batches() {
 #[test]
 fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let source =
-        std::fs::read_to_string(crate_dir.join("src/lib.rs")).expect("failed to read lib.rs");
+    // The renderer's producer half lives in frontend.rs (text state, app
+    // context, scene); the shared-text-state contract spans both files.
+    let source = format!(
+        "{}{}",
+        std::fs::read_to_string(crate_dir.join("src/lib.rs")).expect("failed to read lib.rs"),
+        std::fs::read_to_string(crate_dir.join("src/frontend.rs"))
+            .expect("failed to read frontend.rs"),
+    );
     let cargo_toml =
         std::fs::read_to_string(crate_dir.join("Cargo.toml")).expect("failed to read Cargo.toml");
 
@@ -1496,7 +1502,7 @@ fn wgpu_text_system_uses_one_shared_state_for_measure_and_render() {
     );
     assert!(
         source.contains("SoftwareTextMeasurer::from_font_set(")
-            && source.contains("self.text_fonts.clone()"),
+            && source.contains("self.frontend.text_fonts.clone()"),
         "AppContext text measurer should use the same software font set as WGPU raster text rendering"
     );
     assert!(
@@ -1523,6 +1529,49 @@ fn wgpu_renderer_matches_shared_render_contracts() {
     };
 
     for case in ALL_SHARED_RENDER_CASES {
+        let mut frames = Vec::new();
+        for fixture in case.fixtures() {
+            renderer.scene_mut().graph = Some(fixture.graph);
+            let frame = renderer
+                .capture_frame(fixture.width, fixture.height)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to capture shared render case {}: {err:?}",
+                        case.name()
+                    )
+                });
+            frames.push(RenderedFrame {
+                width: frame.width,
+                height: frame.height,
+                pixels: frame.pixels,
+                normalized_rect: fixture.normalized_rect,
+            });
+        }
+        case.assert_frames(&frames);
+    }
+}
+
+/// The stroke/arc contract, isolated from the font-dependent text cases so a
+/// missing system font can never mask a geometry regression. These assertions
+/// are shared verbatim with the pixels backend, which is what proves the CPU
+/// rasterizer is not silently falling back to filled shapes.
+#[test]
+fn wgpu_renderer_matches_shared_stroke_and_arc_contracts() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping shared stroke/arc contract assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    for case in [
+        cranpose_render_common::render_contract::SharedRenderCase::StrokedRoundRect,
+        cranpose_render_common::render_contract::SharedRenderCase::AnnularSector,
+    ] {
         let mut frames = Vec::new();
         for fixture in case.fixtures() {
             renderer.scene_mut().graph = Some(fixture.graph);

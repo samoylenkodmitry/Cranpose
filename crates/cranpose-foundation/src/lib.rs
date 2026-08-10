@@ -19,8 +19,9 @@ pub use modifier::*;
 #[allow(unused_imports)]
 pub use modifier_helpers::*;
 pub use nodes::input::{
-    PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
-    PointerSource,
+    rotary_scroll_pixels_from_detents, PointerButton, PointerButtons, PointerEvent,
+    PointerEventKind, PointerId, PointerPhase, PointerSource, RotaryScrollEvent,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP,
 };
 
 pub mod prelude {

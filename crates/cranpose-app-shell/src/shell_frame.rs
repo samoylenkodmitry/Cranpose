@@ -60,8 +60,7 @@ fn log_frame_stage_telemetry(
 }
 
 fn render_phase_dirty_diagnostics_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RENDER_PHASE_DIRTY_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_RENDER_PHASE_DIRTY_DIAG")
 }
 
 struct RenderPhaseDirtyDiagnostics<'a> {
@@ -119,12 +118,28 @@ where
             return;
         }
         self.semantics_enabled = enabled;
+        self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
         if enabled {
             self.request_forced_layout_pass();
             self.mark_dirty();
         } else {
             self.semantics_tree = None;
         }
+    }
+
+    /// Sets how the platform should vote the display's frame rate for this
+    /// app. The default, [`FrameRatePreference::Auto`], mirrors Compose: the
+    /// panel's fastest rate while frames are being produced, no preference
+    /// when the scene is still.
+    pub fn set_frame_rate_preference(&mut self, preference: crate::FrameRatePreference) {
+        self.frame_rate_preference = preference;
+    }
+
+    /// The app's current display frame-rate preference. Read by platform
+    /// backends each frame; the vote itself is applied by the backend that
+    /// owns the native window.
+    pub fn frame_rate_preference(&self) -> crate::FrameRatePreference {
+        self.frame_rate_preference
     }
 
     pub(crate) fn process_frame(&mut self) -> FrameUpdateResult {
@@ -261,6 +276,8 @@ where
             ) {
                 Ok(_measurements) => {
                     self.layout_tree = None;
+                    self.semantics_snapshot_revision =
+                        self.semantics_snapshot_revision.wrapping_add(1);
                     if self.semantics_enabled {
                         self.semantics_tree = None;
                     }
@@ -279,6 +296,8 @@ where
                     log::error!("failed to compute layout: {err}");
                     self.layout_tree = None;
                     self.semantics_tree = None;
+                    self.semantics_snapshot_revision =
+                        self.semantics_snapshot_revision.wrapping_add(1);
                     self.scoped_layout_scene_nodes.clear();
                     self.scene_dirty = true;
                 }
@@ -287,6 +306,7 @@ where
         } else {
             self.layout_tree = None;
             self.semantics_tree = None;
+            self.semantics_snapshot_revision = self.semantics_snapshot_revision.wrapping_add(1);
             self.scoped_layout_scene_nodes.clear();
             self.scene_dirty = true;
             self.layout_requested = false;
@@ -295,7 +315,7 @@ where
     }
 
     fn run_post_layout_recomposition(&mut self) -> bool {
-        if !self.composition.should_render() {
+        if !self.composition.should_recompose() {
             return false;
         }
 
@@ -456,7 +476,7 @@ where
         // scene update patches only the dirty subtrees, so every structural
         // parent must be in scope or a removed subtree's layers stay in the
         // persistent render graph and keep compositing (the cross-tab ghost).
-        let structural_parents = if std::env::var_os("CRANPOSE_DISABLE_STRUCTURAL_DIRT").is_some() {
+        let structural_parents = if cranpose_core::env_flag!("CRANPOSE_DISABLE_STRUCTURAL_DIRT") {
             Vec::new()
         } else if let Some(root) = self.composition.root() {
             self.composition

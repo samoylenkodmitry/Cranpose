@@ -14,6 +14,9 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.accessibility.AccessibilityEvent;
@@ -61,6 +64,12 @@ import java.util.List;
  * tracks appear and can be played while the rest keep streaming in.
  */
 public class CranposeActivity extends NativeActivity {
+    /** Manifest meta-data key {@link NativeActivity} uses to name the native library. */
+    private static final String NATIVE_LIB_NAME_META_DATA = "android.app.lib_name";
+
+    /** Library name {@link NativeActivity} falls back to when the meta-data is absent. */
+    private static final String DEFAULT_NATIVE_LIB_NAME = "main";
+
     private static final int REQUEST_BASE = 0x0C9A0000;
     private static final int FLAG_FOLDER = 1;
     private static final int FLAG_STREAMING = 2;
@@ -919,15 +928,94 @@ public class CranposeActivity extends NativeActivity {
     /** The user tapped a notification carrying a deep-link. */
     private static native void nativeNotificationAction(String deeplink);
 
+    /** A new launching intent replaced the old one; carries re-encoded extras. */
+    private static native void nativeOnLaunchArguments(String payload);
+
     /** An ACTION_CREATE_DOCUMENT save finished. */
     private static native void nativeOnFileSaved(long token, boolean ok, String error);
 
+    /**
+     * Loads the app's native library into this class loader so that the {@code native}
+     * methods declared above can resolve.
+     *
+     * <p>{@link NativeActivity} loads the library itself, but through libnativeloader's
+     * {@code OpenNativeLibrary}, which never registers it with ART's JNI method resolver.
+     * The native entry point still runs, so the app appears to start, and then the first
+     * synchronous Java-to-native call dies with {@code UnsatisfiedLinkError} even though
+     * the symbol is present in the packaged {@code .so}. Loading it here, before
+     * {@code super.onCreate}, is what makes the symbols resolvable from Java.
+     *
+     * <p>The library name comes from the same {@code android.app.lib_name} manifest
+     * meta-data that {@link NativeActivity} reads, so subclasses need no extra wiring.
+     */
+    private void loadCranposeNativeLibrary() {
+        String libraryName = DEFAULT_NATIVE_LIB_NAME;
+        try {
+            android.content.pm.ActivityInfo info =
+                    getPackageManager()
+                            .getActivityInfo(
+                                    getComponentName(),
+                                    android.content.pm.PackageManager.GET_META_DATA);
+            if (info.metaData != null) {
+                String declared = info.metaData.getString(NATIVE_LIB_NAME_META_DATA);
+                if (declared != null && !declared.isEmpty()) {
+                    libraryName = declared;
+                }
+            }
+        } catch (android.content.pm.PackageManager.NameNotFoundException error) {
+            android.util.Log.w("cranpose", "activity info unavailable; using default lib name", error);
+        }
+        try {
+            System.loadLibrary(libraryName);
+        } catch (UnsatisfiedLinkError error) {
+            android.util.Log.w("cranpose", "could not load native library " + libraryName, error);
+        }
+    }
+
+    /**
+     * Makes the native content view focusable and gives it focus.
+     *
+     * <p>Wear OS delivers rotary encoder events — the Pixel Watch crown, the Galaxy
+     * Watch bezel — only to a focused view. {@link NativeActivity} never marks its
+     * content view focusable, so without this the crown produces nothing at all, with
+     * no error to explain the silence. Touch is unaffected, which makes it look like
+     * the app simply ignores the crown.
+     *
+     * <p>Re-applied from {@code onWindowFocusChanged} because the window can hand
+     * focus elsewhere (dialogs, IME) and not give it back to the content view.
+     */
+    private void focusNativeContentView() {
+        View content = findViewById(android.R.id.content);
+        if (content instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) content;
+            if (group.getChildCount() > 0) {
+                content = group.getChildAt(0);
+            }
+        }
+        if (content == null) {
+            return;
+        }
+        content.setFocusable(true);
+        content.setFocusableInTouchMode(true);
+        content.requestFocus();
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        loadCranposeNativeLibrary();
         super.onCreate(savedInstanceState);
+        focusNativeContentView();
         installInsetsListener();
         registerNetworkCallback();
         dispatchDeeplink(getIntent());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) {
+            focusNativeContentView();
+        }
     }
 
     @Override
@@ -935,6 +1023,9 @@ public class CranposeActivity extends NativeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         dispatchDeeplink(intent);
+        // setIntent above is what makes getIntent() — and therefore the encoder —
+        // report the new extras, mirroring what a Compose activity sees.
+        nativeOnLaunchArguments(cranposeEncodeLaunchArguments());
     }
 
     @Override
@@ -962,6 +1053,93 @@ public class CranposeActivity extends NativeActivity {
             intent.removeExtra(EXTRA_DEEPLINK);
             nativeNotificationAction(deeplink);
         }
+    }
+
+    /**
+     * Flattens the launching intent's extras for {@code cranpose_services::launch_args}.
+     *
+     * <p>A Cranpose app is a {@link NativeActivity}: it sees neither the environment of
+     * the shell that ran {@code am start} nor the {@link Intent} itself, so debug and
+     * instrumentation flags read from {@code std::env::var} silently return nothing on
+     * device. This is the equivalent of {@code intent.extras.getBoolean(...)} in a
+     * Compose activity — Rust calls it once at startup and it is pushed again from
+     * {@link #onNewIntent}.
+     *
+     * <p>The whole {@link android.os.Bundle} crosses JNI as one string rather than one
+     * call per extra. The first line is {@code 1} or {@code 0} for
+     * {@code ApplicationInfo.FLAG_DEBUGGABLE}; each following line is
+     * {@code <type>\t<name>\t<value>} with {@code type} one of {@code b i l f s}.
+     * Extras Cranpose has no typed API for (arrays, {@code Parcelable}s, nested
+     * bundles) are omitted rather than guessed at.
+     */
+    public String cranposeEncodeLaunchArguments() {
+        StringBuilder payload = new StringBuilder();
+        payload.append(isCranposeDebuggableBuild() ? '1' : '0');
+        Intent intent = getIntent();
+        if (intent == null) {
+            return payload.toString();
+        }
+        Bundle extras;
+        try {
+            extras = intent.getExtras();
+        } catch (RuntimeException error) {
+            // An extra whose class this process cannot unmarshal throws from
+            // getExtras(); losing the launch arguments must not lose the launch.
+            android.util.Log.w("cranpose", "launch intent extras are unreadable", error);
+            return payload.toString();
+        }
+        if (extras == null) {
+            return payload.toString();
+        }
+        for (String name : extras.keySet()) {
+            Object value;
+            try {
+                value = extras.get(name);
+            } catch (RuntimeException error) {
+                continue;
+            }
+            appendLaunchArgument(payload, name, value);
+        }
+        return payload.toString();
+    }
+
+    /** {@code ApplicationInfo.FLAG_DEBUGGABLE} — the gate for app debug options. */
+    private boolean isCranposeDebuggableBuild() {
+        android.content.pm.ApplicationInfo info = getApplicationInfo();
+        return info != null
+                && (info.flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
+    private static void appendLaunchArgument(StringBuilder payload, String name, Object value) {
+        char kind;
+        String encoded;
+        if (value instanceof Boolean) {
+            kind = 'b';
+            encoded = ((Boolean) value) ? "1" : "0";
+        } else if (value instanceof Integer || value instanceof Short || value instanceof Byte) {
+            kind = 'i';
+            encoded = Integer.toString(((Number) value).intValue());
+        } else if (value instanceof Long) {
+            kind = 'l';
+            encoded = Long.toString((Long) value);
+        } else if (value instanceof Float || value instanceof Double) {
+            // `am start --ed` produces a Double; Cranpose types floats as f32.
+            kind = 'f';
+            encoded = Float.toString(((Number) value).floatValue());
+        } else if (value instanceof CharSequence) {
+            kind = 's';
+            encoded = escapeLaunchArgument(value.toString());
+        } else {
+            return;
+        }
+        payload.append('\n').append(kind).append('\t')
+                .append(escapeLaunchArgument(name)).append('\t').append(encoded);
+    }
+
+    /** Keeps the record separators out of names and values; {@code %} goes first. */
+    private static String escapeLaunchArgument(String value) {
+        return value.replace("%", "%25").replace("\t", "%09")
+                .replace("\n", "%0A").replace("\r", "%0D");
     }
 
     private void installInsetsListener() {
@@ -1067,6 +1245,135 @@ public class CranposeActivity extends NativeActivity {
             }
             decor.performHapticFeedback(constant);
         });
+    }
+
+    /** The system vibrator, or {@code null} where the device has none. */
+    private Vibrator cranposeVibrator() {
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager =
+                        (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+                return manager == null ? null : manager.getDefaultVibrator();
+            }
+            return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /** Vibrates once for {@code durationMs} at {@code amplitude} (-1 for the
+     * device default, otherwise 1..255). Called from Rust over JNI (any
+     * thread); {@code VibrationEffect.createOneShot} needs API 26. */
+    public void cranposeHapticOneShot(final long durationMs, final int amplitude) {
+        if (durationMs <= 0) {
+            return;
+        }
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                int level = amplitude < 0
+                        ? VibrationEffect.DEFAULT_AMPLITUDE
+                        : Math.max(1, Math.min(255, amplitude));
+                vibrator.vibrate(VibrationEffect.createOneShot(durationMs, level));
+            } else {
+                vibrator.vibrate(durationMs);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Plays a vibration waveform: alternating durations in {@code timingsMs}
+     * with a target amplitude each in {@code amplitudes} (0..255), looping back
+     * to {@code repeat} (or -1 for a single pass). Called from Rust over JNI
+     * (any thread); {@code VibrationEffect.createWaveform} needs API 26, and
+     * pre-26 devices fall back to the timings alone. */
+    public void cranposeHapticWaveform(final long[] timingsMs, final int[] amplitudes,
+            final int repeat) {
+        if (timingsMs == null || amplitudes == null || timingsMs.length != amplitudes.length
+                || timingsMs.length == 0) {
+            return;
+        }
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        final int index = repeat >= 0 && repeat < timingsMs.length ? repeat : -1;
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                int[] levels = new int[amplitudes.length];
+                for (int i = 0; i < amplitudes.length; i++) {
+                    levels[i] = Math.max(0, Math.min(255, amplitudes[i]));
+                }
+                vibrator.vibrate(VibrationEffect.createWaveform(timingsMs, levels, index));
+            } else {
+                vibrator.vibrate(timingsMs, index);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Plays a predefined effect: 0 click, 1 double click, 2 tick, 3 heavy
+     * click. Called from Rust over JNI (any thread);
+     * {@code VibrationEffect.createPredefined} needs API 29, and older devices
+     * fall back to a short one-shot of comparable weight. */
+    public void cranposeHapticPredefined(final int effect) {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return;
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                int constant;
+                switch (effect) {
+                    case 1: constant = VibrationEffect.EFFECT_DOUBLE_CLICK; break;
+                    case 2: constant = VibrationEffect.EFFECT_TICK; break;
+                    case 3: constant = VibrationEffect.EFFECT_HEAVY_CLICK; break;
+                    default: constant = VibrationEffect.EFFECT_CLICK; break;
+                }
+                vibrator.vibrate(VibrationEffect.createPredefined(constant));
+            } else {
+                long duration;
+                switch (effect) {
+                    case 1: duration = 40L; break;
+                    case 2: duration = 8L; break;
+                    case 3: duration = 50L; break;
+                    default: duration = 20L; break;
+                }
+                cranposeHapticOneShot(duration, -1);
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Stops any vibration in progress, including a repeating waveform.
+     * Called from Rust over JNI (any thread). */
+    public void cranposeHapticCancel() {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null) {
+            return;
+        }
+        try {
+            vibrator.cancel();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Whether the vibrator reproduces amplitudes rather than treating every
+     * non-zero level as full strength. Called from Rust over JNI (any thread);
+     * blocks only for the duration of the query. */
+    public boolean cranposeHapticHasAmplitudeControl() {
+        final Vibrator vibrator = cranposeVibrator();
+        if (vibrator == null || !vibrator.hasVibrator()) {
+            return false;
+        }
+        try {
+            return Build.VERSION.SDK_INT >= 26 && vibrator.hasAmplitudeControl();
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     /** Writes {@code text} to the system clipboard. Called from Rust over JNI. */

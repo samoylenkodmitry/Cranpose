@@ -28,6 +28,7 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
+pub mod rotary;
 mod shader_rect;
 mod shaders;
 mod text_showcase;
@@ -49,6 +50,7 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
+use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
 pub use shaders::ShaderSection;
 use shaders::ShadersTab;
@@ -96,6 +98,7 @@ pub enum DemoTab {
     Liquid,
     MarkdownViewer,
     FilePicker,
+    Rotary,
 }
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Liquid;
@@ -124,6 +127,7 @@ impl DemoTab {
             DemoTab::Liquid => "Liquid UI",
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
+            DemoTab::Rotary => "Rotary Input",
         }
     }
 
@@ -162,7 +166,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 21] = [
+pub const DEMO_TABS: [DemoTab; 22] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -184,6 +188,7 @@ pub const DEMO_TABS: [DemoTab; 21] = [
     DemoTab::MarkdownViewer,
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
+    DemoTab::Rotary,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -229,7 +234,7 @@ struct Holder {
     count: i32,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnimationState {
     pub progress: f32,
     pub direction: f32,
@@ -244,7 +249,7 @@ impl Default for AnimationState {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameStats {
     pub frames: u32,
     pub last_frame_ms: f32,
@@ -546,6 +551,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::ShaderRect => ShaderRectTab(),
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::FilePicker => file_picker_tab(),
+        DemoTab::Rotary => rotary_tab(),
         DemoTab::Liquid => LiquidUiTab(),
     }
 }
@@ -1802,6 +1808,8 @@ fn counter_app() {
                                                 PointerEventKind::Cancel => pointer_down.set(false),
                                                 PointerEventKind::Scroll
                                                 | PointerEventKind::Zoom
+                                                | PointerEventKind::RotaryScrollPre
+                                                | PointerEventKind::RotaryScroll
                                                 | PointerEventKind::Enter
                                                 | PointerEventKind::Exit => {}
                                             }

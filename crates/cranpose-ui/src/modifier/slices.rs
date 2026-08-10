@@ -23,6 +23,13 @@ use cranpose_ui_graphics::EdgeInsets;
 pub struct ModifierNodeSlices {
     draw_commands: Vec<DrawCommand>,
     pointer_inputs: Vec<Rc<dyn Fn(PointerEvent)>>,
+    /// Write targets for the node's resolved layout size, one per pointer-input
+    /// node in the chain that exposes a size to its handler (Compose's
+    /// `PointerInputScope.size`). The layout/scene pass publishes the node's
+    /// size into them every pass via
+    /// [`ModifierNodeSlices::publish_pointer_input_size`], so a handler reading
+    /// `scope.size()` — before or after its first event — sees live dimensions.
+    pointer_input_sizes: Vec<Rc<std::cell::Cell<cranpose_ui_graphics::Size>>>,
     click_handlers: Vec<Rc<dyn Fn(Point)>>,
     clip_to_bounds: bool,
     motion_context_animated: bool,
@@ -78,6 +85,7 @@ impl Clone for ModifierNodeSlices {
         Self {
             draw_commands: self.draw_commands.clone(),
             pointer_inputs: self.pointer_inputs.clone(),
+            pointer_input_sizes: self.pointer_input_sizes.clone(),
             click_handlers: self.click_handlers.clone(),
             clip_to_bounds: self.clip_to_bounds,
             motion_context_animated: self.motion_context_animated,
@@ -172,6 +180,30 @@ impl ModifierNodeSlices {
 
     pub fn pointer_inputs(&self) -> &[Rc<dyn Fn(PointerEvent)>] {
         &self.pointer_inputs
+    }
+
+    /// The write targets for this node's resolved size, one per pointer-input
+    /// node that exposes a size to its handler. See
+    /// [`ModifierNodeSlices::publish_pointer_input_size`].
+    pub fn pointer_input_size_sinks(&self) -> &[Rc<std::cell::Cell<cranpose_ui_graphics::Size>>] {
+        &self.pointer_input_sizes
+    }
+
+    /// Publishes this layout node's resolved size to every pointer-input
+    /// handler attached to it, so `PointerInputScope::size()` reports the
+    /// node's real dimensions.
+    ///
+    /// Called by every pass that resolves a node's geometry (the layout `place`
+    /// passes and the per-frame scene build), so the size is current before any
+    /// pointer event for that frame is dispatched and tracks resizes.
+    ///
+    /// `size` is the node's layout box — the same box the dispatched
+    /// [`PointerEvent`] positions are made local to — so handlers can compare
+    /// event coordinates against it directly.
+    pub fn publish_pointer_input_size(&self, size: cranpose_ui_graphics::Size) {
+        for sink in &self.pointer_input_sizes {
+            sink.set(size);
+        }
     }
 
     pub fn click_handlers(&self) -> &[Rc<dyn Fn(Point)>] {
@@ -340,6 +372,7 @@ impl ModifierNodeSlices {
     pub fn clear(&mut self) {
         self.draw_commands.clear();
         self.pointer_inputs.clear();
+        self.pointer_input_sizes.clear();
         self.click_handlers.clear();
         self.clip_to_bounds = false;
         self.motion_context_animated = false;
@@ -428,11 +461,16 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
             // POINTER_INPUT collection
             if has_pointer && node_caps.intersects(NodeCapabilities::POINTER_INPUT) {
-                if let Some(handler) = node
-                    .as_pointer_input_node()
-                    .and_then(|n| n.pointer_input_handler())
-                {
-                    slices.pointer_inputs.push(handler);
+                if let Some(pointer_node) = node.as_pointer_input_node() {
+                    if let Some(handler) = pointer_node.pointer_input_handler() {
+                        slices.pointer_inputs.push(handler);
+                    }
+                    // Collect the node's size sink so the layout pass can
+                    // publish this node's resolved size into the handler's
+                    // scope (`PointerInputScope::size`).
+                    if let Some(sink) = pointer_node.layout_size_sink() {
+                        slices.pointer_input_sizes.push(sink);
+                    }
                 }
             }
 
@@ -462,15 +500,21 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
                         slices.draw_commands.push(DrawCommand::Overlay(closure));
                     } else {
                         use cranpose_ui_graphics::{DrawScope as _, DrawScopeDefault};
-                        let mut scope = DrawScopeDefault::new(crate::modifier::Size {
-                            width: 0.0,
-                            height: 0.0,
-                        });
+                        let mut scope = DrawScopeDefault::with_text_measurer(
+                            crate::modifier::Size {
+                                width: 0.0,
+                                height: 0.0,
+                            },
+                            crate::text::AppContextTextMeasurer::shared(),
+                        );
                         draw_node.draw(&mut scope);
                         let primitives = scope.into_primitives();
                         if !primitives.is_empty() {
-                            let draw_cmd =
-                                Rc::new(move |_size: crate::modifier::Size| primitives.clone());
+                            let draw_cmd = Rc::new(
+                                move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                                    scope.push_recorded(primitives.clone())
+                                },
+                            );
                             slices.draw_commands.push(DrawCommand::Overlay(draw_cmd));
                         }
                     }
@@ -549,23 +593,17 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
 
     // Convert background + shape into a draw command
     if let Some(color) = background_color {
-        let draw_cmd = Rc::new(move |size: crate::modifier::Size| {
-            use crate::modifier::{Brush, Rect};
-            use cranpose_ui_graphics::DrawPrimitive;
+        let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+            use crate::modifier::Brush;
+            use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
 
+            let size = scope.size();
             let brush = Brush::solid(color);
-            let rect = Rect {
-                x: 0.0,
-                y: 0.0,
-                width: size.width,
-                height: size.height,
-            };
-
             if let Some(shape) = corner_shape {
-                let radii = shape.resolve(size.width, size.height);
-                vec![DrawPrimitive::RoundRect { rect, brush, radii }]
+                let radii: CornerRadii = shape.resolve(size.width, size.height);
+                scope.draw_round_rect(brush, radii);
             } else {
-                vec![DrawPrimitive::Rect { rect, brush }]
+                scope.draw_rect(brush);
             }
         });
 

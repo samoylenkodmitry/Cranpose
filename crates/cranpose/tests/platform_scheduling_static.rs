@@ -464,6 +464,97 @@ fn android_activity_jni_attaches_the_caller_without_recreating_the_vm() {
 }
 
 #[test]
+fn android_launch_arguments_reach_the_service_registry() {
+    let services_source = crate_source("src/android_services.rs");
+    let decoder_source = crate_source("src/android_launch_args.rs");
+    let environment_source = crate_source("src/platform_env.rs");
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+
+    assert!(
+        java_source.contains("public String cranposeEncodeLaunchArguments()")
+            && java_source.contains("ApplicationInfo.FLAG_DEBUGGABLE")
+            && java_source.contains("private static native void nativeOnLaunchArguments(String payload);")
+            && java_source.contains("nativeOnLaunchArguments(cranposeEncodeLaunchArguments());"),
+        "CranposeActivity should encode the launching intent's extras with the debuggable flag and re-push them from onNewIntent; a NativeActivity has no other way to see them"
+    );
+    assert!(
+        java_source.contains("private void loadCranposeNativeLibrary()")
+            && java_source.contains("System.loadLibrary(libraryName)"),
+        "the Java-declared launch-argument callback only resolves because CranposeActivity loads the library itself; libnativeloader does not register it with ART's JNI resolver"
+    );
+    assert!(
+        services_source.contains("jni_str!(\"cranposeEncodeLaunchArguments\")")
+            && services_source
+                .contains("set_platform_launch_args(Rc::new(read_launch_arguments(&app)))"),
+        "the Android backend should pull the launching intent's extras at startup, where getIntent() is already populated, instead of racing a push from onCreate"
+    );
+    assert!(
+        services_source
+            .contains("Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments")
+            && services_source.contains("PENDING_LAUNCH_ARGS")
+            && services_source.contains("shell.request_root_render()"),
+        "onNewIntent extras should be parked for the native loop, which owns the snapshot, and force a root render once applied"
+    );
+    assert!(
+        decoder_source.contains("pub(crate) fn decode_launch_arguments"),
+        "the intent-extra wire format should be decoded in safe Rust, outside the JNI boundary"
+    );
+    assert!(
+        environment_source.contains("local_launch_args().provides(launch_args)"),
+        "the platform environment should publish the launch arguments so composition observes a replacement intent"
+    );
+}
+
+#[test]
+fn android_play_billing_reaches_the_purchase_registry() {
+    let services_source = crate_source("src/android_services.rs");
+    let backend_source = crate_source("src/android_purchases.rs");
+    let wire_source = crate_source("src/android_purchase_wire.rs");
+    let java_source = workspace_source(
+        "crates/cranpose/android/java-billing/dev/cranpose/android/CranposeBilling.java",
+    );
+
+    assert!(
+        services_source.contains("crate::android_purchases::register(app.clone())"),
+        "the Android backend should install the Play Billing purchase backend alongside the other platform services"
+    );
+    assert!(
+        backend_source.contains("set_platform_purchases(Rc::new(AndroidPurchases { app }))")
+            && backend_source.contains("load_cranpose_java_class(env, &activity, BILLING_CLASS)"),
+        "the Play Billing backend should reach its Java bridge through the activity class loader and register itself into cranpose_services::purchases"
+    );
+    assert!(
+        backend_source.contains("jni_str!(\"cranposeBillingConfigure\")")
+            && backend_source.contains("jni_str!(\"cranposeBillingPurchase\")")
+            && backend_source.contains("jni_str!(\"cranposeBillingRestore\")"),
+        "querying products, buying and restoring should each be one non-blocking JNI call into the Java bridge"
+    );
+    assert!(
+        backend_source
+            .contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot")
+            && backend_source.contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent")
+            && backend_source.contains("wake_native_loop()"),
+        "store answers arrive on Play Billing worker threads and must be parked for the native loop, which is woken so the frame that reads them happens"
+    );
+    assert!(
+        wire_source.contains("pub(crate) fn decode_store_snapshot")
+            && wire_source.contains("pub(crate) fn decode_purchase_event"),
+        "the Play Billing wire format should be decoded in safe Rust, outside the JNI boundary"
+    );
+    assert!(
+        java_source.contains("private static native void nativeBillingSnapshot(String payload);")
+            && java_source.contains("activity.runOnUiThread")
+            && java_source.contains("client.launchBillingFlow(activity, flow)"),
+        "the Java bridge should flatten the whole store snapshot into one JNI call and launch the payment sheet on the Java UI thread"
+    );
+    assert!(
+        java_source.contains("acknowledgePurchase"),
+        "Play refunds an unacknowledged purchase, so the bridge must acknowledge every entitlement it sees"
+    );
+}
+
+#[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");
 
@@ -1030,12 +1121,26 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
     let allowed = [
+        // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
+        // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
+        // them, mirroring how HWUI votes the panel's frame rate.
+        "android_frame_rate.rs",
+        "android_frame_telemetry.rs",
         "android_jni.rs",
         "android_accessibility.rs",
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
+        // The Play Billing bridge: the exported symbols
+        // `dev.cranpose.android.CranposeBilling` calls back through. Decoding
+        // what they carry lives in safe Rust next door, in
+        // android_purchase_wire.rs.
+        "android_purchases.rs",
         "android_text_input.rs",
+        // One `AChoreographer_postFrameCallback64` and the callback it posts,
+        // which is how the frame loop learns when the display is ready for the
+        // next frame.
+        "android_vsync.rs",
         "android_writable_folder.rs",
         "ios_file_picker.rs",
         "ios_uri_handler.rs",
@@ -1209,12 +1314,26 @@ fn workspace_ffi_boundaries_are_explicit() {
         .expect("cranpose crate should live under workspace crates directory");
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
+        // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
+        // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
+        // them, mirroring how HWUI votes the panel's frame rate.
+        "crates/cranpose/src/android_frame_rate.rs",
+        "crates/cranpose/src/android_frame_telemetry.rs",
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_accessibility.rs",
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
+        // The Play Billing bridge: the exported symbols
+        // `dev.cranpose.android.CranposeBilling` calls back through, and
+        // nothing else. Decoding the payloads they carry lives in safe Rust in
+        // android_purchase_wire.rs, which is built and tested on the host.
+        "crates/cranpose/src/android_purchases.rs",
         "crates/cranpose/src/android_text_input.rs",
+        // One `AChoreographer_postFrameCallback64` and the callback it posts,
+        // which is how the frame loop learns when the display is ready for the
+        // next frame.
+        "crates/cranpose/src/android_vsync.rs",
         "crates/cranpose/src/android_writable_folder.rs",
         "crates/cranpose/src/ios_file_picker.rs",
         "crates/cranpose/src/ios_uri_handler.rs",
@@ -1233,6 +1352,25 @@ fn workspace_ffi_boundaries_are_explicit() {
         // plus the callback it invokes. The crate root denies unsafe code and
         // opts this one module back in by name.
         "crates/cranpose-storekit/src/apple.rs",
+        // The audio engine's two boundaries: the lock-free queue that carries
+        // commands to the real-time thread, and the AAudio callback that turns
+        // the device's raw output pointer into a slice. The crate root denies
+        // unsafe code and opts these back in by name.
+        "crates/cranpose-audio/src/ring.rs",
+        "crates/cranpose-audio/src/backend/aaudio.rs",
+        // The renderer's fixed frame worker pool: lending frame-local borrows
+        // to persistent parked workers cannot be expressed safely in std (the
+        // problem rayon exists for). The unsafety is two pointer wrappers
+        // whose invariants the pool's completion barrier enforces; the crate
+        // root denies unsafe code and opts this one module back in by name.
+        "crates/cranpose-render/wgpu/src/worker_pool.rs",
+        // The shape-run entry borrows its DrawPrimitive, whose TYPE is !Sync
+        // (the Text variant holds Rc) even though the constructor only ever
+        // admits the Sync-payload shape variants. The module is kept tiny so
+        // the constructor invariant and the two manual Send/Sync impls stay
+        // on one screen; the crate root denies unsafe code and opts this one
+        // module back in by name.
+        "crates/cranpose-render/wgpu/src/run_entry.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
@@ -1276,6 +1414,8 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/ios_accessibility.rs",
+        "crates/cranpose-audio/src/ring.rs",
+        "crates/cranpose-audio/src/backend/aaudio.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

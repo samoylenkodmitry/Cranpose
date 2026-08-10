@@ -227,7 +227,17 @@ where
 /// }
 /// ```
 #[allow(non_snake_case)]
-pub fn useState<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
+pub fn useState<T: Clone + PartialEq + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
+    composer_context::with_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        composer
+            .remember(|| OwnedMutableState::with_runtime_structural_eq(init(), runtime))
+            .with(|state| state.handle())
+    })
+}
+
+#[allow(non_snake_case)]
+pub fn useStateRaw<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer

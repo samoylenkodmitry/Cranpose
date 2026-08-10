@@ -39,7 +39,7 @@ const GRID_PRESETS: [GridPreset; 3] = [
     },
 ];
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 struct MineswapperCell {
     is_mine: bool,
     is_revealed: bool,
@@ -47,7 +47,7 @@ struct MineswapperCell {
     adjacent: u8,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 struct MineswapperGame {
     width: usize,
     height: usize,

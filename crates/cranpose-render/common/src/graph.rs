@@ -10,6 +10,7 @@ use cranpose_ui::{
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
 
 use crate::raster_cache::LayerRasterCacheHashes;
+use crate::style_shared::DrawPlacement;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectiveTransform {
@@ -248,7 +249,9 @@ pub struct DrawPrimitiveNode {
 pub struct TextPrimitiveNode {
     pub node_id: NodeId,
     pub rect: Rect,
-    pub text: AnnotatedString,
+    /// Shared so the renderer can hand the same allocation to every draw it
+    /// emits for this node instead of deep-copying the string once per emit.
+    pub text: Rc<AnnotatedString>,
     pub text_style: TextStyle,
     pub font_size: f32,
     pub layout_options: TextLayoutOptions,
@@ -355,7 +358,174 @@ impl LayerNode {
 #[derive(Clone)]
 pub enum RenderNode {
     Primitive(PrimitiveEntry),
+    /// A whole draw command's primitives as one node. A heavy canvas records
+    /// thousands of primitives per frame; wrapping each in its own
+    /// [`RenderNode`] made the graph rebuild move every one of them twice and
+    /// free seventeen thousand nodes per frame on a stress scene. The run
+    /// keeps the recorded vector intact — semantically it is exactly that
+    /// many consecutive `Primitive` draw entries with no per-primitive clip.
+    DrawRun(DrawRunNode),
     Layer(Box<LayerNode>),
+}
+
+/// Stable identity of the draw command a run was recorded from: the layout
+/// node owning the command, the command's index in that node's command list,
+/// and which placement pass produced this run (a `WithContent` command emits
+/// one run per placement, so the pair alone is not unique). Rendering does
+/// not read it yet; it is the key under which retained recording state lives
+/// as retention moves up to the draw-command recorder, and it must survive
+/// recording, graph construction, normalized-scene creation, and renderer
+/// cache lookup unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DrawCommandId {
+    pub node_id: NodeId,
+    pub command_index: u32,
+    pub placement: DrawPlacement,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DrawRunNode {
+    pub phase: PrimitivePhase,
+    /// Which draw command recorded these primitives. `None` only for runs
+    /// with no per-command provenance (hand-built tests).
+    pub command: Option<DrawCommandId>,
+    /// Shared, not owned: the recording registry keyed by [`DrawCommandId`]
+    /// keeps a handle to the same buffer, so its capacity survives this
+    /// node being dropped on the next rebuild and the command re-records
+    /// into it instead of growing a fresh vector. Nothing mutates a run's
+    /// primitives after construction, which is what makes sharing sound.
+    pub primitives: std::rc::Rc<Vec<DrawPrimitive>>,
+    /// Content facts consumers keep asking per frame, answered once at
+    /// construction. Surface planning used to rescan every primitive of
+    /// every run per frame to learn "does it contain text?" — for a
+    /// 17k-primitive game canvas with no text, that was two full walks per
+    /// frame that could never early-exit.
+    pub summary: DrawRunSummary,
+    /// The command's verified retained/dynamic span structure for the frame
+    /// this node was built, in primitive space. A renderer that retains by
+    /// identity draws the run span by span — retained spans from slots
+    /// keyed (command, slot), dynamic spans from `primitives` — instead of
+    /// walking the whole vector. `None` means no verification ran or
+    /// nothing was retained: the run is all ordinary primitives.
+    pub replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
+}
+
+impl DrawRunNode {
+    pub fn new(phase: PrimitivePhase, primitives: Vec<DrawPrimitive>) -> Self {
+        Self::for_command(phase, None, primitives)
+    }
+
+    pub fn for_command(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: Vec<DrawPrimitive>,
+    ) -> Self {
+        Self::for_command_shared(phase, command, std::rc::Rc::new(primitives))
+    }
+
+    pub fn for_command_shared(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
+    ) -> Self {
+        Self::for_command_replayed(phase, command, primitives, None)
+    }
+
+    pub fn for_command_replayed(
+        phase: PrimitivePhase,
+        command: Option<DrawCommandId>,
+        primitives: std::rc::Rc<Vec<DrawPrimitive>>,
+        replay: Option<Box<cranpose_ui_graphics::CommandReplayFrame>>,
+    ) -> Self {
+        // Fail-closed invariant: a bypassed span has NO primitives — the
+        // frame's own `fallback` recording is the only thing that can ever
+        // draw it, so a frame carrying bypassed spans without one is
+        // unconstructible here. The builder attaches the published handle
+        // to every frame; hand-built frames that bypass must do the same.
+        debug_assert!(
+            replay.as_ref().is_none_or(|frame| {
+                frame.fallback.is_some()
+                    || !frame.spans.iter().any(|span| {
+                        matches!(
+                            span,
+                            cranpose_ui_graphics::FrameSpan::Retained {
+                                capture: false,
+                                range,
+                                ..
+                            } if range.1 <= range.0
+                        )
+                    })
+            }),
+            "a replay frame with bypassed spans must own its fallback recording"
+        );
+        let mut summary = DrawRunSummary::scan(&primitives);
+        // Bypassed retained spans have no primitives to scan, but they are
+        // drawable content — only shape records ever retain, never shadows.
+        if replay.as_ref().is_some_and(|frame| {
+            frame
+                .spans
+                .iter()
+                .any(|span| matches!(span, cranpose_ui_graphics::FrameSpan::Retained { .. }))
+        }) {
+            summary.has_non_shadow = true;
+        }
+        Self {
+            phase,
+            command,
+            primitives,
+            summary,
+            replay,
+        }
+    }
+}
+
+/// One-pass discriminant census of a draw run, recursing through `Blend`
+/// wrappers the same way the per-primitive predicates it replaces did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DrawRunSummary {
+    /// Any `Text` primitive, including inside `Blend` — glyph masks want
+    /// rigid snapping.
+    pub has_text: bool,
+    pub has_shadow: bool,
+    /// Any primitive besides `Shadow` (direct drawable content).
+    pub has_non_shadow: bool,
+    /// Any `Image` or `Text`, including inside `Blend` — content that
+    /// resamples badly on a fractionally offset surface.
+    pub has_pixel_sensitive: bool,
+}
+
+impl DrawRunSummary {
+    pub fn scan(primitives: &[DrawPrimitive]) -> Self {
+        fn unwrap_blend(mut primitive: &DrawPrimitive) -> &DrawPrimitive {
+            while let DrawPrimitive::Blend {
+                primitive: inner, ..
+            } = primitive
+            {
+                primitive = inner;
+            }
+            primitive
+        }
+        let mut summary = Self::default();
+        for primitive in primitives {
+            // Shadow classification looks at the outer discriminant only,
+            // text and pixel sensitivity see through `Blend` — exactly the
+            // split the per-primitive predicates this replaces made.
+            if matches!(primitive, DrawPrimitive::Shadow(_)) {
+                summary.has_shadow = true;
+                continue;
+            }
+            summary.has_non_shadow = true;
+            match unwrap_blend(primitive) {
+                DrawPrimitive::Text(_) => {
+                    summary.has_text = true;
+                    summary.has_pixel_sensitive = true;
+                }
+                DrawPrimitive::Image { .. } => summary.has_pixel_sensitive = true,
+                _ => {}
+            }
+        }
+        summary
+    }
 }
 
 #[derive(Clone)]
@@ -376,6 +546,7 @@ impl RenderGraph {
                 .iter()
                 .map(|child| match child {
                     RenderNode::Primitive(_) => 1,
+                    RenderNode::DrawRun(run) => run.primitives.len(),
                     RenderNode::Layer(child_layer) => count_layer(child_layer),
                 })
                 .sum::<usize>()
@@ -402,6 +573,14 @@ fn layer_heap_bytes(layer: &LayerNode) -> usize {
 fn render_node_heap_bytes(node: &RenderNode) -> usize {
     match node {
         RenderNode::Primitive(entry) => primitive_entry_heap_bytes(entry),
+        RenderNode::DrawRun(run) => {
+            size_of::<DrawPrimitive>() * run.primitives.capacity()
+                + run
+                    .primitives
+                    .iter()
+                    .map(draw_primitive_heap_bytes)
+                    .sum::<usize>()
+        }
         RenderNode::Layer(layer) => size_of::<LayerNode>() + layer_heap_bytes(layer),
     }
 }
@@ -417,11 +596,23 @@ fn primitive_entry_heap_bytes(entry: &PrimitiveEntry) -> usize {
 
 fn draw_primitive_heap_bytes(primitive: &DrawPrimitive) -> usize {
     match primitive {
-        DrawPrimitive::Content | DrawPrimitive::Rect { .. } | DrawPrimitive::RoundRect { .. } => 0,
+        DrawPrimitive::Content
+        | DrawPrimitive::Rect { .. }
+        | DrawPrimitive::RoundRect { .. }
+        | DrawPrimitive::Arc { .. } => 0,
         DrawPrimitive::Blend { primitive, .. } => {
             size_of::<DrawPrimitive>() + draw_primitive_heap_bytes(primitive)
         }
         DrawPrimitive::Image { .. } => 0,
+        DrawPrimitive::Text(text) => {
+            size_of::<cranpose_ui_graphics::TextPrimitive>()
+                + text.text.len()
+                + text
+                    .style
+                    .font_family
+                    .as_ref()
+                    .map_or(0, |family| family.capacity())
+        }
         DrawPrimitive::Shadow(shadow) => shadow_primitive_heap_bytes(shadow),
     }
 }
@@ -675,6 +866,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -713,6 +905,7 @@ mod tests {
                         height: 6.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),

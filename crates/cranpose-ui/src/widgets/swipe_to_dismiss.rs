@@ -422,6 +422,8 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
         }
         PointerEventKind::Scroll
         | PointerEventKind::Zoom
+        | PointerEventKind::RotaryScrollPre
+        | PointerEventKind::RotaryScroll
         | PointerEventKind::Enter
         | PointerEventKind::Exit => {}
     }

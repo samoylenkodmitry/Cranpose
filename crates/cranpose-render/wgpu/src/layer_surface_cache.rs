@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
 pub(crate) const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_SCENE_RANGE_CACHE_ITEMS: usize = 16;
+const MAX_SCENE_RANGE_CACHE_ITEMS: usize = 256;
 pub(crate) const MAX_SCENE_RANGE_CACHE_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_SCENE_RANGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY: usize = 256;

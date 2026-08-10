@@ -361,7 +361,7 @@ fn measure_lazy_list_children(
         .borrow_mut()
         .insert(item.clone(), retained_children);
     let elapsed = context.measure_start.elapsed();
-    if std::env::var_os("CRANPOSE_LAZY_ITEM_TELEMETRY").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_LAZY_ITEM_TELEMETRY") {
         log::warn!(
             "[lazy-item-telemetry] index={} children={} main={:.2} cross={:.2} elapsed_ms={:.2}",
             context.index,
@@ -806,7 +806,7 @@ fn log_lazy_cache_telemetry(
     result: &LazyListMeasureResult,
     measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
 ) {
-    if std::env::var_os("CRANPOSE_LAZY_CACHE_TELEMETRY").is_none() {
+    if !cranpose_core::env_flag!("CRANPOSE_LAZY_CACHE_TELEMETRY") {
         return;
     }
 

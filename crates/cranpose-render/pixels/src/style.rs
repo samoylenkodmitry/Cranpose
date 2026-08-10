@@ -1,12 +1,10 @@
 #[cfg(test)]
 pub(crate) use cranpose_render_common::graph::quad_bounds;
 #[cfg(test)]
-pub(crate) use cranpose_render_common::layer_transform::{
-    apply_layer_affine_to_rect, apply_layer_to_quad,
-};
+pub(crate) use cranpose_render_common::layer_transform::apply_layer_to_rect;
 #[cfg(test)]
 pub(crate) use cranpose_render_common::layer_transform::{
-    apply_layer_to_rect, layer_uniform_scale,
+    apply_layer_affine_to_rect, apply_layer_to_quad,
 };
 pub(crate) use cranpose_render_common::style_shared::{
     apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii,
@@ -17,8 +15,6 @@ pub(crate) use cranpose_render_common::style_shared::{
 };
 #[cfg(test)]
 use cranpose_ui::DrawCommand;
-#[cfg(test)]
-use cranpose_ui_graphics::RoundedCornerShape;
 #[cfg(test)]
 use cranpose_ui_graphics::{BlendMode, DrawPrimitive, GraphicsLayer, ShadowPrimitive, Size};
 use cranpose_ui_graphics::{CornerRadii, Rect};
@@ -58,45 +54,21 @@ pub(crate) fn apply_draw_commands(
                 scene,
                 blend_mode.or(Some(nested)),
             ),
-            DrawPrimitive::Rect {
-                rect: local_rect,
-                brush,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let brush = apply_layer_to_brush(brush, layer);
-                scene.push_shape_with_geometry(
-                    transformed,
-                    local_rect,
-                    quad,
-                    brush,
-                    None,
+            // Shapes (fills, strokes and arcs) and text go through the one
+            // shared lowering in `cranpose_render_common::primitive_emit` so
+            // this test-only helper can never drift from the production path.
+            shape_primitive @ (DrawPrimitive::Rect { .. }
+            | DrawPrimitive::RoundRect { .. }
+            | DrawPrimitive::Arc { .. }
+            | DrawPrimitive::Text(_)) => {
+                crate::pipeline::push_draw_primitive(
+                    &shape_primitive,
+                    layer_bounds,
+                    layer,
                     clip,
-                    blend_mode.unwrap_or(BlendMode::SrcOver),
-                );
-            }
-            DrawPrimitive::RoundRect {
-                rect: local_rect,
-                brush,
-                radii,
-            } => {
-                let draw_rect = local_rect.translate(layer_bounds.x, layer_bounds.y);
-                let local_rect = apply_layer_affine_to_rect(draw_rect, layer_bounds, layer);
-                let quad = apply_layer_to_quad(draw_rect, layer_bounds, layer);
-                let transformed = quad_bounds(quad);
-                let scaled_radii = scale_corner_radii(radii, layer_uniform_scale(layer));
-                let shape = RoundedCornerShape::with_radii(scaled_radii);
-                let brush = apply_layer_to_brush(brush, layer);
-                scene.push_shape_with_geometry(
-                    transformed,
-                    local_rect,
-                    quad,
-                    brush,
-                    Some(shape),
-                    clip,
-                    blend_mode.unwrap_or(BlendMode::SrcOver),
+                    scene,
+                    blend_mode,
+                    false,
                 );
             }
             DrawPrimitive::Image {
@@ -420,18 +392,21 @@ mod tests {
 
     #[test]
     fn apply_draw_commands_scales_round_rect_radii_with_uniform_axis_scale() {
-        let command = DrawCommand::Behind(std::rc::Rc::new(|_size| {
-            vec![DrawPrimitive::RoundRect {
-                rect: Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: 80.0,
-                    height: 40.0,
-                },
-                brush: Brush::solid(Color::BLACK),
-                radii: CornerRadii::uniform(10.0),
-            }]
-        }));
+        let command = DrawCommand::Behind(std::rc::Rc::new(
+            |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                scope.push_recorded(vec![DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 80.0,
+                        height: 40.0,
+                    },
+                    brush: Brush::solid(Color::BLACK),
+                    radii: CornerRadii::uniform(10.0),
+                    stroke: None,
+                }]);
+            },
+        ));
 
         let layer = GraphicsLayer {
             scale: 1.0,
@@ -469,39 +444,44 @@ mod tests {
 
     #[test]
     fn primitives_for_placement_uses_last_content_marker() {
-        let command = DrawCommand::WithContent(std::rc::Rc::new(|_size| {
-            vec![
-                DrawPrimitive::Rect {
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 10.0,
-                        height: 10.0,
+        let command = DrawCommand::WithContent(std::rc::Rc::new(
+            |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
+                scope.push_recorded(vec![
+                    DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        brush: Brush::solid(Color::from_rgba_u8(255, 0, 0, 255)),
+                        stroke: None,
                     },
-                    brush: Brush::solid(Color::from_rgba_u8(255, 0, 0, 255)),
-                },
-                DrawPrimitive::Content,
-                DrawPrimitive::Rect {
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 10.0,
-                        height: 10.0,
+                    DrawPrimitive::Content,
+                    DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        brush: Brush::solid(Color::from_rgba_u8(0, 255, 0, 255)),
+                        stroke: None,
                     },
-                    brush: Brush::solid(Color::from_rgba_u8(0, 255, 0, 255)),
-                },
-                DrawPrimitive::Content,
-                DrawPrimitive::Rect {
-                    rect: Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: 10.0,
-                        height: 10.0,
+                    DrawPrimitive::Content,
+                    DrawPrimitive::Rect {
+                        rect: Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 10.0,
+                            height: 10.0,
+                        },
+                        brush: Brush::solid(Color::from_rgba_u8(0, 0, 255, 255)),
+                        stroke: None,
                     },
-                    brush: Brush::solid(Color::from_rgba_u8(0, 0, 255, 255)),
-                },
-            ]
-        }));
+                ]);
+            },
+        ));
 
         let behind = primitives_for_placement(
             &command,

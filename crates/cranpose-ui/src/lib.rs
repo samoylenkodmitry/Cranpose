@@ -59,7 +59,10 @@ pub use bring_into_view::{
 };
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
-pub use draw::{execute_draw_commands, DrawCacheBuilder, DrawCommand};
+pub use draw::{
+    command_draw_scope, command_draw_scope_retained, command_draw_scope_reusing,
+    execute_draw_commands, DrawCacheBuilder, DrawCommand, DrawCommandFn,
+};
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
@@ -93,7 +96,8 @@ pub use modifier::{
     FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
     PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
-    RoundedCornerShape, RuntimeShader, Shadow, ShadowScope, Size, TransformOrigin,
+    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader, Shadow,
+    ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,

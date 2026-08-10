@@ -5,6 +5,7 @@
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 
+pub mod audio;
 pub mod background;
 pub mod camera;
 pub mod device_info;
@@ -12,6 +13,7 @@ pub mod file_picker;
 pub mod haptics;
 pub mod http;
 pub mod image_picker;
+pub mod launch_args;
 pub mod navigation;
 pub mod network_status;
 pub mod notifier;
@@ -23,6 +25,11 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
+pub use audio::{
+    clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
+    AudioBus, AudioClip, AudioError, AudioPlayer, AudioPlayerRef, NoopAudioPlayer, PlaybackParams,
+    ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
+};
 pub use background::{
     background_activity, clear_platform_background_activity, set_background_active,
     set_platform_background_activity, BackgroundActivity, BackgroundActivityRef,
@@ -41,8 +48,8 @@ pub use file_picker::{
     ResumedPick, SaveFileRequest,
 };
 pub use haptics::{
-    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticFeedback,
-    Haptics, HapticsRef, ProvideHaptics,
+    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticEffect,
+    HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
 };
 pub use http::{
     default_http_client, local_http_client, map_ordered_concurrent, HttpClient, HttpClientRef,
@@ -53,8 +60,14 @@ pub use image_picker::{
     set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
     ProvideImagePicker, IMAGE_EXTENSIONS,
 };
+pub use launch_args::{
+    clear_platform_launch_args, isDebuggable, is_debuggable, launch_args,
+    launch_args_from_command_line, local_launch_args, set_platform_launch_args, LaunchArgValue,
+    LaunchArgs, LaunchArgsRef, ProvideLaunchArgs,
+};
 pub use navigation::{
-    back_interception_enabled, push_back_request, set_back_interception, take_back_requests,
+    back_interception_enabled, push_back_request, set_back_interception, set_back_request_listener,
+    take_back_requests,
 };
 pub use network_status::{
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,

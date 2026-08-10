@@ -5,6 +5,12 @@
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use cranpose_app_shell::FramePacingMode;
+use cranpose_render_common::font_source::{
+    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+};
+use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
+use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
+use std::path::Path;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
 #[cfg(all(
@@ -25,6 +31,13 @@ pub struct AppSettings {
     pub initial_size_explicit: bool,
     /// Fonts loaded for text rendering (ordered: primary first, fallbacks last).
     pub fonts: Option<&'static [&'static [u8]]>,
+    /// App-supplied font families, already read and parsed.
+    ///
+    /// This is where fonts that are not compiled into the binary live: files on
+    /// disk, platform system fonts, APK assets. Faces registered here carry the
+    /// `FontFamily` an app names them by, so a `TextStyle` asking for that
+    /// family resolves to them for both measurement and drawing.
+    pub font_registry: SoftwareTextFontRegistry,
     /// Whether to load system fonts on Android (default: false)
     pub android_use_system_fonts: bool,
     /// Optional Android overlay surface configuration.
@@ -77,6 +90,7 @@ impl Default for AppSettings {
             initial_height: 600,
             initial_size_explicit: false,
             fonts: None,
+            font_registry: SoftwareTextFontRegistry::new(),
             android_use_system_fonts: false,
             android_overlay_window: None,
             headless: false,
@@ -102,6 +116,56 @@ impl Default for AppSettings {
             #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
             record_to: None,
         }
+    }
+}
+
+impl AppSettings {
+    /// The font set every platform entry point hands its renderer.
+    ///
+    /// One definition so the platforms cannot drift, and so the measurer and
+    /// the rasterizer are built from the same faces: app-registered families
+    /// first, then the static `with_fonts()` slices as unnamed fallbacks, then
+    /// the embedded default face if nothing else loaded.
+    pub fn resolve_font_set(&self) -> SoftwareTextFontSet {
+        let mut registry = self.font_registry.clone();
+        if cfg!(target_os = "android") && self.android_use_system_fonts {
+            for family in [
+                FontFamily::SansSerif,
+                FontFamily::Serif,
+                FontFamily::Monospace,
+            ] {
+                if let Err(error) = registry.register_system_family(
+                    ANDROID_SYSTEM_FONT_DIR,
+                    &family,
+                    DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+                ) {
+                    log::warn!("android system font family {family:?} unavailable: {error}");
+                }
+            }
+        }
+        let fonts = registry.into_font_set_or_default(self.fonts.unwrap_or(&[]));
+        // Which typeface text actually landed on is otherwise invisible until
+        // someone compares screenshots, so say it once at startup.
+        log::info!(
+            "Text fonts: {} face(s) [{}]",
+            fonts.faces().len(),
+            fonts
+                .faces()
+                .iter()
+                .map(|face| format!(
+                    "{} {}{}",
+                    face.family_names().first().map_or("?", String::as_str),
+                    face.weight().value(),
+                    if face.style() == FontStyle::Italic {
+                        " italic"
+                    } else {
+                        ""
+                    }
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        fonts
     }
 }
 
@@ -324,13 +388,180 @@ impl AppLauncher {
         self
     }
 
+    /// Register a font family from files on disk.
+    ///
+    /// Each [`FontFile`](cranpose_ui::text::FontFile) declares the weight and
+    /// style its file provides, and a `TextStyle` naming the same family picks
+    /// between them. The files are read and parsed here, once, before the app
+    /// runs — nothing re-reads them per frame or per string.
+    ///
+    /// A family whose files cannot be read is reported and skipped; text asking
+    /// for it falls back to the default face rather than disappearing.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use cranpose::AppLauncher;
+    /// use cranpose::text::{FontFamily, FontFile, FontWeight};
+    ///
+    /// let roboto = FontFamily::file_backed(vec![
+    ///     FontFile::new("/system/fonts/Roboto-Regular.ttf"),
+    ///     FontFile::new("/system/fonts/Roboto-Regular.ttf").with_weight(FontWeight::MEDIUM),
+    ///     FontFile::new("/system/fonts/Roboto-Regular.ttf").with_weight(FontWeight::BOLD),
+    /// ])
+    /// .expect("a family needs at least one file");
+    ///
+    /// let launcher = AppLauncher::new().with_font_family(&roboto);
+    /// ```
+    pub fn with_font_family(mut self, family: &FontFamily) -> Self {
+        if let Err(error) = self.settings.font_registry.register_family(family) {
+            log::warn!("font family could not be loaded: {error}");
+        }
+        self
+    }
+
+    /// Register a font family from bytes the app already holds.
+    ///
+    /// Use this for fonts that are not files on disk — an archive entry, a
+    /// download cache, or an asset `cranpose-assets` resolved out of a desktop
+    /// bundle (its `load_bytes` returns exactly what this wants). For an APK
+    /// asset use [`AppLauncher::with_android_asset_font`] instead: APK entries
+    /// are not filesystem paths, so a path resolver cannot reach them.
+    ///
+    /// ```no_run
+    /// use cranpose::AppLauncher;
+    /// use cranpose::text::{FontFamily, FontStyle, FontWeight};
+    ///
+    /// # fn load(bytes: Vec<u8>) {
+    /// let launcher = AppLauncher::new().with_font_face_bytes(
+    ///     &FontFamily::named("Roboto"),
+    ///     FontWeight::NORMAL,
+    ///     FontStyle::Normal,
+    ///     bytes,
+    /// );
+    /// # }
+    /// ```
+    pub fn with_font_face_bytes(
+        mut self,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Self {
+        if let Err(error) = self
+            .settings
+            .font_registry
+            .register_face_bytes(family, weight, style, bytes)
+        {
+            log::warn!("font face could not be loaded: {error}");
+        }
+        self
+    }
+
+    /// Register a font face shipped in the APK's `assets/` directory.
+    ///
+    /// APK entries are not filesystem paths, so `with_font_family` cannot reach
+    /// them; the asset manager the activity already owns can. Call this from
+    /// `android_main`, where the `AndroidApp` exists:
+    ///
+    /// ```no_run
+    /// # #[cfg(target_os = "android")]
+    /// # fn main(app: android_activity::AndroidApp) {
+    /// use cranpose::AppLauncher;
+    /// use cranpose::text::{FontFamily, FontStyle, FontWeight};
+    ///
+    /// let launcher = AppLauncher::new().with_android_asset_font(
+    ///     &app,
+    ///     &FontFamily::named("Roboto"),
+    ///     FontWeight::NORMAL,
+    ///     FontStyle::Normal,
+    ///     "fonts/Roboto-Regular.ttf",
+    /// );
+    /// # }
+    /// ```
+    #[cfg(all(feature = "android", target_os = "android"))]
+    pub fn with_android_asset_font(
+        mut self,
+        app: &android_activity::AndroidApp,
+        family: &FontFamily,
+        weight: FontWeight,
+        style: FontStyle,
+        asset_path: &str,
+    ) -> Self {
+        let Ok(asset_name) = std::ffi::CString::new(asset_path) else {
+            log::warn!("asset font path is not a valid C string: {asset_path}");
+            return self;
+        };
+        let Some(mut asset) = app.asset_manager().open(&asset_name) else {
+            log::warn!("no font asset at {asset_path}");
+            return self;
+        };
+        if let Err(error) = self
+            .settings
+            .font_registry
+            .register_face_reader(family, weight, style, &mut asset)
+        {
+            log::warn!("font asset {asset_path} could not be loaded: {error}");
+        }
+        self
+    }
+
+    /// Bind a generic family (`FontFamily::SansSerif`, `Serif`, `Monospace`,
+    /// `Cursive`) to the platform's own typeface for it, at Regular, Medium and
+    /// Bold.
+    ///
+    /// Styles keep naming the generic family; they simply stop resolving to the
+    /// framework's bundled fallback. On Android this is how an app matches what
+    /// Jetpack Compose draws for `FontFamily.SansSerif`, because the platform
+    /// backs that alias with its own Roboto.
+    ///
+    /// `directory` is the platform's font directory —
+    /// [`ANDROID_SYSTEM_FONT_DIR`] on Android. If nothing there backs the
+    /// family, the failure is reported and the bundled fallback keeps serving.
+    pub fn with_system_font_family(
+        mut self,
+        directory: impl AsRef<Path>,
+        family: &FontFamily,
+    ) -> Self {
+        if let Err(error) = self.settings.font_registry.register_system_family(
+            directory,
+            family,
+            DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+        ) {
+            log::warn!("system font family could not be loaded: {error}");
+        }
+        self
+    }
+
+    /// Register fonts through the registry directly, for apps that want the
+    /// per-face `Result` rather than a logged warning.
+    pub fn with_fonts_from(
+        mut self,
+        register: impl FnOnce(&mut SoftwareTextFontRegistry) -> Result<(), FontLoadError>,
+    ) -> Self {
+        if let Err(error) = register(&mut self.settings.font_registry) {
+            log::warn!("app font registration failed: {error}");
+        }
+        self
+    }
+
     /// Enable system font loading on Android (default: false).
     ///
-    /// When false (recommended), only fonts provided via `with_fonts()` are used.
-    /// When true, Android system fonts are loaded in addition to provided fonts.
+    /// When false, only fonts provided via `with_fonts()`, `with_font_family()`
+    /// and friends are used. When true, the platform's `sans-serif`, `serif`
+    /// and `monospace` faces are registered from
+    /// [`ANDROID_SYSTEM_FONT_DIR`] in addition, so styles naming those generic
+    /// families draw in the system typeface.
     ///
-    /// Note: Modern Android uses variable fonts which can cause rendering issues.
-    /// Use static fonts via `with_fonts()` for reliable rendering.
+    /// Android backs those aliases with variable fonts on modern builds; the
+    /// registry instances them per weight on their `wght` axis rather than
+    /// drawing every weight at the file's default.
+    ///
+    /// Text that names no family at all also lands on the system face, because
+    /// registered faces outrank the plain `with_fonts()` bytes on a tie — the
+    /// same thing Compose does, where `FontFamily.Default` is `sans-serif` on
+    /// Android. An app that wants its own bundled font for unnamed text should
+    /// leave this off and register its family by name instead.
     pub fn with_android_use_system_fonts(mut self, use_system_fonts: bool) -> Self {
         self.settings.android_use_system_fonts = use_system_fonts;
         self

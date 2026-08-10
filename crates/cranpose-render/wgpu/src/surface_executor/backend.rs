@@ -2,14 +2,11 @@ use crate::effect_renderer::{
     CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
     ShaderCompositeBatchItem,
 };
-use crate::normalized_scene::CollectedLayer;
 use crate::offscreen::OffscreenTarget;
 use crate::scene::{
-    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, ShadowDraw, SnapAnchor, TextDraw,
+    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw, ShadowDraw, TextDraw,
 };
-use crate::surface_plan::{LayerSurfaceRequirements, TranslationRenderContext};
 use crate::surface_requirements::SurfaceRequirementSet;
-use crate::TextSystemState;
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::LayerNode;
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
@@ -142,23 +139,6 @@ pub(crate) trait SurfaceExecutionBackend {
         target: OffscreenTarget,
         logical_rect: Rect,
     ) -> Rc<OffscreenTarget>;
-    fn layer_raster_cache_candidate(
-        &mut self,
-        layer: &LayerNode,
-        root_scale: f32,
-        has_backdrop_underlay: bool,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
-    ) -> Option<(LayerRasterCacheKey, Rect)>;
-    fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements;
-    fn collect_layer_contents_with_translation_context<'a>(
-        &mut self,
-        text_state: &mut TextSystemState,
-        layer: &'a LayerNode,
-        inherited_clip: Option<Rect>,
-        inherited_translated_snap_anchor: Option<SnapAnchor>,
-        translation_context: TranslationRenderContext,
-    ) -> CollectedLayer<'a>;
     fn clear_target_view_with_load_op(
         &mut self,
         target_view: &wgpu::TextureView,
@@ -167,12 +147,12 @@ pub(crate) trait SurfaceExecutionBackend {
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -185,12 +165,12 @@ pub(crate) trait SurfaceExecutionBackend {
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment_with_composites(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -205,7 +185,6 @@ pub(crate) trait SurfaceExecutionBackend {
     #[allow(clippy::too_many_arguments)]
     fn render_range_with_layer_events_to_target(
         &mut self,
-        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -225,7 +204,6 @@ pub(crate) trait SurfaceExecutionBackend {
     ) -> Result<(), String>;
     fn render_shadow_draw(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
         width: u32,

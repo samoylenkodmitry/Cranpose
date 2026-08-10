@@ -1333,7 +1333,11 @@ fn scroll_impl(
                             } else {
                                 event.scroll_delta.x
                             }),
+                            // Rotary is opt-in via `Modifier::on_rotary_scroll_event`;
+                            // touch scroll containers ignore it.
                             PointerEventKind::Zoom
+                            | PointerEventKind::RotaryScrollPre
+                            | PointerEventKind::RotaryScroll
                             | PointerEventKind::Enter
                             | PointerEventKind::Exit => false,
                         };
@@ -1476,7 +1480,11 @@ fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: 
                                 } else {
                                     event.scroll_delta.x
                                 }),
+                                // Rotary is opt-in via
+                                // `Modifier::on_rotary_scroll_event`.
                                 PointerEventKind::Zoom
+                                | PointerEventKind::RotaryScrollPre
+                                | PointerEventKind::RotaryScroll
                                 | PointerEventKind::Enter
                                 | PointerEventKind::Exit => false,
                             };

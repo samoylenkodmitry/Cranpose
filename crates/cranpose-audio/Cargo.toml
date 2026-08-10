@@ -1,0 +1,32 @@
+[package]
+name = "cranpose-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, cpal on desktop)"
+
+[dependencies]
+cranpose-services = { workspace = true }
+log = "0.4"
+
+[features]
+# The AAudio output device. Costs nothing off Android: `ndk` is only declared
+# for the Android target, and cranpose already depends on it there.
+default = ["aaudio"]
+aaudio = ["dep:ndk"]
+# The cpal output device for desktop development. Off by default because cpal
+# links a system audio library (ALSA on Linux, CoreAudio on macOS, WASAPI on
+# Windows) that a build machine may not have headers for.
+cpal-backend = ["dep:cpal"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk = { version = "0.9.0", default-features = false, features = ["audio"], optional = true }
+
+[target.'cfg(not(any(target_os = "android", target_arch = "wasm32")))'.dependencies]
+cpal = { version = "0.18.1", optional = true }

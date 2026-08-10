@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::task::{Context, Poll, Waker};
 use std::thread::ThreadId;
@@ -409,7 +409,6 @@ struct RuntimeInner {
     ui_thread_id: ThreadId,
     tasks: RefCell<Vec<TaskEntry>>,
     next_task_id: Cell<u64>,
-    task_waker: RefCell<Option<Waker>>,
     state_arena: StateArena,
     external_state_owners: RefCell<HashMap<StateId, Rc<StateHandleLease>>>,
     live_recompose_scope_count: Cell<usize>,
@@ -419,6 +418,20 @@ struct RuntimeInner {
 struct TaskEntry {
     id: u64,
     future: Pin<Box<dyn Future<Output = ()> + 'static>>,
+    /// Whether this task can currently make progress.
+    ///
+    /// Set when the task is spawned and every time its waker fires, cleared
+    /// immediately before it is polled. A task that returned `Poll::Pending`
+    /// and has not been woken since is *parked*: polling it again would only
+    /// return `Poll::Pending` a second time, and — more importantly — it is
+    /// not a reason to keep asking the display for frames. See
+    /// [`RuntimeInner::has_pending_ui`].
+    ///
+    /// Shared with the task's [`Waker`], which may be woken from any thread.
+    runnable: Arc<AtomicBool>,
+    /// The waker handed to this task's future, so a wake can be attributed to
+    /// the one task that is ready rather than to all of them.
+    waker: Waker,
 }
 
 impl RuntimeInner {
@@ -442,17 +455,11 @@ impl RuntimeInner {
             ui_thread_id: std::thread::current().id(),
             tasks: RefCell::new(Vec::new()),
             next_task_id: Cell::new(1),
-            task_waker: RefCell::new(None),
             state_arena: StateArena::default(),
             external_state_owners: RefCell::new(HashMap::default()),
             live_recompose_scope_count: Cell::new(0),
             runtime_id: RuntimeId::next(),
         }
-    }
-
-    fn init_task_waker(this: &Rc<Self>) {
-        let waker = RuntimeTaskWaker::new(this).into_waker();
-        *this.task_waker.borrow_mut() = Some(waker);
     }
 
     fn schedule(&self) {
@@ -541,7 +548,14 @@ impl RuntimeInner {
     fn spawn_ui_task(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> u64 {
         let id = self.next_task_id.get();
         self.next_task_id.set(id + 1);
-        self.tasks.borrow_mut().push(TaskEntry { id, future });
+        let runnable = Arc::new(AtomicBool::new(true));
+        let waker = RuntimeTaskWaker::new(self, Arc::clone(&runnable)).into_waker();
+        self.tasks.borrow_mut().push(TaskEntry {
+            id,
+            future,
+            runnable,
+            waker,
+        });
         self.schedule();
         id
     }
@@ -554,17 +568,20 @@ impl RuntimeInner {
     }
 
     fn poll_async_tasks(&self) -> bool {
-        let waker = match self.task_waker.borrow().as_ref() {
-            Some(waker) => waker.clone(),
-            None => return false,
-        };
-        let mut cx = Context::from_waker(&waker);
         let mut tasks_ref = self.tasks.borrow_mut();
         let tasks = std::mem::take(&mut *tasks_ref);
         drop(tasks_ref);
         let mut pending = Vec::with_capacity(tasks.len());
         let mut made_progress = false;
         for mut entry in tasks.into_iter() {
+            // Claim the wake before polling, not after: the future may be woken
+            // from another thread while it is being polled, and that wake has to
+            // survive into the next pass rather than be cleared by this one.
+            if !entry.runnable.swap(false, Ordering::AcqRel) {
+                pending.push(entry);
+                continue;
+            }
+            let mut cx = Context::from_waker(&entry.waker);
             match entry.future.as_mut().poll(&mut cx) {
                 Poll::Ready(()) => {
                     made_progress = true;
@@ -623,6 +640,12 @@ impl RuntimeInner {
                 break;
             }
         }
+
+        // Draining is the point at which tasks park, so it is also the first
+        // moment we can tell that the runtime has gone quiet. Checking here
+        // rather than waiting for the next frame-callback drain saves the app
+        // one wasted wake every time it settles.
+        self.clear_needs_frame_if_idle();
     }
 
     fn has_pending_ui(&self) -> bool {
@@ -632,13 +655,29 @@ impl RuntimeInner {
             .map(|tasks| !tasks.is_empty())
             .unwrap_or(true);
 
-        let async_pending = self
-            .tasks
-            .try_borrow()
-            .map(|tasks| !tasks.is_empty())
-            .unwrap_or(true);
+        local_pending || self.ui_dispatcher.has_pending() || self.has_runnable_tasks()
+    }
 
-        local_pending || self.ui_dispatcher.has_pending() || async_pending
+    /// Whether any spawned task could make progress if it were polled now.
+    ///
+    /// Only *runnable* tasks count. A task that is merely alive is not pending
+    /// work: an effect awaiting a back gesture, a network reply, or a frame it
+    /// has not asked for yet will do nothing if polled, so counting it as
+    /// pending pinned `needs_frame` true for the lifetime of the composition.
+    /// Since almost every app spawns at least one long-lived effect, that kept
+    /// the frame clock running forever and asked the display for 60 frames a
+    /// second on a screen where nothing moved. A task awaiting the frame clock
+    /// keeps frames coming through `has_frame_callbacks` instead, which is the
+    /// honest reason to want one.
+    fn has_runnable_tasks(&self) -> bool {
+        self.tasks
+            .try_borrow()
+            .map(|tasks| {
+                tasks
+                    .iter()
+                    .any(|task| task.runnable.load(Ordering::Acquire))
+            })
+            .unwrap_or(true)
     }
 
     fn register_ui_cont<T: 'static>(&self, f: impl FnOnce(T) + 'static) -> u64 {
@@ -703,24 +742,21 @@ impl RuntimeInner {
         if let Some(index) = callbacks.iter().position(|entry| entry.id == id) {
             callbacks.remove(index);
         }
-        let callbacks_empty = callbacks.is_empty();
         drop(callbacks);
-        let local_pending = self
-            .local_tasks
-            .try_borrow()
-            .map(|tasks| !tasks.is_empty())
-            .unwrap_or(true);
-        let async_pending = self
-            .tasks
-            .try_borrow()
-            .map(|tasks| !tasks.is_empty())
-            .unwrap_or(true);
+        self.clear_needs_frame_if_idle();
+    }
+
+    /// Stops asking the display for frames when nothing is left for one to do.
+    ///
+    /// These four are the complete set of reasons to want another frame: a
+    /// scope to recompose, a queued node update, a registered frame callback,
+    /// or UI work that can run. If none of them holds, the next frame would
+    /// wake the process, walk an unchanged tree, and present nothing.
+    fn clear_needs_frame_if_idle(&self) {
         if !self.has_invalid_scopes()
             && !self.has_updates()
-            && callbacks_empty
-            && !local_pending
-            && !self.ui_dispatcher.has_pending()
-            && !async_pending
+            && !self.has_frame_callbacks()
+            && !self.has_pending_ui()
         {
             *self.needs_frame.borrow_mut() = false;
         }
@@ -749,13 +785,7 @@ impl RuntimeInner {
             });
         }
 
-        if !self.has_invalid_scopes()
-            && !self.has_updates()
-            && !self.has_frame_callbacks()
-            && !self.has_pending_ui()
-        {
-            *self.needs_frame.borrow_mut() = false;
-        }
+        self.clear_needs_frame_if_idle();
     }
 
     fn debug_stats(&self) -> RuntimeDebugStats {
@@ -798,7 +828,6 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(scheduler: Arc<dyn RuntimeScheduler>) -> Self {
         let inner = Rc::new(RuntimeInner::new(scheduler));
-        RuntimeInner::init_task_waker(&inner);
         let runtime = Self { inner };
         let handle = runtime.handle();
         register_runtime_handle(&handle);
@@ -820,7 +849,15 @@ impl Runtime {
     }
 
     pub fn needs_frame(&self) -> bool {
-        *self.inner.needs_frame.borrow()
+        // The stored flag is only half the answer. A task woken from another
+        // thread cannot touch this runtime's `RefCell`s, so its waker can only
+        // set the shared `runnable` flag and ping the scheduler.
+        //
+        // A merely pending UI continuation does NOT belong here: main's "Avoid
+        // frames for idle UI continuations" moved that to an update-only wake
+        // (`has_pending_ui` in the app shell), so an idle continuation no
+        // longer costs a frame.
+        *self.inner.needs_frame.borrow() || self.inner.has_runnable_tasks()
     }
 
     pub fn set_needs_frame(&self, value: bool) {
@@ -1251,27 +1288,46 @@ pub(crate) struct FrameCallbackEntry {
     callback: Option<Box<dyn FnOnce(u64) + 'static>>,
 }
 
+/// The waker for one spawned UI task.
+///
+/// Waking marks that task runnable and asks the platform for a frame, which is
+/// what eventually reaches [`RuntimeInner::poll_async_tasks`]. The `runnable`
+/// flag is the half that matters for idling: without it a wake is
+/// indistinguishable from any other, so the runtime cannot tell a task that is
+/// ready from one that is parked.
+///
+/// `runnable` is an `Arc<AtomicBool>` rather than a `Cell` because a task may
+/// legitimately be woken from another thread — a JNI callback, a worker
+/// finishing, a platform service replying.
 #[cfg(not(target_arch = "wasm32"))]
 struct RuntimeTaskWaker {
     scheduler: Arc<dyn RuntimeScheduler>,
+    runnable: Arc<AtomicBool>,
 }
 
 #[cfg(target_arch = "wasm32")]
 struct RuntimeTaskWaker {
     runtime_id: RuntimeId,
+    runnable: Arc<AtomicBool>,
 }
 
 impl RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
-    fn new(inner: &RuntimeInner) -> Self {
+    fn new(inner: &RuntimeInner, runnable: Arc<AtomicBool>) -> Self {
         let scheduler = inner.scheduler.clone();
-        Self { scheduler }
+        Self {
+            scheduler,
+            runnable,
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn new(inner: &RuntimeInner) -> Self {
+    fn new(inner: &RuntimeInner, runnable: Arc<AtomicBool>) -> Self {
         let runtime_id = inner.runtime_id;
-        Self { runtime_id }
+        Self {
+            runtime_id,
+            runnable,
+        }
     }
 
     fn into_waker(self) -> Waker {
@@ -1282,11 +1338,13 @@ impl RuntimeTaskWaker {
 impl futures_task::ArcWake for RuntimeTaskWaker {
     #[cfg(not(target_arch = "wasm32"))]
     fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.runnable.store(true, Ordering::Release);
         arc_self.scheduler.schedule_frame();
     }
 
     #[cfg(target_arch = "wasm32")]
     fn wake_by_ref(arc_self: &Arc<Self>) {
+        arc_self.runnable.store(true, Ordering::Release);
         REGISTERED_RUNTIMES.with(|registry| {
             if let Some(handle) = registry.borrow().get(&arc_self.runtime_id).cloned() {
                 handle.schedule();

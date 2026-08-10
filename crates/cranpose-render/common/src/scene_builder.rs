@@ -15,12 +15,13 @@ use cranpose_ui_graphics::{
 };
 
 use crate::graph::{
-    CachePolicy, DrawPrimitiveNode, HitTestNode, IsolationReasons, LayerNode, PrimitiveEntry,
-    PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
+    PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    TextPrimitiveNode,
 };
 use crate::layer_transform::layer_transform_to_parent;
 use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{primitives_for_placement, DrawPlacement};
+use crate::style_shared::{primitives_for_placement_verified, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
@@ -61,6 +62,7 @@ pub struct GraphUpdateReport {
 }
 
 pub fn build_graph_from_layout_tree(root: &LayoutBox, scale: f32) -> RenderGraph {
+    bump_recording_generation();
     let root_snapshot = layout_box_to_snapshot(root, None);
     RenderGraph {
         root: build_layer_node(root_snapshot, scale, false),
@@ -72,6 +74,7 @@ pub fn build_graph_from_applier(
     root: NodeId,
     scale: f32,
 ) -> Option<RenderGraph> {
+    bump_recording_generation();
     Some(RenderGraph {
         root: build_layer_node_from_applier(applier, root, scale, false)?,
     })
@@ -98,8 +101,9 @@ pub fn update_graph_from_applier_report(
             hit_graph_dirty: false,
         };
     }
+    bump_recording_generation();
 
-    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!("[scene-update-diag] dirty={dirty_nodes:?}");
     }
 
@@ -230,7 +234,7 @@ fn replace_dirty_layers_from_applier(
         parent.has_hit_targets = parent.hit_test.is_some()
             || parent.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-                RenderNode::Primitive(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
     }
 
@@ -325,6 +329,7 @@ fn build_layer_node_internal(
         inherited_translated_content_context || translated_content_context;
 
     let mut children = draw_nodes(
+        node_id,
         &draw_commands,
         DrawPlacement::Behind,
         size,
@@ -365,6 +370,7 @@ fn build_layer_node_internal(
         children.push(RenderNode::Layer(Box::new(child_layer)));
     }
     children.extend(draw_nodes(
+        node_id,
         &draw_commands,
         DrawPlacement::Overlay,
         size,
@@ -373,7 +379,7 @@ fn build_layer_node_internal(
     let has_hit_targets = hit_test.is_some()
         || children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-            RenderNode::Primitive(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
     LayerNode {
@@ -521,7 +527,7 @@ fn build_layer_node_from_data(
         width: layout_state.size.width,
         height: layout_state.size.height,
     };
-    if std::env::var_os("CRANPOSE_SCENE_UPDATE_DIAG").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_SCENE_UPDATE_DIAG") {
         eprintln!(
             "[scene-update-diag] build layer node={node_id:?} size=({:.2},{:.2}) pos=({:.2},{:.2})",
             layout_state.size.width,
@@ -554,6 +560,14 @@ fn build_layer_node_from_data(
         pointer_inputs: pointer_inputs.to_vec(),
         clip: (clip_to_bounds || graphics_layer.clip).then_some(local_bounds),
     });
+
+    // Publish this node's resolved size to its `pointer_input` handlers, so
+    // `PointerInputScope::size()` reports the node's real dimensions — the same
+    // box the events dispatched to those handlers are made local to. This is the
+    // only pass that runs in the app runtime, and it runs before the frame's
+    // pointer dispatch, so handlers see the current size (and track resizes)
+    // whether or not an event has arrived yet.
+    modifier_slices.publish_pointer_input_size(layout_state.size);
 
     let node_motion_context_animated =
         inherited_motion_context_animated || modifier_slices.motion_context_animated();
@@ -626,6 +640,7 @@ fn build_layer_node_from_data(
     });
 
     let mut render_children = draw_nodes(
+        node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Behind,
         layout_state.size,
@@ -674,6 +689,7 @@ fn build_layer_node_from_data(
         render_children.push(RenderNode::Layer(Box::new(child_layer)));
     }
     render_children.extend(draw_nodes(
+        node_id,
         modifier_slices.draw_commands(),
         DrawPlacement::Overlay,
         layout_state.size,
@@ -682,7 +698,7 @@ fn build_layer_node_from_data(
     let has_hit_targets = hit_test.is_some()
         || render_children.iter().any(|child| match child {
             RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
-            RenderNode::Primitive(_) => false,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
         });
 
     let layer = LayerNode {
@@ -718,23 +734,306 @@ fn build_layer_node_from_data(
     Some(layer)
 }
 
+/// Reusable per-command recording buffers, keyed by the command's stable
+/// identity. The graph shares each primitive vector AND each compact
+/// recording (`Rc`) and still holds last frame's buffers while this frame
+/// records, so each command keeps two of each: the frame-before-last's is
+/// the free one, and steady-state re-recording ping-pongs between the two
+/// with no buffer allocation. A handle a live graph node still shares is
+/// never written through — reuse requires sole ownership, checked at
+/// acquisition.
+struct RecorderSlot {
+    generation: u64,
+    handles: [Option<Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>>; 2],
+    /// The command's compact recording buffers (tape + typed stores), under
+    /// the same double-buffer discipline as `handles`: the graph frame owns
+    /// a handle to the exact recording it was built from (its bypassed
+    /// spans' only rematerialization source — see
+    /// [`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so a
+    /// recording a live frame still shares is never written through, and
+    /// steady-state re-recording ping-pongs between the pair with no buffer
+    /// allocation.
+    recordings: [Option<Rc<cranpose_ui_graphics::CommandRecording>>; 2],
+    /// Per-command similarity verification state: the retained snapshot and
+    /// its segments. Advances every time the command re-records while a
+    /// retained feed is active.
+    replay: cranpose_ui_graphics::CommandReplayState,
+    /// The feed epoch `replay` was built under; `None` before the first
+    /// verified recording. See [`set_retained_feed_epoch`].
+    replay_epoch: Option<u64>,
+}
+
+thread_local! {
+    static COMMAND_RECORDINGS: std::cell::RefCell<
+        std::collections::HashMap<DrawCommandId, RecorderSlot, cranpose_ui_graphics::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
+    static RECORDING_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static RETAINED_FEED_EPOCH: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Declares that the renderer consuming graphs built on this thread retains
+/// draw-run spans by identity, so scene building should verify command
+/// recordings and attach [`cranpose_ui_graphics::CommandReplayFrame`]s to
+/// the runs it builds. The epoch names the renderer's retained-slot
+/// universe: bumping it (device loss, scale change — anything that dropped
+/// slots wholesale) resets every command's verification state, so no frame
+/// ever references a slot from a dead universe. Renderers that draw every
+/// primitive (pixels) never call this and never pay for verification.
+pub fn set_retained_feed_epoch(epoch: Option<u64>) {
+    RETAINED_FEED_EPOCH.with(|cell| cell.set(epoch));
+}
+
+thread_local! {
+    static CONFIRMED_RETAINED_SLOTS: std::cell::RefCell<
+        std::collections::HashMap<(DrawCommandId, u32), u64, cranpose_ui_graphics::FxBuildHasher>,
+    > = std::cell::RefCell::new(std::collections::HashMap::default());
+}
+
+/// The renderer's word that it holds a live retained buffer for this
+/// (command, slot) identity, stamped with the retained-feed generation the
+/// buffer was captured under. Only confirmed spans may skip materialization:
+/// an unconfirmed span's primitives are the renderer's only way to draw it
+/// in the same frame. The stamp is what keeps the word LIVE: a confirmation
+/// from a dead slot universe (renderer replaced, device lost, root-scale
+/// change) stops matching the epoch declared for the build and bypass fails
+/// closed instead of trusting a buffer that no longer exists.
+pub fn confirm_retained_slot(command: DrawCommandId, slot: u32, generation: u64) {
+    CONFIRMED_RETAINED_SLOTS.with(|map| {
+        map.borrow_mut().insert((command, slot), generation);
+    });
+}
+
+/// The renderer released this identity's buffer (aged out, replaced):
+/// spans referencing it must materialize again.
+pub fn revoke_retained_slot(command: DrawCommandId, slot: u32) {
+    CONFIRMED_RETAINED_SLOTS.with(|map| {
+        map.borrow_mut().remove(&(command, slot));
+    });
+}
+
+/// Wholesale retire: every confirmation dies with the slots.
+pub fn clear_retained_slot_confirmations() {
+    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow_mut().clear());
+}
+
+/// Whether the renderer has confirmed a live retained buffer for this
+/// identity UNDER THE EPOCH DECLARED FOR THIS BUILD (readable by tests
+/// driving the recorder by hand). No declared epoch means no consumer for
+/// bypassed spans, so nothing may skip materialization; a stored generation
+/// from another epoch is a buffer of a dead slot universe.
+pub fn retained_slot_confirmed(command: DrawCommandId, slot: u32) -> bool {
+    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
+        return false;
+    };
+    CONFIRMED_RETAINED_SLOTS.with(|map| map.borrow().get(&(command, slot)) == Some(&epoch))
+}
+
+thread_local! {
+    static VERIFY_EXECUTOR: std::cell::Cell<
+        Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>,
+    > = const { std::cell::Cell::new(None) };
+}
+
+/// Lends the renderer's frame worker pool to command verification: while
+/// set, segment commits at a record boundary run across the pool's lanes
+/// instead of on the build thread alone. `None` (the default, and the wasm
+/// state) keeps verification serial.
+pub fn set_verify_executor(pool: Option<&'static dyn cranpose_ui_graphics::VerifyExecutor>) {
+    VERIFY_EXECUTOR.with(|cell| cell.set(pool));
+}
+
+/// The executor lent by [`set_verify_executor`], if any.
+pub fn verify_executor() -> Option<&'static dyn cranpose_ui_graphics::VerifyExecutor> {
+    VERIFY_EXECUTOR.with(|cell| cell.get())
+}
+
+/// Test hook: drops every command recording on this thread, severing every
+/// AMBIENT rematerialization source. Frame-owned fallbacks
+/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]) are unaffected
+/// by construction — which is exactly what the fail-closed tests prove.
+#[doc(hidden)]
+pub fn clear_command_recordings_for_tests() {
+    COMMAND_RECORDINGS.with(|map| map.borrow_mut().clear());
+}
+
+/// Called once per graph build/update. The sweep is pure capacity
+/// management: it drops slots whose commands stopped recording long ago
+/// (screen navigated away). A slot's shared `handles` and `recordings` only
+/// die here if no graph frame shares them — a frame that still needs its
+/// recording (bypassed spans) owns its own handle
+/// ([`cranpose_ui_graphics::CommandReplayFrame::fallback`]), so nothing the
+/// sweep does can ever remove a frame's rematerialization source.
+/// Clean-but-live commands losing their slot merely re-earn capacity if
+/// they ever re-record.
+fn bump_recording_generation() {
+    let generation = RECORDING_GENERATION.with(|cell| {
+        let next = cell.get().wrapping_add(1);
+        cell.set(next);
+        next
+    });
+    if generation.is_multiple_of(512) {
+        COMMAND_RECORDINGS.with(|map| {
+            map.borrow_mut()
+                .retain(|_, slot| generation.wrapping_sub(slot.generation) <= 64);
+        });
+    }
+}
+
+fn acquire_recording(
+    id: DrawCommandId,
+) -> (
+    cranpose_ui_graphics::CommandRecording,
+    Vec<cranpose_ui_graphics::DrawPrimitive>,
+    Option<cranpose_ui_graphics::CommandReplayState>,
+) {
+    let feed_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
+    COMMAND_RECORDINGS.with(|map| {
+        let mut map = map.borrow_mut();
+        let Some(slot) = map.get_mut(&id) else {
+            return (
+                cranpose_ui_graphics::CommandRecording::default(),
+                Vec::new(),
+                feed_epoch.map(|_| cranpose_ui_graphics::CommandReplayState::default()),
+            );
+        };
+        // First recording of the pair the registry solely owns; one a live
+        // graph frame still shares (its `fallback`) is never written
+        // through. `DrawScopeDefault` clears the contents on construction,
+        // so only the capacity survives the unwrap.
+        let mut recording = cranpose_ui_graphics::CommandRecording::default();
+        for shared in &mut slot.recordings {
+            if shared
+                .as_ref()
+                .is_some_and(|shared| Rc::strong_count(shared) == 1)
+            {
+                let shared = shared.take().expect("checked some above");
+                recording = Rc::try_unwrap(shared).expect("sole owner checked above");
+                break;
+            }
+        }
+        // A state from another slot universe (renderer dropped its retained
+        // slots wholesale) restarts from scratch — its slot ids reference
+        // buffers that no longer exist.
+        let replay = feed_epoch.map(|epoch| {
+            if slot.replay_epoch == Some(epoch) {
+                std::mem::take(&mut slot.replay)
+            } else {
+                cranpose_ui_graphics::CommandReplayState::default()
+            }
+        });
+        for handle in &mut slot.handles {
+            if handle
+                .as_ref()
+                .is_some_and(|shared| Rc::strong_count(shared) == 1)
+            {
+                let shared = handle.take().expect("checked some above");
+                let storage = Rc::try_unwrap(shared).expect("sole owner checked above");
+                return (recording, storage, replay);
+            }
+        }
+        (recording, Vec::new(), replay)
+    })
+}
+
+/// Publishes the command's finished frame into the registry and returns the
+/// shared handles the graph rides: the materialized primitives and the
+/// recording they came from. The recording MOVES into its handle — the
+/// multi-thousand-record tape is never cloned — and the frame that keeps
+/// the returned handle owns its rematerialization source outright, immune
+/// to anything the registry does afterwards.
+fn publish_recording(
+    id: DrawCommandId,
+    recording: cranpose_ui_graphics::CommandRecording,
+    primitives: Vec<cranpose_ui_graphics::DrawPrimitive>,
+    replay: Option<cranpose_ui_graphics::CommandReplayState>,
+) -> (
+    Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
+    Rc<cranpose_ui_graphics::CommandRecording>,
+) {
+    let shared = Rc::new(primitives);
+    let recording = Rc::new(recording);
+    COMMAND_RECORDINGS.with(|map| {
+        let mut map = map.borrow_mut();
+        let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
+        let slot = map.entry(id).or_insert_with(|| RecorderSlot {
+            generation,
+            handles: [None, None],
+            recordings: [None, None],
+            replay: cranpose_ui_graphics::CommandReplayState::default(),
+            replay_epoch: None,
+        });
+        slot.generation = generation;
+        if let Some(replay) = replay {
+            slot.replay = replay;
+            slot.replay_epoch = RETAINED_FEED_EPOCH.with(std::cell::Cell::get);
+        }
+        // Newest first; the displaced oldest handle drops out of the
+        // registry, and its buffer lives on only while a graph node holds it.
+        slot.recordings[1] = slot.recordings[0].take();
+        slot.recordings[0] = Some(recording.clone());
+        slot.handles[1] = slot.handles[0].take();
+        slot.handles[0] = Some(shared.clone());
+    });
+    (shared, recording)
+}
+
 fn draw_nodes(
+    node_id: NodeId,
     commands: &[DrawCommand],
     placement: DrawPlacement,
     size: Size,
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
-    for command in commands {
-        for primitive in primitives_for_placement(command, placement, size) {
-            nodes.push(RenderNode::Primitive(PrimitiveEntry {
-                phase,
-                node: PrimitiveNode::Draw(DrawPrimitiveNode {
-                    primitive,
-                    clip: None,
-                }),
-            }));
+    for (command_index, command) in commands.iter().enumerate() {
+        let id = DrawCommandId {
+            node_id,
+            command_index: command_index as u32,
+            placement,
+        };
+        let (recording, storage, mut replay) = acquire_recording(id);
+        let mut replay_ref = replay.as_mut();
+        let (primitives, recording, frame) = primitives_for_placement_verified(
+            command,
+            placement,
+            size,
+            recording,
+            storage,
+            &mut replay_ref,
+            Some(id),
+        );
+        // A bypassed span leaves no primitives behind, so emptiness alone no
+        // longer means the command drew nothing in this placement.
+        let has_replay_spans = frame.as_ref().is_some_and(|frame| !frame.spans.is_empty());
+        // An empty recording with no earned capacity is what a command's
+        // mismatched placement pass produces every rebuild; keeping those out
+        // of the registry halves its population. An empty recording WITH
+        // capacity is still published so the buffer waits for the frame this
+        // command draws again.
+        if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
+            continue;
         }
+        let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
+        if shared.is_empty() && !has_replay_spans {
+            continue;
+        }
+        // The frame owns a pinned handle to the exact recording it was
+        // built from: its bypassed spans' rematerialization source travels
+        // WITH the frame, so rendering never has to look it up through the
+        // sweepable ambient registry.
+        let frame = frame.map(|mut frame| {
+            frame.fallback = Some(published_recording);
+            frame
+        });
+        // The recorded vector rides into the graph whole: a single canvas
+        // command can carry thousands of primitives, and wrapping each in its
+        // own node moved every one of them an extra time each frame.
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
+            phase,
+            Some(id),
+            shared,
+            frame.map(Box::new),
+        )));
     }
     nodes
 }
@@ -829,7 +1128,7 @@ fn text_node_from_parts(parts: TextNodeParts<'_>) -> Option<TextPrimitiveNode> {
     Some(TextPrimitiveNode {
         node_id,
         rect,
-        text: prepared.text,
+        text: std::rc::Rc::new(prepared.text),
         text_style: visual_style,
         font_size,
         layout_options: options,
@@ -1070,7 +1369,9 @@ mod tests {
         LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
         ScrollState, Size, Spacer, Text, TextStyle,
     };
-    use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, RenderEffect};
+    use cranpose_ui_graphics::{
+        Brush, DrawPrimitive, DrawScope as _, DrawScopeDefault, GraphicsLayer, RenderEffect,
+    };
 
     use super::*;
 
@@ -1090,6 +1391,7 @@ mod tests {
                         return Some(motion);
                     }
                 }
+                RenderNode::DrawRun(_) => {}
             }
         }
 
@@ -1106,6 +1408,7 @@ mod tests {
                     labels.push(text.text.text.clone());
                 }
                 RenderNode::Layer(child_layer) => collect_text_labels(child_layer, labels),
+                RenderNode::DrawRun(_) => {}
             }
         }
     }
@@ -1133,6 +1436,7 @@ mod tests {
                             return Some(top);
                         }
                     }
+                    RenderNode::DrawRun(_) => {}
                 }
             }
             None
@@ -1147,7 +1451,7 @@ mod tests {
         }
         layer.children.iter().find_map(|child| match child {
             RenderNode::Layer(child_layer) => find_layer_by_node_id(child_layer, node_id),
-            RenderNode::Primitive(_) => None,
+            RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
         })
     }
 
@@ -1166,7 +1470,7 @@ mod tests {
                     node_id,
                     child_layer.transform_to_parent.then(transform),
                 ),
-                RenderNode::Primitive(_) => None,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => None,
             })
         }
 
@@ -1195,7 +1499,7 @@ mod tests {
             .is_some_and(RenderEffect::contains_runtime_shader)
             || layer.children.iter().any(|child| match child {
                 RenderNode::Layer(child_layer) => graph_has_runtime_shader_effect(child_layer),
-                RenderNode::Primitive(_) => false,
+                RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             })
     }
 
@@ -1209,8 +1513,8 @@ mod tests {
     }
 
     fn snapshot_with_translation(tx: f32) -> BuildNodeSnapshot {
-        let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
-            vec![DrawPrimitive::Rect {
+        let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![DrawPrimitive::Rect {
                 rect: Rect {
                     x: 3.0,
                     y: 4.0,
@@ -1218,7 +1522,8 @@ mod tests {
                     height: 8.0,
                 },
                 brush: Brush::solid(Color::WHITE),
-            }]
+                stroke: None,
+            }]);
         }));
 
         let child = BuildNodeSnapshot {
@@ -1284,18 +1589,14 @@ mod tests {
         let RenderNode::Layer(moved_child) = &moved_graph.children[0] else {
             panic!("expected child layer");
         };
-        let RenderNode::Primitive(static_draw) = &static_child.children[0] else {
-            panic!("expected draw primitive");
+        let RenderNode::DrawRun(static_run) = &static_child.children[0] else {
+            panic!("expected draw run");
         };
-        let PrimitiveNode::Draw(static_draw) = &static_draw.node else {
-            panic!("expected draw primitive");
+        let static_draw = &static_run.primitives[0];
+        let RenderNode::DrawRun(moved_run) = &moved_child.children[0] else {
+            panic!("expected draw run");
         };
-        let RenderNode::Primitive(moved_draw) = &moved_child.children[0] else {
-            panic!("expected draw primitive");
-        };
-        let PrimitiveNode::Draw(moved_draw) = &moved_draw.node else {
-            panic!("expected draw primitive");
-        };
+        let moved_draw = &moved_run.primitives[0];
 
         assert_ne!(
             static_graph.transform_to_parent, moved_graph.transform_to_parent,
@@ -1381,8 +1682,8 @@ mod tests {
     #[test]
     fn translated_content_offset_changes_visual_position_and_full_surface_hash() {
         fn parent_with_offset(offset: Point, motion_context_animated: bool) -> BuildNodeSnapshot {
-            let child_command = DrawCommand::Behind(Rc::new(|_size: Size| {
-                vec![DrawPrimitive::Rect {
+            let child_command = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+                scope.push_recorded(vec![DrawPrimitive::Rect {
                     rect: Rect {
                         x: 3.0,
                         y: 4.0,
@@ -1390,7 +1691,8 @@ mod tests {
                         height: 8.0,
                     },
                     brush: Brush::solid(Color::WHITE),
-                }]
+                    stroke: None,
+                }]);
             }));
 
             let child = BuildNodeSnapshot {
@@ -2279,8 +2581,8 @@ mod tests {
             graphics_layer: None,
             children: vec![],
         };
-        let behind = DrawCommand::Behind(Rc::new(|_size: Size| {
-            vec![cranpose_ui_graphics::DrawPrimitive::Rect {
+        let behind = DrawCommand::Behind(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect: Rect {
                     x: 1.0,
                     y: 2.0,
@@ -2288,10 +2590,11 @@ mod tests {
                     height: 6.0,
                 },
                 brush: Brush::solid(Color::WHITE),
-            }]
+                stroke: None,
+            }]);
         }));
-        let overlay = DrawCommand::Overlay(Rc::new(|_size: Size| {
-            vec![cranpose_ui_graphics::DrawPrimitive::Rect {
+        let overlay = DrawCommand::Overlay(Rc::new(|scope: &mut DrawScopeDefault| {
+            scope.push_recorded(vec![cranpose_ui_graphics::DrawPrimitive::Rect {
                 rect: Rect {
                     x: 3.0,
                     y: 1.0,
@@ -2299,7 +2602,8 @@ mod tests {
                     height: 4.0,
                 },
                 brush: Brush::solid(Color::BLACK),
-            }]
+                stroke: None,
+            }]);
         }));
 
         let parent = BuildNodeSnapshot {
@@ -2327,18 +2631,102 @@ mod tests {
         };
 
         let graph = build_layer_node_for_test(parent, 1.0, false);
-        let RenderNode::Primitive(behind) = &graph.children[0] else {
-            panic!("expected before-children primitive");
+        let RenderNode::DrawRun(behind) = &graph.children[0] else {
+            panic!("expected before-children draw run");
         };
         let RenderNode::Layer(_) = &graph.children[1] else {
             panic!("expected child layer");
         };
-        let RenderNode::Primitive(overlay) = &graph.children[2] else {
-            panic!("expected after-children primitive");
+        let RenderNode::DrawRun(overlay) = &graph.children[2] else {
+            panic!("expected after-children draw run");
         };
 
         assert_eq!(behind.phase, PrimitivePhase::BeforeChildren);
         assert_eq!(overlay.phase, PrimitivePhase::AfterChildren);
+    }
+
+    /// The recording registry's whole contract: a command re-recording on a
+    /// rebuild reuses the buffer of a recording the graph has let go of, and
+    /// never writes through one anything else still shares.
+    #[test]
+    fn command_recordings_reuse_buffers_across_rebuilds() {
+        let snapshot = || BuildNodeSnapshot {
+            node_id: 7001,
+            placement: Point::default(),
+            size: Size {
+                width: 40.0,
+                height: 20.0,
+            },
+            content_offset: Point::default(),
+            motion_context_animated: false,
+            translated_content_context: false,
+            measured_max_width: None,
+            resolved_modifiers: ResolvedModifiers::default(),
+            draw_commands: vec![DrawCommand::Behind(Rc::new(
+                |scope: &mut DrawScopeDefault| {
+                    scope.draw_rect_at(
+                        Rect {
+                            x: 1.0,
+                            y: 2.0,
+                            width: 8.0,
+                            height: 6.0,
+                        },
+                        Brush::solid(Color::WHITE),
+                    );
+                },
+            ))],
+            click_actions: vec![],
+            pointer_inputs: vec![],
+            clip_to_bounds: false,
+            annotated_text: None,
+            text_style: None,
+            text_layout_options: None,
+            text_pan: None,
+            graphics_layer: None,
+            children: vec![],
+        };
+        fn run_of(layer: &LayerNode) -> &DrawRunNode {
+            let RenderNode::DrawRun(run) = &layer.children[0] else {
+                panic!("expected draw run");
+            };
+            run
+        }
+
+        let graph_a = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_a = run_of(&graph_a).primitives.as_ptr();
+
+        // Graph A is still alive, so its buffer must not be lent out.
+        let graph_b = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_b = run_of(&graph_b).primitives.as_ptr();
+        assert_ne!(
+            ptr_a, ptr_b,
+            "a buffer a live graph shares must never be recorded into"
+        );
+        assert_eq!(
+            run_of(&graph_a).primitives,
+            run_of(&graph_b).primitives,
+            "re-recording must reproduce the recording"
+        );
+
+        // With graph A gone, its buffer is the registry's to lend again. The
+        // registry still holds a handle, so the allocator cannot have
+        // recycled this address: pointer equality here is reuse, not luck.
+        drop(graph_a);
+        let graph_c = build_layer_node_for_test(snapshot(), 1.0, false);
+        assert_eq!(
+            run_of(&graph_c).primitives.as_ptr(),
+            ptr_a,
+            "the released buffer must be reused for the next recording"
+        );
+
+        // A recording shared outside the graph (renderer caches, tests)
+        // keeps its buffer out of circulation even after the node drops.
+        let held = std::rc::Rc::clone(&run_of(&graph_c).primitives);
+        drop(graph_c);
+        let graph_d = build_layer_node_for_test(snapshot(), 1.0, false);
+        let ptr_d = run_of(&graph_d).primitives.as_ptr();
+        assert_ne!(ptr_d, held.as_ptr());
+        assert_ne!(ptr_d, run_of(&graph_b).primitives.as_ptr());
     }
 
     #[test]
@@ -3361,6 +3749,7 @@ mod tests {
                                 return Some(found);
                             }
                         }
+                        RenderNode::DrawRun(_) => {}
                     }
                 }
                 None
@@ -3383,5 +3772,213 @@ mod tests {
                 following_top
             );
         });
+    }
+
+    #[test]
+    fn retained_slot_confirmations_are_live_only_under_their_generation() {
+        let command = DrawCommandId {
+            node_id: 990_101,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        set_retained_feed_epoch(Some(7));
+        confirm_retained_slot(command, 3, 7);
+        assert!(retained_slot_confirmed(command, 3));
+        // A new epoch (renderer swap, device loss) makes the word stale.
+        set_retained_feed_epoch(Some(8));
+        assert!(!retained_slot_confirmed(command, 3));
+        // No declared epoch means no consumer: never confirmed.
+        set_retained_feed_epoch(None);
+        assert!(!retained_slot_confirmed(command, 3));
+        // Back on the stored generation the buffer is live again.
+        set_retained_feed_epoch(Some(7));
+        assert!(retained_slot_confirmed(command, 3));
+        revoke_retained_slot(command, 3);
+        assert!(!retained_slot_confirmed(command, 3));
+        set_retained_feed_epoch(None);
+        clear_retained_slot_confirmations();
+    }
+
+    /// Draws enough similar arcs for the replay verifier to engage
+    /// (`MIN_REPLAY_COMMAND_RECORDS`) and to carve several segments —
+    /// partial arcs, because a chain anchor must pin rotation and circles
+    /// cannot. Static across frames, so every segment verifies under the
+    /// identity transform from the first replay frame on.
+    fn record_sweep_test_rings(scope: &mut DrawScopeDefault) {
+        let count = 600usize;
+        let sweep = std::f32::consts::TAU / count as f32 * 0.8;
+        for i in 0..count {
+            let start = i as f32 * (std::f32::consts::TAU / count as f32);
+            scope.draw_annular_sector(
+                Brush::solid(cranpose_ui_graphics::Color(0.2, 0.4, 0.6, 1.0)),
+                cranpose_ui_graphics::Point::new(204.0, 204.0),
+                140.0,
+                150.0,
+                start,
+                sweep,
+            );
+        }
+    }
+
+    /// The FLIP of the old sweep-exemption test: with the frame owning a
+    /// pinned handle to the exact recording it was built from, the idle
+    /// sweep is pure capacity management again — a live confirmation no
+    /// longer pins the registry slot, the sweep drops it anyway, and the
+    /// frame's bypassed spans still rematerialize byte-identically from the
+    /// handle the frame owns. Sweeping can categorically never sever a
+    /// frame's rematerialization source.
+    #[test]
+    fn recording_sweep_cannot_sever_a_frames_fallback() {
+        let command = DrawCommandId {
+            node_id: 990_102,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        set_retained_feed_epoch(Some(41));
+        for slot in 0..64 {
+            confirm_retained_slot(command, slot, 41);
+        }
+
+        // The production seam order, driven by hand: acquire buffers,
+        // record, verify, finish with the confirmed slots bypassed, publish
+        // — and the frame keeps the published recording handle, exactly as
+        // `draw_nodes` attaches it.
+        let mut state = cranpose_ui_graphics::CommandReplayState::default();
+        let mut published = None;
+        for _frame in 0..4 {
+            let (recording, storage, _) = acquire_recording(command);
+            let mut scope = DrawScopeDefault::with_recording(
+                cranpose_ui_graphics::Size::new(408.0, 408.0),
+                None,
+                recording,
+                storage,
+            );
+            record_sweep_test_rings(&mut scope);
+            let outcome = state.advance(scope.recorded());
+            let center = state.center();
+            let (finished, frame) = scope.finish_replay(center, outcome, &mut |slot| {
+                retained_slot_confirmed(command, slot)
+            });
+            let (primitives, fallback) =
+                publish_recording(command, finished.recording, finished.primitives, None);
+            let frame = frame.map(|mut frame| {
+                frame.fallback = Some(fallback.clone());
+                frame
+            });
+            published = Some((primitives, fallback, frame));
+        }
+        let (_primitives, fallback, frame) = published.expect("four frames published");
+        let frame = frame.expect("the replay must produce a frame with retained spans");
+        let bypassed: Vec<(u32, u32)> = frame
+            .spans
+            .iter()
+            .filter_map(|span| match span {
+                cranpose_ui_graphics::FrameSpan::Retained {
+                    capture: false,
+                    range,
+                    tape_range,
+                    ..
+                } if range.1 <= range.0 => Some(*tape_range),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !bypassed.is_empty(),
+            "confirmed slots must actually have bypassed materialization"
+        );
+        let expected: Vec<Vec<DrawPrimitive>> = bypassed
+            .iter()
+            .map(|tape_range| {
+                fallback
+                    .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+                    .expect("a frame-consistent tape range must materialize")
+            })
+            .collect();
+
+        // 1024 builds without re-recording: both sweeps (512, 1024) run with
+        // the slot idle far past the 64-build window, confirmations still
+        // live. The slot must be GONE — capacity management owes the frame
+        // nothing anymore.
+        for _ in 0..1024 {
+            bump_recording_generation();
+        }
+        assert!(
+            COMMAND_RECORDINGS.with(|map| !map.borrow().contains_key(&command)),
+            "the sweep must stay pure capacity management: a live confirmation \
+             no longer pins the registry slot"
+        );
+
+        // The categorical property: the frame's own handle survives any
+        // sweep, and its bypassed spans rematerialize byte-identically.
+        for (tape_range, expected) in bypassed.iter().zip(&expected) {
+            let after = fallback
+                .materialize_range(tape_range.0 as usize, tape_range.1 as usize)
+                .expect("the frame-owned recording must outlive the sweep");
+            assert_eq!(
+                &after, expected,
+                "post-sweep rematerialization must be byte-identical"
+            );
+        }
+        set_retained_feed_epoch(None);
+        clear_retained_slot_confirmations();
+    }
+
+    /// [`command_recordings_reuse_buffers_across_rebuilds`] for the compact
+    /// recording pair: a graph frame owns last build's recording (its
+    /// `fallback`) while this build records, so steady-state publishes
+    /// ping-pong between exactly two allocations — `Rc::try_unwrap`
+    /// succeeds at every acquisition after warmup and no recording buffer
+    /// is ever reallocated — and a recording a live frame still shares is
+    /// never written through.
+    #[test]
+    fn command_recordings_reuse_recording_buffers_across_rebuilds() {
+        let command = DrawCommandId {
+            node_id: 990_103,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        // Simulates the installed graph: it holds the newest build's
+        // handles, and the previous build's drop when it is replaced.
+        let mut held = None;
+        let mut ptrs = Vec::new();
+        for _build in 0..8 {
+            let (recording, storage, _) = acquire_recording(command);
+            let mut scope = DrawScopeDefault::with_recording(
+                cranpose_ui_graphics::Size::new(64.0, 64.0),
+                None,
+                recording,
+                storage,
+            );
+            scope.draw_rect_at(
+                Rect {
+                    x: 4.0,
+                    y: 4.0,
+                    width: 16.0,
+                    height: 8.0,
+                },
+                Brush::solid(Color::WHITE),
+            );
+            let finished = scope.finish();
+            let (primitives, recording) =
+                publish_recording(command, finished.recording, finished.primitives, None);
+            ptrs.push(recording.tape_ptr());
+            held = Some((primitives, recording));
+        }
+        drop(held);
+        // Every buffer in play stays alive for the whole loop (registry pair
+        // or in-flight scope), so pointer equality here is reuse, not an
+        // allocator recycling a freed address.
+        for build in 2..8 {
+            assert_eq!(
+                ptrs[build],
+                ptrs[build - 2],
+                "steady-state publishes must ping-pong between the pair's \
+                 buffers (build {build} allocated)"
+            );
+        }
+        assert_ne!(
+            ptrs[6], ptrs[7],
+            "a recording a live frame still shares must never be recorded into"
+        );
     }
 }

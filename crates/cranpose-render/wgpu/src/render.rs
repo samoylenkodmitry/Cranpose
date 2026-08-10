@@ -8,6 +8,9 @@ use crate::effect_renderer::{
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
+use crate::frame_packet::{
+    CancelReason, FramePacket, PacketRoot, PresentOutcome, RenderReturns, RootSurfacePacket,
+};
 use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
@@ -17,19 +20,18 @@ use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
     filtered_effect_layer_index, scene_bounds, SceneWindowSource,
 };
-use crate::normalized_scene::{
-    collect_layer_contents_with_translation_context_and_text_layout,
-    estimate_layer_surface_rect_cached, translate_quad, ChildLayerComposite, CollectedLayer,
-};
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
+use crate::normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer};
 use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    ShadowDraw, SnapAnchor, TextDraw,
+    RetainedDraw, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
 };
 use crate::shaders;
+#[cfg(test)]
+use crate::surface_executor::surface_target_size;
 use crate::surface_executor::{
     apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
     axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
@@ -38,39 +40,40 @@ use crate::surface_executor::{
     offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
     render_layer_surface as execute_render_layer_surface,
     render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
-    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad, surface_target_size,
+    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad,
     translation_stable_anchored_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
     SurfaceExecutionBackend,
 };
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 #[cfg(test)]
+use crate::surface_plan::root_can_render_directly_cached;
+#[cfg(test)]
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
     direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
-    layer_surface_requirements, layer_surface_scale, layer_surface_target_scale,
-    TranslatedContentAxes,
+    layer_surface_requirements, layer_surface_requirements_cached, layer_surface_scale,
+    layer_surface_target_scale, layer_uses_external_backdrop_input, TranslatedContentAxes,
 };
-use crate::surface_plan::{
-    layer_surface_requirements_cached, layer_uses_external_backdrop_input,
-    root_can_render_directly_cached, LayerSurfaceRequest, LayerSurfaceRequirements,
-    TranslationRenderContext,
-};
+use crate::surface_plan::{LayerSurfaceRequest, TranslationRenderContext};
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
 use crate::surface_requirements::SurfaceRequirementSet;
 use crate::DebugCpuAllocationStats;
-use crate::TextSystemState;
 use bytemuck::{Pod, Zeroable};
+use cranpose_core::collections::map::HashMap;
 use cranpose_core::{hash::default as default_hash, NodeId};
 use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
 use cranpose_render_common::geometry::blur_extent_margin;
-use cranpose_render_common::graph::{quad_bounds, CachePolicy, LayerNode, RenderGraph};
+use cranpose_render_common::graph::quad_bounds;
 #[cfg(test)]
 use cranpose_render_common::graph::{
-    PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
 };
-use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+#[cfg(test)]
+use cranpose_render_common::raster_cache::ScaleBucket;
 use cranpose_render_common::software_text_raster::{
     collect_solid_text_atlas_run, measure_text_with_font,
     rasterize_annotated_text_to_image_with_glyph_cache, rasterize_text_to_image_with_glyph_cache,
@@ -80,15 +83,14 @@ use cranpose_render_common::software_text_raster::{
 #[cfg(test)]
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect, RenderEffect,
-    RenderHash, RuntimeShader, TileMode,
+    BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
+    RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
 };
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
@@ -99,8 +101,12 @@ use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
 use crate::pipeline::push_layer_shadow;
 
+/// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
+/// shader source is used verbatim, so a larger batch cap here would index past
+/// the declared array. 102 x 160-byte ShapeData = 16320 bytes, the most that
+/// fits WebGL's 16 KiB uniform-binding floor.
 #[cfg(target_arch = "wasm32")]
-const MAX_SHAPES_PER_BATCH: usize = 200;
+const MAX_SHAPES_PER_BATCH: usize = 102;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_SHAPES_PER_BATCH: usize = 768;
 #[cfg(target_arch = "wasm32")]
@@ -108,22 +114,51 @@ const MAX_GRADIENT_STOPS: usize = 256;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_GRADIENT_STOPS: usize = 1024;
 
-/// Uniform batch capacities derived from the actual device limits.
+/// Per-pass ceilings when the shape and gradient arrays live in storage
+/// buffers instead of uniforms. These are not hardware limits — storage
+/// bindings are hundreds of megabytes everywhere — they bound worst-case
+/// buffer growth: 65 536 shapes is a 7 MiB shape buffer and a 12 MiB vertex
+/// buffer, far past any real scene, while still forcing a batch split before
+/// a pathological one can ask for gigabytes.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_SHAPES_PER_STORAGE_BATCH: usize = 1 << 16;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_GRADIENT_STOPS_PER_STORAGE_BATCH: usize = 1 << 16;
+
+/// How many shapes/stops the storage-mode buffers start out sized for. In
+/// uniform mode the initial capacity must equal the cap (a uniform binding
+/// smaller than the shader's fixed-length array fails validation), but a
+/// runtime-sized storage array binds at any size, so start small and let
+/// `ensure_capacity` double toward the cap as scenes demand.
+#[cfg(not(target_arch = "wasm32"))]
+const INITIAL_STORAGE_BATCH_CAPACITY: usize = 1024;
+
+/// Shape/gradient batch capacities derived from the actual device limits.
 ///
-/// The compile-time `MAX_*` constants assume desktop-class 64 KiB uniform
-/// bindings. Android downlevel and GLES-class devices may only offer the
-/// 16 KiB spec minimum; sizing the shape/gradient uniform buffers (and the
-/// matching WGSL array lengths) past `max_uniform_buffer_binding_size` makes
-/// the very first "Shape Bind Group" fail validation and aborts the app.
+/// Where storage buffers are available (any real Vulkan/Metal/D3D device, and
+/// GL only when it exposes SSBOs to fragment shaders) the arrays are bound as
+/// read-only storage and a whole scene fits one batch. Otherwise they fall
+/// back to uniform arrays: the compile-time `MAX_*` constants assume
+/// desktop-class 64 KiB uniform bindings, while Android downlevel and
+/// GLES-class devices may only offer the 16 KiB spec minimum; sizing the
+/// buffers (and the matching WGSL array lengths) past
+/// `max_uniform_buffer_binding_size` makes the very first "Shape Bind Group"
+/// fail validation and aborts the app.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ShapeBatchLimits {
     max_shapes_per_batch: usize,
     max_gradient_stops: usize,
+    storage: bool,
 }
 
 impl ShapeBatchLimits {
     fn for_device(device: &wgpu::Device) -> Self {
-        Self::for_uniform_binding_size(device.limits().max_uniform_buffer_binding_size)
+        let limits = device.limits();
+        #[cfg(not(target_arch = "wasm32"))]
+        if limits.max_storage_buffers_per_shader_stage >= 2 {
+            return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
+        }
+        Self::for_uniform_binding_size(limits.max_uniform_buffer_binding_size)
     }
 
     fn for_uniform_binding_size(max_uniform_buffer_binding_size: u64) -> Self {
@@ -133,6 +168,53 @@ impl ShapeBatchLimits {
                 .clamp(1, MAX_SHAPES_PER_BATCH),
             max_gradient_stops: (binding / std::mem::size_of::<GradientStop>())
                 .clamp(1, MAX_GRADIENT_STOPS),
+            storage: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn for_storage_binding_size(max_storage_buffer_binding_size: u64) -> Self {
+        let binding = max_storage_buffer_binding_size as usize;
+        Self {
+            max_shapes_per_batch: (binding / std::mem::size_of::<ShapeData>())
+                .clamp(1, MAX_SHAPES_PER_STORAGE_BATCH),
+            max_gradient_stops: (binding / std::mem::size_of::<GradientStop>())
+                .clamp(1, MAX_GRADIENT_STOPS_PER_STORAGE_BATCH),
+            storage: true,
+        }
+    }
+
+    fn initial_shape_capacity(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.storage {
+            return self
+                .max_shapes_per_batch
+                .min(INITIAL_STORAGE_BATCH_CAPACITY);
+        }
+        self.max_shapes_per_batch
+    }
+
+    fn initial_gradient_capacity(&self) -> usize {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.storage {
+            return self.max_gradient_stops.min(INITIAL_STORAGE_BATCH_CAPACITY);
+        }
+        self.max_gradient_stops
+    }
+
+    fn data_buffer_usage(&self) -> wgpu::BufferUsages {
+        if self.storage {
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST
+        } else {
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST
+        }
+    }
+
+    fn data_binding_type(&self) -> wgpu::BufferBindingType {
+        if self.storage {
+            wgpu::BufferBindingType::Storage { read_only: true }
+        } else {
+            wgpu::BufferBindingType::Uniform
         }
     }
 
@@ -141,7 +223,8 @@ impl ShapeBatchLimits {
         Self::for_uniform_binding_size(wgpu::Limits::default().max_uniform_buffer_binding_size)
     }
 }
-const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (vertex/index only)
+#[cfg(target_arch = "wasm32")]
+const HARD_MAX_BUFFER_MB: usize = 64; // Maximum 64MB per buffer (image vertex/index only)
 const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 // Sized for HiDPI: a 4K fractional-scale screen full of shadowed panels needs
 // ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
@@ -163,8 +246,19 @@ const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CANDIDATES: usize = 2;
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_UNCACHED_CHARS: usize = 160;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_OFFSCREEN_TEXT_GLYPH_PREWARM_CACHED_GLYPHS: usize = 160;
-const TEXT_GLYPH_ATLAS_WIDTH: u32 = 4096;
-const TEXT_GLYPH_ATLAS_HEIGHT: u32 = 4096;
+/// Side length the glyph atlas starts at, and the one it doubles towards.
+///
+/// The atlas is square and `R8Unorm`, so the maximum is a 16 MiB texture. That
+/// was also the starting size until it became the single largest resource the
+/// renderer allocated: a 454x454 watch face draws a couple of hundred distinct
+/// glyphs and needs well under a megabyte of them, but paid the full 16 MiB at
+/// renderer construction, before a single glyph had been rastered. Starting at
+/// `MIN` and doubling on overflow (see `TextGlyphAtlas::reset`) costs at most
+/// three extra resets for a workload that genuinely needs the large atlas —
+/// which then behaves exactly as the fixed 4096 atlas did — and costs a
+/// text-light screen 256 KiB instead of 16 MiB, permanently.
+const TEXT_GLYPH_ATLAS_MIN_SIZE: u32 = 512;
+const TEXT_GLYPH_ATLAS_MAX_SIZE: u32 = 4096;
 const TEXT_GLYPH_ATLAS_PADDING: u32 = 1;
 const MAX_TEXT_LINE_INDEX_CACHE_ITEMS: usize = 512;
 const MIN_MULTILINE_TEXT_LINES_FOR_CLIPPED_RASTER: usize = 2;
@@ -187,7 +281,7 @@ const MAX_TEXTURE_CACHE_ITEMS: usize = 256;
 const MAX_IMAGE_TEXTURE_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const RETAINED_STAGED_UPLOAD_BYTES: usize = 256 * 1024;
 const RETAINED_STAGED_UPLOAD_COPIES: usize = 128;
-const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
+pub(crate) const RETAINED_LAYER_REQUIREMENTS_CAPACITY: usize = 512;
 const DEFAULT_WGPU_RENDER_STAGE_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 #[cfg(not(target_arch = "wasm32"))]
 static SEGMENT_DIAG_LINES: AtomicUsize = AtomicUsize::new(0);
@@ -209,11 +303,11 @@ fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
     })
 }
 
-fn instant_ms(start: Instant, end: Instant) -> f64 {
+pub(crate) fn instant_ms(start: Instant, end: Instant) -> f64 {
     end.duration_since(start).as_secs_f64() * 1000.0
 }
 
-fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
+pub(crate) fn should_log_wgpu_render_stage(start: Instant, end: Instant) -> Option<f64> {
     let threshold_ms = wgpu_render_stage_telemetry_threshold_ms()?;
     let total_ms = instant_ms(start, end);
     (total_ms >= threshold_ms).then_some(total_ms)
@@ -264,18 +358,15 @@ fn update_frame_warmup_budget(pending_frames: &mut u8, snapshot: &gpu_stats::Fra
 }
 
 fn text_atlas_fallback_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_TEXT_ATLAS_FALLBACK_DIAG")
 }
 
 fn text_glyph_run_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_TEXT_GLYPH_RUN_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_TEXT_GLYPH_RUN_DIAG")
 }
 
 fn root_direct_diag_enabled() -> bool {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_ROOT_DIRECT_DIAG").is_some())
+    cranpose_core::env_flag!("CRANPOSE_ROOT_DIRECT_DIAG")
 }
 
 fn scene_layer_events_precede_z(scene: &CompositorScene, z_index: usize) -> bool {
@@ -289,9 +380,9 @@ fn scene_layer_events_precede_z(scene: &CompositorScene, z_index: usize) -> bool
             .any(|layer| layer.z_index < z_index)
 }
 
-fn direct_root_child_can_be_replayed_into_later_underlay(child: &ChildLayerComposite<'_>) -> bool {
-    child.layer.backdrop().is_none()
-        && child.layer.effect().is_none()
+fn direct_root_child_can_be_replayed_into_later_underlay(child: &ChildLayerComposite) -> bool {
+    child.backdrop.is_none()
+        && !child.has_effect
         && child.shadow_draws.is_empty()
         && axis_aligned_quad_rect(child.dest_quad).is_some()
 }
@@ -304,13 +395,13 @@ fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b_right && b.x < a_right && a.y < b_bottom && b.y < a_bottom
 }
 
-fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> bool {
+pub(crate) fn direct_root_child_underlays_are_supported(collected: &CollectedLayer) -> bool {
     for (child_index, child) in collected.child_layers.iter().enumerate() {
-        if child.layer.backdrop().is_some() {
+        if child.backdrop.is_some() {
             if root_direct_diag_enabled() {
                 log::warn!(
                     "[root-direct-diag] reject self-backdrop child node={:?}",
-                    child.layer.node_id
+                    child.node_id
                 );
             }
             return false;
@@ -320,7 +411,7 @@ fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> 
                 if root_direct_diag_enabled() {
                     log::warn!(
                         "[root-direct-diag] reject projective underlay child node={:?}",
-                        child.layer.node_id
+                        child.node_id
                     );
                 }
                 return false;
@@ -342,7 +433,7 @@ fn direct_root_child_underlays_are_supported(collected: &CollectedLayer<'_>) -> 
                 if root_direct_diag_enabled() {
                     log::warn!(
                         "[root-direct-diag] reject underlay child node={:?} unsupported_preceding_child_layer={} preceding_scene_events={} translation_only={} dest=({:.1},{:.1},{:.1},{:.1}) logical=({:.1},{:.1},{:.1},{:.1})",
-                        child.layer.node_id,
+                        child.node_id,
                         unsupported_preceding_child_layer,
                         preceding_scene_events,
                         translation_only,
@@ -438,7 +529,7 @@ struct CachedGpuTextGlyphRun {
 struct TextLineIndexCacheKey(usize);
 
 struct CachedTextLineIndex {
-    text: Weak<cranpose_ui::text::AnnotatedString>,
+    text: std::sync::Weak<cranpose_ui::text::RenderString>,
     len: usize,
     starts: Rc<[usize]>,
 }
@@ -454,14 +545,14 @@ impl TextLineIndexCache {
         }
     }
 
-    fn line_starts(&mut self, text: &Rc<cranpose_ui::text::AnnotatedString>) -> Rc<[usize]> {
-        let key = TextLineIndexCacheKey(Rc::as_ptr(text) as usize);
+    fn line_starts(&mut self, text: &Arc<cranpose_ui::text::RenderString>) -> Rc<[usize]> {
+        let key = TextLineIndexCacheKey(Arc::as_ptr(text) as usize);
         if let Some(cached) = self.entries.get(&key) {
             if cached.len == text.text.len()
                 && cached
                     .text
                     .upgrade()
-                    .is_some_and(|cached_text| Rc::ptr_eq(&cached_text, text))
+                    .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
             {
                 return cached.starts.clone();
             }
@@ -471,7 +562,7 @@ impl TextLineIndexCache {
         self.entries.put(
             key,
             CachedTextLineIndex {
-                text: Rc::downgrade(text),
+                text: Arc::downgrade(text),
                 len: text.text.len(),
                 starts: starts.clone(),
             },
@@ -753,6 +844,7 @@ fn shape_draw_is_visible_in_viewport(
 fn cached_text_glyph_quad(
     glyph: &SoftwareGlyphAtlasPlacement,
     entry: GlyphAtlasEntry,
+    atlas_size: u32,
 ) -> CachedTextGlyphQuad {
     CachedTextGlyphQuad {
         x: glyph.x,
@@ -765,7 +857,7 @@ fn cached_text_glyph_quad(
             glyph.color.2.clamp(0.0, 1.0),
             glyph.color.3.clamp(0.0, 1.0),
         ),
-        uv: glyph_atlas_uv_rect(entry),
+        uv: glyph_atlas_uv_rect(entry, atlas_size),
     }
 }
 
@@ -991,7 +1083,7 @@ fn hash_shape_shadow_item<H: Hasher>(
 }
 
 fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
     // cancels out exactly. Anchoring to floored device-pixel bounds would leak
     // the device subpixel phase into the hash and defeat the cache at
@@ -1191,10 +1283,39 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
+    // These literals must stay in sync with `shape.wgsl`; a mismatch makes
+    // the substitution silently no-op and leaves the shader sized for the
+    // downlevel floor.
+    if batch_limits.storage {
+        return Cow::Owned(
+            shaders::SHADER
+                .replace(
+                    "var<uniform> shape_data: array<ShapeData, 102>;",
+                    "var<storage, read> shape_data: array<ShapeData>;",
+                )
+                .replace(
+                    "var<uniform> gradient_stops: array<GradientStop, 256>;",
+                    // Also inject the retained-paint array here: one mutable
+                    // color per shape, read when `similarity.paint_select`
+                    // is set, so recolor patches upload 16-byte colors
+                    // instead of whole ShapeData records. The base text
+                    // never declares it — uniform-mode devices cannot bind
+                    // storage and never host retained slots.
+                    "var<storage, read> gradient_stops: array<GradientStop>;\n\n\
+                     @group(1) @binding(3)\n\
+                     var<storage, read> paint: array<vec4<f32>>;",
+                )
+                .replace(
+                    "output.color = shape.color;",
+                    "output.color = \
+                     select(shape.color, paint[shape_idx], similarity.paint_select > 0.5);",
+                ),
+        );
+    }
     Cow::Owned(
         shaders::SHADER
             .replace(
-                "array<ShapeData, 200>",
+                "array<ShapeData, 102>",
                 &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
             )
             .replace(
@@ -1235,7 +1356,134 @@ fn create_shape_pipeline(
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Vertex::desc()],
+            // No vertex buffer: `vs_main` pulls quad corners from ShapeData
+            // by `vertex_index`.
+            buffers: &[],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state_for_mode(blend_mode)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Storage-mode pipeline for retained slots that captured a conservative arc
+/// mesh: `vs_mesh` consumes `{position, uv, shape_idx}` vertices instead of
+/// expanding six corners per shape. Fragment stage, bind group layouts
+/// (including the dynamic-offset similarity binding and the retained paint
+/// binding) and the SrcOver blend are exactly the ones the quad-expansion retained
+/// path uses — only the vertex fetch differs.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_mesh_shape_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: &wgpu::BindGroupLayout,
+    shape_layout: &wgpu::BindGroupLayout,
+    batch_limits: ShapeBatchLimits,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shape Mesh Shader"),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Mesh Render Pipeline Layout"),
+        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Retained Mesh Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_mesh"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[MeshVertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Storage-mode pipeline for ordinary shape batches drawn as instanced
+/// indexed quads (`vs_shape_instanced`): four vertex executions per shape
+/// through the static `[0, 1, 2, 2, 1, 3]` index buffer instead of six
+/// unindexed corner expansions. Everything but the vertex entry point is
+/// exactly `create_shape_pipeline` — same fragment stage, same layouts,
+/// same blend per mode — so a draw-time fallback to `vs_main` (the
+/// `CRANPOSE_INSTANCED_QUADS=0` kill switch) changes nothing else.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_instanced_shape_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: &wgpu::BindGroupLayout,
+    shape_layout: &wgpu::BindGroupLayout,
+    blend_mode: BlendMode,
+    batch_limits: ShapeBatchLimits,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Shape Instanced Shader"),
+        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+    });
+
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Instanced Render Pipeline Layout"),
+        bind_group_layouts: &[Some(uniform_layout), Some(shape_layout)],
+        immediate_size: 0,
+    });
+
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Instanced Render Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_shape_instanced"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            // No vertex buffer: like `vs_main`, the corners come from
+            // ShapeData; only the shape index source differs
+            // (`instance_index` instead of `vertex_index / 6`).
+            buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -1401,17 +1649,570 @@ struct Uniforms {
     viewport_offset: [f32; 2],
 }
 
+/// Mirror of `struct ShapeData` in `shape.wgsl`. Field order and sizes must
+/// match exactly: 10 x 16 bytes = 160 bytes, every member 16-byte aligned as
+/// the uniform address space requires. The quad corners and vertex color ride
+/// in here because the shape pipeline has no vertex buffer: the vertex shader
+/// pulls all six corners of a shape straight from this struct.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct ShapeData {
-    rect: [f32; 4],            // x, y, width, height
-    radii: [f32; 4],           // top_left, top_right, bottom_left, bottom_right
+    rect: [f32; 4], // x, y, width, height
+    /// Rects: top_left, top_right, bottom_left, bottom_right corner radii.
+    /// Arcs: (sin, cos) of the mid angle and of the half sweep — the shader's
+    /// per-shape trig, precomputed so `sdf_arc_band` needs none per fragment.
+    radii: [f32; 4],
     gradient_params: [f32; 4], // linear: start.xy,end.xy; radial: center.xy,radius,unused
     clip_rect: [f32; 4],       // clip_x, clip_y, clip_width, clip_height (0,0,0,0 = no clip)
-    brush_type: u32,           // 0=solid, 1=linear_gradient, 2=radial_gradient
-    gradient_start: u32,       // Starting index in gradient buffer
-    gradient_count: u32,       // Number of gradient stops
-    gradient_tile_mode: u32,   // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+    /// stroke width, packed flags (see [`pack_shape_flags`]), arc outer radius,
+    /// arc inner radius. All zero for a plain fill.
+    stroke_params: [f32; 4],
+    /// arc center.xy, start angle, sweep angle (radians, 0 = +X, clockwise).
+    arc_params: [f32; 4],
+    /// Device-space quad corners 0 (xy) and 1 (zw).
+    quad01: [f32; 4],
+    /// Device-space quad corners 2 (xy) and 3 (zw).
+    quad23: [f32; 4],
+    /// Vertex color: the solid brush color, or the first gradient stop.
+    color: [f32; 4],
+    brush_type: u32,         // 0=solid, 1=linear_gradient, 2=radial_gradient
+    gradient_start: u32,     // Starting index in gradient buffer
+    gradient_count: u32,     // Number of gradient stops
+    gradient_tile_mode: u32, // 0=Clamp, 1=Repeated, 2=Mirror, 3=Decal
+}
+
+/// Shape kinds understood by `shape.wgsl`.
+const SHAPE_KIND_FILL: u32 = 0;
+const SHAPE_KIND_STROKE: u32 = 1;
+const SHAPE_KIND_ARC: u32 = 2;
+
+fn stroke_cap_code(cap: StrokeCap) -> u32 {
+    match cap {
+        StrokeCap::Butt => 0,
+        StrokeCap::Round => 1,
+        StrokeCap::Square => 2,
+    }
+}
+
+fn stroke_join_code(join: StrokeJoin) -> u32 {
+    match join {
+        StrokeJoin::Miter => 0,
+        StrokeJoin::Round => 1,
+        StrokeJoin::Bevel => 2,
+    }
+}
+
+/// Packs kind/cap/join into the single float `ShapeData::stroke_params[1]`.
+///
+/// Three 2-bit fields fit in one f32 exactly (integers below 2^24 are exact),
+/// which keeps `ShapeData` a slot smaller than it would be if each field got
+/// its own float — batch capacity is set by this size on uniform backends.
+fn pack_shape_flags(kind: u32, cap: StrokeCap, join: StrokeJoin) -> f32 {
+    ((kind & 3) | (stroke_cap_code(cap) << 2) | (stroke_join_code(join) << 4)) as f32
+}
+
+/// Whether a batch conversion fans out is decided by measurement — see
+/// [`crate::cost_tuner::CostTuner`]. The floor of 256 matters: a device
+/// whose uniform binding caps batches at ~409 shapes never crossed the old
+/// fixed threshold of 512, so conversion ran serial on exactly the class of
+/// hardware (watch-grade in-order cores) where fanning out pays most. The
+/// 400 µs cheap floor keeps a big phone core, which clears such a batch in
+/// well under that, from ever paying for a spawn wave.
+#[cfg(not(target_arch = "wasm32"))]
+static SHAPE_CONVERT_TUNER: crate::cost_tuner::CostTuner =
+    crate::cost_tuner::CostTuner::new("shape-convert", 256, 400_000);
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn shape_convert_worker_count() -> usize {
+    static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *WORKERS.get_or_init(|| {
+        let cpus = std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1);
+        let workers = cpus.clamp(1, 4);
+        // One line per process: on devices whose scheduler confines the
+        // process (affinity masks, cpusets), this is the number that
+        // explains why fan-out stages stayed serial.
+        log::info!("[shape-convert] fan-out width {workers} (available parallelism {cpus})");
+        workers
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn shape_convert_worker_count() -> usize {
+    1
+}
+
+fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
+    match &shape.brush {
+        Brush::Solid(_) => 0,
+        Brush::LinearGradient { colors, .. }
+        | Brush::RadialGradient { colors, .. }
+        | Brush::SweepGradient { colors, .. } => colors.len(),
+    }
+}
+
+/// Converts one [`DrawShape`] into its GPU representation, writing into
+/// pre-sized slots so a batch can convert in parallel across disjoint
+/// sub-slices. `gradient_start` is the shape's global offset into the batch
+/// gradient buffer; `gradient_out` is exactly its span of that buffer.
+fn convert_shape_into_slots(
+    shape: &DrawShape,
+    root_scale: f32,
+    gradient_start: u32,
+    shape_out: &mut ShapeData,
+    gradient_out: &mut [GradientStop],
+) {
+    let snap_delta = shape
+        .snap_anchor
+        .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
+        .unwrap_or_default();
+    let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
+    let quad = translate_quad(shape.quad, snap_delta);
+    // Clips are resolved in scene space from their own layer ancestry. A draw
+    // item's raster snap must never move a fixed ancestor clip.
+    let clip = shape.clip;
+    let canonicalize = shape.snap_anchor.is_some();
+    let device_local_rect = if canonicalize {
+        canonicalized_scaled_rect(local_rect, root_scale)
+    } else {
+        Rect {
+            x: local_rect.x * root_scale,
+            y: local_rect.y * root_scale,
+            width: local_rect.width * root_scale,
+            height: local_rect.height * root_scale,
+        }
+    };
+    let device_quad = if canonicalize {
+        canonicalized_scaled_quad(quad, root_scale)
+    } else {
+        scaled_quad(quad, root_scale)
+    };
+    let canonicalize_brush_coordinate = |value| {
+        if canonicalize {
+            canonicalize_device_coordinate(value)
+        } else {
+            value
+        }
+    };
+
+    // Clip rect (scaled to physical pixels)
+    let clip_rect = if let Some(clip) = clip {
+        let device_clip = if canonicalize {
+            canonicalized_scaled_rect(clip, root_scale)
+        } else {
+            Rect {
+                x: clip.x * root_scale,
+                y: clip.y * root_scale,
+                width: clip.width * root_scale,
+                height: clip.height * root_scale,
+            }
+        };
+        [
+            device_clip.x,
+            device_clip.y,
+            device_clip.width,
+            device_clip.height,
+        ]
+    } else {
+        [0.0, 0.0, 0.0, 0.0]
+    };
+
+    // Gradient parameters
+    let mut fill_gradient_entries = |colors: &[Color], stops: Option<&[f32]>| {
+        let count = colors.len();
+        let explicit_stops = stops.filter(|values| values.len() == count);
+        for (index, color) in colors.iter().enumerate() {
+            let position = explicit_stops
+                .map(|values| values[index])
+                .unwrap_or_else(|| {
+                    if count <= 1 {
+                        0.0
+                    } else {
+                        index as f32 / (count - 1) as f32
+                    }
+                });
+            gradient_out[index] = GradientStop {
+                color: [color.r(), color.g(), color.b(), color.a()],
+                position: [position, 0.0, 0.0, 0.0],
+            };
+        }
+        count as u32
+    };
+    let mut gradient_params = [0.0f32; 4];
+    let (brush_type, gradient_count, gradient_tile_mode) = match &shape.brush {
+        Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
+        Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => {
+            let count = fill_gradient_entries(colors, stops.as_deref());
+            gradient_params = [
+                canonicalize_brush_coordinate(resolve_gradient_point(
+                    device_local_rect.x,
+                    device_local_rect.width,
+                    start.x * root_scale,
+                )),
+                canonicalize_brush_coordinate(resolve_gradient_point(
+                    device_local_rect.y,
+                    device_local_rect.height,
+                    start.y * root_scale,
+                )),
+                canonicalize_brush_coordinate(resolve_gradient_point(
+                    device_local_rect.x,
+                    device_local_rect.width,
+                    end.x * root_scale,
+                )),
+                canonicalize_brush_coordinate(resolve_gradient_point(
+                    device_local_rect.y,
+                    device_local_rect.height,
+                    end.y * root_scale,
+                )),
+            ];
+            (1u32, count, gradient_tile_mode_value(*tile_mode))
+        }
+        Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => {
+            let count = fill_gradient_entries(colors, stops.as_deref());
+            gradient_params = [
+                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                (radius * root_scale).max(f32::EPSILON),
+                0.0,
+            ];
+            (2u32, count, gradient_tile_mode_value(*tile_mode))
+        }
+        Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => {
+            let count = fill_gradient_entries(colors, stops.as_deref());
+            gradient_params = [
+                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                0.0,
+                0.0,
+            ];
+            (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
+        }
+    };
+
+    // A stroked rect/round-rect was emitted with `local_rect` already
+    // inflated by half the stroke width, so corner radii must resolve
+    // against the geometry that was actually asked for, not the
+    // inflated box. The shader shrinks `half_size` by the same amount.
+    let stroke_outset = shape
+        .stroke
+        .map(|stroke| stroke.half_width())
+        .unwrap_or(0.0);
+    let geometry_width = (local_rect.width - stroke_outset * 2.0).max(0.0);
+    let geometry_height = (local_rect.height - stroke_outset * 2.0).max(0.0);
+
+    let radii = if let Some(arc) = shape.arc {
+        // Arcs never carry corner radii, so this slot ships the shader's
+        // per-shape trig instead: (sin, cos) of the sweep's mid angle and of
+        // the half sweep. Computing these here — once per shape — is what
+        // lets `sdf_arc_band` run without a single transcendental per
+        // fragment. A full ring is the common case (dots, particles) and
+        // `ArcGeometry::new` normalizes it to start 0 / sweep TAU, whose
+        // values are exact constants; the half-sweep sine is pinned to
+        // non-negative just like the shader used to, so a closed ring keeps
+        // its seam-free (0, -1) form.
+        if arc.sweep_angle >= cranpose_ui_graphics::TAU && arc.start_angle == 0.0 {
+            [0.0, -1.0, 0.0, -1.0]
+        } else {
+            let half_sweep = arc.sweep_angle.clamp(0.0, cranpose_ui_graphics::TAU) * 0.5;
+            let (mid_sin, mid_cos) = (arc.start_angle + half_sweep).sin_cos();
+            let (half_sin, half_cos) = half_sweep.sin_cos();
+            [mid_sin, mid_cos, half_sin.max(0.0), half_cos]
+        }
+    } else if let Some(rounded) = shape.shape {
+        let resolved = rounded.resolve(geometry_width, geometry_height);
+        [
+            resolved.top_left * root_scale,
+            resolved.top_right * root_scale,
+            resolved.bottom_left * root_scale,
+            resolved.bottom_right * root_scale,
+        ]
+    } else {
+        [0.0, 0.0, 0.0, 0.0]
+    };
+
+    let device_rect = [
+        device_local_rect.x,
+        device_local_rect.y,
+        device_local_rect.width,
+        device_local_rect.height,
+    ];
+
+    // Stroke/arc parameters ride in the same ShapeData and the same
+    // pipeline as fills, so a stroked or arc shape never splits a
+    // batch.
+    let (stroke_params, arc_params) = match (shape.arc, shape.stroke) {
+        (Some(arc), _) => (
+            [
+                0.0,
+                pack_shape_flags(SHAPE_KIND_ARC, arc.cap, StrokeJoin::Miter),
+                arc.outer_radius * root_scale,
+                arc.inner_radius * root_scale,
+            ],
+            [
+                (arc.center.x + snap_delta.x) * root_scale,
+                (arc.center.y + snap_delta.y) * root_scale,
+                arc.start_angle,
+                arc.sweep_angle,
+            ],
+        ),
+        (None, Some(stroke)) => (
+            [
+                stroke.width.max(0.0) * root_scale,
+                pack_shape_flags(SHAPE_KIND_STROKE, stroke.cap, stroke.join),
+                0.0,
+                0.0,
+            ],
+            [0.0; 4],
+        ),
+        (None, None) => (
+            [
+                0.0,
+                pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter),
+                0.0,
+                0.0,
+            ],
+            [0.0; 4],
+        ),
+    };
+
+    let color = match &shape.brush {
+        Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+        Brush::LinearGradient { colors, .. } => {
+            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+            [first.r(), first.g(), first.b(), first.a()]
+        }
+        Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
+            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+            [first.r(), first.g(), first.b(), first.a()]
+        }
+    };
+
+    *shape_out = ShapeData {
+        rect: device_rect,
+        radii,
+        gradient_params,
+        clip_rect,
+        stroke_params,
+        arc_params,
+        quad01: [
+            device_quad[0][0],
+            device_quad[0][1],
+            device_quad[1][0],
+            device_quad[1][1],
+        ],
+        quad23: [
+            device_quad[2][0],
+            device_quad[2][1],
+            device_quad[3][0],
+            device_quad[3][1],
+        ],
+        color,
+        brush_type,
+        gradient_start,
+        gradient_count,
+        gradient_tile_mode,
+    };
+}
+
+/// `CRANPOSE_QUAD_AREA_DIAG=1` prints, per shape batch, how many device
+/// pixels the emitted quads cover — split into arc quads, the true arc band
+/// coverage inside them, and everything else. Fill cost is the product of
+/// fragment count and shader cost, and this is the fragment-count half: it
+/// is how the MEGA scene's ~10x overdraw (and the ~50% of arc-quad area that
+/// the SDF discards) was measured.
+fn quad_area_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_QUAD_AREA_DIAG").is_some())
+}
+
+/// Converts a batch of shapes into pre-sized output slices, fanning the work
+/// across scoped threads when the batch is large enough to pay for spawns.
+/// The outputs may be scratch vectors or mapped GPU staging memory; each
+/// shape writes only its own disjoint slots, so chunked `split_at_mut`
+/// hand-off keeps the parallel path free of any synchronization.
+fn convert_shapes_into_outputs(
+    shape_refs: &[&DrawShape],
+    gradient_offsets: &[u32],
+    root_scale: f32,
+    shape_data_out: &mut [ShapeData],
+    gradients_out: &mut [GradientStop],
+) {
+    let shape_count = shape_refs.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let convert_started = Instant::now();
+    #[cfg(not(target_arch = "wasm32"))]
+    let parallel =
+        SHAPE_CONVERT_TUNER.choose_parallel(shape_count) && shape_convert_worker_count() > 1;
+    if quad_area_diag_enabled() {
+        let quad_area = |q: [[f32; 2]; 4]| {
+            // Shoelace over the quad polygon TL, TR, BR, BL (corners 0,1,3,2).
+            let poly = [q[0], q[1], q[3], q[2]];
+            let mut twice = 0.0f64;
+            for i in 0..4 {
+                let a = poly[i];
+                let b = poly[(i + 1) % 4];
+                twice += a[0] as f64 * b[1] as f64 - b[0] as f64 * a[1] as f64;
+            }
+            twice.abs() * 0.5
+        };
+        let mut arc_quad = 0.0f64; // quad px of arc shapes
+        let mut arc_band = 0.0f64; // true band coverage of those arcs
+        let mut arc_count = 0usize;
+        let mut ring_count = 0usize;
+        let mut other_quad = 0.0f64;
+        let mut other_count = 0usize;
+        // Largest non-arc quads: (area, index) so the tail of the diag can
+        // name what the aggregate "other" fill actually is.
+        let mut top_other: Vec<(f64, usize)> = Vec::new();
+        for (index, shape) in shape_refs.iter().enumerate() {
+            let area = quad_area(shape.quad);
+            if let Some(arc) = shape.arc {
+                arc_quad += area;
+                arc_count += 1;
+                if arc.sweep_angle >= cranpose_ui_graphics::TAU {
+                    ring_count += 1;
+                }
+                let ra = arc.mid_radius() as f64;
+                let rb = arc.half_thickness() as f64;
+                arc_band +=
+                    arc.sweep_angle as f64 * ra * (2.0 * rb) + std::f64::consts::PI * rb * rb;
+            } else {
+                other_quad += area;
+                other_count += 1;
+                top_other.push((area, index));
+            }
+        }
+        let scale2 = (root_scale as f64) * (root_scale as f64);
+        eprintln!(
+            "[quad-area] arcs={arc_count} (rings={ring_count}) arc_quad_px={:.0} arc_band_px={:.0} | other={other_count} other_px={:.0}",
+            arc_quad * scale2,
+            arc_band * scale2,
+            other_quad * scale2,
+        );
+        top_other.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for &(area, index) in top_other.iter().take(4) {
+            let shape = shape_refs[index];
+            let brush = match &shape.brush {
+                cranpose_ui_graphics::Brush::Solid(color) => format!("solid a={:.2}", color.3),
+                cranpose_ui_graphics::Brush::LinearGradient { colors, .. } => {
+                    format!("linear n={}", colors.len())
+                }
+                cranpose_ui_graphics::Brush::RadialGradient { colors, .. } => {
+                    format!("radial n={}", colors.len())
+                }
+                cranpose_ui_graphics::Brush::SweepGradient { colors, .. } => {
+                    format!("sweep n={}", colors.len())
+                }
+            };
+            eprintln!(
+                "[quad-area]   top other: {:.0}px {}x{} at ({:.0},{:.0}) {} shape={} stroke={} clip={} blend={:?} z={}",
+                area * scale2,
+                shape.rect.width.round(),
+                shape.rect.height.round(),
+                shape.rect.x,
+                shape.rect.y,
+                brush,
+                shape.shape.is_some(),
+                shape.stroke.is_some(),
+                shape.clip.is_some(),
+                shape.blend_mode,
+                shape.z_index,
+            );
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let parallel = false;
+    let workers = if parallel {
+        shape_convert_worker_count()
+    } else {
+        1
+    };
+    if workers <= 1 {
+        for (idx, shape) in shape_refs.iter().enumerate() {
+            let gradient_start = gradient_offsets[idx];
+            let gradient_end = gradient_offsets[idx + 1];
+            convert_shape_into_slots(
+                shape,
+                root_scale,
+                gradient_start,
+                &mut shape_data_out[idx],
+                &mut gradients_out[gradient_start as usize..gradient_end as usize],
+            );
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        SHAPE_CONVERT_TUNER.record(
+            false,
+            shape_count,
+            convert_started.elapsed().as_nanos() as u64,
+        );
+        return;
+    }
+
+    let chunk_len = shape_count.div_ceil(workers);
+    let mut shape_data_rest = shape_data_out;
+    let mut gradients_rest = gradients_out;
+    std::thread::scope(|scope| {
+        let mut chunk_start = 0usize;
+        while chunk_start < shape_count {
+            let chunk_end = (chunk_start + chunk_len).min(shape_count);
+            let count = chunk_end - chunk_start;
+            let gradient_base = gradient_offsets[chunk_start];
+            let gradient_span = (gradient_offsets[chunk_end] - gradient_base) as usize;
+            let (shape_data_chunk, rest) = std::mem::take(&mut shape_data_rest).split_at_mut(count);
+            shape_data_rest = rest;
+            let (gradient_chunk, rest) =
+                std::mem::take(&mut gradients_rest).split_at_mut(gradient_span);
+            gradients_rest = rest;
+            let chunk_refs = &shape_refs[chunk_start..chunk_end];
+            let chunk_offsets = &gradient_offsets[chunk_start..=chunk_end];
+            let mut convert_chunk = move || {
+                for (j, shape) in chunk_refs.iter().enumerate() {
+                    let gradient_start = chunk_offsets[j];
+                    let local_start = (gradient_start - gradient_base) as usize;
+                    let local_end = (chunk_offsets[j + 1] - gradient_base) as usize;
+                    convert_shape_into_slots(
+                        shape,
+                        root_scale,
+                        gradient_start,
+                        &mut shape_data_chunk[j],
+                        &mut gradient_chunk[local_start..local_end],
+                    );
+                }
+            };
+            if chunk_end == shape_count {
+                // The caller would only block at the scope join; converting
+                // the final chunk inline puts that time to work and saves a
+                // spawn.
+                convert_chunk();
+            } else {
+                scope.spawn(convert_chunk);
+            }
+            chunk_start = chunk_end;
+        }
+    });
+    #[cfg(not(target_arch = "wasm32"))]
+    SHAPE_CONVERT_TUNER.record(
+        true,
+        shape_count,
+        convert_started.elapsed().as_nanos() as u64,
+    );
 }
 
 #[repr(C)]
@@ -1419,6 +2220,820 @@ struct ShapeData {
 struct GradientStop {
     color: [f32; 4],
     position: [f32; 4],
+}
+
+/// How many replay slots the shared transform buffer holds. Each slot's
+/// transform lives at `slot * REPLAY_TRANSFORM_STRIDE`, aligned for the
+/// strictest uniform-offset requirement any backend reports.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_REPLAY_SLOTS: u32 = 128;
+#[cfg(not(target_arch = "wasm32"))]
+const REPLAY_TRANSFORM_STRIDE: u64 = 256;
+
+/// One retained replay batch: converted shape slots captured on an earlier
+/// frame, kept on the GPU and re-drawn each frame under the similarity
+/// transform staged at `transform_offset`.
+///
+/// The immutable `ShapeData` and gradient buffers hold no handle here:
+/// nothing addresses them after capture, and `bind_group` keeps them alive.
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlot {
+    /// One `vec4<f32>` color per shape — the mutable paint the shader reads
+    /// under `paint_select`, split out so recolor patches upload 16 bytes
+    /// per shape while the 160-byte `ShapeData` stays immutable on the GPU
+    /// from capture to release.
+    paint_buffer: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
+    shape_count: u32,
+    /// CPU mirror of the paint buffer. Recolor patches apply here first
+    /// and upload as one contiguous span per slot per frame — MEGA's
+    /// twinkle field recolors ~1.7k dots a frame, and that many individual
+    /// copy commands stall a mobile GPU for longer than the spans' extra
+    /// bytes ever could.
+    paint_mirror: Vec<[f32; 4]>,
+    /// Conservative capture-space arc/ring mesh, built once at capture.
+    /// `None` when the kill switch is off, the slot meshed no arcs, or the
+    /// vertex budget overflowed — those slots replay through the quad-expansion
+    /// six-vertices-per-shape path.
+    mesh: Option<ReplaySlotMesh>,
+    /// Which capture created this slot's buffers, from the store's global
+    /// monotone counter. Retained bundle keys carry it so a slot id that is
+    /// released and recaptured — new bind group, new buffers, same id — can
+    /// never be drawn through a bundle recorded against the old capture.
+    capture_epoch: u64,
+}
+
+/// Vertex geometry a retained slot replays instead of per-shape quads: arc
+/// bands get trapezoid strips covering only their antialiasing footprint,
+/// every other shape gets a passthrough pair of triangles identical to the
+/// quad expansion. See [`build_arc_mesh_vertices`].
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlotMesh {
+    vertex_buffer: wgpu::Buffer,
+    /// `u32` triangle-list indices into `vertex_buffer`: band-boundary
+    /// vertices are emitted once and shared by both adjacent trapezoids, so
+    /// per-arc vertex-shader work drops from ~30 executions to the unique
+    /// boundary vertices (~10-14) — the amplification that made the
+    /// non-indexed mesh SLOWER than plain quads on the watch's Adreno 702.
+    index_buffer: wgpu::Buffer,
+    /// Prefix table, `shape_count + 1` entries: shape `i`'s triangles occupy
+    /// indices `index_prefix[i]..index_prefix[i + 1]`, so a retained span
+    /// draws `index_prefix[first]..index_prefix[first + count]` — one
+    /// `draw_indexed` per op, identical shape order, z untouched.
+    index_prefix: Vec<u32>,
+}
+
+/// Vertex of a retained slot's conservative arc mesh: capture-device-space
+/// position, the uv reproducing `vs_main`'s affine rect map at that position,
+/// and the shape index standing in for `vertex_index / 6`.
+#[cfg(not(target_arch = "wasm32"))]
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Pod, Zeroable)]
+struct MeshVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    shape_idx: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MeshVertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 3] =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Uint32];
+
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MeshVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+/// Kill switch, mirroring `command_feed_enabled`: default ON,
+/// `CRANPOSE_ARC_MESH=0` (or the `debug.cranpose.arc_mesh` property on
+/// Android) makes the next capture skip mesh building entirely, so a device
+/// A/B needs no rebuild. Read per capture — captures are rare.
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_enabled() -> bool {
+    // Opt-in (CRANPOSE_ARC_MESH=1 / debug.cranpose.arc_mesh): the Gate 0
+    // off-charger watch A/B measured the non-indexed mesh 5-7 fps SLOWER
+    // than plain quads on the Adreno 702 — the 4-6x vertex amplification
+    // outweighs the fragment savings on a small binning GPU (big desktop
+    // GPUs and the at-vsync-ceiling Huawei masked it). Default returns to
+    // quad expansion until indexed band-boundary geometry removes the
+    // amplification; then the A/B is repeated.
+    matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok(v) if v != "0")
+}
+
+/// Dilation applied to the band's half-thickness before meshing, in capture
+/// device pixels. The fragment SDF feathers over ±0.5 px
+/// (`smoothstep(-0.5, 0.5, dist)`), so every pixel the shader keeps sits
+/// within 0.5 px of the band; the other 0.5 px absorbs f32 slop between this
+/// builder's trig and the converted shape's precomputed (sin, cos) pairs.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MARGIN: f32 = 1.0;
+
+/// Chord overshoot budget in pixels: the segment count is chosen so pushing
+/// outer edges tangent-outside the dilated outer circle overshoots it by
+/// about this much at the chord ends.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_OVERSHOOT: f32 = 2.0;
+
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MIN_SEGMENTS: usize = 4;
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_MAX_SEGMENTS: usize = 64;
+
+/// Per-slot geometry budget in BYTES: 48 vertex-equivalents (~1 KB) per
+/// shape, floored for tiny slots so a single huge ring still fits. The
+/// non-indexed mesh spent this entirely on 20-byte vertices; the indexed
+/// mesh counts vertices AND 4-byte indices against the same byte ceiling,
+/// which indexed geometry fits with more headroom (MEGA's retained arcs
+/// drop from ~30 vertices ≈ 600 B to ~12 unique vertices + ~30 indices
+/// ≈ 360 B). Overflow falls back to whole-slot passthrough WITH a warning —
+/// truncating silently would break the containment invariant.
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_BUDGET_BYTES_PER_SHAPE: usize = 48 * std::mem::size_of::<MeshVertex>();
+#[cfg(not(target_arch = "wasm32"))]
+const ARC_MESH_BUDGET_FLOOR_BYTES: usize = 4096 * std::mem::size_of::<MeshVertex>();
+
+/// The budget-relevant size of an indexed mesh: what the GPU buffers will
+/// actually hold.
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_bytes(vertices: usize, indices: usize) -> usize {
+    vertices * std::mem::size_of::<MeshVertex>() + indices * std::mem::size_of::<u32>()
+}
+
+/// Band parameters of a captured arc that qualifies for a conservative mesh:
+/// solid brush, no clip, and a quad that is exactly — tolerance zero — the
+/// axis-aligned box of its rect. Everything else returns `None` and passes
+/// through as today's two quad triangles.
+#[cfg(not(target_arch = "wasm32"))]
+struct ArcMeshBand {
+    center: [f32; 2],
+    inner: f32,
+    outer: f32,
+    start: f32,
+    sweep: f32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
+    // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    if flags & 3 != SHAPE_KIND_ARC {
+        return None;
+    }
+    // Solid brushes only: gradients also derive from `rect_pos` and would
+    // mesh in principle, but the hot retained scenes are solid and a narrow
+    // gate keeps the byte-exactness surface small.
+    if shape.brush_type != 0 {
+        return None;
+    }
+    // A live clip is a hard `world_pos` comparison in the fragment shader.
+    // Meshed arcs interpolate `world_pos` across different triangles than
+    // the quad would, and one ulp of difference at the clip boundary flips
+    // whole pixels — clipped arcs pass through untouched.
+    if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
+        return None;
+    }
+    let [_, _, w, h] = shape.rect;
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    // The quad must be an axis-aligned box, tolerance zero: the mesh is
+    // clipped to the quad's own corners, so as long as the quad IS a box its
+    // rasterized pixel set equals the mesh clip region and the tight-AABB
+    // tangent-point crop is reproduced exactly. (Comparing against `rect`
+    // instead is an over-tight gate: under a non-dyadic root scale
+    // `(x + w) * s` differs from `x * s + w * s` by an ulp and every arc
+    // fell back to passthrough — observed on the Huawei at scale 2.75.)
+    let [left, top, right, _] = shape.quad01;
+    let [bl_x, bottom, br_x, br_y] = shape.quad23;
+    let axis_aligned = shape.quad01[3] == top
+        && bl_x == left
+        && br_x == right
+        && br_y == bottom
+        && left < right
+        && top < bottom;
+    if !axis_aligned {
+        return None;
+    }
+    let center = [shape.arc_params[0], shape.arc_params[1]];
+    let start = shape.arc_params[2];
+    let sweep = shape.arc_params[3];
+    let outer = shape.stroke_params[2];
+    let inner = shape.stroke_params[3];
+    let finite = center[0].is_finite()
+        && center[1].is_finite()
+        && start.is_finite()
+        && sweep.is_finite()
+        && outer.is_finite()
+        && inner.is_finite();
+    if !finite || outer <= 0.0 || sweep <= 0.0 {
+        return None;
+    }
+    Some(ArcMeshBand {
+        center,
+        inner,
+        outer,
+        start,
+        sweep,
+    })
+}
+
+/// Emits the quad `vs_main` would expand for this shape as four shared
+/// vertices plus the index pattern (0, 1, 2)(2, 1, 3) — the identical corner
+/// order, corner uvs and positions straight from the captured quad, so a
+/// passthrough shape rasterizes bit-identically to the quad-expansion
+/// indexless path while spending four vertex executions instead of six.
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_passthrough_quad(
+    shape: &ShapeData,
+    shape_idx: u32,
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+) {
+    let base = vertices.len() as u32;
+    let corners = [
+        ([shape.quad01[0], shape.quad01[1]], [0.0, 0.0]),
+        ([shape.quad01[2], shape.quad01[3]], [1.0, 0.0]),
+        ([shape.quad23[0], shape.quad23[1]], [0.0, 1.0]),
+        ([shape.quad23[2], shape.quad23[3]], [1.0, 1.0]),
+    ];
+    for (position, uv) in corners {
+        vertices.push(MeshVertex {
+            position,
+            uv,
+            shape_idx,
+        });
+    }
+    indices.extend([0u32, 1, 2, 2, 1, 3].map(|corner| base + corner));
+}
+
+/// One Sutherland–Hodgman pass against an axis-aligned half-plane.
+///
+/// Two properties the byte-exactness bar depends on:
+/// * the clipped coordinate is set to `bound` EXACTLY rather than recomputed
+///   through `p + t * (q - p)`, so every clipped polygon's boundary lies
+///   bitwise on the clip line;
+/// * the intersection is computed on the lexicographically ordered endpoint
+///   pair, so the shared radial edge of two adjacent trapezoids — traversed
+///   in opposite directions — clips to bitwise-identical points, keeping the
+///   strip watertight (no pixel shaded twice or missed along the seam).
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_polygon_axis(
+    input: &[[f32; 2]],
+    axis: usize,
+    bound: f32,
+    keep_at_most: bool,
+    output: &mut Vec<[f32; 2]>,
+) {
+    output.clear();
+    let inside = |p: [f32; 2]| {
+        if keep_at_most {
+            p[axis] <= bound
+        } else {
+            p[axis] >= bound
+        }
+    };
+    let intersect = |a: [f32; 2], b: [f32; 2]| {
+        let (p, q) = if (b[0], b[1]) < (a[0], a[1]) {
+            (b, a)
+        } else {
+            (a, b)
+        };
+        let t = (bound - p[axis]) / (q[axis] - p[axis]);
+        let mut point = [0.0f32; 2];
+        point[axis] = bound;
+        point[1 - axis] = p[1 - axis] + t * (q[1 - axis] - p[1 - axis]);
+        point
+    };
+    for (index, &current) in input.iter().enumerate() {
+        let previous = input[(index + input.len() - 1) % input.len()];
+        match (inside(previous), inside(current)) {
+            (true, true) => output.push(current),
+            (true, false) => output.push(intersect(previous, current)),
+            (false, true) => {
+                output.push(intersect(previous, current));
+                output.push(current);
+            }
+            (false, false) => {}
+        }
+    }
+}
+
+/// Emits the conservative trapezoid-strip mesh for one qualifying arc band.
+///
+/// CONTAINMENT INVARIANT (the byte-exactness bar): the union of emitted
+/// triangles is a superset of `{ p in the capture quad's box :
+/// sdf_arc_band(p) <= 0.5 }` — every pixel the fragment shader would keep.
+/// Over-inclusion is free (the SDF discards those pixels identically to
+/// today's quad); only under-inclusion can diverge, and
+/// `arc_mesh_contains_every_band_pixel` checks it never happens.
+///
+/// Geometry: outer vertices ride at `Ro / cos(step / 2)` so every chord is
+/// tangent-outside the dilated outer circle; inner vertices ride at the
+/// dilated inner radius, whose chords lie inside the hole. Cap coverage is
+/// bounded by the round-cap disc about the band endpoint (butt/square caps
+/// only cut that disc with planes — see `sdf_arc_band`), so padding the
+/// angular range by the disc's angular half-extent contains every cap. Each
+/// trapezoid is clipped to the quad box and fan-triangulated IN INDEX SPACE:
+/// a trapezoid the clipper left untouched shares its two boundary vertices
+/// with each neighbor through the index list (closed rings wrap the sharing
+/// modulo the boundary count), so the strip is watertight by construction —
+/// the seam edge is one vertex pair, not two bitwise-equal copies — and the
+/// per-arc vertex count collapses from three-per-triangle to the unique
+/// boundary vertices. Clipped trapezoids cannot share boundary vertices (the
+/// clipper rewrote them), so their fan vertices are appended PRIVATELY after
+/// the shared block and indexed directly; seams against neighbors still hold
+/// because a boundary edge either survives the clip on both sides
+/// bitwise-identically (same input edge, same planes, same float ops — see
+/// `clip_polygon_axis`) or is cut on both sides identically. Triangles are
+/// emitted in exact segment order either way, so the indexed mesh's
+/// primitive stream is triangle-for-triangle the one the non-indexed
+/// emitter produced.
+///
+/// Returns the emitted segment count, or `None` when the mesh came out empty
+/// — the caller emits the passthrough quad instead (never risk
+/// under-coverage).
+#[cfg(not(target_arch = "wasm32"))]
+fn emit_arc_band_mesh(
+    shape: &ShapeData,
+    shape_idx: u32,
+    band: &ArcMeshBand,
+    vertices: &mut Vec<MeshVertex>,
+    indices: &mut Vec<u32>,
+) -> Option<usize> {
+    let [cx, cy] = band.center;
+    let ra = (band.outer + band.inner) * 0.5;
+    let rb = ((band.outer - band.inner) * 0.5).max(0.0);
+    let rb_m = rb + ARC_MESH_MARGIN;
+    let ro = ra + rb_m;
+    let ri = (ra - rb_m).max(0.0);
+    let tau = cranpose_ui_graphics::TAU;
+
+    let (range_start, range) = if band.sweep >= tau {
+        (0.0, tau)
+    } else {
+        let pad = if rb_m < ra {
+            (rb_m / ra).asin() + 0.05
+        } else {
+            // The cap disc wraps the center; such shapes are tiny, take the
+            // whole circle.
+            std::f32::consts::PI
+        };
+        let padded = band.sweep + pad + pad;
+        if padded >= tau {
+            (0.0, tau)
+        } else {
+            (band.start - pad, padded)
+        }
+    };
+    let closed = range >= tau;
+
+    let dtheta = (2.0 * (ro / (ro + ARC_MESH_OVERSHOOT)).acos()).clamp(tau / 64.0, tau / 6.0);
+    let segments =
+        ((range / dtheta).ceil() as usize).clamp(ARC_MESH_MIN_SEGMENTS, ARC_MESH_MAX_SEGMENTS);
+    let step = range / segments as f32;
+    let rc = ro / (step * 0.5).cos();
+
+    // Boundary vertices are computed once and shared by both adjacent
+    // trapezoids: bitwise-equal edge endpoints are what let the rasterizer's
+    // fill rule shade each seam exactly once.
+    let boundary_count = if closed { segments } else { segments + 1 };
+    let mut boundaries = Vec::with_capacity(boundary_count);
+    for j in 0..boundary_count {
+        let (sin, cos) = (range_start + step * j as f32).sin_cos();
+        boundaries.push((
+            [cx + cos * ri, cy + sin * ri],
+            [cx + cos * rc, cy + sin * rc],
+        ));
+    }
+
+    let quad_min = [shape.quad01[0], shape.quad01[1]];
+    let quad_max = [shape.quad23[2], shape.quad23[3]];
+
+    /// One trapezoid's clip outcome (see the function docs): `Shared` means
+    /// the clip output is bitwise the input quad, so its corners index the
+    /// shared boundary block; `Fan` carries the clipped polygon for private
+    /// fan triangulation; `Empty` was clipped away entirely.
+    enum SegmentGeometry {
+        Shared,
+        Fan(Vec<[f32; 2]>),
+        Empty,
+    }
+
+    // Phase 1: clip every trapezoid and classify it.
+    let mut polygon: Vec<[f32; 2]> = Vec::with_capacity(8);
+    let mut scratch: Vec<[f32; 2]> = Vec::with_capacity(8);
+    let mut segment_geometry = Vec::with_capacity(segments);
+    let mut boundary_used = vec![false; boundary_count];
+    for j in 0..segments {
+        let jb = (j + 1) % boundary_count;
+        let (inner_a, outer_a) = boundaries[j];
+        let (inner_b, outer_b) = boundaries[jb];
+        polygon.clear();
+        polygon.extend_from_slice(&[inner_a, outer_a, outer_b, inner_b]);
+        clip_polygon_axis(&polygon, 0, quad_min[0], false, &mut scratch);
+        clip_polygon_axis(&scratch, 0, quad_max[0], true, &mut polygon);
+        clip_polygon_axis(&polygon, 1, quad_min[1], false, &mut scratch);
+        clip_polygon_axis(&scratch, 1, quad_max[1], true, &mut polygon);
+        // Collapse exact duplicates (an `Ri == 0` pie wedge duplicates the
+        // center) before fanning.
+        scratch.clear();
+        for &point in polygon.iter() {
+            if scratch.last() != Some(&point) {
+                scratch.push(point);
+            }
+        }
+        while scratch.len() > 1 && scratch.first() == scratch.last() {
+            scratch.pop();
+        }
+        if scratch.len() < 3 {
+            segment_geometry.push(SegmentGeometry::Empty);
+        } else if scratch[..] == [inner_a, outer_a, outer_b, inner_b] {
+            boundary_used[j] = true;
+            boundary_used[jb] = true;
+            segment_geometry.push(SegmentGeometry::Shared);
+        } else {
+            segment_geometry.push(SegmentGeometry::Fan(scratch.clone()));
+        }
+    }
+
+    let push_vertex = |vertices: &mut Vec<MeshVertex>, position: [f32; 2]| -> u32 {
+        let index = vertices.len() as u32;
+        vertices.push(MeshVertex {
+            position,
+            uv: [
+                (position[0] - shape.rect[0]) / shape.rect[2],
+                (position[1] - shape.rect[1]) / shape.rect[3],
+            ],
+            shape_idx,
+        });
+        index
+    };
+
+    // Shared block: every boundary referenced by a surviving whole trapezoid
+    // gets its (inner, outer) vertex pair exactly once, in boundary order.
+    let mut boundary_vertex = vec![[0u32; 2]; boundary_count];
+    for (j, used) in boundary_used.iter().enumerate() {
+        if *used {
+            let (inner, outer) = boundaries[j];
+            boundary_vertex[j] = [push_vertex(vertices, inner), push_vertex(vertices, outer)];
+        }
+    }
+
+    // Phase 2: indices in exact segment order — the primitive stream matches
+    // the non-indexed emitter triangle for triangle.
+    let start_len = indices.len();
+    for (j, geometry) in segment_geometry.iter().enumerate() {
+        match geometry {
+            SegmentGeometry::Empty => {}
+            SegmentGeometry::Shared => {
+                let jb = (j + 1) % boundary_count;
+                let [in_a, out_a] = boundary_vertex[j];
+                let [in_b, out_b] = boundary_vertex[jb];
+                // The fan the non-indexed emitter produced for an untouched
+                // trapezoid: (in_a, out_a, out_b)(in_a, out_b, in_b) — the
+                // same quad diagonal.
+                indices.extend_from_slice(&[in_a, out_a, out_b, in_a, out_b, in_b]);
+            }
+            SegmentGeometry::Fan(points) => {
+                let base = vertices.len() as u32;
+                for &point in points {
+                    push_vertex(vertices, point);
+                }
+                for i in 1..points.len() as u32 - 1 {
+                    indices.extend_from_slice(&[base, base + i, base + i + 1]);
+                }
+            }
+        }
+    }
+    if indices.len() == start_len {
+        return None;
+    }
+    Some(segments)
+}
+
+/// Unsigned shoelace area of an emitted indexed triangle list, for
+/// telemetry.
+#[cfg(not(target_arch = "wasm32"))]
+fn triangles_shoelace_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
+    indices
+        .chunks_exact(3)
+        .map(|tri| {
+            let [a, b, c] = [
+                vertices[tri[0] as usize].position,
+                vertices[tri[1] as usize].position,
+                vertices[tri[2] as usize].position,
+            ];
+            let cross = (b[0] as f64 - a[0] as f64) * (c[1] as f64 - a[1] as f64)
+                - (b[1] as f64 - a[1] as f64) * (c[0] as f64 - a[0] as f64);
+            cross.abs() * 0.5
+        })
+        .sum()
+}
+
+/// Unsigned area of the two triangles the quad-expansion path would rasterize for
+/// this shape, for telemetry.
+#[cfg(not(target_arch = "wasm32"))]
+fn quad_shoelace_area(shape: &ShapeData) -> f64 {
+    let corners = [
+        [shape.quad01[0] as f64, shape.quad01[1] as f64],
+        [shape.quad01[2] as f64, shape.quad01[3] as f64],
+        [shape.quad23[0] as f64, shape.quad23[1] as f64],
+        [shape.quad23[2] as f64, shape.quad23[3] as f64],
+    ];
+    let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+        ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
+    };
+    tri(corners[0], corners[1], corners[2]) + tri(corners[2], corners[1], corners[3])
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ArcMeshBuild {
+    vertices: Vec<MeshVertex>,
+    /// Triangle-list indices into `vertices`; see [`ReplaySlotMesh`].
+    indices: Vec<u32>,
+    /// `shape_count + 1` entries; shape `i` owns triangles
+    /// `indices[index_prefix[i]..index_prefix[i + 1]]`.
+    index_prefix: Vec<u32>,
+    meshed_arcs: usize,
+    meshed_segments: usize,
+    passthrough: usize,
+    quad_area: f64,
+    mesh_area: f64,
+}
+
+/// Builds a slot's conservative indexed mesh: arc bands become
+/// vertex-sharing trapezoid strips, every other shape a passthrough quad
+/// (four vertices, six indices), in the exact capture shape order. Returns
+/// `None` when the byte budget overflows — the caller warns and the whole
+/// slot replays through the quad-expansion path (silent truncation would
+/// break the containment invariant).
+#[cfg(not(target_arch = "wasm32"))]
+fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
+    let budget_bytes =
+        (shape_data.len() * ARC_MESH_BUDGET_BYTES_PER_SHAPE).max(ARC_MESH_BUDGET_FLOOR_BYTES);
+    let mut build = ArcMeshBuild {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        index_prefix: Vec::with_capacity(shape_data.len() + 1),
+        meshed_arcs: 0,
+        meshed_segments: 0,
+        passthrough: 0,
+        quad_area: 0.0,
+        mesh_area: 0.0,
+    };
+    build.index_prefix.push(0);
+    for (index, shape) in shape_data.iter().enumerate() {
+        let start = build.indices.len();
+        let meshed = arc_mesh_band(shape).and_then(|band| {
+            emit_arc_band_mesh(
+                shape,
+                index as u32,
+                &band,
+                &mut build.vertices,
+                &mut build.indices,
+            )
+        });
+        match meshed {
+            Some(segments) => {
+                build.meshed_arcs += 1;
+                build.meshed_segments += segments;
+            }
+            None => {
+                emit_passthrough_quad(shape, index as u32, &mut build.vertices, &mut build.indices);
+                build.passthrough += 1;
+            }
+        }
+        if arc_mesh_bytes(build.vertices.len(), build.indices.len()) > budget_bytes {
+            return None;
+        }
+        build.index_prefix.push(build.indices.len() as u32);
+        build.quad_area += quad_shoelace_area(shape);
+        build.mesh_area += triangles_shoelace_area(&build.vertices, &build.indices[start..]);
+    }
+    Some(build)
+}
+
+/// The renderer's registry of live replay slots. The replay cache (scene
+/// side) owns slot LIFECYCLE decisions; this store owns the GPU resources.
+#[cfg(not(target_arch = "wasm32"))]
+struct ReplaySlotStore {
+    slots: std::collections::HashMap<u32, ReplaySlot, cranpose_ui_graphics::FxBuildHasher>,
+    transform_buffer: wgpu::Buffer,
+    free_ids: Vec<u32>,
+    /// Global capture counter feeding [`ReplaySlot::capture_epoch`]: bumped
+    /// on every capture, never reused, so an epoch identifies one capture's
+    /// buffers for the renderer's whole lifetime.
+    next_capture_epoch: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReplaySlotStore {
+    fn new(device: &wgpu::Device) -> Self {
+        let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Transform Buffer"),
+            size: MAX_REPLAY_SLOTS as u64 * REPLAY_TRANSFORM_STRIDE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            slots: std::collections::HashMap::default(),
+            transform_buffer,
+            free_ids: (0..MAX_REPLAY_SLOTS).rev().collect(),
+            next_capture_epoch: 1,
+        }
+    }
+}
+
+/// Kill switch for cached retained render bundles, mirroring
+/// `command_feed_enabled`: default ON, `CRANPOSE_RETAINED_BUNDLES=0` (or the
+/// `debug.cranpose.retained_bundles` property on Android) drops the fused
+/// retained arms back to direct per-op encoding, so a device A/B needs no
+/// rebuild. Read per partition — the parity harness flips it between passes.
+#[cfg(not(target_arch = "wasm32"))]
+fn retained_bundles_enabled() -> bool {
+    std::env::var("CRANPOSE_RETAINED_BUNDLES").as_deref() != Ok("0")
+}
+
+/// Kill switch for instanced ordinary-shape quads: default ON,
+/// `CRANPOSE_INSTANCED_QUADS=0` (or the `debug.cranpose.instanced_quads`
+/// property on Android) reverts every ordinary shape draw to the six-vertex
+/// `vs_main` expansion. Unlike the per-partition bundle flag this is read
+/// ONCE per [`GpuRenderer`] construction into a field: cached retained
+/// bundles encode the selected pipeline, so a flag that moved per draw would
+/// let a cached bundle replay a selection the direct path no longer makes.
+#[cfg(not(target_arch = "wasm32"))]
+fn instanced_quads_enabled() -> bool {
+    std::env::var("CRANPOSE_INSTANCED_QUADS").as_deref() != Ok("0")
+}
+
+/// The index pattern of one instanced quad: the exact triangle pair
+/// `vs_main`'s six-slot corner mapping produces — (0, 1, 2)(2, 1, 3), same
+/// diagonal, same winding — shared by every instance.
+#[cfg(not(target_arch = "wasm32"))]
+const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
+
+/// The latched instanced-quad selection: `Some` exactly when the renderer
+/// was constructed in storage mode with [`instanced_quads_enabled`]. Both
+/// blend variants exist because ordinary batches draw SrcOver and DstOut;
+/// the `vs_main` pipelines coexist untouched so the `=0` revert (and the
+/// uniform-mode path) still has its six-vertex draws.
+#[cfg(not(target_arch = "wasm32"))]
+struct InstancedQuadPipelines {
+    pipeline: wgpu::RenderPipeline,
+    pipeline_dst_out: wgpu::RenderPipeline,
+    /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
+    /// by every instanced draw.
+    index_buffer: wgpu::Buffer,
+}
+
+/// Everything that decides the commands one retained op contributes to a
+/// cached bundle. Equal op keys imply identical encoded commands:
+/// `capture_epoch` pins the slot's bind group and buffers to one capture,
+/// `has_mesh` pins the pipeline and vertex-buffer choice, `first..last` is
+/// the clamped draw range, and `retained_index` is the dynamic transform
+/// offset. Transforms and paints are NOT here — they are data-buffer
+/// contents the bundle reads at execution.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RetainedBundleOpKey {
+    slot: u32,
+    /// The slot's capture epoch at key time, `None` while the slot is absent
+    /// from the store (the op encodes nothing). Epochs are globally unique
+    /// per capture, so a recaptured slot reusing its id can never satisfy a
+    /// key recorded against the previous capture's buffers.
+    capture_epoch: Option<u64>,
+    first: u32,
+    last: u32,
+    retained_index: u32,
+    has_mesh: bool,
+}
+
+/// Key of one maximal consecutive retained stretch: the op keys in draw
+/// order. Any reorder, count change, range change, recapture, or slot
+/// release changes the key and forces a rebuild.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+struct RetainedBundleKey {
+    ops: Vec<RetainedBundleOpKey>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct RetainedBundleCacheEntry<B> {
+    bundle: B,
+    last_used_frame: u64,
+}
+
+/// Cache of encoded render bundles for retained stretches, generic over the
+/// bundle payload so the reuse/invalidation/eviction logic is unit-testable
+/// without a GPU. The full [`RetainedBundleKey`] is the map key — a fresh
+/// key can only ever build a fresh bundle, never alias a stale one.
+///
+/// The surface format and the group-0 uniform bind group are deliberately
+/// not part of the key: both are fixed for a `GpuRenderer`'s lifetime (a
+/// surface reconfigure builds a new renderer, and with it an empty cache).
+#[cfg(not(target_arch = "wasm32"))]
+struct RetainedBundleCacheImpl<B> {
+    entries: HashMap<RetainedBundleKey, RetainedBundleCacheEntry<B>>,
+    frame: u64,
+    rebuilds: u64,
+    cached_executes: u64,
+    window_rebuilds: u64,
+    window_executes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+type RetainedBundleCache = RetainedBundleCacheImpl<wgpu::RenderBundle>;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<B> RetainedBundleCacheImpl<B> {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::default(),
+            frame: 0,
+            rebuilds: 0,
+            cached_executes: 0,
+            window_rebuilds: 0,
+            window_executes: 0,
+        }
+    }
+
+    /// True when a bundle for `key` is cached; marks it used this frame and
+    /// counts a cached execute.
+    fn hit(&mut self, key: &RetainedBundleKey) -> bool {
+        let frame = self.frame;
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                entry.last_used_frame = frame;
+                self.cached_executes += 1;
+                self.window_executes += 1;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Stores a freshly built bundle, counting a rebuild.
+    fn insert(&mut self, key: RetainedBundleKey, bundle: B) {
+        self.rebuilds += 1;
+        self.window_rebuilds += 1;
+        self.entries.insert(
+            key,
+            RetainedBundleCacheEntry {
+                bundle,
+                last_used_frame: self.frame,
+            },
+        );
+    }
+
+    fn get(&self, key: &RetainedBundleKey) -> Option<&B> {
+        self.entries.get(key).map(|entry| &entry.bundle)
+    }
+
+    /// Drops every cached bundle. Called whenever a replay slot is released:
+    /// the key compare already makes stale entries unreachable (their epochs
+    /// can never recur), so this only releases the dropped capture's GPU
+    /// resources promptly instead of one frame later via eviction.
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Frame boundary: evicts entries the frame did not use — a bundle
+    /// holds references on its slot's buffers, so unused entries must not
+    /// accumulate — and emits the rate-limited rebuild/execute telemetry.
+    fn end_frame(&mut self) {
+        let frame = self.frame;
+        self.entries
+            .retain(|_, entry| entry.last_used_frame >= frame);
+        self.frame = self.frame.wrapping_add(1);
+        // Always-on at a cadence that cannot spam; every perf window (120
+        // frames) under the replay diagnostics flag so short A/B runs see
+        // the counts. log::warn because log::info is invisible on the
+        // desktop console.
+        let due = self.frame.is_multiple_of(1024)
+            || (cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG")
+                && self.frame.is_multiple_of(120));
+        if due && self.window_rebuilds + self.window_executes > 0 {
+            log::warn!(
+                "[retained-bundles] {} stretches, {} rebuilds, {} cached executes ({} live bundles)",
+                self.window_rebuilds + self.window_executes,
+                self.window_rebuilds,
+                self.window_executes,
+                self.entries.len(),
+            );
+            self.window_rebuilds = 0;
+            self.window_executes = 0;
+        }
+    }
+
+    /// Lifetime (rebuilds, cached executes) for tests and diagnostics.
+    fn stats(&self) -> (u64, u64) {
+        (self.rebuilds, self.cached_executes)
+    }
 }
 
 struct CachedImageTexture {
@@ -1452,12 +3067,32 @@ struct GlyphAtlasEntry {
     height: u32,
 }
 
+/// Side length the glyph atlas should be rebuilt at after it overflowed at
+/// `current`: one doubling, never past `max`.
+///
+/// Doubling (rather than jumping straight to `max`) is what makes the atlas
+/// cost track the workload: an app that overflows once needs a little more
+/// room, not sixteen times more.
+fn next_glyph_atlas_size(current: u32, max: u32) -> u32 {
+    current.saturating_mul(2).clamp(1, max.max(1))
+}
+
 struct TextGlyphAtlas {
     texture: wgpu::Texture,
     _view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     entries: BoundedLruCache<SoftwareGlyphAtlasKey, GlyphAtlasEntry>,
     generation: u64,
+    /// Side length of `texture`, between `TEXT_GLYPH_ATLAS_MIN_SIZE` and the
+    /// device's ceiling. Every UV is normalised against it, so it has to travel
+    /// with the atlas rather than be read back off a constant.
+    size: u32,
+    /// Largest side length this atlas may grow to: the smaller of
+    /// `TEXT_GLYPH_ATLAS_MAX_SIZE` and what the device grants. Mobile devices
+    /// are requested `downlevel_defaults()` limits raised by `using_resolution`,
+    /// so a device that only offers 2048 would otherwise fail to create the
+    /// texture outright.
+    max_size: u32,
     cursor_x: u32,
     cursor_y: u32,
     row_height: u32,
@@ -1469,8 +3104,11 @@ impl TextGlyphAtlas {
         device: &wgpu::Device,
         image_layout: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
+        size: u32,
     ) -> Self {
-        let texture = Self::create_texture(device);
+        let max_size = TEXT_GLYPH_ATLAS_MAX_SIZE.min(device.limits().max_texture_dimension_2d);
+        let size = size.clamp(TEXT_GLYPH_ATLAS_MIN_SIZE.min(max_size), max_size);
+        let texture = Self::create_texture(device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Text Glyph Atlas Bind Group"),
@@ -1492,6 +3130,8 @@ impl TextGlyphAtlas {
             bind_group,
             entries: BoundedLruCache::with_capacity_at_least_one(MAX_TEXT_GLYPH_ATLAS_ITEMS),
             generation: 0,
+            size,
+            max_size,
             cursor_x: TEXT_GLYPH_ATLAS_PADDING,
             cursor_y: TEXT_GLYPH_ATLAS_PADDING,
             row_height: 0,
@@ -1499,12 +3139,12 @@ impl TextGlyphAtlas {
         }
     }
 
-    fn create_texture(device: &wgpu::Device) -> wgpu::Texture {
+    fn create_texture(device: &wgpu::Device, size: u32) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Text Glyph Atlas Texture"),
             size: wgpu::Extent3d {
-                width: TEXT_GLYPH_ATLAS_WIDTH,
-                height: TEXT_GLYPH_ATLAS_HEIGHT,
+                width: size,
+                height: size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1516,6 +3156,21 @@ impl TextGlyphAtlas {
         })
     }
 
+    /// Throws every cached glyph away and starts over on a texture one doubling
+    /// larger, up to [`TextGlyphAtlas::max_size`].
+    ///
+    /// `allocate` is a one-way shelf cursor with no compaction, so the only
+    /// recovery from a full atlas is to start again — and starting again at the
+    /// same size makes a workload whose live glyph set genuinely does not fit
+    /// re-raster every glyph every frame. Treating each overflow as the signal
+    /// to double means the atlas converges on the size the workload actually
+    /// needs: a text-heavy screen reaches the old fixed 4096 after at most three
+    /// resets and behaves identically from then on, while a watch face that
+    /// never overflows never pays for space it will not use.
+    ///
+    /// Bumping the generation is what invalidates the cached glyph runs, whose
+    /// UVs are normalised against the previous size and would otherwise sample
+    /// the wrong part of the new texture.
     fn reset(
         &mut self,
         device: &wgpu::Device,
@@ -1523,13 +3178,18 @@ impl TextGlyphAtlas {
         sampler: &wgpu::Sampler,
     ) {
         let generation = self.generation.wrapping_add(1);
-        let mut next = Self::new(device, image_layout, sampler);
+        let grown = next_glyph_atlas_size(self.size, self.max_size);
+        let mut next = Self::new(device, image_layout, sampler, grown);
         next.generation = generation;
         *self = next;
     }
 
     fn generation(&self) -> u64 {
         self.generation
+    }
+
+    fn size(&self) -> u32 {
+        self.size
     }
 
     fn entry(&mut self, key: &SoftwareGlyphAtlasKey) -> Option<GlyphAtlasEntry> {
@@ -1539,13 +3199,13 @@ impl TextGlyphAtlas {
     fn allocate(&mut self, width: u32, height: u32) -> Option<GlyphAtlasEntry> {
         if width == 0
             || height == 0
-            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_WIDTH
-            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > TEXT_GLYPH_ATLAS_HEIGHT
+            || width + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
+            || height + TEXT_GLYPH_ATLAS_PADDING * 2 > self.size
         {
             return None;
         }
 
-        if self.cursor_x + width + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_WIDTH {
+        if self.cursor_x + width + TEXT_GLYPH_ATLAS_PADDING > self.size {
             self.cursor_x = TEXT_GLYPH_ATLAS_PADDING;
             self.cursor_y = self
                 .cursor_y
@@ -1553,7 +3213,7 @@ impl TextGlyphAtlas {
                 .saturating_add(TEXT_GLYPH_ATLAS_PADDING);
             self.row_height = 0;
         }
-        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > TEXT_GLYPH_ATLAS_HEIGHT {
+        if self.cursor_y + height + TEXT_GLYPH_ATLAS_PADDING > self.size {
             return None;
         }
 
@@ -1697,15 +3357,13 @@ struct ImageUvRect {
 // Text raster cache is owned by GpuRenderer and backed by software text images
 // between measurement and rendering to eliminate duplicate text shaping
 
-/// Persistent GPU buffers for batched shape rendering
+/// Persistent GPU buffers for batched shape rendering. There is no vertex or
+/// index buffer: the shape shader pulls quad corners straight out of
+/// `ShapeData` by `vertex_index`, so the batch is drawn unindexed.
 struct ShapeBatchBuffers {
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
     shape_buffer: wgpu::Buffer,
     gradient_buffer: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
-    vertex_capacity: usize,
-    index_capacity: usize,
     shape_capacity: usize,
     gradient_capacity: usize,
     batch_limits: ShapeBatchLimits,
@@ -1736,14 +3394,19 @@ struct ViewportUniformParams {
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 enum UploadTarget {
     Uniform,
-    ShapeVertex,
-    ShapeIndex,
     ShapeData,
     ShapeGradient,
     ImageVertex,
     ImageIndex,
     #[cfg(not(target_arch = "wasm32"))]
     RetainedGlyphUniform,
+    /// The shared replay-transform buffer; copies land at each slot's fixed
+    /// 256-byte-aligned offset.
+    #[cfg(not(target_arch = "wasm32"))]
+    ReplayTransform,
+    /// A replay slot's retained paint buffer (color patches land here).
+    #[cfg(not(target_arch = "wasm32"))]
+    ReplayPaintData(u32),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1796,6 +3459,29 @@ impl StagedBufferUploads {
         self.stage_at(target, 0, bytes);
     }
 
+    /// Records a GPU copy whose source bytes were already written into the
+    /// frame upload buffer (via `Queue::write_buffer_with`), so nothing is
+    /// appended to `bytes`. `source_offset` is relative to the same base the
+    /// caller later passes to `flush_staged_uploads_at`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn record_upload_copy(
+        &mut self,
+        target: UploadTarget,
+        source_offset: u64,
+        target_offset: u64,
+        size: u64,
+    ) {
+        if size == 0 {
+            return;
+        }
+        self.copies.push(PendingBufferCopy {
+            source_offset,
+            target_offset,
+            size,
+            target,
+        });
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn stage_at(&mut self, target: UploadTarget, target_offset: u64, bytes: &[u8]) {
         if bytes.is_empty() {
@@ -1829,69 +3515,84 @@ impl StagedBufferUploads {
     }
 }
 
+/// The fresh-batch entry list for the shape bind group layout: the batch's
+/// own data buffers, the shared identity similarity buffer, and — storage
+/// mode only, where the layout carries the paint entry — the renderer-wide
+/// dummy paint buffer (fresh draws leave `paint_select` at 0.0).
+fn shape_batch_bind_group_entries<'a>(
+    shape_buffer: &'a wgpu::Buffer,
+    gradient_buffer: &'a wgpu::Buffer,
+    similarity_buffer: &'a wgpu::Buffer,
+    paint_buffer: Option<&'a wgpu::Buffer>,
+) -> Vec<wgpu::BindGroupEntry<'a>> {
+    let mut entries = vec![
+        wgpu::BindGroupEntry {
+            binding: 0,
+            resource: shape_buffer.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 1,
+            resource: gradient_buffer.as_entire_binding(),
+        },
+        wgpu::BindGroupEntry {
+            binding: 2,
+            resource: similarity_buffer.as_entire_binding(),
+        },
+    ];
+    if let Some(paint_buffer) = paint_buffer {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 3,
+            resource: paint_buffer.as_entire_binding(),
+        });
+    }
+    entries
+}
+
 impl ShapeBatchBuffers {
     fn new(
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
+        similarity_buffer: &wgpu::Buffer,
+        paint_buffer: Option<&wgpu::Buffer>,
         batch_limits: ShapeBatchLimits,
     ) -> Self {
-        let initial_vertex_cap = batch_limits.max_shapes_per_batch * 4; // 4 vertices per shape
-        let initial_index_cap = batch_limits.max_shapes_per_batch * 6; // 6 indices per shape
-        let initial_shape_cap = batch_limits.max_shapes_per_batch;
-        let initial_gradient_cap = batch_limits.max_gradient_stops;
+        debug_assert_eq!(
+            paint_buffer.is_some(),
+            batch_limits.storage,
+            "the paint binding exists exactly when the layout is in storage mode"
+        );
+        let initial_shape_cap = batch_limits.initial_shape_capacity();
+        let initial_gradient_cap = batch_limits.initial_gradient_capacity();
 
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shape Vertex Buffer"),
-            size: (std::mem::size_of::<Vertex>() * initial_vertex_cap) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Shape Index Buffer"),
-            size: (std::mem::size_of::<u32>() * initial_index_cap) as u64,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Use UNIFORM for WebGL compatibility (storage buffers not supported)
         let shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Shape Data Buffer"),
             size: (std::mem::size_of::<ShapeData>() * initial_shape_cap) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: batch_limits.data_buffer_usage(),
             mapped_at_creation: false,
         });
 
         let gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Gradient Buffer"),
             size: (std::mem::size_of::<GradientStop>() * initial_gradient_cap) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: batch_limits.data_buffer_usage(),
             mapped_at_creation: false,
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Shape Bind Group"),
             layout: bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: shape_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: gradient_buffer.as_entire_binding(),
-                },
-            ],
+            entries: &shape_batch_bind_group_entries(
+                &shape_buffer,
+                &gradient_buffer,
+                similarity_buffer,
+                paint_buffer,
+            ),
         });
 
         Self {
-            vertex_buffer,
-            index_buffer,
             shape_buffer,
             gradient_buffer,
             bind_group,
-            vertex_capacity: initial_vertex_cap,
-            index_capacity: initial_index_cap,
             shape_capacity: initial_shape_cap,
             gradient_capacity: initial_gradient_cap,
             batch_limits,
@@ -1904,42 +3605,16 @@ impl ShapeBatchBuffers {
         &mut self,
         device: &wgpu::Device,
         bind_group_layout: &wgpu::BindGroupLayout,
-        vertices_needed: usize,
-        indices_needed: usize,
+        similarity_buffer: &wgpu::Buffer,
+        paint_buffer: Option<&wgpu::Buffer>,
         shapes_needed: usize,
         gradients_needed: usize,
     ) {
         let mut need_bind_group_update = false;
-        let hard_max_bytes = HARD_MAX_BUFFER_MB * 1024 * 1024;
 
-        if vertices_needed > self.vertex_capacity {
-            let desired = vertices_needed.next_power_of_two();
-            let max_count = hard_max_bytes / std::mem::size_of::<Vertex>();
-            let new_cap = desired.min(max_count);
-            self.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Shape Vertex Buffer"),
-                size: (std::mem::size_of::<Vertex>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.vertex_capacity = new_cap;
-        }
-
-        if indices_needed > self.index_capacity {
-            let desired = indices_needed.next_power_of_two();
-            let max_count = hard_max_bytes / std::mem::size_of::<u32>();
-            let new_cap = desired.min(max_count);
-            self.index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Shape Index Buffer"),
-                size: (std::mem::size_of::<u32>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.index_capacity = new_cap;
-        }
-
-        // Shape and gradient buffers are uniform buffers whose size must match
-        // the shader's fixed-size array declarations. Never grow beyond those.
+        // In uniform mode the shape and gradient buffers start at the cap
+        // (the shader's fixed-size array length) so these never fire; in
+        // storage mode they double toward the cap as scenes demand.
         if shapes_needed > self.shape_capacity
             && self.shape_capacity < self.batch_limits.max_shapes_per_batch
         {
@@ -1949,7 +3624,7 @@ impl ShapeBatchBuffers {
             self.shape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Shape Data Buffer"),
                 size: (std::mem::size_of::<ShapeData>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: self.batch_limits.data_buffer_usage(),
                 mapped_at_creation: false,
             });
             self.shape_capacity = new_cap;
@@ -1966,7 +3641,7 @@ impl ShapeBatchBuffers {
             self.gradient_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Gradient Buffer"),
                 size: (std::mem::size_of::<GradientStop>() * new_cap) as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: self.batch_limits.data_buffer_usage(),
                 mapped_at_creation: false,
             });
             self.gradient_capacity = new_cap;
@@ -1977,16 +3652,12 @@ impl ShapeBatchBuffers {
             self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Shape Bind Group"),
                 layout: bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.shape_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.gradient_buffer.as_entire_binding(),
-                    },
-                ],
+                entries: &shape_batch_bind_group_entries(
+                    &self.shape_buffer,
+                    &self.gradient_buffer,
+                    similarity_buffer,
+                    paint_buffer,
+                ),
             });
         }
     }
@@ -2077,13 +3748,45 @@ impl ImageBatchBuffers {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
+    /// This instance's renderer epoch, stamped by `init_gpu` at
+    /// construction. A packet whose `renderer_epoch` differs was built
+    /// against another instance and is cancelled at the head of
+    /// [`Self::render`], never drawn.
+    renderer_epoch: u64,
+    /// The producer feed generation this store's slot universe belongs to:
+    /// seeded at construction, advanced by `consume_replay_ops` when a
+    /// higher-generation batch arrives (the batch itself carries the
+    /// retirement releases). The store never reads the producer's
+    /// thread-local — this field is its only generation authority.
+    #[cfg(not(target_arch = "wasm32"))]
+    store_feed_generation: u64,
     surface_format: wgpu::TextureFormat,
     shape_batch_limits: ShapeBatchLimits,
     pipeline: wgpu::RenderPipeline,
     pipeline_dst_out: wgpu::RenderPipeline,
+    /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
+    /// over a vertex buffer) that replay slots with a captured arc mesh draw
+    /// through. Uniform-mode devices never host retained slots.
+    #[cfg(not(target_arch = "wasm32"))]
+    mesh_pipeline: Option<wgpu::RenderPipeline>,
+    /// `Some` exactly when this renderer latched the instanced-quad path at
+    /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
+    /// ONCE per renderer lifetime — cached retained bundles encode the
+    /// selection, so it must never move under them (see
+    /// [`instanced_quads_enabled`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    instanced_quads: Option<InstancedQuadPipelines>,
     #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
+    /// `Some` exactly in storage mode: the 16-byte stand-in every fresh
+    /// batch binds at the paint entry (see `shape_batch_bind_group_entries`).
+    dummy_paint_buffer: Option<wgpu::Buffer>,
+    /// Shared identity binding for `@group(1) @binding(2)`: every freshly
+    /// converted shape batch draws untransformed through this one buffer.
+    identity_similarity_buffer: wgpu::Buffer,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_slots: ReplaySlotStore,
     image_pipeline: wgpu::RenderPipeline,
     image_pipeline_dst_out: wgpu::RenderPipeline,
     glyph_atlas_pipeline: wgpu::RenderPipeline,
@@ -2142,8 +3845,6 @@ pub struct GpuRenderer {
     text_line_index_cache: TextLineIndexCache,
     scratch_shape_data: Vec<ShapeData>,
     scratch_gradients: Vec<GradientStop>,
-    scratch_vertices: Vec<Vertex>,
-    scratch_indices: Vec<u32>,
     scratch_image_vertices: Vec<Vertex>,
     scratch_image_indices: Vec<u32>,
     scratch_image_cmds: Vec<ImageDrawCmd>,
@@ -2162,14 +3863,104 @@ pub struct GpuRenderer {
     observed_scene_range_cache_misses: BoundedLruCache<LayerRasterCacheKey, ()>,
     shadow_surface_cache: BoundedLruCache<ShadowSurfaceCacheKey, CachedShadowSurface>,
     shadow_surface_cache_bytes: u64,
-    layer_surface_rect_cache: HashMap<usize, Rect>,
-    layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     frame_stats: gpu_stats::FrameStats,
     last_frame_stats: Option<gpu_stats::FrameStatsSnapshot>,
     pending_frame_warmup_frames: u8,
     frame_count: u64,
     gpu_stats_enabled: bool,
     warning_state: RendererWarningState,
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_upload_stats: ReplayUploadStats,
+    /// The frame's replay recolor patches, parked here by
+    /// `consume_replay_ops` until the retained prepare arms drain them
+    /// (`stage_replay_patches`). The vec this frame's ops displace is last
+    /// frame's, already drained empty, and returns to the producer with
+    /// the ack — capacity ping-pongs planner queue → packet ops → here →
+    /// ack return, so neither side allocates per frame (P4b).
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_color_patches: Vec<crate::scene::ColorPatch>,
+    /// Drain arena for `replay_color_patches`: `stage_replay_patches`
+    /// swaps against this instead of `mem::take`, so both keep their
+    /// high-water capacity across frames. Always empty between drains.
+    #[cfg(not(target_arch = "wasm32"))]
+    color_patch_scratch: Vec<crate::scene::ColorPatch>,
+    /// Recycled confirmations buffer for the next [`crate::frame_packet::ReplayAck`]:
+    /// `consume_replay_ops` fills it, the planner drains it in `apply_ack`,
+    /// and the render loop hands the emptied vec (capacity intact) back
+    /// here — the ack channel's half of the P4b no-allocation contract.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_ack_confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
+    /// Lifetime count of replay-ops batches dropped whole by the
+    /// generation check in `consume_replay_ops` — fail-closed against ops
+    /// planned under a slot universe this store no longer holds.
+    /// Synchronously impossible today; structural for the pipeline split.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_generation_drops: u64,
+    /// Cached render bundles for maximal consecutive retained stretches in
+    /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
+    #[cfg(not(target_arch = "wasm32"))]
+    retained_bundle_cache: RetainedBundleCache,
+}
+
+/// Running totals for retained-slot patch uploads, the paint-bandwidth
+/// instrument: recolors upload 16-byte paint records (plus gradient stop
+/// spans), coalesced per slot between the lowest and highest patched
+/// index, so `bytes` versus `ideal_bytes` (patched colors alone) is just
+/// the untouched records inside each coalesced span.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ReplayUploadStats {
+    calls: u64,
+    patched_calls: u64,
+    patches: u64,
+    slots: u64,
+    records: u64,
+    bytes: u64,
+    ideal_bytes: u64,
+    max_frame_bytes: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ReplayUploadStats {
+    /// One aggregate line roughly every few seconds: cheap enough to stay
+    /// on unconditionally, which matters because the watch cannot take
+    /// setprop-backed diag flags — its logcat is the only channel, and a
+    /// measurement window must catch several lines. Counts every drain
+    /// call (the drain runs several times per frame; only the first sees
+    /// patches) so a target with zero paint traffic still reports an
+    /// affirmative zero instead of silence, while the averages divide by
+    /// PATCHED calls so they read as per-frame numbers.
+    /// warn level: the platform loggers filter info on desktop.
+    const REPORT_CALLS: u64 = 1024;
+
+    fn note_frame(&mut self, patches: u64, slots: u64, records: u64, bytes: u64, ideal: u64) {
+        self.calls += 1;
+        if patches > 0 {
+            self.patched_calls += 1;
+            self.patches += patches;
+            self.slots += slots;
+            self.records += records;
+            self.bytes += bytes;
+            self.ideal_bytes += ideal;
+            self.max_frame_bytes = self.max_frame_bytes.max(bytes);
+        }
+        if self.calls >= Self::REPORT_CALLS {
+            let patched = self.patched_calls.max(1);
+            log::warn!(
+                "[replay-upload] {} patched of {} drains: avg {:.1} KB/frame (max {:.1} KB), \
+                 color-only would be {:.1} KB/frame; avg {} patches over {} records in {} slots",
+                self.patched_calls,
+                self.calls,
+                self.bytes as f64 / patched as f64 / 1024.0,
+                self.max_frame_bytes as f64 / 1024.0,
+                self.ideal_bytes as f64 / patched as f64 / 1024.0,
+                self.patches / patched,
+                self.records / patched,
+                self.slots / patched,
+            );
+            *self = Self::default();
+        }
+    }
 }
 
 fn image_sampler_descriptor(sampling: ImageSampling) -> wgpu::SamplerDescriptor<'static> {
@@ -2247,7 +4038,11 @@ impl GpuRenderer {
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
         text_fonts: SoftwareTextFontSet,
+        renderer_epoch: u64,
+        store_feed_generation: u64,
     ) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = store_feed_generation;
         let shape_batch_limits = ShapeBatchLimits::for_device(&device);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2281,34 +4076,101 @@ impl GpuRenderer {
                 }],
             });
 
-        // Use uniform buffers for WebGL compatibility
-        // Storage buffers aren't supported in WebGL fragment shaders
+        // Read-only storage bindings where the device has them (so a whole
+        // scene fits one batch); uniform arrays on WebGL-class devices, which
+        // have no storage buffers in fragment shaders. The shape array is
+        // visible to the vertex stage as well: the pipeline has no vertex
+        // buffer and `vs_main` pulls quad corners from ShapeData. (Storage
+        // mode is gated on `max_storage_buffers_per_shader_stage`, which GL
+        // backends report as the minimum across stages, so a device that
+        // cannot read storage from the vertex stage falls back to uniforms.)
+        let mut shape_bind_group_layout_entries = vec![
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: shape_batch_limits.data_binding_type(),
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: shape_batch_limits.data_binding_type(),
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            // The similarity transform rides a dynamic offset so
+            // retained draws sharing one captured batch can each
+            // apply their own transform; ordinary batches pass
+            // offset 0 into the identity buffer.
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: wgpu::BufferSize::new(
+                        std::mem::size_of::<SimilarityTransform>() as u64,
+                    ),
+                },
+                count: None,
+            },
+        ];
+        // Retained-slot paint colors, read by the vertex stage under
+        // `paint_select` (see `shape_shader_source`). Storage mode only:
+        // the uniform-variant shader never declares the array, and
+        // uniform-mode devices never host retained slots, so their layout
+        // stays exactly the three-entry one the uniform pipeline expects.
+        if shape_batch_limits.storage {
+            shape_bind_group_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            });
+        }
         let shape_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Shape Bind Group Layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
+                entries: &shape_bind_group_layout_entries,
             });
+
+        let identity_similarity_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Identity Similarity Buffer"),
+            size: std::mem::size_of::<SimilarityTransform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: true,
+        });
+        identity_similarity_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::bytes_of(&SimilarityTransform::IDENTITY));
+        identity_similarity_buffer.unmap();
+
+        // Fresh-batch bind groups need a resource at the paint binding even
+        // though their draws leave `paint_select` at 0.0 and never use the
+        // value; one minimal buffer (a single never-read vec4) serves every
+        // batch. Uniform-mode layouts have no paint entry, so none exists.
+        let dummy_paint_buffer = shape_batch_limits.storage.then(|| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Dummy Paint Buffer"),
+                size: std::mem::size_of::<[f32; 4]>() as u64,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        let replay_slot_store = ReplaySlotStore::new(&device);
 
         let pipeline = create_shape_pipeline(
             &device,
@@ -2326,6 +4188,55 @@ impl GpuRenderer {
             BlendMode::DstOut,
             shape_batch_limits,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        let mesh_pipeline = shape_batch_limits.storage.then(|| {
+            create_mesh_shape_pipeline(
+                &device,
+                surface_format,
+                &uniform_bind_group_layout,
+                &shape_bind_group_layout,
+                shape_batch_limits,
+            )
+        });
+        // The instanced-quad selection is LATCHED here, once per renderer:
+        // cached retained bundles encode whichever pipelines this resolves
+        // to, so a per-draw env read could let a bundle replay a selection
+        // the direct path no longer makes. Storage mode only — the
+        // uniform/WebGL path keeps `vs_main` and its plain draws untouched.
+        #[cfg(not(target_arch = "wasm32"))]
+        let instanced_quads =
+            (shape_batch_limits.storage && instanced_quads_enabled()).then(|| {
+                let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Instanced Quad Index Buffer"),
+                    size: std::mem::size_of_val(&INSTANCED_QUAD_INDICES) as u64,
+                    usage: wgpu::BufferUsages::INDEX,
+                    mapped_at_creation: true,
+                });
+                index_buffer
+                    .slice(..)
+                    .get_mapped_range_mut()
+                    .copy_from_slice(bytemuck::cast_slice(&INSTANCED_QUAD_INDICES));
+                index_buffer.unmap();
+                InstancedQuadPipelines {
+                    pipeline: create_instanced_shape_pipeline(
+                        &device,
+                        surface_format,
+                        &uniform_bind_group_layout,
+                        &shape_bind_group_layout,
+                        BlendMode::SrcOver,
+                        shape_batch_limits,
+                    ),
+                    pipeline_dst_out: create_instanced_shape_pipeline(
+                        &device,
+                        surface_format,
+                        &uniform_bind_group_layout,
+                        &shape_bind_group_layout,
+                        BlendMode::DstOut,
+                        shape_batch_limits,
+                    ),
+                    index_buffer,
+                }
+            });
 
         let image_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2405,15 +4316,24 @@ impl GpuRenderer {
         });
 
         #[cfg(not(target_arch = "wasm32"))]
-        let shape_buffers =
-            ShapeBatchBuffers::new(&device, &shape_bind_group_layout, shape_batch_limits);
+        let shape_buffers = ShapeBatchBuffers::new(
+            &device,
+            &shape_bind_group_layout,
+            &identity_similarity_buffer,
+            dummy_paint_buffer.as_ref(),
+            shape_batch_limits,
+        );
 
         let image_nearest_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Nearest));
         let image_linear_sampler =
             device.create_sampler(&image_sampler_descriptor(ImageSampling::Linear));
-        let text_glyph_atlas =
-            TextGlyphAtlas::new(&device, &image_bind_group_layout, &image_nearest_sampler);
+        let text_glyph_atlas = TextGlyphAtlas::new(
+            &device,
+            &image_bind_group_layout,
+            &image_nearest_sampler,
+            TEXT_GLYPH_ATLAS_MIN_SIZE,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let image_vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2465,13 +4385,24 @@ impl GpuRenderer {
         Self {
             device,
             queue,
+            renderer_epoch,
+            #[cfg(not(target_arch = "wasm32"))]
+            store_feed_generation,
             surface_format,
             shape_batch_limits,
             pipeline,
             pipeline_dst_out,
+            #[cfg(not(target_arch = "wasm32"))]
+            mesh_pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
+            instanced_quads,
             #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
+            dummy_paint_buffer,
+            identity_similarity_buffer,
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_slots: replay_slot_store,
             image_pipeline,
             image_pipeline_dst_out,
             glyph_atlas_pipeline,
@@ -2538,8 +4469,6 @@ impl GpuRenderer {
             text_line_index_cache: TextLineIndexCache::new(MAX_TEXT_LINE_INDEX_CACHE_ITEMS),
             scratch_shape_data: Vec::new(),
             scratch_gradients: Vec::new(),
-            scratch_vertices: Vec::new(),
-            scratch_indices: Vec::new(),
             scratch_image_vertices: Vec::new(),
             scratch_image_indices: Vec::new(),
             scratch_image_cmds: Vec::new(),
@@ -2562,14 +4491,24 @@ impl GpuRenderer {
                 MAX_SHADOW_SURFACE_CACHE_ITEMS,
             ),
             shadow_surface_cache_bytes: 0,
-            layer_surface_rect_cache: HashMap::new(),
-            layer_surface_requirements_cache: HashMap::new(),
             frame_stats: gpu_stats::FrameStats::default(),
             last_frame_stats: None,
             pending_frame_warmup_frames: 0,
             frame_count: 0,
             gpu_stats_enabled: gpu_stats_enabled(),
             warning_state: RendererWarningState::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_upload_stats: ReplayUploadStats::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_color_patches: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            color_patch_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_ack_confirmations: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_generation_drops: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            retained_bundle_cache: RetainedBundleCache::new(),
         }
     }
 
@@ -2828,61 +4767,6 @@ impl GpuRenderer {
         self.shadow_surface_cache_bytes = self.shadow_surface_cache_bytes.saturating_add(byte_size);
     }
 
-    fn layer_raster_cache_candidate(
-        &mut self,
-        layer: &LayerNode,
-        root_scale: f32,
-        has_backdrop_underlay: bool,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
-    ) -> Option<(LayerRasterCacheKey, Rect)> {
-        let surface_requirements =
-            layer_surface_requirements_cached(layer, &mut self.layer_surface_requirements_cache);
-        let runtime_cache_is_safe = allow_runtime_cache
-            && surface_requirements
-                .surface_requirements
-                .has_isolating_requirement()
-            && !layer
-                .effect()
-                .is_some_and(RenderEffect::contains_runtime_shader);
-        let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
-            || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
-            || runtime_cache_is_safe;
-        if !cache_is_allowed {
-            return None;
-        }
-        if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
-            return None;
-        }
-        // RuntimeShader effects produce different output every frame (animated
-        // uniforms like time). Caching their layer surfaces is
-        // counterproductive: every frame generates a new unique cache key that
-        // fills the LRU with stale textures.
-        if layer.effect().is_some_and(|e| e.contains_runtime_shader()) {
-            return None;
-        }
-
-        let logical_rect = logical_rect_override.unwrap_or_else(|| {
-            estimate_layer_surface_rect_cached(
-                layer,
-                &mut self.layer_surface_rect_cache,
-                &mut self.layer_surface_requirements_cache,
-            )
-        });
-        let pixel_size = surface_target_size(logical_rect, root_scale, self.max_texture_dim());
-        Some((
-            LayerRasterCacheKey::new(
-                layer.node_id,
-                layer.target_content_hash(),
-                layer.effect_hash(),
-                logical_rect,
-                pixel_size,
-                ScaleBucket::from_scale(root_scale),
-            ),
-            logical_rect,
-        ))
-    }
-
     fn supports_render_effect(&self, effect: &RenderEffect) -> bool {
         is_render_effect_supported(effect)
     }
@@ -2897,7 +4781,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
     #[allow(clippy::too_many_arguments)]
     fn render_range_with_layer_events_to_target_recorded(
         &mut self,
-        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -2946,12 +4829,14 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
             for event in &events {
                 if event.z_index > cursor_z {
                     self.render_non_effect_segment(
-                        text_state,
                         &target.view,
                         shapes,
                         images,
                         texts,
                         shadow_draws,
+                        // Windowed scenes never carry retained draws — see
+                        // `build_scene_window`.
+                        &[],
                         draw_ops,
                         cursor_z,
                         event.z_index,
@@ -3007,7 +4892,6 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         }
                         execute_render_effect_layer_to_target(
                             self,
-                            text_state,
                             target,
                             shapes,
                             images,
@@ -3029,12 +4913,12 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
 
             if cursor_z < z_end {
                 self.render_non_effect_segment(
-                    text_state,
                     &target.view,
                     shapes,
                     images,
                     texts,
                     shadow_draws,
+                    &[],
                     draw_ops,
                     cursor_z,
                     z_end,
@@ -3631,49 +5515,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             .insert_cached_layer_surface(key, target, logical_rect)
     }
 
-    fn layer_raster_cache_candidate(
-        &mut self,
-        layer: &LayerNode,
-        root_scale: f32,
-        has_backdrop_underlay: bool,
-        allow_runtime_cache: bool,
-        logical_rect_override: Option<Rect>,
-    ) -> Option<(LayerRasterCacheKey, Rect)> {
-        self.renderer.layer_raster_cache_candidate(
-            layer,
-            root_scale,
-            has_backdrop_underlay,
-            allow_runtime_cache,
-            logical_rect_override,
-        )
-    }
-
-    fn layer_surface_requirements(&mut self, layer: &LayerNode) -> LayerSurfaceRequirements {
-        layer_surface_requirements_cached(
-            layer,
-            &mut self.renderer.layer_surface_requirements_cache,
-        )
-    }
-
-    fn collect_layer_contents_with_translation_context<'a>(
-        &mut self,
-        text_state: &mut TextSystemState,
-        layer: &'a LayerNode,
-        inherited_clip: Option<Rect>,
-        inherited_translated_snap_anchor: Option<SnapAnchor>,
-        translation_context: TranslationRenderContext,
-    ) -> CollectedLayer<'a> {
-        collect_layer_contents_with_translation_context_and_text_layout(
-            layer,
-            text_state,
-            inherited_clip,
-            inherited_translated_snap_anchor,
-            translation_context,
-            &mut self.renderer.layer_surface_rect_cache,
-            &mut self.renderer.layer_surface_requirements_cache,
-        )
-    }
-
     fn clear_target_view_with_load_op(
         &mut self,
         target_view: &wgpu::TextureView,
@@ -3706,12 +5547,12 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -3722,12 +5563,12 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
         self.render_non_effect_segment_with_composites(
-            text_state,
             target_view,
             shapes,
             images,
             texts,
             shadow_draws,
+            retained_draws,
             draw_ops,
             z_start,
             z_end,
@@ -3744,12 +5585,12 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
     #[allow(clippy::too_many_arguments)]
     fn render_non_effect_segment_with_composites(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         z_start: usize,
         z_end: usize,
@@ -3831,7 +5672,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 .iter()
                 .map(|(z_index, composite)| (*z_index, composite.batch_item())),
         );
-        ordered_items.sort_by_key(|(z_index, _)| *z_index);
+        // Z indices are unique — the scene hands every op its own `next_z` — so an
+        // unstable sort cannot reorder anything a stable one wouldn't, and it skips
+        // the stable sort's scratch allocation, paid here once per segment per frame.
+        ordered_items.sort_unstable_by_key(|(z_index, _)| *z_index);
         #[cfg(not(target_arch = "wasm32"))]
         maybe_print_segment_diag(
             z_start..z_end,
@@ -3851,7 +5695,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             Ok(SegmentCommandEncodeOutcome { first_batch: true })
         } else {
             self.renderer.encode_non_effect_segment_commands(
-                text_state,
                 self.recorder,
                 target_view,
                 &ordered_items,
@@ -3861,6 +5704,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 images,
                 texts,
                 shadow_draws,
+                retained_draws,
                 initial_load_op,
                 width,
                 height,
@@ -3877,7 +5721,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 
     fn render_range_with_layer_events_to_target(
         &mut self,
-        text_state: &mut TextSystemState,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
         images: &[ImageDraw],
@@ -3896,7 +5739,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<(), String> {
         self.render_range_with_layer_events_to_target_recorded(
-            text_state,
             target,
             shapes,
             images,
@@ -3918,7 +5760,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 
     fn render_shadow_draw(
         &mut self,
-        text_state: &mut TextSystemState,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
         width: u32,
@@ -3926,7 +5767,6 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         root_scale: f32,
     ) {
         self.renderer.encode_shadow_draw(
-            text_state,
             self.recorder,
             target_view,
             shadow,
@@ -4313,17 +6153,33 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 }
 
 impl GpuRenderer {
-    #[allow(clippy::too_many_arguments)] // Render path needs explicit scene slices and target metadata.
     pub fn render(
         &mut self,
-        text_state: &mut TextSystemState,
         view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
-        root_scale: f32,
+        packet: FramePacket,
+        surface_epoch: u64,
+        returns: &mut RenderReturns,
     ) -> Result<(), String> {
+        // Packet validity gate — BEFORE consume_replay_ops and any
+        // encoding. A packet built against another renderer instance,
+        // another surface configuration, or another viewport is cancelled
+        // whole: its buffers travel back through `returns` for re-queue
+        // and recycling, and nothing of it reaches the GPU.
+        let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
+            Some(CancelReason::RendererEpoch)
+        } else if packet.surface_epoch != surface_epoch {
+            Some(CancelReason::SurfaceEpoch)
+        } else if packet.viewport != (width, height) {
+            Some(CancelReason::Viewport)
+        } else {
+            None
+        };
+        if let Some(reason) = cancel_reason {
+            return Self::cancel_packet(packet, reason, returns);
+        }
+        returns.frame_id = packet.frame_id;
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
         let render_start = Instant::now();
 
@@ -4338,15 +6194,11 @@ impl GpuRenderer {
             self.retained_glyph_uniform_cursor = 0;
         }
 
-        let result = self.render_graph(
-            text_state,
-            view,
-            graph,
-            overlay_graph,
-            width,
-            height,
-            root_scale,
-        );
+        // Producer-side text layout cache size, carried by the packet — the
+        // present call tree holds no text layout state, and no layout runs
+        // between packet build and the stats block below.
+        let text_cache_len = packet.text_cache_len;
+        let result = self.render_graph(view, packet, returns);
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
 
@@ -4366,16 +6218,12 @@ impl GpuRenderer {
                     .saturating_add(WASM_BATCH_POOL_MARGIN),
             );
         }
-        self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
-        if self.layer_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY {
-            self.layer_surface_requirements_cache
-                .shrink_to(RETAINED_LAYER_REQUIREMENTS_CAPACITY);
-        }
         self.staged_uploads
             .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
 
         self.layer_surface_cache.finish_frame(&self.frame_stats);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.retained_bundle_cache.end_frame();
 
         self.frame_stats.offscreen_pool_size.set(
             self.effect_renderer
@@ -4393,9 +6241,7 @@ impl GpuRenderer {
         self.frame_stats
             .image_cache_size
             .set(self.image_texture_cache.len() as u32);
-        self.frame_stats
-            .text_cache_size
-            .set(text_state.text_cache_len() as u32);
+        self.frame_stats.text_cache_size.set(text_cache_len as u32);
         self.effect_renderer
             .merge_and_reset_debug_counters(&self.frame_stats);
         self.frame_graph_executor.reset_upload_allocators();
@@ -4407,6 +6253,9 @@ impl GpuRenderer {
             &mut self.frame_count,
             self.gpu_stats_enabled,
         );
+        if self.gpu_stats_enabled && self.frame_count.is_multiple_of(60) {
+            gpu_stats::print_gpu_memory_report(&self.device, self.frame_count);
+        }
         self.frame_stats.reset();
         let after_stats = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(render_start, after_stats) {
@@ -4416,7 +6265,58 @@ impl GpuRenderer {
                 instant_ms(after_graph, after_stats),
             );
         }
+        if result.is_ok() {
+            // Only a draw that actually ran may report `Presented`; an
+            // errored draw leaves the default `NotRun`.
+            returns.outcome = PresentOutcome::Presented;
+        }
         result
+    }
+
+    /// Refuses a packet whole, before any encoding: every buffer it
+    /// carries travels back through `returns` — the direct scene for the
+    /// producer pool, the unconsumed replay plan for the planner to
+    /// re-queue (its releases name still-live store slots; dropping them
+    /// would leak pool ids forever). A cancel is a protocol outcome, not a
+    /// draw error, so the render call returns `Ok(())`.
+    fn cancel_packet(
+        packet: FramePacket,
+        reason: CancelReason,
+        returns: &mut RenderReturns,
+    ) -> Result<(), String> {
+        let FramePacket {
+            frame_id,
+            viewport: _,
+            renderer_epoch: _,
+            surface_epoch: _,
+            root_scale: _,
+            root,
+            overlay: _,
+            replay,
+            text_cache_len: _,
+        } = packet;
+        match root {
+            PacketRoot::Direct(root) => {
+                // Destructure: the scene buffers return to the producer
+                // pool; the rest of the collected layer drops. A Direct
+                // packet's replay plan came from the planner and must go
+                // back to it unconsumed — a Surface packet only ever
+                // carries the empty default plan, which has nothing to
+                // reclaim.
+                returns.scene = Some(root.scene);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    returns.cancelled_replay = Some(replay);
+                }
+            }
+            PacketRoot::Surface(_) => {}
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = replay;
+        returns.ack = None;
+        returns.frame_id = frame_id;
+        returns.outcome = PresentOutcome::Cancelled(reason);
+        Ok(())
     }
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
@@ -4446,8 +6346,6 @@ impl GpuRenderer {
             image_texture_cache_cap: self.image_texture_cache.cap().get(),
             scratch_shape_data_cap: self.scratch_shape_data.capacity(),
             scratch_gradients_cap: self.scratch_gradients.capacity(),
-            scratch_vertices_cap: self.scratch_vertices.capacity(),
-            scratch_indices_cap: self.scratch_indices.capacity(),
             scratch_image_vertices_cap: self.scratch_image_vertices.capacity(),
             scratch_image_indices_cap: self.scratch_image_indices.capacity(),
             scratch_image_cmds_cap: self.scratch_image_cmds.capacity(),
@@ -4460,24 +6358,24 @@ impl GpuRenderer {
             layer_surface_cache_cap: layer_surface_cache_stats.entries_cap,
             layer_surface_cache_identity_len: layer_surface_cache_stats.identity_len,
             layer_surface_cache_identity_cap: layer_surface_cache_stats.identity_cap,
-            layer_surface_rect_cache_len: self.layer_surface_rect_cache.len(),
-            layer_surface_rect_cache_cap: self.layer_surface_rect_cache.capacity(),
-            layer_surface_requirements_cache_len: self.layer_surface_requirements_cache.len(),
-            layer_surface_requirements_cache_cap: self.layer_surface_requirements_cache.capacity(),
+            // The producer frontend owns the only lowering-memo pair since
+            // step 6b; the present backend contributes nothing.
+            layer_surface_rect_cache_len: 0,
+            layer_surface_rect_cache_cap: 0,
+            layer_surface_requirements_cache_len: 0,
+            layer_surface_requirements_cache_cap: 0,
             layer_cache_seen_this_frame_len: layer_surface_cache_stats.seen_this_frame_len,
             layer_cache_seen_this_frame_cap: layer_surface_cache_stats.seen_this_frame_cap,
         }
     }
 
-    #[allow(clippy::too_many_arguments)] // Mirrors render() call site and scene inputs.
     pub fn render_to_rgba_pixels(
         &mut self,
-        text_state: &mut TextSystemState,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
         width: u32,
         height: u32,
-        root_scale: f32,
+        packet: FramePacket,
+        surface_epoch: u64,
+        returns: &mut RenderReturns,
     ) -> Result<Vec<u8>, String> {
         if width == 0 || height == 0 {
             return Err("Screenshot size must be non-zero".to_string());
@@ -4499,15 +6397,7 @@ impl GpuRenderer {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render(
-            text_state,
-            &output_view,
-            graph,
-            overlay_graph,
-            width,
-            height,
-            root_scale,
-        )?;
+        self.render(&output_view, width, height, packet, surface_epoch, returns)?;
 
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
@@ -4596,16 +6486,11 @@ impl GpuRenderer {
         Ok(pixels)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_graph(
         &mut self,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
-        width: u32,
-        height: u32,
-        root_scale: f32,
+        packet: FramePacket,
+        returns: &mut RenderReturns,
     ) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.queue.clone();
@@ -4621,16 +6506,7 @@ impl GpuRenderer {
                 &[],
                 &[surface],
                 |frame_encoder| {
-                    self.render_graph_recorded(
-                        text_state,
-                        surface_view,
-                        graph,
-                        overlay_graph,
-                        width,
-                        height,
-                        root_scale,
-                        frame_encoder,
-                    )
+                    self.render_graph_recorded(surface_view, packet, returns, frame_encoder)
                 },
             );
             let after_build = Instant::now();
@@ -4664,16 +6540,8 @@ impl GpuRenderer {
                 let mut frame_encoder =
                     executor.begin(&device, &queue, Some("Renderer Frame Encoder"));
                 let initial_pass_count = frame_encoder.recorded_pass_count();
-                let result = self.render_graph_recorded(
-                    text_state,
-                    surface_view,
-                    graph,
-                    overlay_graph,
-                    width,
-                    height,
-                    root_scale,
-                    &mut frame_encoder,
-                );
+                let result =
+                    self.render_graph_recorded(surface_view, packet, returns, &mut frame_encoder);
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -4694,86 +6562,118 @@ impl GpuRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn render_graph_recorded<C: FrameCommandRecorder>(
         &mut self,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
-        overlay_graph: Option<&RenderGraph>,
-        width: u32,
-        height: u32,
-        root_scale: f32,
+        packet: FramePacket,
+        returns: &mut RenderReturns,
         frame_encoder: &mut C,
     ) -> Result<(), String> {
         let recorded_start = Instant::now();
-        self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
-        let direct_root = if root_can_render_directly_cached(
-            &graph.root,
-            &mut self.layer_surface_requirements_cache,
-        ) {
-            let collected = collect_layer_contents_with_translation_context_and_text_layout(
-                &graph.root,
-                text_state,
-                None,
-                None,
-                TranslationRenderContext::default(),
-                &mut self.layer_surface_rect_cache,
-                &mut self.layer_surface_requirements_cache,
-            );
-            if root_direct_scene_events_are_supported(&collected.scene) {
-                direct_root_child_underlays_are_supported(&collected).then_some(collected)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let after_root_collect = Instant::now();
+
+        // Present-side consumption of the packet's replay plan, adjacent to
+        // packet consumption: the store honors the ops just before the
+        // packet renders. Gated on a Direct root — a Surface packet never
+        // touched the planner and carries the empty default plan
+        // (generation 0), which the store must not consume: it would count
+        // a false generation drop. The ack travels back through `returns`
+        // and the producer applies it right after this render call —
+        // equivalent to the in-store drain this replaces, because both
+        // application points sit after this frame's graph build and before
+        // the next collect, which is where the bypass gate and `feed_slots`
+        // are read.
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut packet = packet;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let PacketRoot::Direct(root) = &packet.root {
+            let ops = std::mem::take(&mut packet.replay);
+            let (ack, recycled) =
+                self.consume_replay_ops(ops, &root.scene.shapes, packet.root_scale);
+            returns.ack = Some((ack, recycled));
+        }
+
+        let FramePacket {
+            frame_id,
+            viewport: (width, height),
+            renderer_epoch: _,
+            surface_epoch: _,
+            root_scale,
+            root,
+            overlay,
+            replay: _,
+            text_cache_len: _,
+        } = packet;
 
         let mut backend = RecordingSurfaceBackend {
             renderer: self,
             recorder: frame_encoder,
         };
 
-        if let Some(collected) = direct_root {
-            let direct_render_start = Instant::now();
-            let result = execute_render_root_direct(
-                &mut backend,
-                text_state,
-                surface_view,
-                collected,
-                width,
-                height,
-                root_scale,
-                wgpu::LoadOp::Clear(CLEAR_COLOR),
-            );
-            if result.is_ok() {
-                if let Some(overlay_graph) = overlay_graph {
-                    Self::render_overlay_graph_recorded(
-                        &mut backend,
-                        text_state,
-                        surface_view,
-                        overlay_graph,
-                        width,
-                        height,
-                        root_scale,
-                    )?;
+        let surface_packet = match root {
+            PacketRoot::Direct(root) => {
+                let direct_render_start = Instant::now();
+                let result = match execute_render_root_direct(
+                    &mut backend,
+                    surface_view,
+                    *root,
+                    width,
+                    height,
+                    root_scale,
+                    wgpu::LoadOp::Clear(CLEAR_COLOR),
+                ) {
+                    // Return the packet's scene buffers to the producer pool
+                    // in BOTH arms — for a heavy animated frame they are
+                    // megabytes of Vec, and an errored draw must not leak
+                    // them.
+                    Ok(scene) => {
+                        returns.scene = Some(scene);
+                        Ok(())
+                    }
+                    Err((error, scene)) => {
+                        returns.scene = Some(scene);
+                        Err(error)
+                    }
+                };
+                if result.is_ok() {
+                    if let Some(overlay) = overlay {
+                        Self::render_overlay_packet(
+                            &mut backend,
+                            surface_view,
+                            overlay,
+                            width,
+                            height,
+                            root_scale,
+                        )?;
+                    }
                 }
+                let after_direct_render = Instant::now();
+                if let Some(total_ms) =
+                    should_log_wgpu_render_stage(recorded_start, after_direct_render)
+                {
+                    log::warn!(
+                        "[wgpu-render-stage:recorded-direct-root] frame={frame_id} total_ms={total_ms:.2} render_ms={:.2}",
+                        instant_ms(direct_render_start, after_direct_render),
+                    );
+                }
+                return result;
             }
-            let after_direct_render = Instant::now();
-            if let Some(total_ms) =
-                should_log_wgpu_render_stage(recorded_start, after_direct_render)
-            {
-                log::warn!(
-                    "[wgpu-render-stage:recorded-direct-root] total_ms={total_ms:.2} collect_ms={:.2} render_ms={:.2}",
-                    instant_ms(recorded_start, after_root_collect),
-                    instant_ms(direct_render_start, after_direct_render),
-                );
-            }
-            return result;
-        }
+            PacketRoot::Surface(surface_packet) => surface_packet,
+        };
+        let after_root_collect = Instant::now();
+
+        let RootSurfacePacket {
+            lowered,
+            source,
+            transform_to_parent,
+            node_id,
+            backdrop,
+            graphics_layer,
+            local_bounds,
+            clip_rect,
+            shadow_clip,
+        } = *surface_packet;
+        let mut lowered = lowered;
+        lowered.source = source;
 
         // The root layer's visible area is always the viewport — content
         // outside the screen is invisible regardless of scroll offsets or
@@ -4787,8 +6687,7 @@ impl GpuRenderer {
         };
         let root_surface = execute_render_layer_surface(
             &mut backend,
-            text_state,
-            &graph.root,
+            &mut lowered,
             LayerSurfaceRequest {
                 root_scale,
                 backdrop_underlay: None,
@@ -4799,14 +6698,11 @@ impl GpuRenderer {
                 translation_context: TranslationRenderContext::default(),
             },
         )?;
-        let root_quad = graph
-            .root
-            .transform_to_parent
-            .map_rect(root_surface.logical_rect);
+        let root_quad = transform_to_parent.map_rect(root_surface.logical_rect);
         let root_dest_quad = scaled_quad(root_quad, root_scale);
 
         let needs_root_composite_target =
-            graph.root.backdrop().is_some() || graph.root.graphics_layer.shadow_elevation > 0.0;
+            backdrop.is_some() || graphics_layer.shadow_elevation > 0.0;
 
         if needs_root_composite_target {
             let composite_target = backend.acquire_frame_surface(width, height);
@@ -4815,22 +6711,14 @@ impl GpuRenderer {
                 wgpu::LoadOp::Clear(CLEAR_COLOR),
             );
 
-            if let Some(backdrop) = graph.root.backdrop() {
+            if let Some(backdrop) = &backdrop {
                 execute_apply_backdrop_layer_to_target(
                     &mut backend,
                     &composite_target,
                     &BackdropLayer {
-                        node_id: graph.root.node_id,
-                        rect: quad_bounds(
-                            graph
-                                .root
-                                .transform_to_parent
-                                .map_rect(graph.root.local_bounds),
-                        ),
-                        clip: graph
-                            .root
-                            .clip_rect()
-                            .map(|clip| quad_bounds(graph.root.transform_to_parent.map_rect(clip))),
+                        node_id,
+                        rect: quad_bounds(transform_to_parent.map_rect(local_bounds)),
+                        clip: clip_rect.map(|clip| quad_bounds(transform_to_parent.map_rect(clip))),
                         snap_anchor: None,
                         effect: backdrop.clone(),
                         z_index: 0,
@@ -4844,25 +6732,17 @@ impl GpuRenderer {
             }
 
             let mut root_shadow_scene = CompositorScene::new();
-            let root_shadow_clip = graph
-                .root
-                .shadow_clip
-                .map(|clip| quad_bounds(graph.root.transform_to_parent.map_rect(clip)));
+            let root_shadow_clip =
+                shadow_clip.map(|clip| quad_bounds(transform_to_parent.map_rect(clip)));
             push_layer_shadow(
                 &mut root_shadow_scene,
-                &graph.root.graphics_layer,
-                graph.root.local_bounds,
-                quad_bounds(
-                    graph
-                        .root
-                        .transform_to_parent
-                        .map_rect(graph.root.local_bounds),
-                ),
+                &graphics_layer,
+                local_bounds,
+                quad_bounds(transform_to_parent.map_rect(local_bounds)),
                 root_shadow_clip,
             );
             for shadow in &root_shadow_scene.shadow_draws {
                 backend.render_shadow_draw(
-                    text_state,
                     &composite_target.view,
                     shadow,
                     width,
@@ -4914,12 +6794,11 @@ impl GpuRenderer {
             )?;
         }
         backend.release_layer_surface_target(root_surface.target);
-        if let Some(overlay_graph) = overlay_graph {
-            Self::render_overlay_graph_recorded(
+        if let Some(overlay) = overlay {
+            Self::render_overlay_packet(
                 &mut backend,
-                text_state,
                 surface_view,
-                overlay_graph,
+                overlay,
                 width,
                 height,
                 root_scale,
@@ -4936,49 +6815,39 @@ impl GpuRenderer {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_overlay_graph_recorded<C: FrameCommandRecorder>(
+    /// Renders the producer-lowered dev overlay on top of the frame. The
+    /// packet carries the collected overlay; the backend only validates
+    /// that it stayed directly renderable and draws it.
+    fn render_overlay_packet<C: FrameCommandRecorder>(
         backend: &mut RecordingSurfaceBackend<'_, '_, C>,
-        text_state: &mut TextSystemState,
         surface_view: &wgpu::TextureView,
-        graph: &RenderGraph,
+        overlay: CollectedLayer,
         width: u32,
         height: u32,
         root_scale: f32,
     ) -> Result<(), String> {
-        backend.renderer.layer_surface_rect_cache.clear();
-        backend.renderer.layer_surface_requirements_cache.clear();
-        let collected = collect_layer_contents_with_translation_context_and_text_layout(
-            &graph.root,
-            text_state,
-            None,
-            None,
-            TranslationRenderContext::default(),
-            &mut backend.renderer.layer_surface_rect_cache,
-            &mut backend.renderer.layer_surface_requirements_cache,
-        );
-        if !collected.child_layers.is_empty()
-            || !root_direct_scene_events_are_supported(&collected.scene)
-            || !direct_root_child_underlays_are_supported(&collected)
+        if !overlay.child_layers.is_empty()
+            || !root_direct_scene_events_are_supported(&overlay.scene)
+            || !direct_root_child_underlays_are_supported(&overlay)
         {
             return Err("dev overlay graph must stay directly renderable".to_string());
         }
         execute_render_root_direct(
             backend,
-            text_state,
             surface_view,
-            collected,
+            overlay,
             width,
             height,
             root_scale,
             wgpu::LoadOp::Load,
         )
+        .map(|_overlay_scene| ())
+        .map_err(|(error, _overlay_scene)| error)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn encode_non_effect_segment_commands<C: FrameCommandRecorder>(
         &mut self,
-        text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
@@ -4988,6 +6857,7 @@ impl GpuRenderer {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         initial_load_op: wgpu::LoadOp<wgpu::Color>,
         width: u32,
         height: u32,
@@ -5005,7 +6875,6 @@ impl GpuRenderer {
                         wgpu::LoadOp::Load
                     };
                     let outcome = self.render_segment_draw_chunk(
-                        text_state,
                         frame_encoder,
                         target_view,
                         ordered_items,
@@ -5014,6 +6883,7 @@ impl GpuRenderer {
                         shapes,
                         images,
                         texts,
+                        retained_draws,
                         chunk,
                         width,
                         height,
@@ -5052,7 +6922,6 @@ impl GpuRenderer {
                     }
                     let pass_count_before = frame_encoder.recorded_pass_count();
                     self.encode_shadow_draw(
-                        text_state,
                         frame_encoder,
                         target_view,
                         &shadow_draws[index],
@@ -5081,6 +6950,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: &SegmentDrawChunkPlan,
         width: u32,
         height: u32,
@@ -5110,6 +6980,7 @@ impl GpuRenderer {
                 shapes,
                 images,
                 texts,
+                retained_draws,
                 &partition.chunk,
                 partition.budget,
                 width,
@@ -5142,6 +7013,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: &SegmentDrawChunkPlan,
         budget: NativeSegmentFusionBudget,
         width: u32,
@@ -5195,17 +7067,21 @@ impl GpuRenderer {
             }
             let after_shape_refs = Instant::now();
 
+            let mut direct_shape_uploads = StagedBufferUploads::default();
+            let mut shape_upload_base = 0u64;
             if !shape_refs.is_empty() {
-                let Some(_) = self.prepare_shapes_batch(
+                let Some((_, upload_base)) = self.prepare_shapes_batch_direct(
+                    frame_encoder,
                     shape_refs.iter().copied(),
                     root_scale,
                     viewport,
-                    &mut staged_uploads,
+                    &mut direct_shape_uploads,
                 ) else {
                     return Err(
                         "native fused segment shape preparation produced no draw batch".to_string(),
                     );
                 };
+                shape_upload_base = upload_base;
             }
             let after_shape_prepare = Instant::now();
 
@@ -5229,12 +7105,10 @@ impl GpuRenderer {
                         }
                         let shape_count = end - start;
                         if shape_count > 0 {
-                            let index_start = shape_cursor * 6;
-                            let index_count = shape_count as u32 * 6;
                             fused_batches.push(FusedSegmentBatch::Shape {
                                 batch: PreparedShapeBatch {
-                                    index_start,
-                                    index_count,
+                                    vertex_start: shape_cursor * 6,
+                                    vertex_count: shape_count as u32 * 6,
                                 },
                                 blend_mode,
                             });
@@ -5339,6 +7213,34 @@ impl GpuRenderer {
                             });
                         }
                     }
+                    SegmentBatchPlan::Retained { start, end } => {
+                        self.stage_replay_patches(&mut staged_uploads);
+                        for (_, item) in &ordered_items[start..end] {
+                            let SegmentDrawItem::Retained(index) = item else {
+                                return Err(format!(
+                                    "retained batch contains non-retained draw item: {item:?}"
+                                ));
+                            };
+                            let retained = retained_draws.get(*index).ok_or_else(|| {
+                                format!("retained draw index {index} out of bounds")
+                            })?;
+                            if (*index as u32) < MAX_REPLAY_SLOTS
+                                && self.replay_slots.slots.contains_key(&retained.slot)
+                            {
+                                let transform = retained.transform.with_retained_paint();
+                                staged_uploads.stage_at(
+                                    UploadTarget::ReplayTransform,
+                                    *index as u64 * REPLAY_TRANSFORM_STRIDE,
+                                    bytemuck::bytes_of(&transform),
+                                );
+                            }
+                        }
+                        if end > start {
+                            fused_batches.push(FusedSegmentBatch::Retained {
+                                item_range: start..end,
+                            });
+                        }
+                    }
                 }
             }
             let after_batch_prepare = Instant::now();
@@ -5412,11 +7314,22 @@ impl GpuRenderer {
                 });
             }
 
+            // The direct shape copies must be recorded before the staged
+            // flush: its capacity check may replace `upload_buffer`, and the
+            // shape payload was written into the buffer that existed at
+            // prepare time. Recording first binds the copies to that buffer.
+            self.flush_staged_uploads_at(
+                frame_encoder.encoder(),
+                &direct_shape_uploads,
+                shape_upload_base,
+            );
             let upload_offset =
                 frame_encoder.allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
             self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
             let after_upload = Instant::now();
 
+            let use_retained_bundles = retained_bundles_enabled();
+            let mut retained_encode_ms = 0.0_f64;
             {
                 let mut render_pass =
                     frame_encoder
@@ -5508,13 +7421,46 @@ impl GpuRenderer {
                                 );
                             }
                         }
+                        FusedSegmentBatch::Retained { item_range } => {
+                            // Each Retained arm is one MAXIMAL consecutive
+                            // retained stretch — the planner groups adjacent
+                            // retained items into a single batch — so caching
+                            // per arm never flattens across the dynamic
+                            // batches interleaved at their z positions.
+                            let retained_start = Instant::now();
+                            if use_retained_bundles {
+                                self.draw_retained_stretch_bundled(
+                                    &mut render_pass,
+                                    ordered_items,
+                                    retained_draws,
+                                    item_range.clone(),
+                                    width,
+                                    height,
+                                );
+                            } else {
+                                for (_, item) in &ordered_items[item_range.clone()] {
+                                    if let SegmentDrawItem::Retained(index) = item {
+                                        if let Some(retained) = retained_draws.get(*index) {
+                                            self.draw_retained_batch(
+                                                &mut render_pass,
+                                                retained,
+                                                *index,
+                                                width,
+                                                height,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            retained_encode_ms += instant_ms(retained_start, Instant::now());
+                        }
                     }
                 }
             }
             let after_pass = Instant::now();
             if let Some(total_ms) = should_log_wgpu_render_stage(partition_start, after_pass) {
                 log::warn!(
-                    "[wgpu-render-stage:fused-segment] total_ms={total_ms:.2} shape_refs_ms={:.2} shape_prepare_ms={:.2} batch_prepare_ms={:.2} composite_prepare_ms={:.2} upload_ms={:.2} pass_ms={:.2} batches={} shapes={} image_cmds={} glyph_cmds={} staged_bytes={}",
+                    "[wgpu-render-stage:fused-segment] total_ms={total_ms:.2} shape_refs_ms={:.2} shape_prepare_ms={:.2} batch_prepare_ms={:.2} composite_prepare_ms={:.2} upload_ms={:.2} pass_ms={:.2} retained_encode_ms={retained_encode_ms:.3} batches={} shapes={} image_cmds={} glyph_cmds={} staged_bytes={}",
                     instant_ms(partition_start, after_shape_refs),
                     instant_ms(after_shape_refs, after_shape_prepare),
                     instant_ms(after_shape_prepare, after_batch_prepare),
@@ -5546,7 +7492,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn render_segment_draw_chunk<C: FrameCommandRecorder>(
         &mut self,
-        _text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         ordered_items: &[(usize, SegmentDrawItem)],
@@ -5555,6 +7500,7 @@ impl GpuRenderer {
         shapes: &[DrawShape],
         images: &[ImageDraw],
         texts: &[TextDraw],
+        retained_draws: &[RetainedDraw],
         chunk: SegmentDrawChunkPlan,
         width: u32,
         height: u32,
@@ -5571,6 +7517,7 @@ impl GpuRenderer {
             shapes,
             images,
             texts,
+            retained_draws,
             &chunk,
             width,
             height,
@@ -5908,6 +7855,89 @@ impl GpuRenderer {
                         rendered_any = true;
                         next_load_op = wgpu::LoadOp::Load;
                     }
+                    SegmentBatchPlan::Retained { start, end } => {
+                        // Reached only when native fusion declined the chunk;
+                        // retained batches exist on storage-mode native
+                        // devices, where fusion always accepts, but the arm
+                        // stays a real draw so that assumption is not load-
+                        // bearing for correctness. Deliberately direct encode
+                        // — retained bundle caching lives in the fused path
+                        // only; this fallback stays the simple reference.
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let _ = (start, end);
+                            return Err("retained shape batches are native-only".to_string());
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            self.stage_replay_patches(&mut staged_uploads);
+                            for (_, item) in &ordered_items[start..end] {
+                                let SegmentDrawItem::Retained(index) = item else {
+                                    return Err(format!(
+                                        "retained batch contains non-retained draw item: {item:?}"
+                                    ));
+                                };
+                                let retained = retained_draws.get(*index).ok_or_else(|| {
+                                    format!("retained draw index {index} out of bounds")
+                                })?;
+                                if (*index as u32) < MAX_REPLAY_SLOTS
+                                    && self.replay_slots.slots.contains_key(&retained.slot)
+                                {
+                                    let transform = retained.transform.with_retained_paint();
+                                    staged_uploads.stage_at(
+                                        UploadTarget::ReplayTransform,
+                                        *index as u64 * REPLAY_TRANSFORM_STRIDE,
+                                        bytemuck::bytes_of(&transform),
+                                    );
+                                }
+                            }
+                            let upload_offset = frame_encoder
+                                .allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
+                            self.flush_staged_uploads_at(
+                                frame_encoder.encoder(),
+                                &staged_uploads,
+                                upload_offset,
+                            );
+                            {
+                                let mut render_pass = frame_encoder.encoder().begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("Segment Retained Pass"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: target_view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: next_load_op,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    },
+                                );
+                                for (_, item) in &ordered_items[start..end] {
+                                    if let SegmentDrawItem::Retained(index) = item {
+                                        if let Some(retained) = retained_draws.get(*index) {
+                                            self.draw_retained_batch(
+                                                &mut render_pass,
+                                                retained,
+                                                *index,
+                                                width,
+                                                height,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            pass_count = pass_count.saturating_add(1);
+                            rendered_any = true;
+                            next_load_op = wgpu::LoadOp::Load;
+                        }
+                    }
                 }
             }
             Ok(SegmentRenderOutcome {
@@ -6039,6 +8069,8 @@ impl GpuRenderer {
             self.wasm_shape_batches.push(ShapeBatchBuffers::new(
                 &self.device,
                 &self.shape_bind_group_layout,
+                &self.identity_similarity_buffer,
+                self.dummy_paint_buffer.as_ref(),
                 self.shape_batch_limits,
             ));
         }
@@ -6138,13 +8170,20 @@ impl GpuRenderer {
             for copy in &staged_uploads.copies {
                 let target_buffer = match copy.target {
                     UploadTarget::Uniform => &self.uniform_buffer,
-                    UploadTarget::ShapeVertex => &self.shape_buffers.vertex_buffer,
-                    UploadTarget::ShapeIndex => &self.shape_buffers.index_buffer,
                     UploadTarget::ShapeData => &self.shape_buffers.shape_buffer,
                     UploadTarget::ShapeGradient => &self.shape_buffers.gradient_buffer,
                     UploadTarget::ImageVertex => &self.image_vertex_buffer,
                     UploadTarget::ImageIndex => &self.image_index_buffer,
                     UploadTarget::RetainedGlyphUniform => &self.retained_glyph_uniform_buffer,
+                    UploadTarget::ReplayTransform => &self.replay_slots.transform_buffer,
+                    UploadTarget::ReplayPaintData(slot) => {
+                        // A slot released between staging and flush has
+                        // nothing left to patch.
+                        let Some(entry) = self.replay_slots.slots.get(&slot) else {
+                            continue;
+                        };
+                        &entry.paint_buffer
+                    }
                 };
                 encoder.copy_buffer_to_buffer(
                     &self.upload_buffer,
@@ -6160,7 +8199,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     fn encode_shadow_draw<C: FrameCommandRecorder>(
         &mut self,
-        _text_state: &mut TextSystemState,
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         shadow: &ShadowDraw,
@@ -6557,7 +8595,10 @@ impl GpuRenderer {
                 offset: viewport_offset,
             };
             let Some(prepared_shape) = self.prepare_shapes_batch(
-                shapes[start..end].iter().map(|(shape, _blend_mode)| shape),
+                shapes[start..end]
+                    .iter()
+                    .map(|(shape, _blend_mode)| shape)
+                    .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
                 root_scale,
                 viewport,
                 &mut staged_uploads,
@@ -6791,277 +8832,55 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         let _ = staged_uploads;
 
-        // Build shape data for this subset
-        self.scratch_shape_data.clear();
-        self.scratch_gradients.clear();
-        self.scratch_vertices.clear();
-        self.scratch_indices.clear();
-
-        for (idx, shape) in layer_shapes
-            .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale))
+        // Build shape data for this subset. Callers hand in only shapes visible in
+        // `viewport`: the segment paths culled at collect time, and the layer and
+        // shadow-source paths filter at the call site. Re-checking here would run
+        // the same quad math a second time on every shape of every frame.
+        let shape_refs: Vec<&DrawShape> = layer_shapes
             .take(self.shape_batch_limits.max_shapes_per_batch)
-            .enumerate()
-        {
-            let snap_delta = shape
-                .snap_anchor
-                .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
-                .unwrap_or_default();
-            let local_rect = shape.local_rect.translate(snap_delta.x, snap_delta.y);
-            let quad = translate_quad(shape.quad, snap_delta);
-            let clip = shape.clip;
-            let canonicalize = shape.snap_anchor.is_some();
-            let device_local_rect = if canonicalize {
-                canonicalized_scaled_rect(local_rect, root_scale)
-            } else {
-                Rect {
-                    x: local_rect.x * root_scale,
-                    y: local_rect.y * root_scale,
-                    width: local_rect.width * root_scale,
-                    height: local_rect.height * root_scale,
-                }
-            };
-            let device_quad = if canonicalize {
-                canonicalized_scaled_quad(quad, root_scale)
-            } else {
-                scaled_quad(quad, root_scale)
-            };
-            let canonicalize_brush_coordinate = |value| {
-                if canonicalize {
-                    canonicalize_device_coordinate(value)
-                } else {
-                    value
-                }
-            };
-
-            // Clip rect (scaled to physical pixels)
-            let clip_rect = if let Some(clip) = clip {
-                let device_clip = if canonicalize {
-                    canonicalized_scaled_rect(clip, root_scale)
-                } else {
-                    Rect {
-                        x: clip.x * root_scale,
-                        y: clip.y * root_scale,
-                        width: clip.width * root_scale,
-                        height: clip.height * root_scale,
-                    }
-                };
-                [
-                    device_clip.x,
-                    device_clip.y,
-                    device_clip.width,
-                    device_clip.height,
-                ]
-            } else {
-                [0.0, 0.0, 0.0, 0.0]
-            };
-
-            // Gradient parameters
-            let mut gradient_params = [0.0f32; 4];
-            let mut push_gradient_entries = |colors: &[Color], stops: Option<&[f32]>| {
-                let start = self.scratch_gradients.len() as u32;
-                let count = colors.len();
-                let explicit_stops = stops.filter(|values| values.len() == count);
-                for (index, color) in colors.iter().enumerate() {
-                    let position =
-                        explicit_stops
-                            .map(|values| values[index])
-                            .unwrap_or_else(|| {
-                                if count <= 1 {
-                                    0.0
-                                } else {
-                                    index as f32 / (count - 1) as f32
-                                }
-                            });
-                    self.scratch_gradients.push(GradientStop {
-                        color: [color.r(), color.g(), color.b(), color.a()],
-                        position: [position, 0.0, 0.0, 0.0],
-                    });
-                }
-                (start, count as u32)
-            };
-            let (brush_type, gradient_start, gradient_count, gradient_tile_mode) = match &shape
-                .brush
-            {
-                Brush::Solid(_) => (0u32, 0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
-                Brush::LinearGradient {
-                    colors,
-                    stops,
-                    start,
-                    end,
-                    tile_mode,
-                } => {
-                    let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
-                    gradient_params = [
-                        canonicalize_brush_coordinate(resolve_gradient_point(
-                            device_local_rect.x,
-                            device_local_rect.width,
-                            start.x * root_scale,
-                        )),
-                        canonicalize_brush_coordinate(resolve_gradient_point(
-                            device_local_rect.y,
-                            device_local_rect.height,
-                            start.y * root_scale,
-                        )),
-                        canonicalize_brush_coordinate(resolve_gradient_point(
-                            device_local_rect.x,
-                            device_local_rect.width,
-                            end.x * root_scale,
-                        )),
-                        canonicalize_brush_coordinate(resolve_gradient_point(
-                            device_local_rect.y,
-                            device_local_rect.height,
-                            end.y * root_scale,
-                        )),
-                    ];
-                    (1u32, start_idx, count, gradient_tile_mode_value(*tile_mode))
-                }
-                Brush::RadialGradient {
-                    colors,
-                    stops,
-                    center,
-                    radius,
-                    tile_mode,
-                } => {
-                    let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
-                    gradient_params = [
-                        canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                        canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                        (radius * root_scale).max(f32::EPSILON),
-                        0.0,
-                    ];
-                    (2u32, start_idx, count, gradient_tile_mode_value(*tile_mode))
-                }
-                Brush::SweepGradient {
-                    colors,
-                    stops,
-                    center,
-                } => {
-                    let (start_idx, count) = push_gradient_entries(colors, stops.as_deref());
-                    gradient_params = [
-                        canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                        canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                        0.0,
-                        0.0,
-                    ];
-                    (
-                        3u32,
-                        start_idx,
-                        count,
-                        gradient_tile_mode_value(TileMode::Clamp),
-                    )
-                }
-            };
-
-            let radii = if let Some(rounded) = shape.shape {
-                let resolved = rounded.resolve(local_rect.width, local_rect.height);
-                [
-                    resolved.top_left * root_scale,
-                    resolved.top_right * root_scale,
-                    resolved.bottom_left * root_scale,
-                    resolved.bottom_right * root_scale,
-                ]
-            } else {
-                [0.0, 0.0, 0.0, 0.0]
-            };
-
-            let device_rect = [
-                device_local_rect.x,
-                device_local_rect.y,
-                device_local_rect.width,
-                device_local_rect.height,
-            ];
-
-            self.scratch_shape_data.push(ShapeData {
-                rect: device_rect,
-                radii,
-                gradient_params,
-                clip_rect,
-                brush_type,
-                gradient_start,
-                gradient_count,
-                gradient_tile_mode,
-            });
-
-            let base_vertex = (idx * 4) as u32;
-            let color = match &shape.brush {
-                Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
-                Brush::LinearGradient { colors, .. } => {
-                    let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                    [first.r(), first.g(), first.b(), first.a()]
-                }
-                Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
-                    let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-                    [first.r(), first.g(), first.b(), first.a()]
-                }
-            };
-
-            let vertices = device_quad;
-
-            self.scratch_vertices.extend_from_slice(&[
-                Vertex {
-                    position: vertices[0],
-                    color,
-                    uv: [0.0, 0.0],
-                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
-                },
-                Vertex {
-                    position: vertices[1],
-                    color,
-                    uv: [1.0, 0.0],
-                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
-                },
-                Vertex {
-                    position: vertices[2],
-                    color,
-                    uv: [0.0, 1.0],
-                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
-                },
-                Vertex {
-                    position: vertices[3],
-                    color,
-                    uv: [1.0, 1.0],
-                    uv_bounds: [0.0, 0.0, 1.0, 1.0],
-                },
-            ]);
-
-            self.scratch_indices.extend_from_slice(&[
-                base_vertex,
-                base_vertex + 1,
-                base_vertex + 2,
-                base_vertex + 2,
-                base_vertex + 1,
-                base_vertex + 3,
-            ]);
-        }
-
-        if self.scratch_vertices.is_empty() {
-            return None;
-        }
-
-        let shape_count = self.scratch_shape_data.len();
+            .collect();
+        let shape_count = shape_refs.len();
         if shape_count == 0 {
             return None;
         }
+
+        // Per-shape gradient spans as a prefix sum, so every output slot is
+        // known before conversion starts and the shapes can convert in
+        // parallel into disjoint sub-slices.
+        let mut gradient_offsets: Vec<u32> = Vec::with_capacity(shape_count + 1);
+        let mut total_gradient_stops = 0u32;
+        gradient_offsets.push(0);
+        for shape in &shape_refs {
+            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            gradient_offsets.push(total_gradient_stops);
+        }
+
+        self.scratch_shape_data.clear();
+        self.scratch_shape_data
+            .resize(shape_count, ShapeData::zeroed());
+        self.scratch_gradients.clear();
+        self.scratch_gradients
+            .resize(total_gradient_stops as usize, GradientStop::zeroed());
+
+        convert_shapes_into_outputs(
+            &shape_refs,
+            &gradient_offsets,
+            root_scale,
+            &mut self.scratch_shape_data,
+            &mut self.scratch_gradients,
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.shape_buffers.ensure_capacity(
                 &self.device,
                 &self.shape_bind_group_layout,
-                shape_count * 4,
-                shape_count * 6,
+                &self.identity_similarity_buffer,
+                self.dummy_paint_buffer.as_ref(),
                 shape_count,
                 self.scratch_gradients.len().max(1),
             );
             self.stage_viewport_uniforms(staged_uploads, viewport);
-            staged_uploads.stage(
-                UploadTarget::ShapeVertex,
-                bytemuck::cast_slice(&self.scratch_vertices),
-            );
-            staged_uploads.stage(
-                UploadTarget::ShapeIndex,
-                bytemuck::cast_slice(&self.scratch_indices),
-            );
             staged_uploads.stage(
                 UploadTarget::ShapeData,
                 bytemuck::cast_slice(&self.scratch_shape_data),
@@ -7082,21 +8901,13 @@ impl GpuRenderer {
                 buffers.ensure_capacity(
                     &self.device,
                     &self.shape_bind_group_layout,
-                    shape_count * 4,
-                    shape_count * 6,
+                    &self.identity_similarity_buffer,
+                    self.dummy_paint_buffer.as_ref(),
                     shape_count,
                     self.scratch_gradients.len().max(1),
                 );
             }
             let buffers = &self.wasm_shape_batches[slot];
-            self.write_wasm_buffer(
-                &buffers.vertex_buffer,
-                bytemuck::cast_slice(&self.scratch_vertices),
-            );
-            self.write_wasm_buffer(
-                &buffers.index_buffer,
-                bytemuck::cast_slice(&self.scratch_indices),
-            );
             self.write_wasm_buffer(
                 &buffers.shape_buffer,
                 bytemuck::cast_slice(&self.scratch_shape_data),
@@ -7114,13 +8925,893 @@ impl GpuRenderer {
         let uniform_slot = self.prepare_wasm_viewport_uniforms(viewport);
 
         Some(PreparedShapeBatch {
-            index_start: 0,
-            index_count: shape_count as u32 * 6,
+            vertex_start: 0,
+            vertex_count: shape_count as u32 * 6,
             #[cfg(target_arch = "wasm32")]
             shape_slot,
             #[cfg(target_arch = "wasm32")]
             uniform_slot,
         })
+    }
+
+    /// Like [`Self::prepare_shapes_batch`], but converts shapes straight into
+    /// mapped regions of the frame upload buffer instead of scratch vectors —
+    /// one CPU pass over the data instead of three (convert, stage, upload).
+    /// Returns the prepared batch and the upload-buffer base offset to pass
+    /// to `flush_staged_uploads_at`; the GPU copies are recorded into
+    /// `staged_uploads` while its byte blob stays empty.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_shapes_batch_direct<'a, I, C: FrameCommandRecorder>(
+        &mut self,
+        frame_encoder: &mut C,
+        layer_shapes: I,
+        root_scale: f32,
+        viewport: ViewportUniformParams,
+        staged_uploads: &mut StagedBufferUploads,
+    ) -> Option<(PreparedShapeBatch, u64)>
+    where
+        I: Iterator<Item = &'a DrawShape>,
+    {
+        let shape_refs: Vec<&DrawShape> = layer_shapes
+            .take(self.shape_batch_limits.max_shapes_per_batch)
+            .collect();
+        let shape_count = shape_refs.len();
+        if shape_count == 0 {
+            return None;
+        }
+
+        let mut gradient_offsets: Vec<u32> = Vec::with_capacity(shape_count + 1);
+        let mut total_gradient_stops = 0u32;
+        gradient_offsets.push(0);
+        for shape in &shape_refs {
+            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            gradient_offsets.push(total_gradient_stops);
+        }
+
+        self.shape_buffers.ensure_capacity(
+            &self.device,
+            &self.shape_bind_group_layout,
+            &self.identity_similarity_buffer,
+            self.dummy_paint_buffer.as_ref(),
+            shape_count,
+            (total_gradient_stops as usize).max(1),
+        );
+
+        self.scratch_shape_data.clear();
+        self.scratch_shape_data
+            .resize(shape_count, ShapeData::zeroed());
+        self.scratch_gradients.clear();
+        self.scratch_gradients
+            .resize(total_gradient_stops as usize, GradientStop::zeroed());
+        convert_shapes_into_outputs(
+            &shape_refs,
+            &gradient_offsets,
+            root_scale,
+            &mut self.scratch_shape_data,
+            &mut self.scratch_gradients,
+        );
+
+        // Region layout inside the frame upload buffer. Every element type is
+        // f32/u32-based, so all lengths are multiples of
+        // `COPY_BUFFER_ALIGNMENT` and back-to-back packing keeps each offset
+        // copy-aligned. Writing each scratch slice straight into the upload
+        // buffer skips the intermediate staged-bytes blob (one fewer CPU pass
+        // over the batch payload).
+        let uniform_len = std::mem::size_of::<Uniforms>() as u64;
+        let shape_len = (shape_count * std::mem::size_of::<ShapeData>()) as u64;
+        let gradient_len = total_gradient_stops as u64 * std::mem::size_of::<GradientStop>() as u64;
+        let total_len = uniform_len + shape_len + gradient_len;
+        let upload_base = frame_encoder.allocate_staged_upload_bytes(total_len);
+        self.ensure_upload_buffer_capacity(upload_base + total_len);
+
+        let shape_off = uniform_len;
+        let gradient_off = shape_off + shape_len;
+
+        let uniforms = Self::viewport_uniforms(viewport);
+        let mut upload_stats = self.frame_graph_executor.upload_buffer(
+            &self.queue,
+            &self.upload_buffer,
+            upload_base,
+            bytemuck::bytes_of(&uniforms),
+        );
+        upload_stats.upload_bytes += self
+            .frame_graph_executor
+            .upload_buffer(
+                &self.queue,
+                &self.upload_buffer,
+                upload_base + shape_off,
+                bytemuck::cast_slice(&self.scratch_shape_data),
+            )
+            .upload_bytes;
+        if !self.scratch_gradients.is_empty() {
+            upload_stats.upload_bytes += self
+                .frame_graph_executor
+                .upload_buffer(
+                    &self.queue,
+                    &self.upload_buffer,
+                    upload_base + gradient_off,
+                    bytemuck::cast_slice(&self.scratch_gradients),
+                )
+                .upload_bytes;
+        }
+        self.frame_stats.record_command_stats(upload_stats);
+
+        staged_uploads.record_upload_copy(UploadTarget::Uniform, 0, 0, uniform_len);
+        staged_uploads.record_upload_copy(UploadTarget::ShapeData, shape_off, 0, shape_len);
+        staged_uploads.record_upload_copy(
+            UploadTarget::ShapeGradient,
+            gradient_off,
+            0,
+            gradient_len,
+        );
+
+        Some((
+            PreparedShapeBatch {
+                vertex_start: 0,
+                vertex_count: shape_count as u32 * 6,
+            },
+            upload_base,
+        ))
+    }
+
+    /// Whether retained replay batches can exist on this device: they bind
+    /// unsized buffers, so they ride the storage-buffer batch mode only.
+    /// Always `false` on wasm, which has no retained replay path — the
+    /// method exists on both arches so the packet producer has one
+    /// architecture.
+    pub(crate) fn replay_supported(&self) -> bool {
+        // Deliberately not conditioned on free slot ids: an exhausted pool
+        // only means new captures fail (handled per capture), while flipping
+        // this bit would retire every live feed slot.
+        #[cfg(target_arch = "wasm32")]
+        {
+            false
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.shape_batch_limits.storage
+        }
+    }
+
+    /// Return the planner-drained ack confirmations buffer (capacity
+    /// intact) to the store after the producer applied a frame's
+    /// [`crate::frame_packet::ReplayAck`] — the ack channel's half of the
+    /// P4b no-allocation contract, closed by the caller now that ack
+    /// application lives producer-side. No-op on wasm.
+    pub(crate) fn restore_replay_ack_confirmations(
+        &mut self,
+        confirmations: Vec<crate::frame_packet::ReplayConfirmation>,
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.replay_ack_confirmations = confirmations;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = confirmations;
+    }
+
+    /// Present-side consumption of one frame's [`ReplayFrameOps`]: frees
+    /// the plan's releases, then honors its capture requests against the
+    /// scene they were recorded for, answering with a [`ReplayAck`] of
+    /// (identity, gpu slot) confirmations plus the batch's emptied buffers
+    /// for recycling. This is the store half of the split — it touches NO
+    /// planner state: `feed_slots`, confirmation stamping, displaced-slot
+    /// release, and age eviction all live in the planner
+    /// (`take_frame_ops`/`apply_ack`).
+    ///
+    /// Ordering is what makes slot release safe: a slot the plan releases
+    /// is never referenced by a retained op of the same frame (misses
+    /// release before their op would have been pushed, and rebuild frames
+    /// release at flush start), so freeing it here — before any encoding —
+    /// cannot orphan a draw.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn consume_replay_ops(
+        &mut self,
+        mut ops: crate::frame_packet::ReplayFrameOps,
+        shapes: &[DrawShape],
+        root_scale: f32,
+    ) -> (
+        crate::frame_packet::ReplayAck,
+        crate::frame_packet::ReplayFrameOps,
+    ) {
+        if ops.generation < self.store_feed_generation {
+            // Fail-closed: ops planned under an OLDER slot universe name
+            // slots this store does not hold. Drop the batch whole —
+            // captures unconfirmed self-heal (the planner never serves
+            // them), and stale releases must not free live ids.
+            // Synchronously impossible today; structural for the split.
+            self.replay_generation_drops += 1;
+            log::warn!(
+                "[command-feed] dropping replay ops of generation {} against store \
+                 generation {} ({} captures, {} patches, {} releases; lifetime drops {})",
+                ops.generation,
+                self.store_feed_generation,
+                ops.captures.len(),
+                ops.color_patches.len(),
+                ops.releases.len(),
+                self.replay_generation_drops,
+            );
+            ops.captures.clear();
+            ops.color_patches.clear();
+            ops.releases.clear();
+            return (
+                crate::frame_packet::ReplayAck {
+                    generation: self.store_feed_generation,
+                    confirmations: Vec::new(),
+                },
+                ops,
+            );
+        }
+        if ops.generation > self.store_feed_generation {
+            // Adopt forward: a producer-side bump (scale change,
+            // `retire_feed`) delivers its whole retirement — the releases
+            // for every retired slot — THROUGH this very batch, so a
+            // higher generation is the new universe arriving, not a stale
+            // one. The store follows the producer's authority; it never
+            // reads the producer's thread-local.
+            self.store_feed_generation = ops.generation;
+        }
+        let generation = ops.generation;
+        // Queued releases free first, so their buffers are available before
+        // this frame's captures ask.
+        for slot in ops.releases.drain(..) {
+            self.release_replay_slot(slot);
+        }
+        // `take` leaves `Vec::new()` behind (no allocation); the render
+        // loop restores the vec after the planner drains the ack.
+        let mut confirmations = std::mem::take(&mut self.replay_ack_confirmations);
+        debug_assert!(confirmations.is_empty());
+        for capture in ops.captures.drain(..) {
+            if capture.frame != ops.frame {
+                // Defensive: a capture that outlived its frame references
+                // shape indices of a scene that never rendered; honoring it
+                // against THIS frame's shapes would retain wrong content
+                // under a confirmed identity. Categorically drop it. Should
+                // never fire now that ops travel inside the frame's own
+                // packet.
+                log::warn!(
+                    "[command-feed] dropping stale capture for slot {} of {:?} \
+                     (queued frame {}, ops frame {})",
+                    capture.key.1,
+                    capture.key.0,
+                    capture.frame,
+                    ops.frame,
+                );
+                continue;
+            }
+            let end = capture.shape_start + capture.shape_count;
+            let Some(slice) = shapes.get(capture.shape_start..end) else {
+                continue;
+            };
+            let refs: Vec<&DrawShape> = slice.iter().collect();
+            let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
+                continue;
+            };
+            confirmations.push((capture.key, gpu_slot));
+        }
+        // Park the frame's recolor patches for the retained prepare arms
+        // (`stage_replay_patches`); the vec swapped out is last frame's,
+        // already drained empty, and returns to the producer with the ack.
+        // The defensive clear only bites when no prepare arm ran last
+        // frame (aborted render): those patches targeted a frame that
+        // never encoded, and their spans re-queue fresh recolors each
+        // served frame.
+        self.replay_color_patches.clear();
+        std::mem::swap(&mut self.replay_color_patches, &mut ops.color_patches);
+        (
+            crate::frame_packet::ReplayAck {
+                generation,
+                confirmations,
+            },
+            ops,
+        )
+    }
+
+    /// Test/diagnostic view of the store's lifetime count of replay-ops
+    /// batches dropped whole by the generation check — the consume gate's
+    /// proof that Surface frames (default plans, generation 0) are never
+    /// fed to the store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_generation_drops(&self) -> u64 {
+        self.replay_generation_drops
+    }
+
+    /// Test hook for the message protocol: runs one planner→store→planner
+    /// replay cycle outside a frame, with the batch stamped
+    /// `store_feed_generation + generation_skew`, and returns how many
+    /// captures the store confirmed. A skew that lands BELOW the store's
+    /// generation manufactures the fail-closed drop; a skew above it
+    /// exercises adopt-forward. Both are synchronously impossible through
+    /// the public render path today.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
+        let generation = self.store_feed_generation.wrapping_add(generation_skew);
+        let ops = crate::shape_replay::SHAPE_REPLAY
+            .with(|state| state.borrow_mut().take_frame_ops(generation));
+        let (ack, recycled) = self.consume_replay_ops(ops, &[], 1.0);
+        let confirmed = ack.confirmations.len();
+        self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
+            .with(|state| state.borrow_mut().apply_ack(ack, recycled));
+        confirmed
+    }
+
+    /// Stages every queued replay recolor patch. Feed recolors are always
+    /// solid, so every patch rewrites the shape's 16-byte record in the
+    /// slot's paint buffer; the captured `ShapeData` itself is immutable, so
+    /// a recolored frame uploads colors, not geometry. Runs in the retained
+    /// prepare arms so the writes land in the same staged-upload flush that
+    /// carries the frame's transforms; draining is idempotent across arms.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stage_replay_patches(&mut self, staged_uploads: &mut StagedBufferUploads) {
+        // Capacity-retaining drain: swap the frame's parked patch buffer
+        // (see `consume_replay_ops`) against the scratch arena instead of
+        // `mem::take`, so both keep their high-water capacity across
+        // frames. The scratch is cleared before every return, which
+        // preserves drain idempotence across the retained prepare arms: a
+        // later drain in the same frame swaps one empty-with-capacity
+        // arena for another and stages nothing.
+        std::mem::swap(
+            &mut self.replay_color_patches,
+            &mut self.color_patch_scratch,
+        );
+        let total_patches = self.color_patch_scratch.len();
+        if total_patches == 0 {
+            self.replay_upload_stats.note_frame(0, 0, 0, 0, 0);
+            return;
+        }
+
+        // Patches land in the slot's CPU mirror and upload as one contiguous
+        // span per slot. Uploading each patch individually would record one
+        // copy command per patch, and MEGA's twinkle field recolors ~1.7k
+        // dots a frame — that many commands stall a mobile GPU for longer
+        // than the spans' untouched bytes ever cost.
+        #[derive(Clone, Copy)]
+        struct DirtySpan {
+            paint_min: u32,
+            paint_max: u32,
+        }
+        const CLEAN: DirtySpan = DirtySpan {
+            paint_min: u32::MAX,
+            paint_max: 0,
+        };
+        let mut dirty: std::collections::HashMap<
+            u32,
+            DirtySpan,
+            cranpose_ui_graphics::FxBuildHasher,
+        > = std::collections::HashMap::default();
+
+        // One bare 16-byte write into the slot's paint mirror per patch.
+        for patch in &self.color_patch_scratch {
+            let Some(slot) = self.replay_slots.slots.get_mut(&patch.slot) else {
+                continue;
+            };
+            let Some(paint) = slot.paint_mirror.get_mut(patch.shape_index as usize) else {
+                continue;
+            };
+            *paint = patch.color;
+            let span = dirty.entry(patch.slot).or_insert(CLEAN);
+            span.paint_min = span.paint_min.min(patch.shape_index);
+            span.paint_max = span.paint_max.max(patch.shape_index);
+        }
+
+        let mut uploaded_records = 0u64;
+        let mut uploaded_bytes = 0u64;
+        let slots_touched = dirty.len() as u64;
+        for (slot_id, span) in dirty {
+            let Some(slot) = self.replay_slots.slots.get(&slot_id) else {
+                continue;
+            };
+            if span.paint_min <= span.paint_max {
+                let range = span.paint_min as usize..span.paint_max as usize + 1;
+                uploaded_records += range.len() as u64;
+                uploaded_bytes += (range.len() * std::mem::size_of::<[f32; 4]>()) as u64;
+                staged_uploads.stage_at(
+                    UploadTarget::ReplayPaintData(slot_id),
+                    range.start as u64 * std::mem::size_of::<[f32; 4]>() as u64,
+                    bytemuck::cast_slice(&slot.paint_mirror[range]),
+                );
+            }
+        }
+        // A patched color is one 16-byte vec4; the staged bytes exceed this
+        // only by the untouched records inside each coalesced span.
+        let ideal_bytes = total_patches as u64 * 16;
+        self.replay_upload_stats.note_frame(
+            total_patches as u64,
+            slots_touched,
+            uploaded_records,
+            uploaded_bytes,
+            ideal_bytes,
+        );
+        if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
+            log::warn!(
+                "[replay-upload] frame: {} patches -> {} records / {:.1} KB staged \
+                 across {} slots (color-only {:.1} KB)",
+                total_patches,
+                uploaded_records,
+                uploaded_bytes as f64 / 1024.0,
+                slots_touched,
+                ideal_bytes as f64 / 1024.0,
+            );
+        }
+        self.color_patch_scratch.clear();
+    }
+
+    /// Converts `shape_refs` once and retains the result on the GPU as a
+    /// replay slot. Returns the slot id the scene's retained draws reference.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn capture_replay_slot(
+        &mut self,
+        shape_refs: &[&DrawShape],
+        root_scale: f32,
+    ) -> Option<u32> {
+        if !self.shape_batch_limits.storage || shape_refs.is_empty() {
+            return None;
+        }
+        let id = self.replay_slots.free_ids.pop()?;
+        let shape_count = shape_refs.len();
+
+        let mut gradient_offsets: Vec<u32> = Vec::with_capacity(shape_count + 1);
+        let mut total_gradient_stops = 0u32;
+        gradient_offsets.push(0);
+        for shape in shape_refs {
+            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            gradient_offsets.push(total_gradient_stops);
+        }
+
+        let mut shape_data = vec![ShapeData::zeroed(); shape_count];
+        let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
+        convert_shapes_into_outputs(
+            shape_refs,
+            &gradient_offsets,
+            root_scale,
+            &mut shape_data,
+            &mut gradients,
+        );
+
+        let shape_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Shape Buffer"),
+            size: (std::mem::size_of::<ShapeData>() * shape_count) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        shape_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&shape_data));
+        shape_buffer.unmap();
+
+        let gradient_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Gradient Buffer"),
+            size: (std::mem::size_of::<GradientStop>() * gradients.len()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        gradient_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&gradients));
+        gradient_buffer.unmap();
+
+        let mesh = if arc_mesh_enabled() {
+            match build_arc_mesh_vertices(&shape_data) {
+                Some(build) => {
+                    let cut = if build.quad_area > 0.0 {
+                        (1.0 - build.mesh_area / build.quad_area) * 100.0
+                    } else {
+                        0.0
+                    };
+                    // Always-on warn: `log::info` is invisible on the desktop
+                    // console, and captures are rare — one line per slot
+                    // lifetime. The unique-vert/index counts against the
+                    // six-per-shape quad baseline are the vertex-amplification
+                    // instrument P1b exists for.
+                    log::warn!(
+                        "[arc-mesh] slot {id}: {} arcs meshed ({} segs), {} passthrough; \
+                         {} unique verts / {} indices (quad path: {} verts); \
+                         quad_px {:.0} -> mesh_px {:.0} (-{:.1}%)",
+                        build.meshed_arcs,
+                        build.meshed_segments,
+                        build.passthrough,
+                        build.vertices.len(),
+                        build.indices.len(),
+                        shape_count * 6,
+                        build.quad_area,
+                        build.mesh_area,
+                        cut,
+                    );
+                    // A slot that meshed nothing gains nothing over the
+                    // indexless quad path — skip the buffers.
+                    (build.meshed_arcs > 0).then(|| {
+                        let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Replay Mesh Vertex Buffer"),
+                            size: (std::mem::size_of::<MeshVertex>() * build.vertices.len()) as u64,
+                            usage: wgpu::BufferUsages::VERTEX,
+                            mapped_at_creation: true,
+                        });
+                        vertex_buffer
+                            .slice(..)
+                            .get_mapped_range_mut()
+                            .copy_from_slice(bytemuck::cast_slice(&build.vertices));
+                        vertex_buffer.unmap();
+                        let index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("Replay Mesh Index Buffer"),
+                            size: (std::mem::size_of::<u32>() * build.indices.len()) as u64,
+                            usage: wgpu::BufferUsages::INDEX,
+                            mapped_at_creation: true,
+                        });
+                        index_buffer
+                            .slice(..)
+                            .get_mapped_range_mut()
+                            .copy_from_slice(bytemuck::cast_slice(&build.indices));
+                        index_buffer.unmap();
+                        ReplaySlotMesh {
+                            vertex_buffer,
+                            index_buffer,
+                            index_prefix: build.index_prefix,
+                        }
+                    })
+                }
+                None => {
+                    log::warn!(
+                        "[arc-mesh] slot {id}: geometry byte budget overflowed for \
+                         {shape_count} shapes; whole slot falls back to quad passthrough"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Seed the mutable paint from the converted colors, so an unpatched
+        // replay renders bit-identically to the capture frame.
+        let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
+        let paint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Replay Paint Buffer"),
+            size: (std::mem::size_of::<[f32; 4]>() * shape_count) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+        paint_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .copy_from_slice(bytemuck::cast_slice(&paint));
+        paint_buffer.unmap();
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Replay Shape Bind Group"),
+            layout: &self.shape_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: shape_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: gradient_buffer.as_entire_binding(),
+                },
+                // The transform slot is selected per draw via the dynamic
+                // offset, so retained draws sharing this capture can each
+                // move independently.
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.replay_slots.transform_buffer,
+                        offset: 0,
+                        size: Some(
+                            std::num::NonZeroU64::new(
+                                std::mem::size_of::<SimilarityTransform>() as u64
+                            )
+                            .expect("similarity transform is non-empty"),
+                        ),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: paint_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let capture_epoch = self.replay_slots.next_capture_epoch;
+        self.replay_slots.next_capture_epoch += 1;
+        self.replay_slots.slots.insert(
+            id,
+            ReplaySlot {
+                paint_buffer,
+                bind_group,
+                shape_count: shape_count as u32,
+                paint_mirror: paint,
+                mesh,
+                capture_epoch,
+            },
+        );
+        Some(id)
+    }
+
+    /// Frees a replay slot's GPU resources and returns its id to the pool.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn release_replay_slot(&mut self, id: u32) {
+        if self.replay_slots.slots.remove(&id).is_some() {
+            self.replay_slots.free_ids.push(id);
+            // A cached bundle keeps references on the slot buffers it binds.
+            // The epoch in each key already makes entries for this capture
+            // unreachable — releases are rare (churn, retire_feed), so drop
+            // the whole cache and free those references now rather than one
+            // frame later through eviction.
+            self.retained_bundle_cache.clear();
+        }
+    }
+
+    /// Test/diagnostic view of the latched instanced-quad selection: `true`
+    /// when this renderer's ordinary shape draws ride `vs_shape_instanced`.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn instanced_quads_active(&self) -> bool {
+        self.instanced_quads.is_some()
+    }
+
+    /// Test/diagnostic view of retained arc meshes: how many live replay
+    /// slots hold a mesh, out of all live slots.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_slot_mesh_stats(&self) -> (usize, usize) {
+        let meshed = self
+            .replay_slots
+            .slots
+            .values()
+            .filter(|slot| slot.mesh.is_some())
+            .count();
+        (meshed, self.replay_slots.slots.len())
+    }
+
+    /// Draws one retained replay batch — `retained`'s shape range of its
+    /// slot's capture, under the transform staged for this draw's index (see
+    /// the retained arms of the segment paths).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_retained_batch(
+        &self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        retained: &RetainedDraw,
+        retained_index: usize,
+        width: u32,
+        height: u32,
+    ) {
+        let Some(slot) = self.replay_slots.slots.get(&retained.slot) else {
+            return;
+        };
+        if retained_index as u32 >= MAX_REPLAY_SLOTS {
+            return;
+        }
+        let first = retained.first_shape.min(slot.shape_count);
+        let last = retained
+            .first_shape
+            .saturating_add(retained.shape_count)
+            .min(slot.shape_count);
+        if first >= last {
+            return;
+        }
+        self.frame_stats.bump_shapes();
+        self.frame_stats.add_draw_calls(1);
+        render_pass.set_scissor_rect(0, 0, width, height);
+        // A captured mesh replaces the six-per-shape quad expansion with the
+        // slot's conservative arc mesh — same bind groups, same SrcOver
+        // blend, one draw per op over the identical shape range, so z order
+        // is untouched either way. Slots without a mesh draw through the
+        // latched instanced-quad path when it exists (four vertex executions
+        // per shape, shape index from the instance index), else the plain
+        // six-vertex expansion.
+        let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+        match &mesh {
+            Some((_, mesh_pipeline)) => render_pass.set_pipeline(mesh_pipeline),
+            None => match &self.instanced_quads {
+                Some(instanced) => render_pass.set_pipeline(&instanced.pipeline),
+                None => render_pass.set_pipeline(&self.pipeline),
+            },
+        }
+        render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+        render_pass.set_bind_group(
+            1,
+            &slot.bind_group,
+            &[retained_index as u32 * REPLAY_TRANSFORM_STRIDE as u32],
+        );
+        match mesh {
+            Some((mesh, _)) => {
+                render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(
+                    mesh.index_prefix[first as usize]..mesh.index_prefix[last as usize],
+                    0,
+                    0..1,
+                );
+            }
+            None => match &self.instanced_quads {
+                Some(instanced) => {
+                    render_pass.set_index_buffer(
+                        instanced.index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.draw_indexed(0..6, 0, first..last);
+                }
+                None => render_pass.draw(first * 6..last * 6, 0..1),
+            },
+        }
+    }
+
+    /// Key of the retained stretch at `item_range`: one op key per resolved
+    /// retained item, in draw order, carrying exactly the state that decides
+    /// the commands [`Self::draw_retained_batch`] would encode for it —
+    /// clamped range, dynamic-offset index, mesh-vs-quad pipeline choice,
+    /// and the slot's capture epoch (`None` while the slot is absent, when
+    /// the op draws nothing on the direct path too).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_bundle_key(
+        &self,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        retained_draws: &[RetainedDraw],
+        item_range: Range<usize>,
+    ) -> RetainedBundleKey {
+        let mut ops = Vec::with_capacity(item_range.len());
+        for (_, item) in &ordered_items[item_range] {
+            let SegmentDrawItem::Retained(index) = item else {
+                continue;
+            };
+            let Some(retained) = retained_draws.get(*index) else {
+                continue;
+            };
+            let slot = self.replay_slots.slots.get(&retained.slot);
+            let (first, last) = match slot {
+                Some(slot) => (
+                    retained.first_shape.min(slot.shape_count),
+                    retained
+                        .first_shape
+                        .saturating_add(retained.shape_count)
+                        .min(slot.shape_count),
+                ),
+                None => (
+                    retained.first_shape,
+                    retained.first_shape.saturating_add(retained.shape_count),
+                ),
+            };
+            ops.push(RetainedBundleOpKey {
+                slot: retained.slot,
+                capture_epoch: slot.map(|slot| slot.capture_epoch),
+                first,
+                last,
+                retained_index: *index as u32,
+                has_mesh: slot.is_some_and(|slot| slot.mesh.is_some())
+                    && self.mesh_pipeline.is_some(),
+            });
+        }
+        RetainedBundleKey { ops }
+    }
+
+    /// Encodes `key`'s stretch into a render bundle: the IDENTICAL command
+    /// sequence [`Self::draw_retained_batch`] issues on the pass, minus the
+    /// scissor reset (bundles cannot set scissor; the caller sets the same
+    /// full-target scissor on the pass before executing). Must only be
+    /// called with a key built this frame, so every op with an epoch still
+    /// resolves to its slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn build_retained_bundle(&self, key: &RetainedBundleKey) -> wgpu::RenderBundle {
+        let mut encoder =
+            self.device
+                .create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
+                    label: Some("Retained Stretch Bundle"),
+                    // Every fused-pass target — the swapchain, screenshot
+                    // textures, pooled layer surfaces — is created with the
+                    // renderer's one surface format.
+                    color_formats: &[Some(self.surface_format)],
+                    depth_stencil: None,
+                    sample_count: 1,
+                    multiview: None,
+                });
+        for op in &key.ops {
+            if op.capture_epoch.is_none()
+                || op.retained_index >= MAX_REPLAY_SLOTS
+                || op.first >= op.last
+            {
+                continue;
+            }
+            let Some(slot) = self.replay_slots.slots.get(&op.slot) else {
+                continue;
+            };
+            let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+            match &mesh {
+                Some((_, mesh_pipeline)) => encoder.set_pipeline(mesh_pipeline),
+                None => match &self.instanced_quads {
+                    Some(instanced) => encoder.set_pipeline(&instanced.pipeline),
+                    None => encoder.set_pipeline(&self.pipeline),
+                },
+            }
+            encoder.set_bind_group(0, &self.uniform_bind_group, &[]);
+            encoder.set_bind_group(
+                1,
+                &slot.bind_group,
+                &[op.retained_index * REPLAY_TRANSFORM_STRIDE as u32],
+            );
+            match mesh {
+                Some((mesh, _)) => {
+                    encoder.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+                    encoder
+                        .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    encoder.draw_indexed(
+                        mesh.index_prefix[op.first as usize]..mesh.index_prefix[op.last as usize],
+                        0,
+                        0..1,
+                    );
+                }
+                // The latched selection is a per-renderer constant, so it
+                // needs no place in `RetainedBundleOpKey` — every cached
+                // bundle in this renderer's lifetime encodes the same choice
+                // the direct path makes.
+                None => match &self.instanced_quads {
+                    Some(instanced) => {
+                        encoder.set_index_buffer(
+                            instanced.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint16,
+                        );
+                        encoder.draw_indexed(0..6, 0, op.first..op.last);
+                    }
+                    None => encoder.draw(op.first * 6..op.last * 6, 0..1),
+                },
+            }
+        }
+        encoder.finish(&wgpu::RenderBundleDescriptor {
+            label: Some("Retained Stretch Bundle"),
+        })
+    }
+
+    /// Draws one maximal consecutive retained stretch through the bundle
+    /// cache: key the stretch, rebuild on any mismatch (recapture, reorder,
+    /// range or count change, slot release), then execute the cached bundle.
+    /// Replays byte-identical commands to the per-op direct path.
+    /// `stage_replay_patches` and the per-frame transform staging stay in
+    /// the prepare arms, untouched — bundles bind buffers whose contents are
+    /// read at execution.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_retained_stretch_bundled(
+        &mut self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        retained_draws: &[RetainedDraw],
+        item_range: Range<usize>,
+        width: u32,
+        height: u32,
+    ) {
+        let key = self.retained_bundle_key(ordered_items, retained_draws, item_range);
+        if !self.retained_bundle_cache.hit(&key) {
+            let bundle = self.build_retained_bundle(&key);
+            self.retained_bundle_cache.insert(key.clone(), bundle);
+        }
+        // Mirror the direct path's per-op stats for every op the bundle
+        // draws, so bundling is invisible to the frame counters.
+        for op in &key.ops {
+            if op.capture_epoch.is_some()
+                && op.retained_index < MAX_REPLAY_SLOTS
+                && op.first < op.last
+            {
+                self.frame_stats.bump_shapes();
+                self.frame_stats.add_draw_calls(1);
+            }
+        }
+        // Bundles inherit the pass scissor: set the same full-target rect
+        // the direct path sets before every retained draw. Executing the
+        // bundle then resets pipeline/bind/vertex state, which is harmless —
+        // every following fused arm re-binds its own.
+        render_pass.set_scissor_rect(0, 0, width, height);
+        if let Some(bundle) = self.retained_bundle_cache.get(&key) {
+            render_pass.execute_bundles(std::iter::once(bundle));
+        }
+    }
+
+    /// Test/diagnostic view of the retained bundle cache: lifetime
+    /// (rebuilds, cached executes).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn retained_bundle_stats(&self) -> (u64, u64) {
+        self.retained_bundle_cache.stats()
     }
 
     fn draw_prepared_shapes(
@@ -7132,11 +9823,8 @@ impl GpuRenderer {
         height: u32,
     ) {
         self.frame_stats.bump_shapes();
+        self.frame_stats.add_draw_calls(1);
         render_pass.set_scissor_rect(0, 0, width, height);
-        render_pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.pipeline_dst_out,
-            _ => &self.pipeline,
-        });
         #[cfg(not(target_arch = "wasm32"))]
         let (uniform_bind_group, shape_buffers) = (&self.uniform_bind_group, &self.shape_buffers);
         #[cfg(target_arch = "wasm32")]
@@ -7144,16 +9832,46 @@ impl GpuRenderer {
             &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
             &self.wasm_shape_batches[batch.shape_slot],
         );
+        // Latched instanced path (storage mode only): one instance per
+        // shape, four vertices through the static quad index buffer —
+        // identical triangles, identical bind groups, still one draw call.
+        // The uniform/WebGL path never latches it and stays on `vs_main`.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(instanced) = &self.instanced_quads {
+            assert!(
+                batch.vertex_start.is_multiple_of(6) && batch.vertex_count.is_multiple_of(6),
+                "shape batches are whole shapes: vertex range {}..+{} must be \
+                 six-aligned to convert to an instance range",
+                batch.vertex_start,
+                batch.vertex_count,
+            );
+            render_pass.set_pipeline(match blend_mode {
+                BlendMode::DstOut => &instanced.pipeline_dst_out,
+                _ => &instanced.pipeline,
+            });
+            render_pass.set_bind_group(0, uniform_bind_group, &[]);
+            // Dynamic offset 0: ordinary batches read the identity
+            // similarity transform.
+            render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
+            let first_shape = batch.vertex_start / 6;
+            let shape_count = batch.vertex_count / 6;
+            render_pass
+                .set_index_buffer(instanced.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
+            return;
+        }
+        render_pass.set_pipeline(match blend_mode {
+            BlendMode::DstOut => &self.pipeline_dst_out,
+            _ => &self.pipeline,
+        });
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
-        render_pass.set_bind_group(1, &shape_buffers.bind_group, &[]);
-        render_pass.set_vertex_buffer(0, shape_buffers.vertex_buffer.slice(..));
-        render_pass.set_index_buffer(
-            shape_buffers.index_buffer.slice(..),
-            wgpu::IndexFormat::Uint32,
-        );
-        render_pass.draw_indexed(
-            batch.index_start..batch.index_start + batch.index_count,
-            0,
+        // Dynamic offset 0: ordinary batches read the identity similarity
+        // transform.
+        render_pass.set_bind_group(1, &shape_buffers.bind_group, &[0]);
+        // Six unindexed vertices per shape; `vs_main` derives the corner from
+        // `vertex_index` and pulls the quad out of `ShapeData`.
+        render_pass.draw(
+            batch.vertex_start..batch.vertex_start + batch.vertex_count,
             0..1,
         );
     }
@@ -7181,9 +9899,13 @@ impl GpuRenderer {
             height,
             offset: viewport_offset,
         };
-        let Some(batch) =
-            self.prepare_shapes_batch(layer_shapes, root_scale, viewport, &mut staged_uploads)
-        else {
+        let Some(batch) = self.prepare_shapes_batch(
+            layer_shapes
+                .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+            root_scale,
+            viewport,
+            &mut staged_uploads,
+        ) else {
             self.restore_staged_uploads(staged_uploads);
             return;
         };
@@ -7223,6 +9945,7 @@ impl GpuRenderer {
             return Ok(());
         }
         self.frame_stats.bump_images();
+        self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
@@ -7276,6 +9999,7 @@ impl GpuRenderer {
         #[cfg(target_arch = "wasm32")]
         {
             self.frame_stats.bump_text();
+            self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
             render_pass.set_pipeline(&self.glyph_atlas_pipeline);
             let (uniform_bind_group, vertex_buffer, index_buffer) = (
                 &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
@@ -7316,6 +10040,7 @@ impl GpuRenderer {
         }
 
         self.frame_stats.bump_images();
+        self.frame_stats.add_draw_calls(cmds.len() as u32);
         render_pass.set_pipeline(match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
@@ -7353,6 +10078,7 @@ impl GpuRenderer {
         }
 
         self.frame_stats.bump_text();
+        self.frame_stats.add_draw_calls(cmds.len() as u32);
 
         let mut shared_buffers_bound = false;
         let mut retained_pipeline_bound = false;
@@ -7534,11 +10260,15 @@ impl GpuRenderer {
         }
 
         self.stage_viewport_uniforms(staged_uploads, viewport);
+        // Grow to a power of two, as the shape batch and frame upload buffers
+        // do. Sizing these to the exact byte count instead means one more glyph
+        // quad than the last frame destroys and recreates both buffers, and a
+        // caption that grows a character at a time does it on every frame.
         let needed_bytes = std::mem::size_of_val(image_vertices) as u64;
         if needed_bytes > self.image_vertex_buffer.size() {
             self.image_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Image Vertex Buffer"),
-                size: needed_bytes,
+                size: needed_bytes.next_power_of_two(),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -7547,7 +10277,7 @@ impl GpuRenderer {
         if needed_index_bytes > self.image_index_buffer.size() {
             self.image_index_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Image Index Buffer"),
-                size: needed_index_bytes,
+                size: needed_index_bytes.next_power_of_two(),
                 usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -7702,7 +10432,15 @@ impl GpuRenderer {
                     continue;
                 }
                 let entry = self.glyph_atlas_entry_for_placement(glyph)?;
-                generated_quads.push(cached_text_glyph_quad(glyph, entry));
+                // Read the size after the entry is in hand: the only path that
+                // resizes the atlas is the overflow reset, which returns `Err`
+                // above, so `entry` is always normalised against the atlas it
+                // was placed in.
+                generated_quads.push(cached_text_glyph_quad(
+                    glyph,
+                    entry,
+                    self.text_glyph_atlas.size(),
+                ));
             }
         } else {
             for run_glyph in collected_run {
@@ -7716,7 +10454,11 @@ impl GpuRenderer {
                     }
                     SoftwareGlyphAtlasRunGlyph::New(glyph) => self.glyph_atlas_entry_for(glyph)?,
                 };
-                generated_quads.push(cached_text_glyph_quad(&placement, entry));
+                generated_quads.push(cached_text_glyph_quad(
+                    &placement,
+                    entry,
+                    self.text_glyph_atlas.size(),
+                ));
             }
         }
 
@@ -7969,7 +10711,7 @@ impl GpuRenderer {
                 collected_run.clear();
                 let collect_start = Instant::now();
                 let collect_result = collect_solid_text_atlas_run(
-                    &source_draw.text,
+                    source_draw.text.as_ref(),
                     source_raster_rect,
                     &source_draw.text_style,
                     source_draw.color,
@@ -7989,7 +10731,7 @@ impl GpuRenderer {
                             is_visible,
                             draw_action == TextGlyphDrawAction::PrewarmOffscreen,
                             source_draw.text.span_styles.len(),
-                            source_draw.text.link_annotations.len(),
+                            source_draw.text.links.len(),
                             source_draw.text.text.len(),
                             preview,
                             source_draw.text_style.span_style,
@@ -8224,7 +10966,7 @@ impl GpuRenderer {
         glyph_cmds: &mut Vec<GlyphDrawCmd>,
     ) -> Result<(), String> {
         let prewarm_start = Instant::now();
-        let diag_enabled = std::env::var_os("CRANPOSE_TEXT_PREWARM_DIAG").is_some();
+        let diag_enabled = cranpose_core::env_flag!("CRANPOSE_TEXT_PREWARM_DIAG");
         let mut text_items = 0usize;
         let mut candidates = 0usize;
         let mut missing_geometry = 0usize;
@@ -8808,7 +11550,7 @@ impl GpuRenderer {
         }
 
         if let Some(image) = rasterize_annotated_text_to_image_with_glyph_cache(
-            &text_draw.text,
+            text_draw.text.as_ref(),
             raster_rect,
             &text_draw.text_style,
             text_draw.color,
@@ -9038,7 +11780,7 @@ fn clipped_text_raster_source_with_line_starts<'a>(
         width: logical_rect.width,
         height: slice_height,
     };
-    sliced_draw.text = Rc::new(text_draw.text.subsequence(byte_start..byte_end));
+    sliced_draw.text = Arc::new(text_draw.text.subsequence(byte_start..byte_end));
 
     TextRasterSource {
         draw: Cow::Owned(sliced_draw),
@@ -9156,6 +11898,7 @@ enum SegmentDrawItem {
     Shadow(usize),
     Composite(usize),
     ShaderComposite(usize),
+    Retained(usize),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9179,6 +11922,12 @@ enum SegmentBatchPlan {
         end: usize,
     },
     ShaderComposite {
+        start: usize,
+        end: usize,
+    },
+    /// Retained replay batches: each item is one bind + draw of GPU slots
+    /// captured on an earlier frame, so they never merge and cost no budget.
+    Retained {
         start: usize,
         end: usize,
     },
@@ -9242,6 +11991,9 @@ enum FusedSegmentBatch {
     },
     ShaderComposite {
         draw_range: Range<usize>,
+    },
+    Retained {
+        item_range: Range<usize>,
     },
 }
 
@@ -9337,8 +12089,10 @@ impl Iterator for SegmentCommandIter<'_> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreparedShapeBatch {
-    index_start: u32,
-    index_count: u32,
+    /// First vertex and vertex count for the unindexed shape draw; always
+    /// multiples of 6 so `vs_main`'s `vertex_index / 6` lands on whole shapes.
+    vertex_start: u32,
+    vertex_count: u32,
     #[cfg(target_arch = "wasm32")]
     shape_slot: usize,
     #[cfg(target_arch = "wasm32")]
@@ -9623,6 +12377,17 @@ fn segment_batch_plan_at_cursor(
             }
             Some((SegmentBatchPlan::ShaderComposite { start, end }, end))
         }
+        SegmentDrawItem::Retained(_) => {
+            let mut end = start + 1;
+            while end < ordered_items.len() {
+                if matches!(ordered_items[end].1, SegmentDrawItem::Retained(_)) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            Some((SegmentBatchPlan::Retained { start, end }, end))
+        }
         SegmentDrawItem::Shadow(_) => None,
     }
 }
@@ -9667,6 +12432,7 @@ fn collect_non_effect_segment_items(
             DrawOpKind::Image(index) => SegmentDrawItem::Image(index),
             DrawOpKind::Text(index) => SegmentDrawItem::Text(index),
             DrawOpKind::Shadow(index) => SegmentDrawItem::Shadow(index),
+            DrawOpKind::Retained(index) => SegmentDrawItem::Retained(index),
         };
         Some((op.z_index, item))
     }));
@@ -9709,7 +12475,7 @@ fn maybe_print_segment_diag(
     counts: SegmentDiagCounts,
     batch_limits: ShapeBatchLimits,
 ) {
-    if std::env::var_os("CRANPOSE_SEGMENT_DIAG").is_none() {
+    if !cranpose_core::env_flag!("CRANPOSE_SEGMENT_DIAG") {
         return;
     }
     let line = SEGMENT_DIAG_LINES.fetch_add(1, Ordering::Relaxed);
@@ -9860,9 +12626,13 @@ fn image_uv_rect(image: &ImageBitmap, src_rect: Option<Rect>) -> Option<ImageUvR
     })
 }
 
-fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry) -> ImageUvRect {
-    let atlas_width = TEXT_GLYPH_ATLAS_WIDTH as f32;
-    let atlas_height = TEXT_GLYPH_ATLAS_HEIGHT as f32;
+/// Normalises an atlas entry against `atlas_size`, the side length of the
+/// texture the entry was placed in. The atlas grows on overflow, so the size
+/// has to be read from the live atlas rather than a constant — a UV computed
+/// against the wrong size samples the wrong glyph.
+fn glyph_atlas_uv_rect(entry: GlyphAtlasEntry, atlas_size: u32) -> ImageUvRect {
+    let atlas_width = atlas_size as f32;
+    let atlas_height = atlas_size as f32;
     let min = [entry.x as f32 / atlas_width, entry.y as f32 / atlas_height];
     let max = [
         (entry.x + entry.width) as f32 / atlas_width,
@@ -10150,7 +12920,7 @@ mod tests {
             rect,
             snap_anchor: None,
             translated_content_context: false,
-            text: Rc::new(AnnotatedString::new("stable markdown row".to_string())),
+            text: Arc::new(AnnotatedString::new("stable markdown row".to_string()).render_string()),
             color: Color::WHITE,
             text_style,
             font_size: 14.0,
@@ -10235,7 +13005,7 @@ mod tests {
             .map(|line| format!("line-{line:03}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -10784,7 +13554,7 @@ mod tests {
             .map(|line| format!("line-{line:03}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -10832,7 +13602,7 @@ mod tests {
             .map(|line| format!("code-line-{line:02}"))
             .collect::<Vec<_>>()
             .join("\n");
-        draw.text = Rc::new(AnnotatedString::from(lines));
+        draw.text = Arc::new(AnnotatedString::from(lines).render_string());
 
         let raster_rect = Rect {
             x: 16.0,
@@ -10868,7 +13638,7 @@ mod tests {
     #[test]
     fn text_line_index_cache_reuses_retained_index_for_same_text_instance() {
         let mut cache = TextLineIndexCache::new(4);
-        let text = Rc::new(AnnotatedString::from("a\nb\nc"));
+        let text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
 
         let first = cache.line_starts(&text);
         let second = cache.line_starts(&text);
@@ -10883,8 +13653,8 @@ mod tests {
     #[test]
     fn text_line_index_cache_is_retained_text_instance_local() {
         let mut cache = TextLineIndexCache::new(4);
-        let first_text = Rc::new(AnnotatedString::from("a\nb\nc"));
-        let second_text = Rc::new(AnnotatedString::from("a\nb\nc"));
+        let first_text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
+        let second_text = Arc::new(AnnotatedString::from("a\nb\nc").render_string());
 
         let first = cache.line_starts(&first_text);
         let second = cache.line_starts(&second_text);
@@ -11032,6 +13802,8 @@ mod tests {
             snap_anchor: None,
             brush: Brush::solid(Color::BLACK),
             shape: None,
+            stroke: None,
+            arc: None,
             z_index,
             clip: None,
             blend_mode,
@@ -11354,7 +14126,7 @@ mod tests {
             },
             snap_anchor: None,
             translated_content_context: false,
-            text: std::rc::Rc::new(cranpose_ui::text::AnnotatedString::from("t")),
+            text: Arc::new(cranpose_ui::text::AnnotatedString::from("t").render_string()),
             color: Color::WHITE,
             text_style: cranpose_ui::TextStyle::default(),
             font_size: 12.0,
@@ -11549,7 +14321,7 @@ mod tests {
                         width: 48.0,
                         height: 18.0,
                     },
-                    text,
+                    text: std::rc::Rc::new(text),
                     text_style,
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
@@ -11597,6 +14369,7 @@ mod tests {
                             },
                             brush: Brush::solid(Color(0.28, 0.30, 0.46, 0.88)),
                             radii: CornerRadii::uniform(6.0),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -11638,7 +14411,7 @@ mod tests {
                             width: 36.0,
                             height: 16.0,
                         },
-                        text: AnnotatedString::from("48 px"),
+                        text: std::rc::Rc::new(AnnotatedString::from("48 px")),
                         text_style: TextStyle::default(),
                         font_size: 14.0,
                         layout_options: TextLayoutOptions::default(),
@@ -11960,7 +14733,7 @@ mod tests {
                         height: 24.0,
                     },
                     clip: None,
-                    text: AnnotatedString::from("Pure text"),
+                    text: std::rc::Rc::new(AnnotatedString::from("Pure text")),
                     text_style: TextStyle::default(),
                     font_size: 14.0,
                     layout_options: TextLayoutOptions::default(),
@@ -12081,15 +14854,17 @@ mod tests {
         assert!(layer_contains_descendant_backdrop(&parent));
     }
 
-    fn child_layer_composite<'a>(
-        layer: &'a LayerNode,
+    fn child_layer_composite(
+        layer: &LayerNode,
         z_index: usize,
         rect: Rect,
         needs_nested_underlay: bool,
-    ) -> crate::normalized_scene::ChildLayerComposite<'a> {
+    ) -> crate::normalized_scene::ChildLayerComposite {
+        let mut requirements_cache = cranpose_core::collections::map::HashMap::new();
+        let surface_requirements =
+            crate::surface_plan::layer_surface_requirements_cached(layer, &mut requirements_cache);
         crate::normalized_scene::ChildLayerComposite {
             z_index,
-            layer,
             logical_rect: Rect {
                 x: 0.0,
                 y: 0.0,
@@ -12104,6 +14879,32 @@ mod tests {
             surface_clip: None,
             shadow_draws: Vec::new(),
             needs_nested_underlay,
+            node_id: layer.node_id,
+            backdrop: layer.backdrop().cloned(),
+            has_effect: layer.effect().is_some(),
+            effect_contains_runtime_shader: layer
+                .effect()
+                .is_some_and(|effect| effect.contains_runtime_shader()),
+            target_content_hash: layer.target_content_hash(),
+            effect_hash: layer.effect_hash(),
+            motion_source_content_hash: Some(layer.motion_source_content_hash()),
+            contains_descendant_backdrop: layer_contains_descendant_backdrop(layer),
+            cache_policy: layer.cache_policy,
+            surface_requirements,
+            rounded_clip: crate::surface_executor::backend::LayerSurfaceRoundedClip::from_layer(
+                layer,
+            ),
+            isolation: cranpose_render_common::layer_composition::effective_layer_isolation(
+                &layer.graphics_layer,
+            ),
+            translated_content_context: layer.translated_content_context,
+            own_translated_content_axes: crate::surface_plan::translated_content_axes_for_layer(
+                layer,
+            ),
+            clip_rect: layer.clip_rect(),
+            local_bounds: layer.local_bounds,
+            surface_scale: crate::surface_plan::layer_surface_scale(layer),
+            source: crate::normalized_scene::LoweredChildSource::default(),
         }
     }
 
@@ -12434,6 +15235,7 @@ mod tests {
                             height: 6.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12482,6 +15284,7 @@ mod tests {
                             height: 480.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12522,6 +15325,7 @@ mod tests {
                             height: 480.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12562,6 +15366,7 @@ mod tests {
                             height: 200.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12603,6 +15408,7 @@ mod tests {
                                 height: 200.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -12641,6 +15447,7 @@ mod tests {
                             height: 240.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12681,6 +15488,7 @@ mod tests {
                             height: 1400.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12722,6 +15530,7 @@ mod tests {
                                 height: 1400.0,
                             },
                             brush: Brush::solid(Color::WHITE),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -12933,6 +15742,7 @@ mod tests {
                             height: 10.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -12964,6 +15774,7 @@ mod tests {
                         height: 4.0,
                     },
                     brush: Brush::solid(Color::BLACK),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -13000,6 +15811,7 @@ mod tests {
                         height: 4.0,
                     },
                     brush: Brush::solid(Color::BLACK),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -13111,7 +15923,7 @@ mod tests {
                     width: 48.0,
                     height: 18.0,
                 },
-                text: AnnotatedString::from("runtime cache"),
+                text: std::rc::Rc::new(AnnotatedString::from("runtime cache")),
                 text_style: TextStyle::default(),
                 font_size: 14.0,
                 layout_options: TextLayoutOptions::default(),
@@ -13160,6 +15972,7 @@ mod tests {
                             height: 32.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -13275,6 +16088,329 @@ mod tests {
             Point::new(11.4, 23.6),
             "translated plain text's bounded local surface should composite at the content-origin snap phase",
         );
+    }
+
+    /// Not a correctness test: a local timing harness for the shape-run
+    /// collect path. Run manually with
+    /// `cargo test --release -p cranpose-render-wgpu -- --ignored collect_timing --nocapture`.
+    #[test]
+    #[ignore]
+    fn shape_run_collect_timing_harness() {
+        use cranpose_render_common::graph::DrawPrimitiveNode;
+        use cranpose_render_common::layer_composition::local_content_layer_for;
+        use cranpose_ui_graphics::Stroke;
+
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1080.0,
+            height: 2244.0,
+        };
+        let graphics_layer = GraphicsLayer::default();
+
+        // A MEGA-BOSS-shaped workload: thousands of consecutive arcs, most
+        // solid, some gradient, one text-free layer.
+        let mut nodes: Vec<DrawPrimitiveNode> = Vec::new();
+        for i in 0..3000u32 {
+            let f = i as f32;
+            let brush = if i % 8 == 0 {
+                Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])
+            } else {
+                Brush::Solid(Color(0.5, 0.2, 0.8, 1.0))
+            };
+            let center = Point::new(540.0 + (f % 400.0), 1122.0 + (f % 350.0));
+            let radius = 8.0 + (i % 23) as f32;
+            let half = radius + 4.0;
+            nodes.push(DrawPrimitiveNode {
+                primitive: DrawPrimitive::Arc {
+                    rect: Rect {
+                        x: center.x - half,
+                        y: center.y - half,
+                        width: half * 2.0,
+                        height: half * 2.0,
+                    },
+                    brush,
+                    center,
+                    radius,
+                    start_angle: f * 0.07,
+                    sweep_angle: 0.5 + (i % 5) as f32,
+                    stroke: (i % 3 != 0).then(|| Stroke::new(4.0)),
+                    inner_radius: if i % 3 == 0 { radius * 0.6 } else { 0.0 },
+                },
+                clip: None,
+            });
+        }
+
+        let children: Vec<RenderNode> = nodes
+            .iter()
+            .map(|node| {
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(node.clone()),
+                })
+            })
+            .collect();
+        let layer = crate::test_support::layer_node(
+            bounds,
+            ProjectiveTransform::identity(),
+            graphics_layer,
+            children,
+        );
+
+        const ITERS: usize = 300;
+
+        // Reference: the pre-run per-primitive path.
+        let local_layer = local_content_layer_for(&layer.graphics_layer);
+        let start = Instant::now();
+        let mut sink_shapes = 0usize;
+        for _ in 0..ITERS {
+            let mut scene = CompositorScene::new();
+            for node in &nodes {
+                crate::pipeline::push_draw_primitive(
+                    &node.primitive,
+                    bounds,
+                    &local_layer,
+                    None,
+                    &mut scene,
+                    None,
+                    false,
+                );
+            }
+            sink_shapes = scene.shapes.len();
+        }
+        let serial = start.elapsed();
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let start = Instant::now();
+        let mut run_shapes = 0usize;
+        for _ in 0..ITERS {
+            let collected = collect_layer_contents(
+                &layer,
+                None,
+                None,
+                &mut rect_cache,
+                &mut requirements_cache,
+            );
+            run_shapes = collected.scene.shapes.len();
+        }
+        let run = start.elapsed();
+
+        println!(
+            "per-primitive: {:?}/iter ({sink_shapes} shapes)  shape-run: {:?}/iter ({run_shapes} shapes)",
+            serial / ITERS as u32,
+            run / ITERS as u32,
+        );
+    }
+
+    /// Shared body for the serial and forced-parallel equivalence tests:
+    fn assert_shape_run_collect_matches_per_primitive_emission() {
+        use cranpose_render_common::graph::DrawPrimitiveNode;
+        use cranpose_render_common::layer_composition::local_content_layer_for;
+        use cranpose_render_common::primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace};
+        use cranpose_ui_graphics::{CornerRadii, Stroke};
+
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 800.0,
+            height: 800.0,
+        };
+        // Rotation keeps rigid snapping off, so both paths agree on
+        // `snap_anchor: None` without replicating the anchor computation here.
+        let graphics_layer = GraphicsLayer {
+            scale: 1.25,
+            translation_x: 3.5,
+            translation_y: -2.0,
+            alpha: 0.9,
+            rotation_z: 0.35,
+            ..GraphicsLayer::default()
+        };
+
+        let mut nodes: Vec<DrawPrimitiveNode> = Vec::new();
+        for i in 0..600u32 {
+            let f = i as f32;
+            let brush = if i % 11 == 0 {
+                Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])
+            } else {
+                Brush::Solid(Color(0.1 + (i % 7) as f32 * 0.1, 0.5, 0.9, 1.0))
+            };
+            let stroke = (i % 5 == 0).then(|| Stroke::new(1.0 + (i % 3) as f32));
+            let primitive = match i % 3 {
+                0 => DrawPrimitive::Rect {
+                    rect: Rect {
+                        x: f % 37.0,
+                        y: f % 53.0,
+                        width: 8.0 + f % 9.0,
+                        height: 6.0 + f % 5.0,
+                    },
+                    brush,
+                    stroke,
+                },
+                1 => DrawPrimitive::RoundRect {
+                    rect: Rect {
+                        x: f % 41.0,
+                        y: f % 43.0,
+                        width: 12.0,
+                        height: 10.0,
+                    },
+                    brush,
+                    radii: CornerRadii::uniform(2.0 + (i % 4) as f32),
+                    stroke,
+                },
+                _ => {
+                    let center = Point::new(60.0 + f % 71.0, 60.0 + f % 67.0);
+                    let radius = 5.0 + (i % 13) as f32;
+                    // One degenerate sweep proves dropped draws stay dropped.
+                    let sweep_angle = if i == 302 { 0.0 } else { 0.4 + (i % 6) as f32 };
+                    let half = radius + 4.0;
+                    DrawPrimitive::Arc {
+                        rect: Rect {
+                            x: center.x - half,
+                            y: center.y - half,
+                            width: half * 2.0,
+                            height: half * 2.0,
+                        },
+                        brush,
+                        center,
+                        radius,
+                        start_angle: f * 0.11,
+                        sweep_angle,
+                        stroke: (i % 2 == 0).then(|| Stroke::new(3.0)),
+                        inner_radius: if i % 4 == 2 { radius * 0.5 } else { 0.0 },
+                    }
+                }
+            };
+            let primitive = if i == 300 {
+                // A nested blend disqualifies the run view and forces a
+                // mid-run flush through the serial path, splitting 600 draws
+                // into two runs that are both long enough to fan out.
+                DrawPrimitive::Blend {
+                    primitive: Box::new(DrawPrimitive::Blend {
+                        primitive: Box::new(primitive),
+                        blend_mode: BlendMode::SrcOver,
+                    }),
+                    blend_mode: BlendMode::DstOut,
+                }
+            } else if i % 7 == 3 {
+                DrawPrimitive::Blend {
+                    primitive: Box::new(primitive),
+                    blend_mode: BlendMode::DstOut,
+                }
+            } else {
+                primitive
+            };
+            let clip = (i % 31 == 7).then_some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 30.0,
+                height: 30.0,
+            });
+            nodes.push(DrawPrimitiveNode { primitive, clip });
+        }
+
+        let children: Vec<RenderNode> = nodes
+            .iter()
+            .map(|node| {
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(node.clone()),
+                })
+            })
+            .collect();
+        let layer = crate::test_support::layer_node(
+            bounds,
+            ProjectiveTransform::identity(),
+            graphics_layer,
+            children,
+        );
+
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+        let collected =
+            collect_layer_contents(&layer, None, None, &mut rect_cache, &mut requirements_cache);
+
+        // The reference scene: every primitive through the per-primitive
+        // emission path, exactly as the pre-run collect loop ran it.
+        let local_layer = local_content_layer_for(&layer.graphics_layer);
+        let mut expected = CompositorScene::new();
+        for node in &nodes {
+            let clip = resolve_primitive_clip(
+                node.clip,
+                bounds,
+                &local_layer,
+                None,
+                PrimitiveClipSpace::Local,
+            );
+            if node.clip.is_some() && clip.is_none() {
+                continue;
+            }
+            crate::pipeline::push_draw_primitive(
+                &node.primitive,
+                bounds,
+                &local_layer,
+                clip,
+                &mut expected,
+                None,
+                false,
+            );
+        }
+
+        assert!(
+            collected.scene.shapes.len() >= 590,
+            "the runs should engage the parallel branch: got {} shapes",
+            collected.scene.shapes.len()
+        );
+        assert_eq!(collected.scene.shapes.len(), expected.shapes.len());
+        assert_eq!(collected.scene.draw_ops, expected.draw_ops);
+        assert_eq!(collected.scene.next_z, expected.next_z);
+        assert!(
+            collected
+                .scene
+                .shapes
+                .iter()
+                .all(|s| s.snap_anchor.is_none()),
+            "a rotated layer must not rigid-snap; the reference scene assumes it"
+        );
+        for (index, (got, want)) in collected
+            .scene
+            .shapes
+            .iter()
+            .zip(&expected.shapes)
+            .enumerate()
+        {
+            assert_eq!(got.rect, want.rect, "shape {index} rect");
+            assert_eq!(got.local_rect, want.local_rect, "shape {index} local_rect");
+            assert_eq!(got.quad, want.quad, "shape {index} quad");
+            assert_eq!(got.snap_anchor, want.snap_anchor, "shape {index} snap");
+            assert_eq!(got.brush, want.brush, "shape {index} brush");
+            assert_eq!(got.shape, want.shape, "shape {index} shape");
+            assert_eq!(got.stroke, want.stroke, "shape {index} stroke");
+            assert_eq!(got.arc, want.arc, "shape {index} arc");
+            assert_eq!(got.z_index, want.z_index, "shape {index} z");
+            assert_eq!(got.clip, want.clip, "shape {index} clip");
+            assert_eq!(got.blend_mode, want.blend_mode, "shape {index} blend");
+            assert_eq!(
+                got.motion_context_animated, want.motion_context_animated,
+                "shape {index} motion flag"
+            );
+        }
+    }
+
+    /// The run collector must emit exactly what per-primitive emission does,
+    /// on BOTH flush paths: the serial drain and the scoped-thread fan-out
+    /// (forced via the tuning override, since a test-sized scene would never
+    /// cross the size gate on its own).
+    #[test]
+    fn shape_run_collect_matches_per_primitive_emission_exactly() {
+        assert_shape_run_collect_matches_per_primitive_emission();
+        crate::normalized_scene::force_shape_run_parallel_for_tests(true);
+        let outcome =
+            std::panic::catch_unwind(assert_shape_run_collect_matches_per_primitive_emission);
+        crate::normalized_scene::force_shape_run_parallel_for_tests(false);
+        if let Err(payload) = outcome {
+            std::panic::resume_unwind(payload);
+        }
     }
 
     #[test]
@@ -13972,6 +17108,7 @@ mod tests {
                             height: 20.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -13998,6 +17135,7 @@ mod tests {
                                 height: 32.0,
                             },
                             brush: Brush::solid(Color::BLACK),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -14085,7 +17223,7 @@ mod tests {
                     RenderNode::Layer(child_layer) => {
                         collect_graph_text_labels(child_layer, labels)
                     }
-                    RenderNode::Primitive(_) => {}
+                    RenderNode::Primitive(_) | RenderNode::DrawRun(_) => {}
                 }
             }
         }
@@ -14243,6 +17381,7 @@ mod tests {
                             height: 18.0,
                         },
                         brush: Brush::solid(Color::WHITE),
+                        stroke: None,
                     },
                     clip: None,
                 }),
@@ -14270,6 +17409,7 @@ mod tests {
                                 height: 32.0,
                             },
                             brush: Brush::solid(Color::BLACK),
+                            stroke: None,
                         },
                         clip: None,
                     }),
@@ -14728,22 +17868,455 @@ mod tests {
         assert_eq!(ordered_items, vec![(1, SegmentDrawItem::Shadow(0))]);
     }
 
+    #[test]
+    fn shape_data_layout_matches_the_wgsl_mirror() {
+        // 10 x vec4-sized slots. The uniform address space requires a 16-byte
+        // multiple, and `shape.wgsl`'s array length literal is derived from
+        // this size — if it drifts, batches silently overrun the binding.
+        assert_eq!(std::mem::size_of::<ShapeData>(), 160);
+        assert_eq!(std::mem::size_of::<ShapeData>() % 16, 0);
+        assert_eq!(std::mem::size_of::<GradientStop>(), 32);
+    }
+
+    #[test]
+    fn shape_flags_pack_kind_cap_and_join_without_collision() {
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter),
+            0.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Miter),
+            1.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter),
+            2.0
+        );
+        // cap in bits 2-3, join in bits 4-5
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Round, StrokeJoin::Miter),
+            2.0 + 4.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Square, StrokeJoin::Miter),
+            2.0 + 8.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Round),
+            1.0 + 16.0
+        );
+        assert_eq!(
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Bevel),
+            1.0 + 32.0
+        );
+        // Every combination must round-trip through f32 exactly.
+        for kind in [SHAPE_KIND_FILL, SHAPE_KIND_STROKE, SHAPE_KIND_ARC] {
+            for cap in [StrokeCap::Butt, StrokeCap::Round, StrokeCap::Square] {
+                for join in [StrokeJoin::Miter, StrokeJoin::Round, StrokeJoin::Bevel] {
+                    let packed = pack_shape_flags(kind, cap, join);
+                    let bits = packed as u32;
+                    assert_eq!(bits & 3, kind);
+                    assert_eq!((bits >> 2) & 3, stroke_cap_code(cap));
+                    assert_eq!((bits >> 4) & 3, stroke_join_code(join));
+                    assert_eq!(packed, bits as f32, "flags must be exact in f32");
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn mesh_vertex_layout_matches_the_wgsl_input() {
+        // {pos: vec2<f32>, uv: vec2<f32>, shape_idx: u32} = 20 bytes, no
+        // padding — the vertex buffer layout stride relies on it.
+        assert_eq!(std::mem::size_of::<MeshVertex>(), 20);
+    }
+
+    /// f32 port of `sdf_arc_band` (shape.wgsl), operation for operation: the
+    /// same ra/rb derivation and clamp, the same mirror trick (`abs` on the
+    /// rotated x), the same cap branches.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn sdf_arc_band_reference(
+        p: [f32; 2],
+        center: [f32; 2],
+        inner: f32,
+        outer: f32,
+        mid_sin_cos: [f32; 2],
+        half_sin_cos: [f32; 2],
+        cap: u32,
+    ) -> f32 {
+        let ra = (outer + inner) * 0.5;
+        let rb = ((outer - inner) * 0.5).max(0.0);
+        let sm = mid_sin_cos[0];
+        let cm = mid_sin_cos[1];
+        let d = [p[0] - center[0], p[1] - center[1]];
+        let mut q = [-sm * d[0] + cm * d[1], cm * d[0] + sm * d[1]];
+        q[0] = q[0].abs();
+        let sc = half_sin_cos;
+        let mut dist = if sc[1] * q[0] > sc[0] * q[1] {
+            let dx = q[0] - sc[0] * ra;
+            let dy = q[1] - sc[1] * ra;
+            (dx * dx + dy * dy).sqrt() - rb
+        } else {
+            ((q[0] * q[0] + q[1] * q[1]).sqrt() - ra).abs() - rb
+        };
+        let plane = sc[1] * q[0] - sc[0] * q[1];
+        // STROKE_CAP_BUTT = 0, STROKE_CAP_SQUARE = 2, as in the shader.
+        if cap == 0 {
+            dist = dist.max(plane);
+        } else if cap == 2 {
+            dist = dist.max(plane - rb);
+        }
+        dist
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn point_in_triangle(p: [f64; 2], tri: &[[f64; 2]; 3]) -> bool {
+        let side = |a: [f64; 2], b: [f64; 2]| {
+            (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+        };
+        let d0 = side(tri[0], tri[1]);
+        let d1 = side(tri[1], tri[2]);
+        let d2 = side(tri[2], tri[0]);
+        let has_neg = d0 < 0.0 || d1 < 0.0 || d2 < 0.0;
+        let has_pos = d0 > 0.0 || d1 > 0.0 || d2 > 0.0;
+        !(has_neg && has_pos)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn converted_arc_shape(arc: cranpose_ui_graphics::ArcGeometry, root_scale: f32) -> ShapeData {
+        let bounds = arc.bounds();
+        let mut shape = test_shape(0, BlendMode::SrcOver);
+        shape.rect = bounds;
+        shape.local_rect = bounds;
+        shape.quad = [
+            [bounds.x, bounds.y],
+            [bounds.x + bounds.width, bounds.y],
+            [bounds.x, bounds.y + bounds.height],
+            [bounds.x + bounds.width, bounds.y + bounds.height],
+        ];
+        shape.arc = Some(arc);
+        let mut converted = ShapeData::zeroed();
+        convert_shape_into_slots(&shape, root_scale, 0, &mut converted, &mut []);
+        converted
+    }
+
+    /// The containment invariant, checked directly: every point of the
+    /// capture box whose (exactly ported) SDF keeps it must lie inside the
+    /// emitted triangle set. Thin/thick, tiny/huge, full rings, near-zero
+    /// and near-TAU sweeps, all caps, `Ri == 0` discs and pie wedges.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_contains_every_band_pixel() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        let center = Point::new(250.0, 250.0);
+        let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
+            // full ring, thin band
+            (90.0, 100.0, 0.0, tau, StrokeCap::Round),
+            // sweep > TAU normalizes to a closed ring
+            (80.0, 100.0, 1.0, 10.0, StrokeCap::Butt),
+            // full disc: Ri == 0
+            (0.0, 40.0, 0.0, tau, StrokeCap::Round),
+            // thick partial arc, every cap
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Butt),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Square),
+            // thin, axis-crossing sweep
+            (99.0, 101.0, 3.0, 4.0, StrokeCap::Round),
+            // tiny
+            (0.6, 2.0, 0.3, 1.2, StrokeCap::Butt),
+            // huge radius, thin band
+            (1900.0, 1904.0, 0.1, 0.35, StrokeCap::Square),
+            // near-zero sweep
+            (40.0, 60.0, 5.0, 1e-3, StrokeCap::Round),
+            // sweep near TAU: the cap pads wrap the range closed
+            (40.0, 60.0, 0.2, tau - 1e-3, StrokeCap::Butt),
+            // rb_m >= ra: the cap disc wraps the center (pie wedge)
+            (0.0, 3.0, 1.0, 2.0, StrokeCap::Round),
+            // filled annular sector (butt radial ends)
+            (20.0, 60.0, 4.5, 1.9, StrokeCap::Butt),
+        ];
+        for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
+            // 2.75 is deliberately non-dyadic: quad corners and rect then
+            // disagree by an ulp, which the axis-aligned gate must tolerate
+            // (an equality-with-rect gate silently failed every arc on the
+            // Huawei at scale 2.75).
+            for root_scale in [1.0f32, 2.0, 2.75] {
+                let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
+                assert!(!arc.is_degenerate(), "case {case} must be drawable");
+                let converted = converted_arc_shape(arc, root_scale);
+                let band = arc_mesh_band(&converted)
+                    .unwrap_or_else(|| panic!("case {case} must qualify for meshing"));
+                let mut vertices = Vec::new();
+                let mut indices = Vec::new();
+                let segments =
+                    emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+                        .unwrap_or_else(|| panic!("case {case} must produce a mesh"));
+                assert!(segments >= ARC_MESH_MIN_SEGMENTS);
+                // The rasterized set is the indexed walk: triangles are index
+                // triples into the shared vertex list.
+                let position = |index: u32| {
+                    let p = vertices[index as usize].position;
+                    [p[0] as f64, p[1] as f64]
+                };
+                let triangles: Vec<[[f64; 2]; 3]> = indices
+                    .chunks_exact(3)
+                    .map(|tri| [position(tri[0]), position(tri[1]), position(tri[2])])
+                    .collect();
+
+                // Sample the QUAD box, not `rect`: quad expansion rasterizes the
+                // quad, the mesh clips to the quad, and at non-dyadic root
+                // scales the two boxes differ by an ulp.
+                let [qx, qy, ..] = converted.quad01;
+                let [_, _, qr, qb] = converted.quad23;
+                let (rw, rh) = (qr - qx, qb - qy);
+                let cap_bits = (converted.stroke_params[1].max(0.0) as u32 >> 2) & 3;
+                let step = (rw.max(rh) / 400.0).clamp(0.25, 2.0);
+                let mut band_points = 0usize;
+                let mut y = qy;
+                while y <= qb {
+                    let mut x = qx;
+                    while x <= qr {
+                        let dist = sdf_arc_band_reference(
+                            [x, y],
+                            [converted.arc_params[0], converted.arc_params[1]],
+                            converted.stroke_params[3],
+                            converted.stroke_params[2],
+                            [converted.radii[0], converted.radii[1]],
+                            [converted.radii[2], converted.radii[3]],
+                            cap_bits,
+                        );
+                        if dist <= 0.5 {
+                            band_points += 1;
+                            let p = [x as f64, y as f64];
+                            assert!(
+                                triangles.iter().any(|tri| point_in_triangle(p, tri)),
+                                "case {case} scale {root_scale}: band point ({x}, {y}) \
+                                 dist {dist} escapes the mesh"
+                            );
+                        }
+                        x += step;
+                    }
+                    y += step;
+                }
+                assert!(
+                    band_points > 0,
+                    "case {case} scale {root_scale}: the sampling grid never hit the band"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_passthrough_replicates_the_quad_expansion() {
+        let shape = test_shape(0, BlendMode::SrcOver);
+        let mut converted = ShapeData::zeroed();
+        convert_shape_into_slots(&shape, 1.0, 0, &mut converted, &mut []);
+        let build =
+            build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
+        assert_eq!(build.meshed_arcs, 0);
+        assert_eq!(build.passthrough, 1);
+        // Four shared corner vertices, six indices — amplification-free.
+        assert_eq!(build.vertices.len(), 4);
+        assert_eq!(build.index_prefix, vec![0, 6]);
+        assert_eq!(build.indices, vec![0, 1, 2, 2, 1, 3]);
+        let corners = [
+            ([converted.quad01[0], converted.quad01[1]], [0.0f32, 0.0]),
+            ([converted.quad01[2], converted.quad01[3]], [1.0, 0.0]),
+            ([converted.quad23[0], converted.quad23[1]], [0.0, 1.0]),
+            ([converted.quad23[2], converted.quad23[3]], [1.0, 1.0]),
+        ];
+        for (vertex, corner) in build.vertices.iter().zip(corners) {
+            assert_eq!(vertex.position, corner.0);
+            assert_eq!(vertex.uv, corner.1);
+            assert_eq!(vertex.shape_idx, 0);
+        }
+        // The indexed walk expands to vs_main's slot order: triangles
+        // (0, 1, 2) and (2, 1, 3).
+        for (index, corner) in build.indices.iter().zip([0usize, 1, 2, 2, 1, 3]) {
+            assert_eq!(build.vertices[*index as usize].position, corners[corner].0);
+            assert_eq!(build.vertices[*index as usize].uv, corners[corner].1);
+        }
+    }
+
+    /// The indexed-topology contract for arcs whose trapezoids survive
+    /// clipping whole: every band boundary contributes exactly one (inner,
+    /// outer) vertex pair, both adjacent trapezoids reference it through the
+    /// index list, and a closed ring's last segment wraps around to boundary
+    /// zero's pair — one seam vertex pair instead of bitwise-equal copies.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_indices_share_boundary_vertices_and_wrap_closed_rings() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        // (sweep, expected boundary count relation): a closed ring wraps
+        // (boundaries == segments), an open arc does not (segments + 1).
+        for (sweep, closed) in [(tau, true), (1.9f32, false)] {
+            let arc = ArcGeometry::new(
+                Point::new(250.0, 250.0),
+                80.0,
+                100.0,
+                0.7,
+                sweep,
+                StrokeCap::Round,
+            );
+            let mut converted = converted_arc_shape(arc, 1.0);
+            // Inflate the quad box (and rect, for uv) far beyond the dilated
+            // band so NO trapezoid is clipped: every segment must take the
+            // shared-boundary path.
+            converted.rect = [0.0, 0.0, 500.0, 500.0];
+            converted.quad01 = [0.0, 0.0, 500.0, 0.0];
+            converted.quad23 = [0.0, 500.0, 500.0, 500.0];
+            let band = arc_mesh_band(&converted).expect("arc must qualify");
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            let segments = emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+                .expect("arc must mesh");
+            let boundary_count = if closed { segments } else { segments + 1 };
+            assert_eq!(
+                vertices.len(),
+                2 * boundary_count,
+                "closed={closed}: every boundary owns exactly one (inner, outer) pair"
+            );
+            assert_eq!(indices.len(), 6 * segments);
+            // Emission order is boundary order: boundary j's pair is
+            // (2j, 2j + 1). Each segment must reference its own boundary and
+            // its successor's — modulo the count exactly when closed.
+            for j in 0..segments {
+                let jb = (j + 1) % boundary_count;
+                let (in_a, out_a) = (2 * j as u32, 2 * j as u32 + 1);
+                let (in_b, out_b) = (2 * jb as u32, 2 * jb as u32 + 1);
+                assert_eq!(
+                    indices[6 * j..6 * j + 6],
+                    [in_a, out_a, out_b, in_a, out_b, in_b],
+                    "closed={closed}: segment {j} must share its boundary pairs"
+                );
+            }
+            if closed {
+                // The wrap made concrete: the final segment indexes boundary
+                // zero's vertices.
+                assert_eq!(indices[6 * segments - 1], 0);
+            }
+            // Inner vertices ride the dilated inner radius, outer vertices
+            // the pushed-out chord radius — sanity that pairs are ordered
+            // (inner, outer).
+            for pair in vertices.chunks_exact(2) {
+                let radius = |v: &MeshVertex| {
+                    let dx = v.position[0] - 250.0;
+                    let dy = v.position[1] - 250.0;
+                    (dx * dx + dy * dy).sqrt()
+                };
+                assert!(radius(&pair[0]) < radius(&pair[1]));
+            }
+        }
+    }
+
+    /// The private-vertex arm of the indexed topology: under the real
+    /// tight-AABB quad the pushed-out chord vertices near the box edges get
+    /// clipped, and those trapezoids must fan over vertices of their own —
+    /// appended after the shared block, carrying clip-plane coordinates —
+    /// while untouched diagonal trapezoids still share boundary pairs.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_clipped_segments_fan_over_private_vertices() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let arc = ArcGeometry::new(
+            Point::new(250.0, 250.0),
+            80.0,
+            100.0,
+            0.0,
+            cranpose_ui_graphics::TAU,
+            StrokeCap::Round,
+        );
+        let converted = converted_arc_shape(arc, 1.0);
+        let band = arc_mesh_band(&converted).expect("ring must qualify");
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        emit_arc_band_mesh(&converted, 0, &band, &mut vertices, &mut indices)
+            .expect("ring must mesh");
+        // Sharing must actually happen: a shared boundary vertex is used by
+        // both of its trapezoids' fans (at least three triangle references).
+        let mut uses = vec![0usize; vertices.len()];
+        for &index in &indices {
+            uses[index as usize] += 1;
+        }
+        assert!(
+            uses.iter().any(|&count| count >= 3),
+            "some boundary vertices must be shared across trapezoids"
+        );
+        // Clipping must actually happen, and clipped polygons index private
+        // vertices lying bitwise ON the quad box (the clipper writes the
+        // bound coordinate exactly; boundary vertices never touch the box —
+        // inner ones sit strictly inside, pushed-out outer ones strictly
+        // outside near the extremes, where they are clipped).
+        let [left, top, ..] = converted.quad01;
+        let [.., right, bottom] = converted.quad23;
+        let clipped: Vec<&MeshVertex> = vertices
+            .iter()
+            .filter(|vertex| {
+                let [x, y] = vertex.position;
+                x == left || x == right || y == top || y == bottom
+            })
+            .collect();
+        assert!(
+            !clipped.is_empty(),
+            "the tight box must clip the pushed-out chord vertices"
+        );
+        // Fewer unique vertices than the non-indexed emitter's
+        // three-per-triangle — the amplification this change removes.
+        assert!(
+            vertices.len() < indices.len(),
+            "{} unique vertices should undercut {} triangle corners",
+            vertices.len(),
+            indices.len()
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn arc_mesh_budget_overflow_falls_back_to_whole_slot_passthrough() {
+        use cranpose_ui_graphics::ArcGeometry;
+        // 100 large full rings mesh at the 64-segment ceiling (well over
+        // 4 KB of vertices + indices each), far past the byte budget
+        // max(100 * ~960 B, ~80 KB) — the builder must refuse the whole
+        // slot rather than truncate.
+        let arc = ArcGeometry::new(
+            Point::new(2000.0, 2000.0),
+            1690.0,
+            1710.0,
+            0.0,
+            cranpose_ui_graphics::TAU,
+            StrokeCap::Round,
+        );
+        let converted = converted_arc_shape(arc, 1.0);
+        let shapes = vec![converted; 100];
+        assert!(build_arc_mesh_vertices(&shapes).is_none());
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn shape_batch_limits_follow_uniform_binding_size() {
-        // Desktop-class 64 KiB bindings keep the full compile-time capacities.
+        // With a 160-byte ShapeData, even a desktop-class 64 KiB binding can no
+        // longer hold the full compile-time cap: 65536 / 160 = 409 < 768.
+        let desktop_shapes = 65536 / std::mem::size_of::<ShapeData>();
+        assert_eq!(desktop_shapes, 409);
         assert_eq!(
             ShapeBatchLimits::desktop(),
             ShapeBatchLimits {
-                max_shapes_per_batch: MAX_SHAPES_PER_BATCH,
+                max_shapes_per_batch: desktop_shapes.min(MAX_SHAPES_PER_BATCH),
                 max_gradient_stops: MAX_GRADIENT_STOPS,
+                storage: false,
             }
         );
 
         // The 16 KiB downlevel/GLES minimum must shrink batches to fit:
-        // 16384 / 80-byte ShapeData = 204 shapes, 16384 / 32-byte stop = 512.
+        // 16384 / 160-byte ShapeData = 102 shapes, 16384 / 32-byte stop = 512.
         let downlevel = ShapeBatchLimits::for_uniform_binding_size(16384);
-        assert_eq!(downlevel.max_shapes_per_batch, 16384 / 80);
+        assert_eq!(downlevel.max_shapes_per_batch, 16384 / 160);
+        assert_eq!(downlevel.max_shapes_per_batch, 102);
         assert_eq!(downlevel.max_gradient_stops, 512.min(MAX_GRADIENT_STOPS));
         assert!(downlevel.max_shapes_per_batch * std::mem::size_of::<ShapeData>() <= 16384);
         assert!(downlevel.max_gradient_stops * std::mem::size_of::<GradientStop>() <= 16384);
@@ -14755,11 +18328,273 @@ mod tests {
     }
 
     #[test]
-    fn native_shape_shader_source_uses_native_batch_limits() {
-        let source = shape_shader_source(ShapeBatchLimits::desktop());
+    fn storage_shape_batch_limits_uncap_the_batch_and_start_small() {
+        // A typical 128 MiB storage binding hits the compile-time ceilings,
+        // not the device limit: one batch holds the whole scene.
+        let storage = ShapeBatchLimits::for_storage_binding_size(128 << 20);
+        assert!(storage.storage);
+        assert_eq!(storage.max_shapes_per_batch, MAX_SHAPES_PER_STORAGE_BATCH);
+        assert_eq!(
+            storage.max_gradient_stops,
+            MAX_GRADIENT_STOPS_PER_STORAGE_BATCH
+        );
 
-        assert!(source.contains(&format!("array<ShapeData, {MAX_SHAPES_PER_BATCH}>")));
-        assert!(source.contains(&format!("array<GradientStop, {MAX_GRADIENT_STOPS}>")));
+        // The buffers must not be allocated at the multi-megabyte ceiling up
+        // front; they start small and grow on demand.
+        assert_eq!(
+            storage.initial_shape_capacity(),
+            INITIAL_STORAGE_BATCH_CAPACITY
+        );
+        assert_eq!(
+            storage.initial_gradient_capacity(),
+            INITIAL_STORAGE_BATCH_CAPACITY
+        );
+        assert_eq!(
+            storage.data_binding_type(),
+            wgpu::BufferBindingType::Storage { read_only: true }
+        );
+        assert!(storage
+            .data_buffer_usage()
+            .contains(wgpu::BufferUsages::STORAGE));
+
+        // Uniform mode keeps its start-at-the-cap invariant: a uniform
+        // binding smaller than the shader's fixed array fails validation.
+        let uniform = ShapeBatchLimits::desktop();
+        assert_eq!(
+            uniform.initial_shape_capacity(),
+            uniform.max_shapes_per_batch
+        );
+        assert_eq!(
+            uniform.initial_gradient_capacity(),
+            uniform.max_gradient_stops
+        );
+        assert_eq!(
+            uniform.data_binding_type(),
+            wgpu::BufferBindingType::Uniform
+        );
+        assert!(uniform
+            .data_buffer_usage()
+            .contains(wgpu::BufferUsages::UNIFORM));
+    }
+
+    #[test]
+    fn storage_shape_shader_swaps_the_arrays_to_runtime_sized_storage() {
+        let source = shape_shader_source(ShapeBatchLimits::for_storage_binding_size(128 << 20));
+        assert!(
+            source.contains("var<storage, read> shape_data: array<ShapeData>;"),
+            "storage-mode shader must declare a runtime-sized shape array"
+        );
+        assert!(
+            source.contains("var<storage, read> gradient_stops: array<GradientStop>;"),
+            "storage-mode shader must declare a runtime-sized gradient array"
+        );
+        assert!(
+            !source.contains("var<uniform> shape_data"),
+            "the uniform shape declaration must be fully replaced"
+        );
+        assert!(
+            !source.contains("var<uniform> gradient_stops"),
+            "the uniform gradient declaration must be fully replaced"
+        );
+        assert!(
+            source.contains("var<storage, read> paint: array<vec4<f32>>;"),
+            "storage-mode shader must declare the retained paint array"
+        );
+        assert!(
+            source.contains("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)"),
+            "storage-mode shader must read paint under the paint_select flag"
+        );
+        assert!(
+            source.contains("fn vs_mesh("),
+            "the storage rewrite must leave the retained-mesh vertex entry intact"
+        );
+        assert!(
+            source.contains("fn vs_shape_instanced("),
+            "the storage rewrite must leave the instanced-quad vertex entry intact"
+        );
+        assert_eq!(
+            source
+                .matches("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)")
+                .count(),
+            3,
+            "vs_main, vs_shape_instanced and vs_mesh must all read paint under \
+             the paint_select flag (meshless retained draws ride the instanced \
+             entry when the selection is latched on)"
+        );
+
+        // The storage variant is what native devices actually compile; it
+        // must be valid WGSL, not just textually plausible.
+        let module = naga::front::wgsl::parse_str(&source)
+            .expect("storage-mode shape shader must parse as WGSL");
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .expect("storage-mode shape shader must validate for WebGPU");
+    }
+
+    #[test]
+    fn uniform_shape_shader_keeps_the_in_record_color_and_no_paint_binding() {
+        // The base text serves WebGL-class uniform devices, which can bind
+        // no storage buffers: the paint array and its select must exist only
+        // in the storage-mode rewrite.
+        for source in [
+            Cow::Borrowed(shaders::SHADER),
+            shape_shader_source(ShapeBatchLimits::desktop()),
+        ] {
+            assert!(
+                !source.contains("paint: array"),
+                "the uniform variant must not declare a paint array"
+            );
+            assert!(
+                source.contains("output.color = shape.color;"),
+                "the uniform variant must read the color from ShapeData \
+                 (this literal is also what `shape_shader_source` rewrites)"
+            );
+            assert!(
+                source.contains("paint_select: f32"),
+                "SimilarityTransform must name the flag field in both \
+                 variants; the Rust mirror is Pod and uploads raw bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_shape_shader_array_length_fits_the_downlevel_uniform_floor() {
+        // The wasm build uses `shaders::SHADER` verbatim, so its declared array
+        // length is simultaneously the wasm batch cap and the WebGL binding
+        // size. It must fit the 16 KiB floor exactly.
+        assert!(
+            shaders::SHADER.contains("array<ShapeData, 102>"),
+            "shape.wgsl array length must stay in sync with \
+             `shape_shader_source`'s replace string and MAX_SHAPES_PER_BATCH"
+        );
+        assert!(102 * std::mem::size_of::<ShapeData>() <= 16384);
+        assert!(103 * std::mem::size_of::<ShapeData>() > 16384);
+    }
+
+    #[test]
+    fn glyph_atlas_doubles_on_overflow_and_stops_at_the_device_ceiling() {
+        // Every overflow buys one doubling, so an app that needs the old fixed
+        // 4096 atlas reaches it in three resets and then stays there.
+        assert_eq!(
+            next_glyph_atlas_size(TEXT_GLYPH_ATLAS_MIN_SIZE, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            1024
+        );
+        assert_eq!(
+            next_glyph_atlas_size(2048, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            TEXT_GLYPH_ATLAS_MAX_SIZE
+        );
+        assert_eq!(
+            next_glyph_atlas_size(TEXT_GLYPH_ATLAS_MAX_SIZE, TEXT_GLYPH_ATLAS_MAX_SIZE),
+            TEXT_GLYPH_ATLAS_MAX_SIZE
+        );
+
+        // A device that only grants `downlevel_defaults()`'s 2048 caps the
+        // growth there rather than failing to create the texture.
+        assert_eq!(next_glyph_atlas_size(1024, 2048), 2048);
+        assert_eq!(next_glyph_atlas_size(2048, 2048), 2048);
+
+        // Never zero and never wrapping, whatever the ceiling turns out to be.
+        assert_eq!(next_glyph_atlas_size(u32::MAX, 4096), 4096);
+        assert_eq!(next_glyph_atlas_size(0, 0), 1);
+    }
+
+    #[test]
+    fn glyph_atlas_uv_rect_normalizes_against_the_atlas_it_was_placed_in() {
+        // The atlas grows, so a UV is only meaningful together with the size of
+        // the texture the entry came from. Reading the size off a constant is
+        // what would make a grown atlas sample the wrong glyph.
+        let entry = GlyphAtlasEntry {
+            x: 128,
+            y: 256,
+            width: 16,
+            height: 32,
+        };
+
+        let small = glyph_atlas_uv_rect(entry, 512);
+        let large = glyph_atlas_uv_rect(entry, 4096);
+
+        assert_eq!(small.min, [128.0 / 512.0, 256.0 / 512.0]);
+        assert_eq!(large.min, [128.0 / 4096.0, 256.0 / 4096.0]);
+        assert_eq!(small.max, [144.0 / 512.0, 288.0 / 512.0]);
+        assert_eq!(large.max, [144.0 / 4096.0, 288.0 / 4096.0]);
+    }
+
+    #[test]
+    fn native_shape_shader_source_uses_native_batch_limits() {
+        let limits = ShapeBatchLimits::desktop();
+        let source = shape_shader_source(limits);
+
+        assert!(source.contains(&format!(
+            "array<ShapeData, {}>",
+            limits.max_shapes_per_batch
+        )));
+        assert!(source.contains(&format!(
+            "array<GradientStop, {}>",
+            limits.max_gradient_stops
+        )));
+        // Sanity: the substitution actually fired rather than silently leaving
+        // the downlevel literal in place.
+        assert!(!source.contains("array<ShapeData, 146>"));
+    }
+
+    #[test]
+    fn stroked_and_arc_shapes_batch_together_with_fills() {
+        // Strokes and arcs ride the same pipeline, the same ShapeData array and
+        // the same blend state as fills, so a run of mixed shapes must stay a
+        // single batch. If they ever split the batch, a polar UI built from
+        // hundreds of arcs would pay a draw call per arc — precisely the cost
+        // this primitive exists to remove.
+        let fill = test_shape(0, BlendMode::SrcOver);
+        let mut stroked = test_shape(1, BlendMode::SrcOver);
+        stroked.stroke = Some(
+            cranpose_ui_graphics::Stroke::new(3.0)
+                .with_cap(StrokeCap::Round)
+                .with_join(StrokeJoin::Bevel),
+        );
+        let mut arc = test_shape(2, BlendMode::SrcOver);
+        arc.arc = Some(cranpose_ui_graphics::ArcGeometry::new(
+            Point::new(4.0, 4.0),
+            2.0,
+            4.0,
+            0.0,
+            1.0,
+            StrokeCap::Round,
+        ));
+        let trailing_fill = test_shape(3, BlendMode::SrcOver);
+
+        assert!(!fill.has_stroke_or_arc());
+        assert!(stroked.has_stroke_or_arc());
+        assert!(arc.has_stroke_or_arc());
+        assert!(!trailing_fill.has_stroke_or_arc());
+
+        let shapes = vec![fill, stroked, arc, trailing_fill];
+        let ordered_items: Vec<_> = (0..shapes.len())
+            .map(|index| (index, SegmentDrawItem::Shape(index)))
+            .collect();
+        let images = Vec::new();
+
+        let commands: Vec<_> = SegmentCommandIter::new(
+            &ordered_items,
+            &shapes,
+            &images,
+            ShapeBatchLimits::desktop(),
+        )
+        .collect();
+
+        assert_eq!(
+            commands,
+            vec![SegmentRenderCommand::DrawChunk(chunk(&[
+                SegmentBatchPlan::Shape {
+                    start: 0,
+                    end: 4,
+                    blend_mode: BlendMode::SrcOver,
+                }
+            ]))],
+            "mixed fill/stroke/arc runs must stay one batch"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -14872,21 +18707,24 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_shape_uniform_overflow() {
-        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let segment = chunk(&[
             SegmentBatchPlan::Shape {
                 start: 0,
-                end: MAX_SHAPES_PER_BATCH,
+                end: desktop_batch_cap,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH,
-                end: MAX_SHAPES_PER_BATCH + 1,
+                start: desktop_batch_cap,
+                end: desktop_batch_cap + 1,
                 blend_mode: BlendMode::SrcOver,
             },
         ]);
@@ -14906,11 +18744,11 @@ mod tests {
             NativeSegmentFusionPartition {
                 chunk: chunk(&[SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 }]),
                 budget: NativeSegmentFusionBudget {
-                    shape_count: MAX_SHAPES_PER_BATCH,
+                    shape_count: desktop_batch_cap,
                     gradient_stop_count: 0,
                 },
             }
@@ -14919,8 +18757,8 @@ mod tests {
             partitions[1],
             NativeSegmentFusionPartition {
                 chunk: chunk(&[SegmentBatchPlan::Shape {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 }]),
                 budget: NativeSegmentFusionBudget {
@@ -15045,33 +18883,36 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn native_segment_fusion_partitions_preserve_non_shape_order_at_budget_boundary() {
-        let ordered_items: Vec<_> = (0..MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .chain([
-                (MAX_SHAPES_PER_BATCH, SegmentDrawItem::Image(0)),
+                (desktop_batch_cap, SegmentDrawItem::Image(0)),
                 (
-                    MAX_SHAPES_PER_BATCH + 1,
-                    SegmentDrawItem::Shape(MAX_SHAPES_PER_BATCH),
+                    desktop_batch_cap + 1,
+                    SegmentDrawItem::Shape(desktop_batch_cap),
                 ),
             ])
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let segment = chunk(&[
             SegmentBatchPlan::Shape {
                 start: 0,
-                end: MAX_SHAPES_PER_BATCH,
+                end: desktop_batch_cap,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Image {
-                start: MAX_SHAPES_PER_BATCH,
-                end: MAX_SHAPES_PER_BATCH + 1,
+                start: desktop_batch_cap,
+                end: desktop_batch_cap + 1,
                 blend_mode: BlendMode::SrcOver,
             },
             SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH + 1,
-                end: MAX_SHAPES_PER_BATCH + 2,
+                start: desktop_batch_cap + 1,
+                end: desktop_batch_cap + 2,
                 blend_mode: BlendMode::SrcOver,
             },
         ]);
@@ -15091,12 +18932,12 @@ mod tests {
             chunk(&[
                 SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 },
                 SegmentBatchPlan::Image {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 },
             ])
@@ -15104,8 +18945,8 @@ mod tests {
         assert_eq!(
             partitions[1].chunk,
             chunk(&[SegmentBatchPlan::Shape {
-                start: MAX_SHAPES_PER_BATCH + 1,
-                end: MAX_SHAPES_PER_BATCH + 2,
+                start: desktop_batch_cap + 1,
+                end: desktop_batch_cap + 2,
                 blend_mode: BlendMode::SrcOver,
             }])
         );
@@ -15156,10 +18997,13 @@ mod tests {
 
     #[test]
     fn segment_command_iter_splits_contiguous_shape_runs_at_uniform_batch_limit() {
-        let ordered_items: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        // The uniform batch cap is derived from the device binding size and
+        // the 112-byte ShapeData, not from the compile-time ceiling.
+        let desktop_batch_cap = ShapeBatchLimits::desktop().max_shapes_per_batch;
+        let ordered_items: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| (index, SegmentDrawItem::Shape(index)))
             .collect();
-        let shapes: Vec<_> = (0..=MAX_SHAPES_PER_BATCH)
+        let shapes: Vec<_> = (0..=desktop_batch_cap)
             .map(|index| test_shape(index, BlendMode::SrcOver))
             .collect();
         let images = Vec::new();
@@ -15177,12 +19021,12 @@ mod tests {
             vec![SegmentRenderCommand::DrawChunk(chunk(&[
                 SegmentBatchPlan::Shape {
                     start: 0,
-                    end: MAX_SHAPES_PER_BATCH,
+                    end: desktop_batch_cap,
                     blend_mode: BlendMode::SrcOver,
                 },
                 SegmentBatchPlan::Shape {
-                    start: MAX_SHAPES_PER_BATCH,
-                    end: MAX_SHAPES_PER_BATCH + 1,
+                    start: desktop_batch_cap,
+                    end: desktop_batch_cap + 1,
                     blend_mode: BlendMode::SrcOver,
                 },
             ]))]
@@ -15387,6 +19231,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15404,6 +19249,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15421,6 +19267,7 @@ mod tests {
                         height: 40.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15512,6 +19359,7 @@ mod tests {
                         height: 80.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15618,6 +19466,7 @@ mod tests {
                         height: 100.0,
                     },
                     brush: Brush::solid(Color::WHITE),
+                    stroke: None,
                 },
                 clip: None,
             }),
@@ -15680,5 +19529,103 @@ mod tests {
             max_shadow_z,
             min_content_z
         );
+    }
+
+    /// One retained bundle op key with the fields the invalidation tests
+    /// vary; the rest stay representative constants.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bundle_op(slot: u32, epoch: Option<u64>, first: u32, last: u32) -> RetainedBundleOpKey {
+        RetainedBundleOpKey {
+            slot,
+            capture_epoch: epoch,
+            first,
+            last,
+            retained_index: slot,
+            has_mesh: false,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn bundle_key(ops: &[RetainedBundleOpKey]) -> RetainedBundleKey {
+        RetainedBundleKey { ops: ops.to_vec() }
+    }
+
+    /// The same stretch on consecutive frames reuses its bundle: one
+    /// rebuild, then cached executes.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_reuses_stable_keys() {
+        let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+        let ops = [bundle_op(3, Some(7), 0, 40), bundle_op(5, Some(9), 4, 12)];
+        let key = bundle_key(&ops);
+
+        assert!(!cache.hit(&key), "empty cache must miss");
+        cache.insert(key.clone(), 111);
+        assert_eq!(cache.get(&key), Some(&111));
+        cache.end_frame();
+
+        for _ in 0..3 {
+            assert!(cache.hit(&bundle_key(&ops)), "stable key must stay cached");
+            cache.end_frame();
+        }
+        assert_eq!(cache.stats(), (1, 3), "one rebuild, three cached executes");
+    }
+
+    /// Recapture (epoch bump), span reorder, count change, range change and
+    /// slot release each change the key, so a stale bundle can never satisfy
+    /// the lookup.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_invalidates_on_any_op_change() {
+        let ops = [bundle_op(3, Some(7), 0, 40), bundle_op(5, Some(9), 4, 12)];
+        let variants: [Vec<RetainedBundleOpKey>; 5] = [
+            // Recaptured slot 3: same id, bumped epoch.
+            vec![bundle_op(3, Some(8), 0, 40), bundle_op(5, Some(9), 4, 12)],
+            // Reordered stretch.
+            vec![bundle_op(5, Some(9), 4, 12), bundle_op(3, Some(7), 0, 40)],
+            // Op count changed.
+            vec![bundle_op(3, Some(7), 0, 40)],
+            // Draw range changed.
+            vec![bundle_op(3, Some(7), 0, 41), bundle_op(5, Some(9), 4, 12)],
+            // Slot 5 released: epoch gone.
+            vec![bundle_op(3, Some(7), 0, 40), bundle_op(5, None, 4, 12)],
+        ];
+        for changed in variants {
+            let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+            cache.insert(bundle_key(&ops), 111);
+            cache.end_frame();
+            assert!(
+                !cache.hit(&RetainedBundleKey {
+                    ops: changed.clone()
+                }),
+                "changed key {changed:?} must not reuse the stale bundle"
+            );
+        }
+    }
+
+    /// Entries a frame does not use are evicted at its end — bundles pin
+    /// slot buffers, so unused ones must not accumulate — and `clear` (the
+    /// slot-release path) empties the cache outright.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_evicts_unused_entries() {
+        let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+        let stale = bundle_key(&[bundle_op(1, Some(1), 0, 6)]);
+        let live = bundle_key(&[bundle_op(2, Some(2), 0, 6)]);
+        cache.insert(stale.clone(), 1);
+        cache.insert(live.clone(), 2);
+        cache.end_frame();
+
+        assert!(cache.hit(&live));
+        cache.end_frame();
+
+        assert!(
+            !cache.hit(&stale),
+            "entry unused for a frame must have been evicted"
+        );
+        assert!(cache.hit(&live), "used entry must survive eviction");
+
+        cache.clear();
+        assert!(!cache.hit(&live), "clear must drop every entry");
     }
 }

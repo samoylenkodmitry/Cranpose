@@ -6,6 +6,11 @@ use web_time::Instant;
 const FRAME_HISTORY_SIZE: usize = 60;
 const EVENT_DRIVEN_IDLE_GAP_MS: f32 = 50.0;
 
+fn recomposition_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_RECOMP_DIAG").is_some())
+}
+
 #[derive(Debug)]
 pub(crate) struct FpsMonitor {
     tracker: FpsTracker,
@@ -162,6 +167,12 @@ impl FpsTracker {
             self.recomps_per_second = recomposition_count.saturating_sub(self.last_recomp_count);
             self.last_recomp_count = recomposition_count;
             self.last_recomp_calc = frame_finished_at;
+            if recomposition_diag_enabled() {
+                eprintln!(
+                    "[recomp] {}/s frames={:.1}/s total={}",
+                    self.recomps_per_second, self.last_fps, recomposition_count
+                );
+            }
         }
     }
 

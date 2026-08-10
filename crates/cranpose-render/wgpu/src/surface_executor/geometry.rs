@@ -85,7 +85,7 @@ pub(crate) fn content_effect_pixel_rect(
     width: u32,
     height: u32,
 ) -> [f32; 4] {
-    if std::env::var_os("CRANPOSE_BACKDROP_DIAG").is_some() {
+    if cranpose_core::env_flag!("CRANPOSE_BACKDROP_DIAG") {
         eprintln!(
             "[effect-rect-diag] caller={} content={content_rect:?} surface={surface_rect:?} tex=({width},{height})",
             std::panic::Location::caller()

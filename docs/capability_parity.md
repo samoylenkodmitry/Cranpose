@@ -33,6 +33,8 @@ never silently pretend.
 | camera            | ■   | □ (cranscan keeps its system-camera round-trip; camera2 port is the next arc) | □ | □ | frames as RGBA `CameraFrame` |
 | background activity | ■ | □ (FGS is app policy) | □ | □ | documented |
 | file save dialog  | □ (export picker still open) | ■ ACTION_CREATE_DOCUMENT | ■ rfd save | ■ browser download | `FilePicker::save_file`; killed cranscan's direct rfd |
+| launch arguments  | ● argv (`simctl launch`, `launchArguments`) | ■ intent extras + `onNewIntent` | ● argv | □ (query string still open) | `launch_args()`; `is_debuggable()` = `FLAG_DEBUGGABLE` on Android, `debug_assertions` elsewhere |
+| in-app purchases  | ■ StoreKit 2 (`cranpose-storekit`) | ■ Play Billing (`playbilling` feature + `CranposeBilling`) | □ | □ | `purchases::store_state()` snapshot read from the frame loop; a platform without a store reports `StorePhase::Unavailable` and owns nothing, so a build with no backend never grants a paid entitlement by accident |
 
 ## Structural fixes
 
@@ -64,6 +66,8 @@ never silently pretend.
 - Android camera2 backend for `cranpose_services::camera` (cranscan keeps its
   app-side system-camera round-trip + preview until then).
 - Web system-clipboard write bridge; web camera (getUserMedia).
+- Web launch arguments from the URL query string (`launch_args()` is empty on
+  wasm today; the shell would install a snapshot from `location.search`).
 - `local_*()` accessor seams for `camera`/`device_info`/`network`/`background`.
 
 ## cranscan adoption (done in the same arc)

@@ -534,9 +534,7 @@ pub trait DrawModifierNode: ModifierNode {
     /// evaluates at render time, not at slice collection time.
     ///
     /// Returns None by default. Override for nodes needing deferred draw.
-    fn create_draw_closure(
-        &self,
-    ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
+    fn create_draw_closure(&self) -> Option<NodeDrawClosure> {
         None
     }
 
@@ -544,12 +542,16 @@ pub trait DrawModifierNode: ModifierNode {
     /// primitives render BEHIND the node's content — e.g. a text field's
     /// selection highlight, which must sit under the glyphs (a highlight
     /// drawn over them tints the text with its translucent fill).
-    fn create_behind_draw_closure(
-        &self,
-    ) -> Option<Rc<dyn Fn(Size) -> Vec<cranpose_ui_graphics::DrawPrimitive>>> {
+    fn create_behind_draw_closure(&self) -> Option<NodeDrawClosure> {
         None
     }
 }
+
+/// A deferred draw closure returned by
+/// [`DrawModifierNode::create_draw_closure`]: it records into a scope the
+/// renderer provides at render time, so the recording's identity stays with
+/// the consumer rather than with a closure-owned vector.
+pub type NodeDrawClosure = Rc<dyn Fn(&mut cranpose_ui_graphics::DrawScopeDefault)>;
 
 /// Marker trait for pointer input modifier nodes.
 ///
@@ -575,6 +577,22 @@ pub trait PointerInputNode: ModifierNode {
 
     /// Returns an event handler closure if the node wants to participate in pointer dispatch.
     fn pointer_input_handler(&self) -> Option<Rc<dyn Fn(PointerEvent)>> {
+        None
+    }
+
+    /// Returns the cell this node reads its owning layout node's resolved size
+    /// from, if it exposes a size to its handler (Compose's
+    /// `PointerInputScope.size`).
+    ///
+    /// The cell is shared with the node, so the layout pass publishes the size
+    /// into it once per pass and every read — including reads that happen
+    /// before any pointer event arrives — observes the current size. The size
+    /// is the node's layout box in the same local coordinate space the
+    /// dispatched [`PointerEvent`] positions use, so
+    /// `event.local_position / size` is a well-defined fraction of the node.
+    ///
+    /// Returns `None` for pointer nodes with no size-bearing scope.
+    fn layout_size_sink(&self) -> Option<Rc<Cell<Size>>> {
         None
     }
 }
