@@ -62,6 +62,12 @@ pub(crate) struct FeedSlot {
 pub(crate) struct RequestedFeedSlot {
     pub fingerprint: u64,
     pub capture_clip: Option<Rect>,
+    /// The (generation, frame) of the ops batch that carried the capture,
+    /// stamped by [`ShapeReplayState::take_frame_ops`] so a cancelled
+    /// batch's entries — which can never be confirmed — are removable
+    /// precisely ([`ShapeReplayState::reclaim_cancelled_ops`]).
+    pub generation: u64,
+    pub frame: u64,
 }
 
 /// Frames a feed slot may go unreferenced before its buffers are released.
@@ -177,6 +183,34 @@ pub fn pending_feed_capture_count_for_tests() -> usize {
     SHAPE_REPLAY.with(|state| state.borrow().pending_feed_captures.len())
 }
 
+/// Test hook: (queued release ids, awaiting-confirmation entries) on this
+/// thread's planner — the cancellation contract's no-leak instruments.
+#[doc(hidden)]
+pub fn planner_replay_queue_stats_for_tests() -> (usize, usize) {
+    SHAPE_REPLAY.with(|state| {
+        let state = state.borrow();
+        (
+            state.pending_releases.len(),
+            state.awaiting_confirmation.len(),
+        )
+    })
+}
+
+/// Test hook: the recycled-ops buffer capacities (captures, color patches,
+/// releases) on this thread's planner — proof a cancelled batch's buffers
+/// came back for reuse instead of being dropped.
+#[doc(hidden)]
+pub fn recycled_ops_capacities_for_tests() -> (usize, usize, usize) {
+    SHAPE_REPLAY.with(|state| {
+        let state = state.borrow();
+        (
+            state.recycled_ops.captures.capacity(),
+            state.recycled_ops.color_patches.capacity(),
+            state.recycled_ops.releases.capacity(),
+        )
+    })
+}
+
 impl ShapeReplayState {
     /// Voids every pending per-scene request. Called when the collected
     /// scene will never render (rejected collection, renderer replacement):
@@ -269,6 +303,8 @@ impl ShapeReplayState {
                 RequestedFeedSlot {
                     fingerprint: capture.fingerprint,
                     capture_clip: capture.capture_clip,
+                    generation,
+                    frame,
                 },
             );
         }
@@ -334,6 +370,27 @@ impl ShapeReplayState {
         self.awaiting_confirmation.clear();
         self.recycled_ops = recycled;
         ack.confirmations
+    }
+
+    /// Takes back a cancelled packet's [`ReplayFrameOps`] — a plan the store
+    /// never consumed. The releases re-queue whole (the slot ids are still
+    /// live store-side; dropping them would leak pool slots forever — the
+    /// pool is 128 ids). The captures drop (no store slot was ever created),
+    /// but the `awaiting_confirmation` entries [`Self::take_frame_ops`]
+    /// recorded for exactly this batch can never be confirmed and must not
+    /// wait for an ack that may never come (every later frame could be
+    /// Surface), so they purge precisely by the batch's (generation, frame)
+    /// stamp. Color patches drop (regenerated every frame). The emptied
+    /// buffers recycle exactly like [`Self::apply_ack`]'s, capacity intact.
+    pub(crate) fn reclaim_cancelled_ops(&mut self, mut ops: ReplayFrameOps) {
+        self.pending_releases.extend_from_slice(&ops.releases);
+        ops.releases.clear();
+        self.awaiting_confirmation.retain(|_, requested| {
+            (requested.generation, requested.frame) != (ops.generation, ops.frame)
+        });
+        ops.captures.clear();
+        ops.color_patches.clear();
+        self.recycled_ops = ops;
     }
 }
 
@@ -598,6 +655,61 @@ mod tests {
         assert!(
             cranpose_render_common::scene_builder::retained_slot_confirmed(key.0, key.1),
             "the next build may bypass the confirmed span"
+        );
+    }
+
+    #[test]
+    fn reclaim_cancelled_ops_requeues_releases_and_purges_awaiting() {
+        let mut state = ShapeReplayState::default();
+        let cancelled_key = test_key(5, 0);
+        let later_key = test_key(5, 1);
+        state.frame = 6;
+        state.pending_releases.push(21);
+        state.pending_releases.push(22);
+        state
+            .pending_feed_captures
+            .push(capture_for(cancelled_key, 0, 6));
+        let generation = crate::pipeline::retained_feed_generation();
+        let cancelled_ops = state.take_frame_ops(generation);
+        assert_eq!(cancelled_ops.releases, vec![21, 22]);
+        assert_eq!(state.awaiting_confirmation.len(), 1);
+        let captures_capacity = cancelled_ops.captures.capacity();
+        let releases_capacity = cancelled_ops.releases.capacity();
+
+        // A later frame's plan with its own capture: its awaiting entry
+        // must SURVIVE the earlier frame's reclaim (the purge is precise
+        // to the cancelled batch's (generation, frame)).
+        state.begin_frame(true, 1.0);
+        state
+            .pending_feed_captures
+            .push(capture_for(later_key, 0, 7));
+        let _later_ops = state.take_frame_ops(generation);
+        assert_eq!(state.awaiting_confirmation.len(), 2);
+
+        state.reclaim_cancelled_ops(cancelled_ops);
+
+        assert_eq!(
+            state.pending_releases,
+            vec![21, 22],
+            "cancelled releases must re-queue whole — the pool is 128 ids \
+             and a dropped batch would leak them forever"
+        );
+        assert!(
+            !state.awaiting_confirmation.contains_key(&cancelled_key),
+            "the cancelled batch's capture can never confirm"
+        );
+        assert!(
+            state.awaiting_confirmation.contains_key(&later_key),
+            "a later frame's awaiting entry must survive the purge"
+        );
+        assert!(
+            state.recycled_ops.captures.capacity() >= captures_capacity
+                && state.recycled_ops.releases.capacity() >= releases_capacity,
+            "the cancelled batch's buffers must recycle with capacity intact"
+        );
+        assert!(
+            state.recycled_ops.captures.is_empty() && state.recycled_ops.releases.is_empty(),
+            "recycled buffers must come back empty"
         );
     }
 

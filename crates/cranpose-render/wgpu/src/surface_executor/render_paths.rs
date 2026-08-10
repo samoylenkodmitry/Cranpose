@@ -1702,7 +1702,11 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+// result_large_err: the Err arm deliberately carries the same
+// CompositorScene the Ok arm does, so the caller recycles the scene
+// buffers on BOTH arms; the Ok (hot) arm is equally sized, and boxing
+// would only add an allocation to the error path.
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
 pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     backend: &mut B,
     surface_view: &wgpu::TextureView,
@@ -1711,7 +1715,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     height: u32,
     root_scale: f32,
     initial_load_op: wgpu::LoadOp<wgpu::Color>,
-) -> Result<CompositorScene, String> {
+) -> Result<CompositorScene, (String, CompositorScene)> {
     let CollectedLayer {
         scene: local_scene,
         child_layers,
@@ -2034,10 +2038,14 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
 
         Ok(())
     })();
-    // Hand the scene back so the caller can recycle its buffers; for a heavy
-    // animated frame they are megabytes of Vec that would otherwise round-trip
-    // through mmap on every frame.
-    result.map(|()| local_scene)
+    // Hand the scene back in BOTH arms so the caller can recycle its
+    // buffers even when the draw errs; for a heavy animated frame they are
+    // megabytes of Vec that would otherwise round-trip through mmap on
+    // every frame.
+    match result {
+        Ok(()) => Ok(local_scene),
+        Err(error) => Err((error, local_scene)),
+    }
 }
 
 /// Renders the surface for a producer-lowered child layer. Every value the

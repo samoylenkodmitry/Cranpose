@@ -98,8 +98,17 @@ impl RendererFrontend {
         width: u32,
         height: u32,
         replay_supported: bool,
+        renderer_epoch: u64,
+        surface_epoch: u64,
     ) -> Option<FramePacket> {
-        self.build_frame_packet_with_scale(width, height, self.root_scale, replay_supported)
+        self.build_frame_packet_with_scale(
+            width,
+            height,
+            self.root_scale,
+            replay_supported,
+            renderer_epoch,
+            surface_epoch,
+        )
     }
 
     /// [`build_frame_packet`](Self::build_frame_packet) with an explicit
@@ -111,6 +120,8 @@ impl RendererFrontend {
         height: u32,
         root_scale: f32,
         replay_supported: bool,
+        renderer_epoch: u64,
+        surface_epoch: u64,
     ) -> Option<FramePacket> {
         self.scene.graph.as_ref()?;
         // Lowering must run under the app context: text layout branches on
@@ -119,10 +130,24 @@ impl RendererFrontend {
         let app_context = self.app_context.as_ref().and_then(Weak::upgrade);
         let packet = if let Some(app_context) = app_context {
             app_context.enter(|| {
-                self.build_frame_packet_inner(width, height, root_scale, replay_supported)
+                self.build_frame_packet_inner(
+                    width,
+                    height,
+                    root_scale,
+                    replay_supported,
+                    renderer_epoch,
+                    surface_epoch,
+                )
             })
         } else {
-            self.build_frame_packet_inner(width, height, root_scale, replay_supported)
+            self.build_frame_packet_inner(
+                width,
+                height,
+                root_scale,
+                replay_supported,
+                renderer_epoch,
+                surface_epoch,
+            )
         };
         // Per-frame memo hygiene, mirroring the present backend's
         // end-of-render clears: the memos key on node addresses, so they
@@ -143,6 +168,8 @@ impl RendererFrontend {
         height: u32,
         root_scale: f32,
         replay_supported: bool,
+        renderer_epoch: u64,
+        surface_epoch: u64,
     ) -> Option<FramePacket> {
         #[cfg(target_arch = "wasm32")]
         let _ = replay_supported;
@@ -261,6 +288,8 @@ impl RendererFrontend {
         let packet = FramePacket {
             frame_id: self.frame_sequence,
             viewport: (width, height),
+            renderer_epoch,
+            surface_epoch,
             root_scale,
             root,
             overlay,
@@ -290,14 +319,29 @@ impl RendererFrontend {
         &mut self,
         returns: RenderReturns,
     ) -> Option<Vec<ReplayConfirmation>> {
-        let RenderReturns { scene, ack } = returns;
+        let RenderReturns {
+            scene,
+            ack,
+            frame_id: _,
+            outcome: _,
+            cancelled_replay,
+        } = returns;
         if let Some(scene) = scene {
             // The packet's scene buffers return to the producer pool — for
-            // a heavy animated frame they are megabytes of Vec.
+            // a heavy animated frame they are megabytes of Vec. A cancelled
+            // packet returns its scene the same way as a presented one.
             self.retained_direct_scene = Some(scene);
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // A cancelled packet's replay plan never reached the store:
+            // re-queue its releases (slot ids must not leak — the pool is
+            // finite), purge its unconfirmable awaiting entries, and
+            // recycle its buffers.
+            if let Some(ops) = cancelled_replay {
+                crate::shape_replay::SHAPE_REPLAY
+                    .with(|state| state.borrow_mut().reclaim_cancelled_ops(ops));
+            }
             ack.map(|(ack, recycled)| {
                 crate::shape_replay::SHAPE_REPLAY
                     .with(|state| state.borrow_mut().apply_ack(ack, recycled))
@@ -306,8 +350,9 @@ impl RendererFrontend {
         #[cfg(target_arch = "wasm32")]
         {
             // wasm has no retained replay path; a present stage there never
-            // produces an ack.
+            // produces an ack or a cancelled replay plan.
             let _ = ack;
+            let _ = cancelled_replay;
             None
         }
     }
@@ -428,7 +473,7 @@ mod tests {
     #[test]
     fn build_without_graph_produces_no_packet() {
         let mut frontend = frontend();
-        assert!(frontend.build_frame_packet(320, 240, false).is_none());
+        assert!(frontend.build_frame_packet(320, 240, false, 0, 0).is_none());
         assert_eq!(frontend.frame_sequence, 0);
     }
 
@@ -439,7 +484,7 @@ mod tests {
         frontend.root_scale = 2.0;
 
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("direct root must lower into a packet");
 
         assert_eq!(packet.frame_id, 1);
@@ -449,7 +494,7 @@ mod tests {
         assert!(packet.overlay.is_none());
 
         let next = frontend
-            .build_frame_packet_with_scale(320, 240, 1.0, false)
+            .build_frame_packet_with_scale(320, 240, 1.0, false, 0, 0)
             .expect("second frame should lower too");
         assert_eq!(next.frame_id, 2, "frame sequence must be monotone");
         assert_eq!(next.root_scale, 1.0, "explicit scale must win");
@@ -469,7 +514,7 @@ mod tests {
         frontend.root_scale = 2.0;
 
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("non-direct root must lower into a surface packet");
         let surface = surface_root(&packet);
         assert_eq!(
@@ -527,7 +572,7 @@ mod tests {
         frontend.scene.graph = Some(RenderGraph::new(root));
 
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("a rejected direct collect must fall through to a surface packet");
         let surface = surface_root(&packet);
         assert!(
@@ -552,7 +597,7 @@ mod tests {
         frontend.dev_overlay_graph = Some(direct_graph());
 
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("direct root must lower into a packet");
         let overlay = packet
             .overlay
@@ -572,7 +617,7 @@ mod tests {
         shadowed_root.graphics_layer.shadow_elevation = 4.0;
         frontend.scene.graph = Some(RenderGraph::new(shadowed_root));
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("non-direct root must lower into a surface packet");
         assert!(matches!(packet.root, PacketRoot::Surface(_)));
         assert!(
@@ -587,7 +632,7 @@ mod tests {
         frontend.scene.graph = Some(direct_graph());
 
         let packet = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("direct root must lower into a packet");
         assert!(
             frontend.retained_direct_scene.is_none(),
@@ -600,7 +645,7 @@ mod tests {
         };
         let confirmations = frontend.apply_returns(RenderReturns {
             scene: Some(root.scene),
-            ack: None,
+            ..RenderReturns::default()
         });
         assert!(confirmations.is_none(), "no ack means nothing to recycle");
         assert!(
@@ -609,7 +654,7 @@ mod tests {
         );
 
         let next = frontend
-            .build_frame_packet(320, 240, false)
+            .build_frame_packet(320, 240, false, 0, 0)
             .expect("recycled scene must feed the next frame");
         assert_eq!(next.frame_id, 2);
         assert!(

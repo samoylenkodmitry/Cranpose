@@ -8,7 +8,9 @@ use crate::effect_renderer::{
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
-use crate::frame_packet::{FramePacket, PacketRoot, RenderReturns, RootSurfacePacket};
+use crate::frame_packet::{
+    CancelReason, FramePacket, PacketRoot, PresentOutcome, RenderReturns, RootSurfacePacket,
+};
 use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
@@ -3693,6 +3695,18 @@ impl ImageBatchBuffers {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
+    /// This instance's renderer epoch, stamped by `init_gpu` at
+    /// construction. A packet whose `renderer_epoch` differs was built
+    /// against another instance and is cancelled at the head of
+    /// [`Self::render`], never drawn.
+    renderer_epoch: u64,
+    /// The producer feed generation this store's slot universe belongs to:
+    /// seeded at construction, advanced by `consume_replay_ops` when a
+    /// higher-generation batch arrives (the batch itself carries the
+    /// retirement releases). The store never reads the producer's
+    /// thread-local — this field is its only generation authority.
+    #[cfg(not(target_arch = "wasm32"))]
+    store_feed_generation: u64,
     surface_format: wgpu::TextureFormat,
     shape_batch_limits: ShapeBatchLimits,
     pipeline: wgpu::RenderPipeline,
@@ -3971,7 +3985,11 @@ impl GpuRenderer {
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
         text_fonts: SoftwareTextFontSet,
+        renderer_epoch: u64,
+        store_feed_generation: u64,
     ) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = store_feed_generation;
         let shape_batch_limits = ShapeBatchLimits::for_device(&device);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4314,6 +4332,9 @@ impl GpuRenderer {
         Self {
             device,
             queue,
+            renderer_epoch,
+            #[cfg(not(target_arch = "wasm32"))]
+            store_feed_generation,
             surface_format,
             shape_batch_limits,
             pipeline,
@@ -6085,8 +6106,27 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         packet: FramePacket,
+        surface_epoch: u64,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
+        // Packet validity gate — BEFORE consume_replay_ops and any
+        // encoding. A packet built against another renderer instance,
+        // another surface configuration, or another viewport is cancelled
+        // whole: its buffers travel back through `returns` for re-queue
+        // and recycling, and nothing of it reaches the GPU.
+        let cancel_reason = if packet.renderer_epoch != self.renderer_epoch {
+            Some(CancelReason::RendererEpoch)
+        } else if packet.surface_epoch != surface_epoch {
+            Some(CancelReason::SurfaceEpoch)
+        } else if packet.viewport != (width, height) {
+            Some(CancelReason::Viewport)
+        } else {
+            None
+        };
+        if let Some(reason) = cancel_reason {
+            return Self::cancel_packet(packet, reason, returns);
+        }
+        returns.frame_id = packet.frame_id;
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
         let render_start = Instant::now();
 
@@ -6176,7 +6216,58 @@ impl GpuRenderer {
                 instant_ms(after_graph, after_stats),
             );
         }
+        if result.is_ok() {
+            // Only a draw that actually ran may report `Presented`; an
+            // errored draw leaves the default `NotRun`.
+            returns.outcome = PresentOutcome::Presented;
+        }
         result
+    }
+
+    /// Refuses a packet whole, before any encoding: every buffer it
+    /// carries travels back through `returns` — the direct scene for the
+    /// producer pool, the unconsumed replay plan for the planner to
+    /// re-queue (its releases name still-live store slots; dropping them
+    /// would leak pool ids forever). A cancel is a protocol outcome, not a
+    /// draw error, so the render call returns `Ok(())`.
+    fn cancel_packet(
+        packet: FramePacket,
+        reason: CancelReason,
+        returns: &mut RenderReturns,
+    ) -> Result<(), String> {
+        let FramePacket {
+            frame_id,
+            viewport: _,
+            renderer_epoch: _,
+            surface_epoch: _,
+            root_scale: _,
+            root,
+            overlay: _,
+            replay,
+            text_cache_len: _,
+        } = packet;
+        match root {
+            PacketRoot::Direct(root) => {
+                // Destructure: the scene buffers return to the producer
+                // pool; the rest of the collected layer drops. A Direct
+                // packet's replay plan came from the planner and must go
+                // back to it unconsumed — a Surface packet only ever
+                // carries the empty default plan, which has nothing to
+                // reclaim.
+                returns.scene = Some(root.scene);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    returns.cancelled_replay = Some(replay);
+                }
+            }
+            PacketRoot::Surface(_) => {}
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = replay;
+        returns.ack = None;
+        returns.frame_id = frame_id;
+        returns.outcome = PresentOutcome::Cancelled(reason);
+        Ok(())
     }
 
     pub fn last_frame_stats(&self) -> Option<gpu_stats::FrameStatsSnapshot> {
@@ -6234,6 +6325,7 @@ impl GpuRenderer {
         width: u32,
         height: u32,
         packet: FramePacket,
+        surface_epoch: u64,
         returns: &mut RenderReturns,
     ) -> Result<Vec<u8>, String> {
         if width == 0 || height == 0 {
@@ -6256,7 +6348,7 @@ impl GpuRenderer {
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        self.render(&output_view, width, height, packet, returns)?;
+        self.render(&output_view, width, height, packet, surface_epoch, returns)?;
 
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
@@ -6454,6 +6546,8 @@ impl GpuRenderer {
         let FramePacket {
             frame_id,
             viewport: (width, height),
+            renderer_epoch: _,
+            surface_epoch: _,
             root_scale,
             root,
             overlay,
@@ -6469,7 +6563,7 @@ impl GpuRenderer {
         let surface_packet = match root {
             PacketRoot::Direct(root) => {
                 let direct_render_start = Instant::now();
-                let result = execute_render_root_direct(
+                let result = match execute_render_root_direct(
                     &mut backend,
                     surface_view,
                     *root,
@@ -6477,12 +6571,20 @@ impl GpuRenderer {
                     height,
                     root_scale,
                     wgpu::LoadOp::Clear(CLEAR_COLOR),
-                )
-                .map(|scene| {
-                    // Return the packet's scene buffers to the producer pool —
-                    // for a heavy animated frame they are megabytes of Vec.
-                    returns.scene = Some(scene);
-                });
+                ) {
+                    // Return the packet's scene buffers to the producer pool
+                    // in BOTH arms — for a heavy animated frame they are
+                    // megabytes of Vec, and an errored draw must not leak
+                    // them.
+                    Ok(scene) => {
+                        returns.scene = Some(scene);
+                        Ok(())
+                    }
+                    Err((error, scene)) => {
+                        returns.scene = Some(scene);
+                        Err(error)
+                    }
+                };
                 if result.is_ok() {
                     if let Some(overlay) = overlay {
                         Self::render_overlay_packet(
@@ -6690,6 +6792,7 @@ impl GpuRenderer {
             wgpu::LoadOp::Load,
         )
         .map(|_overlay_scene| ())
+        .map_err(|(error, _overlay_scene)| error)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -8961,9 +9064,8 @@ impl GpuRenderer {
         crate::frame_packet::ReplayAck,
         crate::frame_packet::ReplayFrameOps,
     ) {
-        let generation = crate::pipeline::retained_feed_generation();
-        if ops.generation != generation {
-            // Fail-closed: ops planned under another slot universe name
+        if ops.generation < self.store_feed_generation {
+            // Fail-closed: ops planned under an OLDER slot universe name
             // slots this store does not hold. Drop the batch whole —
             // captures unconfirmed self-heal (the planner never serves
             // them), and stale releases must not free live ids.
@@ -8973,7 +9075,7 @@ impl GpuRenderer {
                 "[command-feed] dropping replay ops of generation {} against store \
                  generation {} ({} captures, {} patches, {} releases; lifetime drops {})",
                 ops.generation,
-                generation,
+                self.store_feed_generation,
                 ops.captures.len(),
                 ops.color_patches.len(),
                 ops.releases.len(),
@@ -8984,12 +9086,22 @@ impl GpuRenderer {
             ops.releases.clear();
             return (
                 crate::frame_packet::ReplayAck {
-                    generation,
+                    generation: self.store_feed_generation,
                     confirmations: Vec::new(),
                 },
                 ops,
             );
         }
+        if ops.generation > self.store_feed_generation {
+            // Adopt forward: a producer-side bump (scale change,
+            // `retire_feed`) delivers its whole retirement — the releases
+            // for every retired slot — THROUGH this very batch, so a
+            // higher generation is the new universe arriving, not a stale
+            // one. The store follows the producer's authority; it never
+            // reads the producer's thread-local.
+            self.store_feed_generation = ops.generation;
+        }
+        let generation = ops.generation;
         // Queued releases free first, so their buffers are available before
         // this frame's captures ask.
         for slot in ops.releases.drain(..) {
@@ -9056,13 +9168,14 @@ impl GpuRenderer {
 
     /// Test hook for the message protocol: runs one planner→store→planner
     /// replay cycle outside a frame, with the batch stamped
-    /// `generation + generation_skew`, and returns how many captures the
-    /// store confirmed. A nonzero skew manufactures the
-    /// generation-mismatch drop, which is synchronously impossible through
+    /// `store_feed_generation + generation_skew`, and returns how many
+    /// captures the store confirmed. A skew that lands BELOW the store's
+    /// generation manufactures the fail-closed drop; a skew above it
+    /// exercises adopt-forward. Both are synchronously impossible through
     /// the public render path today.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
-        let generation = crate::pipeline::retained_feed_generation().wrapping_add(generation_skew);
+        let generation = self.store_feed_generation.wrapping_add(generation_skew);
         let ops = crate::shape_replay::SHAPE_REPLAY
             .with(|state| state.borrow_mut().take_frame_ops(generation));
         let (ack, recycled) = self.consume_replay_ops(ops, &[], 1.0);

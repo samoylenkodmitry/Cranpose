@@ -565,11 +565,12 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     assert_byte_exact("self-heal-vs-control", &control, &healed);
 }
 
-/// 5b: a replay-ops batch stamped with a foreign feed generation must be
-/// dropped whole at the store — empty ack, nothing captured, nothing
-/// confirmed, no GPU slot allocated. Synchronously impossible through the
-/// public render path today (planner and store read the same thread-local
-/// generation), so the roundtrip hook skews the batch's stamp directly.
+/// 5b/7a: a replay-ops batch stamped with a LOWER feed generation than the
+/// store's must be dropped whole — empty ack, nothing captured, nothing
+/// confirmed, no GPU slot allocated. (A HIGHER generation adopts forward
+/// instead; see `higher_generation_replay_ops_adopt_forward`.)
+/// Synchronously impossible through the public render path today, so the
+/// roundtrip hook skews the batch's stamp below the store's own generation.
 #[test]
 fn mismatched_generation_replay_ops_drop_whole() {
     let mut renderer = match support::headless_renderer() {
@@ -579,10 +580,17 @@ fn mismatched_generation_replay_ops_drop_whole() {
             return;
         }
     };
+    // Move the store's generation off zero (the swap bumps the producer
+    // generation and the new store adopts it), so `store - 1` below cannot
+    // wrap to u64::MAX and read as a higher generation.
+    support::reinit_gpu(&mut renderer).expect("GPU reinit failed");
     let command = command_for(36);
     cranpose_render_wgpu::inject_feed_capture_for_tests(command, 0, 0, 4);
-    let confirmed = renderer.replay_ops_roundtrip_for_tests(1);
-    assert_eq!(confirmed, 0, "a mismatched batch must confirm nothing");
+    let confirmed = renderer.replay_ops_roundtrip_for_tests(u64::MAX);
+    assert_eq!(
+        confirmed, 0,
+        "a stale-generation batch must confirm nothing"
+    );
     assert_eq!(
         cranpose_render_wgpu::pending_feed_capture_count_for_tests(),
         0,
@@ -603,6 +611,191 @@ fn mismatched_generation_replay_ops_drop_whole() {
         !cranpose_render_common::scene_builder::retained_slot_confirmed(command, 0),
         "a dropped capture must never confirm its slot"
     );
+}
+
+/// 7a §5: a replay-ops batch stamped with a HIGHER generation than the
+/// store's is the new universe arriving, not a stale one — a producer-side
+/// bump (root-scale change retiring the feed) delivers the retirement
+/// releases THROUGH that very batch. The store must adopt the generation
+/// and serve the batch: no generation drop, and the feed re-earns slots
+/// under the adopted generation on the frames that follow.
+#[test]
+fn higher_generation_replay_ops_adopt_forward() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping adopt-forward: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
+    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+
+    // Warm at scale 1.0: captures land, slots confirm.
+    let graphs = build_sequence(37, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
+    if feed_slots == 0 {
+        eprintln!("skipping adopt-forward: device has no retained replay support");
+        std::env::remove_var("CRANPOSE_COMMAND_FEED");
+        std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+        std::env::remove_var("CRANPOSE_ARC_MESH");
+        return;
+    }
+    let drops_before = renderer.replay_generation_drops_for_tests();
+    let generation_before = cranpose_render_wgpu::retained_feed_generation();
+
+    // The bump: a root-scale change retires the feed at collection start —
+    // the producer generation moves to +1 and every retired slot's release
+    // travels in the SAME frame's ops batch, which therefore arrives at the
+    // store stamped one generation ahead of the store's own.
+    renderer.scene_mut().graph = Some(graphs[0].clone());
+    renderer
+        .capture_frame_with_scale(SIZE, SIZE, 2.0)
+        .expect("scale-change frame failed");
+    assert_eq!(
+        cranpose_render_wgpu::retained_feed_generation(),
+        generation_before + 1,
+        "the scale change must have retired the feed to a fresh generation"
+    );
+    assert_eq!(
+        renderer.replay_generation_drops_for_tests(),
+        drops_before,
+        "a higher-generation batch must be adopted and served, never dropped"
+    );
+
+    // Served, not just tolerated: under the adopted generation the feed
+    // re-earns confirmed slots across the following frames — impossible if
+    // the store were dropping every batch of the new generation.
+    for graph in &graphs {
+        renderer.scene_mut().graph = Some(graph.clone());
+        renderer
+            .capture_frame_with_scale(SIZE, SIZE, 2.0)
+            .expect("post-adopt frame failed");
+    }
+    let (feed_slots_after, _, _) = cranpose_render_wgpu::command_feed_live_stats();
+    std::env::remove_var("CRANPOSE_COMMAND_FEED");
+    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_ARC_MESH");
+    assert!(
+        feed_slots_after > 0,
+        "the feed must re-earn slots under the adopted generation"
+    );
+    assert_eq!(
+        renderer.replay_generation_drops_for_tests(),
+        drops_before,
+        "no batch of the adopted generation may count a generation drop"
+    );
+}
+
+/// 7a: a CANCELLED packet whose replay plan carries real feed releases
+/// (here: a whole feed retirement from a root-scale change) must hand
+/// those releases back to the planner for re-queue — the pool is 128 ids
+/// and a dropped batch would leak them forever. The store's slots stay
+/// live until a LATER frame's batch actually serves the releases.
+#[test]
+fn cancelled_packet_requeues_feed_releases() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping cancelled-release requeue: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
+    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+
+    // Warm at scale 1.0 so the feed holds live, confirmed slots.
+    let graphs = build_sequence(38, &mut |_| false);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
+    if feed_slots == 0 {
+        eprintln!("skipping cancelled-release requeue: device has no retained replay support");
+        std::env::remove_var("CRANPOSE_COMMAND_FEED");
+        std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+        std::env::remove_var("CRANPOSE_ARC_MESH");
+        return;
+    }
+    let (_, live_before) = renderer.replay_slot_mesh_stats();
+    let drops_before = renderer.replay_generation_drops_for_tests();
+
+    // A scale change retires the feed at collection start: every live
+    // slot's release rides THIS packet's ops batch.
+    renderer.set_root_scale(2.0);
+    renderer.scene_mut().graph = Some(graphs[0].clone());
+    let packet = renderer
+        .build_frame_packet_for_tests(SIZE, SIZE)
+        .expect("scale-change packet must build");
+    let (queued, _) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
+    assert_eq!(queued, 0, "the packet's plan must have taken the releases");
+
+    // The packet never reaches the store: cancelled for its surface epoch.
+    renderer.note_surface_reconfigured();
+    let device = renderer
+        .try_device()
+        .expect("renderer GPU device was not initialized");
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Cancelled Release Requeue Target"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let outcome = renderer
+        .render_held_packet_for_tests(&view, SIZE, SIZE, packet)
+        .expect("a cancel is a protocol outcome, not a draw error");
+    assert_eq!(
+        outcome,
+        cranpose_render_wgpu::PresentOutcome::Cancelled(
+            cranpose_render_wgpu::CancelReason::SurfaceEpoch
+        )
+    );
+
+    // THE slot-leak fix: the cancelled batch's releases are back in the
+    // planner queue, and the store still holds every slot (nothing of the
+    // cancelled batch reached it).
+    let (requeued, _) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
+    assert!(
+        requeued >= feed_slots,
+        "the cancelled retirement releases must re-queue whole \
+         ({requeued} queued, {feed_slots} retired slots)"
+    );
+    assert_eq!(
+        renderer.replay_slot_mesh_stats().1,
+        live_before,
+        "a cancelled packet must not free store slots"
+    );
+
+    // A later frame's batch serves them: queue drains, no generation drop
+    // (the bumped generation adopts forward), and the slot ids return to
+    // the pool for reuse rather than leaking.
+    renderer.scene_mut().graph = Some(graphs[0].clone());
+    renderer
+        .capture_frame(SIZE, SIZE)
+        .expect("post-cancel frame failed");
+    let (queued_after, _) = cranpose_render_wgpu::planner_replay_queue_stats_for_tests();
+    assert_eq!(
+        queued_after, 0,
+        "the next frame's batch must carry the re-queued releases"
+    );
+    assert_eq!(
+        renderer.replay_generation_drops_for_tests(),
+        drops_before,
+        "serving the re-queued releases must not count a generation drop"
+    );
+    std::env::remove_var("CRANPOSE_COMMAND_FEED");
+    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    std::env::remove_var("CRANPOSE_ARC_MESH");
 }
 
 /// T5: a feed capture that outlives the frame it was queued on (aborted

@@ -32,6 +32,8 @@ mod surface_requirements;
 #[cfg(test)]
 mod test_support;
 
+#[doc(hidden)]
+pub use frame_packet::{CancelReason, PresentOutcome};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +45,9 @@ pub use shape_replay::feed_live_stats as command_feed_live_stats;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count_for_tests};
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
@@ -204,6 +209,16 @@ pub struct WgpuRenderer {
     frontend: RendererFrontend,
     /// Present stage: consumes packets and draws; it never lowers.
     gpu_renderer: Option<GpuRenderer>,
+    /// Which `GpuRenderer` instance packets are currently built against:
+    /// bumped by every [`init_gpu`][Self::init_gpu] (first init → 1) and
+    /// stamped into each packet, so a packet that outlives its renderer is
+    /// cancelled by the present stage instead of drawn.
+    renderer_epoch: u64,
+    /// Which surface configuration packets are currently built against:
+    /// bumped by [`note_surface_reconfigured`][Self::note_surface_reconfigured]
+    /// and stamped into each packet, so a packet that straddles a surface
+    /// reconfigure is cancelled by the present stage instead of drawn.
+    surface_epoch: u64,
 }
 
 impl WgpuRenderer {
@@ -232,6 +247,8 @@ impl WgpuRenderer {
                 text_system.software_fonts(),
             ),
             gpu_renderer: None,
+            renderer_epoch: 0,
+            surface_epoch: 0,
         }
     }
 
@@ -259,13 +276,31 @@ impl WgpuRenderer {
                  confirmations revoked, feed generation bumped"
             );
         }
+        self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
+        // The new store adopts the producer's CURRENT feed generation —
+        // read after `renderer_replaced` bumped it, so packets planned
+        // against the dead store fail the store's generation gate.
+        #[cfg(not(target_arch = "wasm32"))]
+        let store_feed_generation = pipeline::retained_feed_generation();
+        #[cfg(target_arch = "wasm32")]
+        let store_feed_generation = 0;
         self.gpu_renderer = Some(GpuRenderer::new(
             device,
             queue,
             surface_format,
             adapter_backend,
             self.frontend.text_fonts.clone(),
+            self.renderer_epoch,
+            store_feed_generation,
         ));
+    }
+
+    /// Record that the surface was reconfigured (resize, format change,
+    /// swapchain recreation): bumps the surface epoch stamped into every
+    /// subsequent packet, so a packet built against the previous
+    /// configuration is cancelled by the present stage instead of drawn.
+    pub fn note_surface_reconfigured(&mut self) {
+        self.surface_epoch = self.surface_epoch.wrapping_add(1);
     }
 
     /// Set root scale factor for text rendering (e.g., density scaling on Android)
@@ -297,14 +332,27 @@ impl WgpuRenderer {
         };
         let packet = self
             .frontend
-            .build_frame_packet(width, height, gpu_renderer.replay_supported())
+            .build_frame_packet(
+                width,
+                height,
+                gpu_renderer.replay_supported(),
+                self.renderer_epoch,
+                self.surface_epoch,
+            )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         // Packet consumption runs OUTSIDE the producer's app context on
         // purpose: the packet is the complete frame, so the present stage
         // must never need the context — running bare proves it every frame.
-        let result = gpu_renderer.render(view, width, height, packet, &mut returns);
+        let result = gpu_renderer.render(
+            view,
+            width,
+            height,
+            packet,
+            self.surface_epoch,
+            &mut returns,
+        );
         if let Some(confirmations) = frontend.apply_returns(returns) {
             gpu_renderer.restore_replay_ack_confirmations(confirmations);
         }
@@ -341,13 +389,21 @@ impl WgpuRenderer {
                 height,
                 root_scale,
                 gpu_renderer.replay_supported(),
+                self.renderer_epoch,
+                self.surface_epoch,
             )
             .ok_or_else(|| WgpuRendererError::Wgpu("scene graph is missing".to_string()))?;
         let frontend = &mut self.frontend;
         let mut returns = RenderReturns::default();
         // Bare like `render`: the capture path consumes the packet with no
         // producer app context current.
-        let result = gpu_renderer.render_to_rgba_pixels(width, height, packet, &mut returns);
+        let result = gpu_renderer.render_to_rgba_pixels(
+            width,
+            height,
+            packet,
+            self.surface_epoch,
+            &mut returns,
+        );
         if let Some(confirmations) = frontend.apply_returns(returns) {
             gpu_renderer.restore_replay_ack_confirmations(confirmations);
         }
@@ -455,9 +511,11 @@ impl WgpuRenderer {
 
     /// Test hook for the replay message protocol: one planner→store→planner
     /// cycle outside a frame, the batch's generation skewed by
-    /// `generation_skew`; returns how many captures the store confirmed. A
-    /// nonzero skew manufactures the generation-mismatch drop, which the
-    /// public render path cannot produce synchronously.
+    /// `generation_skew` from the store's own; returns how many captures
+    /// the store confirmed. A skew landing BELOW the store's generation
+    /// manufactures the fail-closed drop; one landing above it exercises
+    /// adopt-forward. Neither is producible synchronously through the
+    /// public render path.
     #[cfg(not(target_arch = "wasm32"))]
     #[doc(hidden)]
     pub fn replay_ops_roundtrip_for_tests(&mut self, generation_skew: u64) -> usize {
@@ -466,7 +524,79 @@ impl WgpuRenderer {
             .expect("GPU renderer not initialized")
             .replay_ops_roundtrip_for_tests(generation_skew)
     }
+
+    /// Test hook for the cancellation protocol: builds a packet NOW,
+    /// stamped with the current epochs, and hands it to the caller instead
+    /// of rendering it — the public render path builds and consumes
+    /// atomically, so a packet in flight across an epoch change is only
+    /// constructible here.
+    #[doc(hidden)]
+    pub fn build_frame_packet_for_tests(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Option<HeldFramePacket> {
+        let replay_supported = self
+            .gpu_renderer
+            .as_ref()
+            .is_some_and(GpuRenderer::replay_supported);
+        self.frontend
+            .build_frame_packet(
+                width,
+                height,
+                replay_supported,
+                self.renderer_epoch,
+                self.surface_epoch,
+            )
+            .map(HeldFramePacket)
+    }
+
+    /// Test hook: consumes a held packet through the exact production seam
+    /// (`GpuRenderer::render` + `apply_returns` + ack-buffer restore) and
+    /// reports the present outcome.
+    #[doc(hidden)]
+    pub fn render_held_packet_for_tests(
+        &mut self,
+        view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        packet: HeldFramePacket,
+    ) -> Result<PresentOutcome, WgpuRendererError> {
+        let Some(gpu_renderer) = self.gpu_renderer.as_mut() else {
+            return Err(WgpuRendererError::Wgpu(
+                "GPU renderer not initialized. Call init_gpu() first.".to_string(),
+            ));
+        };
+        let frontend = &mut self.frontend;
+        let mut returns = RenderReturns::default();
+        let result = gpu_renderer.render(
+            view,
+            width,
+            height,
+            packet.0,
+            self.surface_epoch,
+            &mut returns,
+        );
+        let outcome = returns.outcome;
+        if let Some(confirmations) = frontend.apply_returns(returns) {
+            gpu_renderer.restore_replay_ack_confirmations(confirmations);
+        }
+        result.map_err(WgpuRendererError::Wgpu)?;
+        Ok(outcome)
+    }
+
+    /// Test hook: whether the producer pool holds a recycled direct scene —
+    /// the cancellation contract's proof the packet's scene came back.
+    #[doc(hidden)]
+    pub fn has_retained_direct_scene_for_tests(&self) -> bool {
+        self.frontend.retained_direct_scene.is_some()
+    }
 }
+
+/// Opaque handle to a built-but-unrendered frame packet, for the
+/// cancellation-protocol tests only.
+#[doc(hidden)]
+pub struct HeldFramePacket(frame_packet::FramePacket);
 
 impl Default for WgpuRenderer {
     fn default() -> Self {

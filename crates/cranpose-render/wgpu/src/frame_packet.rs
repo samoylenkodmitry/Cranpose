@@ -47,6 +47,36 @@ pub(crate) struct ReplayFrameOps {
 /// mapped to the physical GPU slot the store retained it in.
 pub(crate) type ReplayConfirmation = ((DrawCommandId, u32), u32);
 
+/// Why the present stage refused a packet without drawing it. Each reason
+/// names the expectation the packet no longer matches; the frame is not an
+/// error — its buffers travel back through [`RenderReturns`] for re-queue.
+/// `pub` (not `pub(crate)`) because the cancellation-protocol tests in
+/// `tests/` observe outcomes through `#[doc(hidden)]` hooks; the module is
+/// private, so the only public path is the hidden re-export in `lib.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelReason {
+    /// The packet was built against a different `GpuRenderer` instance.
+    RendererEpoch,
+    /// The packet was built against a different surface configuration.
+    SurfaceEpoch,
+    /// The packet was lowered for a different surface size.
+    Viewport,
+}
+
+/// What the present stage did with a packet. `NotRun` is the `Default` so a
+/// draw that never happened can never be reported `Presented`.
+/// `pub` like [`CancelReason`], for the same hidden test re-export.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PresentOutcome {
+    /// No packet was consumed (the default of an untouched returns value).
+    #[default]
+    NotRun,
+    /// The packet was drawn and presented.
+    Presented,
+    /// The packet was refused before any encoding; buffers returned whole.
+    Cancelled(CancelReason),
+}
+
 /// The store's answer to one [`ReplayFrameOps`] batch, applied by the
 /// planner ([`ShapeReplayState::apply_ack`](crate::shape_replay::ShapeReplayState))
 /// before the next frame's planning. Travels with the batch's emptied
@@ -108,6 +138,12 @@ pub(crate) struct FramePacket {
     pub(crate) frame_id: u64,
     /// Physical surface size the payload was lowered for.
     pub(crate) viewport: (u32, u32),
+    /// The `GpuRenderer` instance the packet was built against; a packet
+    /// that outlives its renderer is cancelled, never drawn.
+    pub(crate) renderer_epoch: u64,
+    /// The surface configuration the packet was built against; a packet
+    /// that straddles a reconfigure is cancelled, never drawn.
+    pub(crate) surface_epoch: u64,
     /// Root scale the payload was lowered for.
     pub(crate) root_scale: f32,
     /// The lowered root (direct or root-surface).
@@ -143,6 +179,16 @@ pub(crate) struct RenderReturns {
     /// op buffers. `None` when no packet was consumed; always `None` on
     /// wasm, which has no retained replay path.
     pub(crate) ack: Option<(ReplayAck, ReplayFrameOps)>,
+    /// The `frame_id` of the packet these returns describe; 0 when no
+    /// packet was consumed.
+    pub(crate) frame_id: u64,
+    /// What the present stage did with the packet. Never `Presented`
+    /// unless a draw actually ran.
+    pub(crate) outcome: PresentOutcome,
+    /// A cancelled packet's replay plan, returned unconsumed so the
+    /// planner can re-queue its releases and recycle its buffers. `None`
+    /// on the presented path (the ops travel back through `ack` there).
+    pub(crate) cancelled_replay: Option<ReplayFrameOps>,
 }
 
 /// Compile-time proof that the packet and every member chain can cross a
@@ -168,6 +214,8 @@ const _: () = {
     assert_send::<ReplayFrameOps>();
     assert_send::<ReplayAck>();
     assert_send::<RenderReturns>();
+    assert_send::<CancelReason>();
+    assert_send::<PresentOutcome>();
     assert_send::<ColorPatch>();
     assert_send::<PendingFeedCapture>();
 };
