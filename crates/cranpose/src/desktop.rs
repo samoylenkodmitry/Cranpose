@@ -13,7 +13,7 @@ use crate::native_window::{
 use crate::robot::{
     char_to_key_code, extract_semantics, find_button_in_app, find_text_in_app,
     panic_payload_message, robot_key_code_and_text, robot_wait_for_idle_animation_loop_only, Robot,
-    RobotChannel, RobotCommand, RobotResponse, RobotScreenshot,
+    RobotChannel, RobotCommand, RobotResponse, RobotScreenshot, RobotTimelineAction,
 };
 use crate::wgpu_surface::surface_present_required;
 use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
@@ -693,23 +693,19 @@ impl App {
             .app
             .as_ref()
             .is_some_and(AppShell::has_active_pointer_gesture);
-        if !active {
-            return false;
-        }
-
         #[cfg(feature = "robot")]
-        if self
+        let synthetic_primary_down = self
             .robot_controller
             .as_ref()
-            .is_some_and(RobotController::synthetic_primary_down)
-        {
-            return false;
-        }
+            .is_some_and(RobotController::synthetic_primary_down);
+        #[cfg(not(feature = "robot"))]
+        let synthetic_primary_down = false;
 
-        let Some(pointer) = native_window_global_pointer_state(&self.native_window_platform_probe)
-        else {
-            return false;
-        };
+        let action = primary_pointer_gesture_poll_action(
+            active,
+            synthetic_primary_down,
+            native_window_global_pointer_state(&self.native_window_platform_probe),
+        );
 
         let (Some(window), Some(platform), Some(app)) =
             (&self.window, &self.platform, self.app.as_mut())
@@ -717,14 +713,30 @@ impl App {
             return false;
         };
 
-        if !pointer.primary_down {
-            let handled = app.pointer_released();
-            if handled {
-                self.last_frame_start_time = None;
-                request_redraw_once(window, &mut self.primary_redraw_pending);
+        let pointer = match action {
+            PrimaryPointerGesturePollAction::Inactive => return false,
+            PrimaryPointerGesturePollAction::ReleaseAt(position) => {
+                let event_time = app.realtime_pointer_event_time(None);
+                let cursor_dirty = native_window_local_pointer_physical(
+                    &self.native_window_platform_probe,
+                    window,
+                    position,
+                )
+                .is_some_and(|local| {
+                    let logical = platform.pointer_position(local);
+                    self.last_cursor_position = Some((logical.x, logical.y));
+                    app.set_cursor_at_event_time(logical.x, logical.y, event_time)
+                });
+                let released = app.pointer_released_at_event_time(event_time);
+                let handled = cursor_dirty || released;
+                if handled {
+                    self.last_frame_start_time = None;
+                    request_redraw_once(window, &mut self.primary_redraw_pending);
+                }
+                return handled;
             }
-            return handled;
-        }
+            PrimaryPointerGesturePollAction::Pressed(pointer) => pointer,
+        };
 
         if self.last_cursor_position.is_some() {
             return false;
@@ -2882,8 +2894,23 @@ fn current_native_window_physical_position(
     platform_probe: &NativeWindowPlatformProbe,
     window: &Arc<dyn Window>,
 ) -> Option<PhysicalPosition<i32>> {
-    native_window_x11_outer_position_physical(platform_probe, window)
+    native_window_x11_surface_position_physical(platform_probe, window)
+        .map(|surface_origin| {
+            physical_outer_origin_from_surface(surface_origin, window.surface_position())
+        })
         .or_else(|| window.outer_position().ok())
+}
+
+fn current_native_window_surface_physical_position(
+    platform_probe: &NativeWindowPlatformProbe,
+    window: &Arc<dyn Window>,
+) -> Option<PhysicalPosition<i32>> {
+    native_window_x11_surface_position_physical(platform_probe, window).or_else(|| {
+        window
+            .outer_position()
+            .ok()
+            .map(|outer| physical_surface_origin_from_outer(outer, window.surface_position()))
+    })
 }
 
 fn current_native_window_position(
@@ -2931,10 +2958,8 @@ fn native_window_surface_origin(
     platform_probe: &NativeWindowPlatformProbe,
     window: &Arc<dyn Window>,
 ) -> Option<cranpose_ui::Point> {
-    let outer = current_native_window_physical_position(platform_probe, window)?;
-    let surface = window.surface_position();
+    let physical = current_native_window_surface_physical_position(platform_probe, window)?;
     let scale_factor = window.scale_factor();
-    let physical = winit::dpi::PhysicalPosition::new(outer.x + surface.x, outer.y + surface.y);
     let logical = physical.to_logical::<f64>(scale_factor);
     Some(cranpose_ui::Point::new(logical.x as f32, logical.y as f32))
 }
@@ -2944,11 +2969,10 @@ fn native_window_screen_pointer_physical(
     window: &Arc<dyn Window>,
     local: PhysicalPosition<f64>,
 ) -> Option<PhysicalPosition<f64>> {
-    let outer = current_native_window_physical_position(platform_probe, window)?;
-    let surface = window.surface_position();
+    let surface = current_native_window_surface_physical_position(platform_probe, window)?;
     Some(PhysicalPosition::new(
-        outer.x as f64 + surface.x as f64 + local.x,
-        outer.y as f64 + surface.y as f64 + local.y,
+        surface.x as f64 + local.x,
+        surface.y as f64 + local.y,
     ))
 }
 
@@ -2957,12 +2981,8 @@ fn native_window_local_pointer_physical(
     window: &Arc<dyn Window>,
     screen: PhysicalPosition<f64>,
 ) -> Option<PhysicalPosition<f64>> {
-    let outer = current_native_window_physical_position(platform_probe, window)?;
-    let surface = window.surface_position();
-    Some(PhysicalPosition::new(
-        screen.x - outer.x as f64 - surface.x as f64,
-        screen.y - outer.y as f64 - surface.y as f64,
-    ))
+    let surface = current_native_window_surface_physical_position(platform_probe, window)?;
+    Some(physical_surface_local_pointer(surface, screen))
 }
 
 fn native_window_surface_contains_pointer(
@@ -2970,15 +2990,43 @@ fn native_window_surface_contains_pointer(
     native: &NativeWindowSurface,
     pointer: PhysicalPosition<f64>,
 ) -> bool {
-    let Some(outer) = current_native_window_physical_position(platform_probe, &native.window)
+    let Some(surface) =
+        current_native_window_surface_physical_position(platform_probe, &native.window)
     else {
         return false;
     };
     physical_surface_rect_contains_pointer(
-        outer,
-        native.window.surface_position(),
+        surface,
+        PhysicalPosition::new(0, 0),
         native.window.surface_size(),
         pointer,
+    )
+}
+
+fn physical_surface_origin_from_outer(
+    outer: PhysicalPosition<i32>,
+    surface_offset: PhysicalPosition<i32>,
+) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(outer.x + surface_offset.x, outer.y + surface_offset.y)
+}
+
+fn physical_outer_origin_from_surface(
+    surface_origin: PhysicalPosition<i32>,
+    surface_offset: PhysicalPosition<i32>,
+) -> PhysicalPosition<i32> {
+    PhysicalPosition::new(
+        surface_origin.x - surface_offset.x,
+        surface_origin.y - surface_offset.y,
+    )
+}
+
+fn physical_surface_local_pointer(
+    surface_origin: PhysicalPosition<i32>,
+    screen: PhysicalPosition<f64>,
+) -> PhysicalPosition<f64> {
+    PhysicalPosition::new(
+        screen.x - surface_origin.x as f64,
+        screen.y - surface_origin.y as f64,
     )
 }
 
@@ -3029,10 +3077,33 @@ fn physical_surface_rect_contains_pointer(
     pointer.x >= x && pointer.x <= right && pointer.y >= y && pointer.y <= bottom
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct NativeWindowPointerState {
     position: PhysicalPosition<f64>,
     primary_down: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PrimaryPointerGesturePollAction {
+    Inactive,
+    Pressed(NativeWindowPointerState),
+    ReleaseAt(PhysicalPosition<f64>),
+}
+
+fn primary_pointer_gesture_poll_action(
+    active: bool,
+    synthetic_primary_down: bool,
+    pointer: Option<NativeWindowPointerState>,
+) -> PrimaryPointerGesturePollAction {
+    if !active || synthetic_primary_down {
+        return PrimaryPointerGesturePollAction::Inactive;
+    }
+
+    match pointer {
+        Some(pointer) if pointer.primary_down => PrimaryPointerGesturePollAction::Pressed(pointer),
+        Some(pointer) => PrimaryPointerGesturePollAction::ReleaseAt(pointer.position),
+        None => PrimaryPointerGesturePollAction::Inactive,
+    }
 }
 
 #[cfg(all(
@@ -3154,7 +3225,7 @@ impl X11WindowClient {
         Some(())
     }
 
-    fn window_position(&self, window: u32) -> Option<PhysicalPosition<i32>> {
+    fn window_surface_position(&self, window: u32) -> Option<PhysicalPosition<i32>> {
         use x11rb::protocol::xproto::ConnectionExt;
 
         let reply = self
@@ -3214,13 +3285,13 @@ fn native_window_x11_id(window: &Arc<dyn Window>) -> Option<u32> {
     not(target_arch = "wasm32"),
     feature = "desktop-x11"
 ))]
-fn native_window_x11_outer_position_physical(
+fn native_window_x11_surface_position_physical(
     platform_probe: &NativeWindowPlatformProbe,
     window: &Arc<dyn Window>,
 ) -> Option<PhysicalPosition<i32>> {
     let window_id = native_window_x11_id(window)?;
     platform_probe
-        .probe_x11_window_client(|client| client.window_position(window_id))
+        .probe_x11_window_client(|client| client.window_surface_position(window_id))
         .flatten()
 }
 
@@ -3229,7 +3300,7 @@ fn native_window_x11_outer_position_physical(
     not(target_arch = "wasm32"),
     feature = "desktop-x11"
 )))]
-fn native_window_x11_outer_position_physical(
+fn native_window_x11_surface_position_physical(
     _platform_probe: &NativeWindowPlatformProbe,
     _window: &Arc<dyn Window>,
 ) -> Option<PhysicalPosition<i32>> {
@@ -4235,7 +4306,8 @@ impl ApplicationHandler for App {
                     logical.y
                 );
                 app.set_pointer_source(pointer_source_from_winit(&source));
-                if app.set_cursor(logical.x, logical.y) {
+                let event_time = app.realtime_pointer_event_time(None);
+                if app.set_cursor_at_event_time(logical.x, logical.y, event_time) {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
                 }
                 let global_pointer =
@@ -4319,6 +4391,7 @@ impl ApplicationHandler for App {
                 // arrive without a prior hover move.
                 let logical = platform.pointer_position(position);
                 self.last_cursor_position = Some((logical.x, logical.y));
+                let event_time = app.realtime_pointer_event_time(None);
                 log::trace!(
                     target: "cranpose::input",
                     "desktop pointer button {:?} at ({:.2},{:.2})",
@@ -4326,7 +4399,7 @@ impl ApplicationHandler for App {
                     logical.x,
                     logical.y
                 );
-                if app.set_cursor(logical.x, logical.y) {
+                if app.set_cursor_at_event_time(logical.x, logical.y, event_time) {
                     request_redraw_once(window, &mut self.primary_redraw_pending);
                 }
                 match state {
@@ -4356,7 +4429,9 @@ impl ApplicationHandler for App {
                             }
                             return;
                         }
-                        let request = pointer_button_frame_request(app.pointer_pressed());
+                        let request = pointer_button_frame_request(
+                            app.pointer_pressed_at_event_time(event_time),
+                        );
                         apply_primary_pointer_button_frame_request(
                             window,
                             &mut self.last_frame_start_time,
@@ -4371,9 +4446,11 @@ impl ApplicationHandler for App {
                         // Touch lift-off samples must not become velocity
                         // samples (see AppShell::pointer_released_at_position).
                         let released = if source.is_touch_like() {
-                            app.pointer_released_at_position(logical.x, logical.y)
+                            app.pointer_released_at_position_event_time(
+                                logical.x, logical.y, event_time,
+                            )
                         } else {
-                            app.pointer_released()
+                            app.pointer_released_at_event_time(event_time)
                         };
                         let request = pointer_button_frame_request(released);
                         app.sync_selection_to_primary();
@@ -4594,16 +4671,18 @@ impl ApplicationHandler for App {
                 match cmd {
                     RobotCommand::Click { x, y } => {
                         app.set_pointer_source(PointerSource::Mouse);
-                        let cursor_dirty = app.set_cursor(x, y);
+                        let event_time = app.realtime_pointer_event_time(None);
+                        let cursor_dirty = app.set_cursor_at_event_time(x, y, event_time);
                         controller.begin_synthetic_primary_gesture();
-                        let press_dirty = app.pointer_pressed();
-                        let release_dirty = app.pointer_released();
+                        let press_dirty = app.pointer_pressed_at_event_time(event_time);
+                        let release_dirty = app.pointer_released_at_event_time(event_time);
                         controller.end_synthetic_primary_gesture();
                         robot_visual_dirty |= cursor_dirty || press_dirty || release_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MoveTo { x, y } => {
-                        robot_visual_dirty |= app.set_cursor(x, y);
+                        let event_time = app.realtime_pointer_event_time(None);
+                        robot_visual_dirty |= app.set_cursor_at_event_time(x, y, event_time);
                         // Record for robot test generation
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_move(x, y);
@@ -4611,8 +4690,9 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseDown => {
+                        let event_time = app.realtime_pointer_event_time(None);
                         controller.begin_synthetic_primary_gesture();
-                        robot_visual_dirty |= app.pointer_pressed();
+                        robot_visual_dirty |= app.pointer_pressed_at_event_time(event_time);
                         // Record for robot test generation
                         if let Some(recorder) = &mut self.recorder {
                             recorder.record_mouse_down();
@@ -4620,7 +4700,8 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::MouseUp => {
-                        robot_visual_dirty |= app.pointer_released();
+                        let event_time = app.realtime_pointer_event_time(None);
+                        robot_visual_dirty |= app.pointer_released_at_event_time(event_time);
                         controller.end_synthetic_primary_gesture();
                         // Record for robot test generation
                         if let Some(recorder) = &mut self.recorder {
@@ -4700,20 +4781,23 @@ impl ApplicationHandler for App {
 
                     RobotCommand::TouchDown { x, y, source } => {
                         app.set_pointer_source(source);
-                        let cursor_dirty = app.set_cursor(x, y);
+                        let event_time = app.realtime_pointer_event_time(None);
+                        let cursor_dirty = app.set_cursor_at_event_time(x, y, event_time);
                         controller.begin_synthetic_primary_gesture();
-                        let press_dirty = app.pointer_pressed();
+                        let press_dirty = app.pointer_pressed_at_event_time(event_time);
                         robot_visual_dirty |= cursor_dirty || press_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::TouchMove { x, y, source } => {
                         app.set_pointer_source(source);
-                        robot_visual_dirty |= app.set_cursor(x, y);
+                        let event_time = app.realtime_pointer_event_time(None);
+                        robot_visual_dirty |= app.set_cursor_at_event_time(x, y, event_time);
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::TouchMoveAndWaitForFrame { x, y, source } => {
                         app.set_pointer_source(source);
-                        let visual_dirty = app.set_cursor(x, y);
+                        let event_time = app.realtime_pointer_event_time(None);
+                        let visual_dirty = app.set_cursor_at_event_time(x, y, event_time);
                         if visual_dirty {
                             robot_visual_dirty = true;
                         }
@@ -4741,8 +4825,9 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::TouchUp { x, y, source } => {
                         app.set_pointer_source(source);
-                        let cursor_dirty = app.set_cursor(x, y);
-                        let release_dirty = app.pointer_released();
+                        let event_time = app.realtime_pointer_event_time(None);
+                        let cursor_dirty = app.set_cursor_at_event_time(x, y, event_time);
+                        let release_dirty = app.pointer_released_at_event_time(event_time);
                         controller.end_synthetic_primary_gesture();
                         robot_visual_dirty |= cursor_dirty || release_dirty;
                         let _ = controller.tx.send(RobotResponse::Ok);
@@ -4812,6 +4897,71 @@ impl ApplicationHandler for App {
                             None => RobotResponse::Screenshots(shots),
                         });
                     }
+                    RobotCommand::CaptureInteractionKeyframes { scale, steps } => {
+                        let mut shots = Vec::new();
+                        let mut capture_err = None;
+                        for step in steps {
+                            native_window::with_native_window_registry(&registry, || {
+                                app.update_after_exact_interval(Duration::from_secs_f64(
+                                    f64::from(step.advance_ms.max(0.0)) / 1000.0,
+                                ))
+                            });
+                            for action in step.actions {
+                                let action_result = match action {
+                                    RobotTimelineAction::MoveTo { x, y } => {
+                                        let event_time = app.exact_pointer_event_time(None);
+                                        app.set_cursor_at_event_time(x, y, event_time);
+                                        Ok(())
+                                    }
+                                    RobotTimelineAction::MouseDown => {
+                                        let event_time = app.exact_pointer_event_time(None);
+                                        controller.begin_synthetic_primary_gesture();
+                                        app.pointer_pressed_at_event_time(event_time);
+                                        Ok(())
+                                    }
+                                    RobotTimelineAction::MouseUp => {
+                                        let event_time = app.exact_pointer_event_time(None);
+                                        app.pointer_released_at_event_time(event_time);
+                                        controller.end_synthetic_primary_gesture();
+                                        Ok(())
+                                    }
+                                    RobotTimelineAction::InvokeAppHook { name, argument } => {
+                                        self.robot_app_hook.as_mut().map_or_else(
+                                            || Err("robot app hook not configured".to_string()),
+                                            |hook| {
+                                                app.debug_enter_app_context(|| hook(name, argument))
+                                                    .map(|_| ())
+                                            },
+                                        )
+                                    }
+                                };
+                                if let Err(err) = action_result {
+                                    capture_err = Some(err);
+                                    break;
+                                }
+                            }
+                            if capture_err.is_some() {
+                                break;
+                            }
+                            native_window::with_native_window_registry(&registry, || {
+                                app.update_after_exact_interval(Duration::ZERO)
+                            });
+                            if step.capture {
+                                match capture_screenshot_with_scale(app, scale) {
+                                    Ok(shot) => shots.push(shot),
+                                    Err(err) => {
+                                        capture_err = Some(err);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        robot_visual_dirty = true;
+                        let _ = controller.tx.send(match capture_err {
+                            Some(err) => RobotResponse::Error(err),
+                            None => RobotResponse::Screenshots(shots),
+                        });
+                    }
                     RobotCommand::GetRenderStats => {
                         let _ = controller.tx.send(RobotResponse::RenderStats(Box::new(
                             app.renderer().last_frame_stats(),
@@ -4867,7 +5017,9 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::InvokeAppHook { name, argument } => {
                         let response = match self.robot_app_hook.as_mut() {
-                            Some(hook) => hook(name, argument).map(RobotResponse::AppHookResult),
+                            Some(hook) => app
+                                .debug_enter_app_context(|| hook(name, argument))
+                                .map(RobotResponse::AppHookResult),
                             None => Err("robot app hook not configured".to_string()),
                         };
                         match response {
@@ -5493,15 +5645,18 @@ mod tests {
         clamp_rect_to_monitor_delta, frame_interval_for_mode, initial_present_redraw_needed,
         native_window_graph_position, native_window_options_change_is_position_only,
         native_window_position_poll_needed, nearest_monitor_to_rect, next_frame_anchor,
-        physical_surface_rect_contains_pointer, pointer_button_frame_request,
-        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
-        primary_launch_requires_initial_redraw, primary_pointer_move_should_recover_press,
+        physical_outer_origin_from_surface, physical_surface_local_pointer,
+        physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
+        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
+        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
+        primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
         primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
         recovered_native_window_drag_start_pointer, scroll_frame_request,
         should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw, App, DesktopRect,
         FramePacingMode, NativeWindowDragSession, NativeWindowGraphPositionSource,
         NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
         NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
+        PrimaryPointerGesturePollAction,
     };
     use crate::launcher::AppSettings;
     use std::time::Instant;
@@ -5518,6 +5673,23 @@ mod tests {
     fn native_window_screen_position_is_declarative() {
         let options = NativeWindowOptions::new("child", 100.0, 50.0).with_position(10.0, 20.0);
         assert!(App::native_window_options_have_screen_position(&options));
+    }
+
+    #[test]
+    fn decorated_window_surface_coordinates_apply_frame_offset_once() {
+        let outer = PhysicalPosition::new(100, 200);
+        let surface_offset = PhysicalPosition::new(2, 32);
+        let surface = physical_surface_origin_from_outer(outer, surface_offset);
+
+        assert_eq!(surface, PhysicalPosition::new(102, 232));
+        assert_eq!(
+            physical_outer_origin_from_surface(surface, surface_offset),
+            outer
+        );
+        assert_eq!(
+            physical_surface_local_pointer(surface, PhysicalPosition::new(250.0, 808.0)),
+            PhysicalPosition::new(148.0, 576.0)
+        );
     }
 
     #[test]
@@ -6108,6 +6280,57 @@ mod tests {
             }),
             true
         ));
+    }
+
+    #[test]
+    fn primary_pointer_poll_synchronizes_global_position_before_releasing() {
+        let position = PhysicalPosition::new(112.0, 57.0);
+
+        assert_eq!(
+            primary_pointer_gesture_poll_action(
+                true,
+                false,
+                Some(NativeWindowPointerState {
+                    position,
+                    primary_down: false,
+                }),
+            ),
+            PrimaryPointerGesturePollAction::ReleaseAt(position)
+        );
+    }
+
+    #[test]
+    fn primary_pointer_poll_preserves_pressed_recovery_state() {
+        let pointer = NativeWindowPointerState {
+            position: PhysicalPosition::new(112.0, 57.0),
+            primary_down: true,
+        };
+
+        assert_eq!(
+            primary_pointer_gesture_poll_action(true, false, Some(pointer)),
+            PrimaryPointerGesturePollAction::Pressed(pointer)
+        );
+    }
+
+    #[test]
+    fn primary_pointer_poll_ignores_inactive_synthetic_and_unavailable_input() {
+        let pointer = Some(NativeWindowPointerState {
+            position: PhysicalPosition::new(112.0, 57.0),
+            primary_down: false,
+        });
+
+        assert_eq!(
+            primary_pointer_gesture_poll_action(false, false, pointer),
+            PrimaryPointerGesturePollAction::Inactive
+        );
+        assert_eq!(
+            primary_pointer_gesture_poll_action(true, true, pointer),
+            PrimaryPointerGesturePollAction::Inactive
+        );
+        assert_eq!(
+            primary_pointer_gesture_poll_action(true, false, None),
+            PrimaryPointerGesturePollAction::Inactive
+        );
     }
 
     #[test]

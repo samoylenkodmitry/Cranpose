@@ -447,8 +447,10 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                             shell.set_pointer_source(pointer_source_from_button(&button));
                             let changed = match route {
                                 TouchRoute::Primary => {
-                                    shell.set_cursor(logical.x, logical.y);
-                                    shell.pointer_pressed()
+                                    let event_time = shell.realtime_pointer_event_time(None);
+                                    shell
+                                        .set_cursor_at_event_time(logical.x, logical.y, event_time);
+                                    shell.pointer_pressed_at_event_time(event_time)
                                 }
                                 TouchRoute::Secondary(id) => {
                                     shell.secondary_pointer_pressed(id, logical.x, logical.y, None)
@@ -474,7 +476,10 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
                             // Touch lift-off positions must not become velocity
                             // samples (see AppShell::pointer_released_at_position).
                             if release.releases_primary {
-                                changed |= shell.pointer_released_at_position(logical.x, logical.y);
+                                let event_time = shell.realtime_pointer_event_time(None);
+                                changed |= shell.pointer_released_at_position_event_time(
+                                    logical.x, logical.y, event_time,
+                                );
                             }
                             if changed {
                                 window.request_redraw();

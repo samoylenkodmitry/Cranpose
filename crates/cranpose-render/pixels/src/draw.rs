@@ -180,9 +180,9 @@ fn draw_shape(
         .map(snap_delta_for_anchor)
         .unwrap_or_default();
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = draw
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    // Clips are already resolved in scene space and may belong to a fixed
+    // ancestor. Only the draw geometry borrows this item's raster snap.
+    let clip = draw.clip;
     let rect = if draw.snap_to_pixel_grid {
         Rect {
             x: rect.x.round(),
@@ -302,9 +302,7 @@ fn draw_image(
         .map(snap_delta_for_anchor)
         .unwrap_or_default();
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = draw
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let clip = draw.clip;
 
     if draw.alpha <= 0.0 || rect.width <= 0.0 || rect.height <= 0.0 {
         return;
@@ -540,9 +538,7 @@ fn draw_text_plain(
         Point::default()
     };
     let rect = draw.rect.translate(snap_delta.x, snap_delta.y);
-    let clip = draw
-        .clip
-        .map(|clip| clip.translate(snap_delta.x, snap_delta.y));
+    let clip = draw.clip;
 
     let raster_rect = if static_text_motion {
         Rect {
@@ -743,6 +739,38 @@ mod tests {
             fallback_cursor_x_for_byte_offset(text, text.len(), 12.0),
             width * 2.0
         );
+    }
+
+    #[test]
+    fn shape_snap_does_not_move_its_fixed_ancestor_clip() {
+        let draw = crate::scene::DrawShape {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            snap_anchor: Some(Point::new(0.4, 0.4)),
+            snap_to_pixel_grid: false,
+            brush: Brush::solid(Color::WHITE),
+            shape: None,
+            stroke: None,
+            arc: None,
+            z_index: 0,
+            clip: Some(Rect {
+                x: 2.0,
+                y: 2.0,
+                width: 2.0,
+                height: 2.0,
+            }),
+            blend_mode: BlendMode::SrcOver,
+        };
+        let mut frame = vec![0; 8 * 8 * 4];
+        draw_shape(&mut frame, 8, 8, &draw, &RenderDiagnostics::new());
+
+        let alpha = |x: usize, y: usize| frame[(y * 8 + x) * 4 + 3];
+        assert_eq!(alpha(1, 2), 0, "content snapping moved the clip left");
+        assert_eq!(alpha(2, 2), 255, "the fixed clip must retain its coverage");
     }
 
     fn count_non_background_pixels(frame: &[u8], width: u32, height: u32) -> usize {

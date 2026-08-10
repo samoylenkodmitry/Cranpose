@@ -371,6 +371,7 @@ pub(crate) struct PreparedShaderDraw<'a> {
 pub(crate) enum CompositeSampleMode {
     Linear,
     Box4,
+    Nearest,
 }
 
 impl EffectRenderer {
@@ -1947,6 +1948,7 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
     match sample_mode {
         CompositeSampleMode::Linear => 0.0,
         CompositeSampleMode::Box4 => 1.0,
+        CompositeSampleMode::Nearest => 2.0,
     }
 }
 

@@ -367,6 +367,27 @@ fn tween_factory_creates_tween_animation_type() {
     );
 }
 
+#[test]
+fn animation_type_delay_updates_tween_and_spring_specs() {
+    let tween = tween(450, Easing::FastOutSlowInEasing).with_delay(37);
+    let spring = spring(Spring::DampingRatioLowBouncy, Spring::StiffnessMedium).with_delay(83);
+
+    assert!(matches!(
+        tween,
+        AnimationType::Tween(AnimationSpec {
+            delay_millis: 37,
+            ..
+        })
+    ));
+    assert!(matches!(
+        spring,
+        AnimationType::Spring(SpringSpec {
+            delay_millis: 83,
+            ..
+        })
+    ));
+}
+
 /// Drives an [`Animatable`] against a standalone composition's frame clock at
 /// ~60 FPS and samples the value after every frame. Returns (time_ns, value)
 /// pairs including the initial state at t=0.
@@ -525,4 +546,61 @@ fn animate_to_with_velocity_seeds_gesture_handoff() {
         last.abs() < 0.5,
         "spring should return to the anchor, got {last}"
     );
+}
+
+#[test]
+fn exact_spring_start_integrates_from_the_event_clock_after_its_delay() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let mut animatable = Animatable::new(0.0f32, runtime.clone());
+    let start = 100_000_000;
+
+    animatable.animate_to_with_velocity_at(
+        100.0,
+        0.0,
+        AnimationType::Spring(SpringSpec::new(1.0, 200.0).with_delay(20)),
+        start,
+    );
+
+    runtime.drain_frame_callbacks(start + 10_000_000);
+    assert_eq!(animatable.state().get(), 0.0);
+    runtime.drain_frame_callbacks(start + 20_000_000);
+    assert_eq!(animatable.state().get(), 0.0);
+    runtime.drain_frame_callbacks(start + 36_666_667);
+    assert!(
+        animatable.state().get() > 0.0,
+        "the first post-delay frame must integrate elapsed event-clock time"
+    );
+}
+
+#[test]
+fn tween_to_spring_transition_discards_the_stale_spring_clock() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let mut animatable = Animatable::new(0.0f32, runtime.clone());
+
+    animatable.animate_to_with_velocity(
+        100.0,
+        500.0,
+        AnimationType::Spring(SpringSpec::new(1.0, 200.0)),
+    );
+    runtime.drain_frame_callbacks(16_666_667);
+    runtime.drain_frame_callbacks(33_333_334);
+    assert!(animatable.velocity().abs() > 1.0);
+
+    animatable.animateTo(50.0, AnimationType::Tween(AnimationSpec::linear(1)));
+    runtime.drain_frame_callbacks(50_000_001);
+    runtime.drain_frame_callbacks(51_000_001);
+    assert_eq!(animatable.state().get(), 50.0);
+    assert_eq!(animatable.velocity(), 0.0);
+
+    animatable.animateTo(75.0, AnimationType::Spring(SpringSpec::new(1.0, 200.0)));
+    runtime.drain_frame_callbacks(67_666_668);
+    assert_eq!(
+        animatable.state().get(),
+        50.0,
+        "a fresh spring uses its first callback as its clock origin"
+    );
+    runtime.drain_frame_callbacks(84_333_335);
+    assert!(animatable.state().get() > 50.0);
 }

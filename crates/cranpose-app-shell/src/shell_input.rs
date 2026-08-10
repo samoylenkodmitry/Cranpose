@@ -5,6 +5,18 @@ where
     R: Renderer,
     R::Error: Debug,
 {
+    fn pointer_event(
+        &self,
+        kind: PointerEventKind,
+        position: Point,
+        global_position: Point,
+        event_time: PointerEventTime,
+    ) -> PointerEvent {
+        PointerEvent::new(kind, position, global_position)
+            .with_time_ms(event_time.platform_time_ms)
+            .with_animation_time_nanos(event_time.animation_time_nanos)
+    }
+
     fn resolve_gesture_targets(
         &self,
         pointer: PointerId,
@@ -86,22 +98,35 @@ where
     /// this so gesture velocity is computed from real event times instead of
     /// delivery times.
     pub fn set_cursor_at_time(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.set_cursor_at_event_time(x, y, event_time)
+    }
+
+    /// Set the cursor using a timestamp already resolved into both clock domains.
+    pub fn set_cursor_at_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, time_ms)).unwrap_or(false)
+            run_in_mutable_snapshot(|| self.set_cursor_inner(x, y, event_time)).unwrap_or(false)
         });
         if result {
             self.mark_dirty();
         }
         log::trace!(
             target: "cranpose::input",
-            "set_cursor ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+            "set_cursor ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
+            event_time.platform_time_ms,
+            event_time.animation_time_nanos,
         );
         result
     }
 
-    fn set_cursor_inner(&mut self, x: f32, y: f32, time_ms: Option<i64>) -> bool {
+    fn set_cursor_inner(&mut self, x: f32, y: f32, event_time: PointerEventTime) -> bool {
         self.cursor = (x, y);
 
         // During a gesture (button pressed), ONLY dispatch to the tracked hit path.
@@ -111,11 +136,15 @@ where
             if self.hit_path_tracker.has_path(PointerId::PRIMARY) {
                 let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
                 if !targets.is_empty() {
-                    let event =
-                        PointerEvent::new(PointerEventKind::Move, Point { x, y }, Point { x, y })
-                            .with_buttons(self.buttons_pressed)
-                            .with_time_ms(time_ms)
-                            .with_source(self.pointer_source);
+                    let event = self
+                        .pointer_event(
+                            PointerEventKind::Move,
+                            Point { x, y },
+                            Point { x, y },
+                            event_time,
+                        )
+                        .with_buttons(self.buttons_pressed)
+                        .with_source(self.pointer_source);
                     self.dispatch_targets(targets, event, false);
                     return true;
                 }
@@ -139,7 +168,8 @@ where
         for old_id in previously_hovered {
             if !new_ids.contains(&old_id) {
                 if let Some(target) = self.renderer.scene().find_target(old_id) {
-                    let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos)
+                    let exit_event = self
+                        .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
                         .with_buttons(self.buttons_pressed)
                         .with_source(self.pointer_source);
                     self.dispatch_targets(std::iter::once(target), exit_event, false);
@@ -150,7 +180,8 @@ where
         // Dispatch Enter to newly hovered nodes
         for hit in &hits {
             if !self.hovered_nodes.contains(&hit.node_id()) {
-                let enter_event = PointerEvent::new(PointerEventKind::Enter, pos, pos)
+                let enter_event = self
+                    .pointer_event(PointerEventKind::Enter, pos, pos, event_time)
                     .with_buttons(self.buttons_pressed)
                     .with_source(self.pointer_source);
                 self.dispatch_targets(std::iter::once(hit.clone()), enter_event, false);
@@ -160,9 +191,9 @@ where
         self.hovered_nodes = new_ids;
 
         if !hits.is_empty() {
-            let event = PointerEvent::new(PointerEventKind::Move, pos, pos)
+            let event = self
+                .pointer_event(PointerEventKind::Move, pos, pos, event_time)
                 .with_buttons(self.buttons_pressed)
-                .with_time_ms(time_ms)
                 .with_source(self.pointer_source);
             self.dispatch_targets(hits, event, true);
             true
@@ -178,19 +209,30 @@ where
     /// Like [`pointer_pressed`](Self::pointer_pressed), but carries the
     /// platform input timestamp (milliseconds) of the press sample.
     pub fn pointer_pressed_at_time(&mut self, time_ms: Option<i64>) -> bool {
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.pointer_pressed_at_event_time(event_time)
+    }
+
+    /// Dispatch primary-button down with an already resolved event timestamp.
+    pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| self.pointer_pressed_inner(time_ms)).unwrap_or(false)
+            run_in_mutable_snapshot(|| self.pointer_pressed_inner(event_time)).unwrap_or(false)
         });
         if result {
             self.mark_dirty();
         }
-        log::trace!(target: "cranpose::input", "pointer_pressed time_ms={time_ms:?} -> {result}");
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_pressed time_ms={:?} animation_time_nanos={} -> {result}",
+            event_time.platform_time_ms,
+            event_time.animation_time_nanos,
+        );
         result
     }
 
-    fn pointer_pressed_inner(&mut self, time_ms: Option<i64>) -> bool {
+    fn pointer_pressed_inner(&mut self, event_time: PointerEventTime) -> bool {
         // Track button state
         self.buttons_pressed.insert(PointerButton::Primary);
 
@@ -206,20 +248,21 @@ where
             self.hit_path_tracker.remove_path(PointerId::PRIMARY);
             false
         } else {
-            let event = PointerEvent::new(
-                PointerEventKind::Down,
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-            )
-            .with_buttons(self.buttons_pressed)
-            .with_time_ms(time_ms)
-            .with_source(self.pointer_source);
+            let event = self
+                .pointer_event(
+                    PointerEventKind::Down,
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    event_time,
+                )
+                .with_buttons(self.buttons_pressed)
+                .with_source(self.pointer_source);
 
             let mut delivered_capture_paths = Vec::new();
             let mut applier = self.composition.applier_mut();
@@ -280,12 +323,23 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.pointer_released_at_position_event_time(x, y, event_time)
+    }
+
+    /// Release at a position with an already resolved event timestamp.
+    pub fn pointer_released_at_position_event_time(
+        &mut self,
+        x: f32,
+        y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
                 self.cursor = (x, y);
-                self.pointer_released_inner(time_ms)
+                self.pointer_released_inner(event_time)
             })
             .unwrap_or(false)
         });
@@ -294,7 +348,9 @@ where
         }
         log::trace!(
             target: "cranpose::input",
-            "pointer_released_at_position ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+            "pointer_released_at_position ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
+            event_time.platform_time_ms,
+            event_time.animation_time_nanos,
         );
         result
     }
@@ -302,19 +358,30 @@ where
     /// Like [`pointer_released`](Self::pointer_released), but carries the
     /// platform input timestamp (milliseconds) of the release sample.
     pub fn pointer_released_at_time(&mut self, time_ms: Option<i64>) -> bool {
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.pointer_released_at_event_time(event_time)
+    }
+
+    /// Dispatch primary-button up with an already resolved event timestamp.
+    pub fn pointer_released_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| self.pointer_released_inner(time_ms)).unwrap_or(false)
+            run_in_mutable_snapshot(|| self.pointer_released_inner(event_time)).unwrap_or(false)
         });
         if result {
             self.mark_dirty();
         }
-        log::trace!(target: "cranpose::input", "pointer_released time_ms={time_ms:?} -> {result}");
+        log::trace!(
+            target: "cranpose::input",
+            "pointer_released time_ms={:?} animation_time_nanos={} -> {result}",
+            event_time.platform_time_ms,
+            event_time.animation_time_nanos,
+        );
         result
     }
 
-    fn pointer_released_inner(&mut self, time_ms: Option<i64>) -> bool {
+    fn pointer_released_inner(&mut self, event_time: PointerEventTime) -> bool {
         // UP events report buttons as "currently pressed" (after release),
         // matching typical platform semantics where primary is already gone.
         self.buttons_pressed.remove(PointerButton::Primary);
@@ -325,20 +392,21 @@ where
         self.hit_path_tracker.remove_path(PointerId::PRIMARY);
 
         if !targets.is_empty() {
-            let event = PointerEvent::new(
-                PointerEventKind::Up,
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-            )
-            .with_buttons(corrected_buttons)
-            .with_time_ms(time_ms)
-            .with_source(self.pointer_source);
+            let event = self
+                .pointer_event(
+                    PointerEventKind::Up,
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    event_time,
+                )
+                .with_buttons(corrected_buttons)
+                .with_source(self.pointer_source);
 
             self.dispatch_targets(targets, event, false);
             true
@@ -362,7 +430,8 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        self.dispatch_secondary_pointer(PointerEventKind::Down, pointer_id, x, y, time_ms)
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.dispatch_secondary_pointer(PointerEventKind::Down, pointer_id, x, y, event_time)
     }
 
     /// Move counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
@@ -373,7 +442,8 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        self.dispatch_secondary_pointer(PointerEventKind::Move, pointer_id, x, y, time_ms)
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.dispatch_secondary_pointer(PointerEventKind::Move, pointer_id, x, y, event_time)
     }
 
     /// Release counterpart of [`secondary_pointer_pressed`](Self::secondary_pointer_pressed).
@@ -384,7 +454,8 @@ where
         y: f32,
         time_ms: Option<i64>,
     ) -> bool {
-        self.dispatch_secondary_pointer(PointerEventKind::Up, pointer_id, x, y, time_ms)
+        let event_time = self.realtime_pointer_event_time(time_ms);
+        self.dispatch_secondary_pointer(PointerEventKind::Up, pointer_id, x, y, event_time)
     }
 
     fn dispatch_secondary_pointer(
@@ -393,7 +464,7 @@ where
         pointer_id: u64,
         x: f32,
         y: f32,
-        time_ms: Option<i64>,
+        event_time: PointerEventTime,
     ) -> bool {
         if pointer_id == 0 {
             log::warn!(
@@ -415,9 +486,9 @@ where
                     return false;
                 }
                 let pos = Point { x, y };
-                let event = PointerEvent::new(kind, pos, pos)
+                let event = self
+                    .pointer_event(kind, pos, pos, event_time)
                     .with_buttons(self.buttons_pressed)
-                    .with_time_ms(time_ms)
                     .with_id(pointer_id)
                     .with_source(self.pointer_source);
                 self.dispatch_targets(targets, event, false);
@@ -430,7 +501,9 @@ where
         }
         log::trace!(
             target: "cranpose::input",
-            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={time_ms:?} -> {result}"
+            "secondary_pointer {kind:?} id={pointer_id} ({x:.2},{y:.2}) time_ms={:?} animation_time_nanos={} -> {result}",
+            event_time.platform_time_ms,
+            event_time.animation_time_nanos,
         );
         result
     }
@@ -441,10 +514,12 @@ where
     /// `zoom_factor` is multiplicative: `> 1.0` zooms in, `< 1.0` zooms out.
     /// Returns `true` if a handler consumed the event.
     pub fn pointer_zoomed(&mut self, zoom_factor: f32) -> bool {
+        let event_time = self.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| self.pointer_zoomed_inner(zoom_factor)).unwrap_or(false)
+            run_in_mutable_snapshot(|| self.pointer_zoomed_inner(zoom_factor, event_time))
+                .unwrap_or(false)
         });
         if result {
             self.mark_dirty();
@@ -456,7 +531,7 @@ where
         result
     }
 
-    fn pointer_zoomed_inner(&mut self, zoom_factor: f32) -> bool {
+    fn pointer_zoomed_inner(&mut self, zoom_factor: f32, event_time: PointerEventTime) -> bool {
         if !zoom_factor.is_finite() || zoom_factor <= 0.0 || zoom_factor == 1.0 {
             return false;
         }
@@ -470,7 +545,8 @@ where
             x: self.cursor.0,
             y: self.cursor.1,
         };
-        let event = PointerEvent::new(PointerEventKind::Zoom, pos, pos)
+        let event = self
+            .pointer_event(PointerEventKind::Zoom, pos, pos, event_time)
             .with_buttons(self.buttons_pressed)
             .with_zoom_delta(zoom_factor)
             .with_source(self.pointer_source);
@@ -493,10 +569,11 @@ where
     ///
     /// Returns `true` if a handler consumed the event.
     pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
+        let event_time = self.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
-            run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y))
+            run_in_mutable_snapshot(|| self.pointer_scrolled_inner(delta_x, delta_y, event_time))
                 .unwrap_or(false)
         });
         if result {
@@ -509,7 +586,12 @@ where
         result
     }
 
-    fn pointer_scrolled_inner(&mut self, delta_x: f32, delta_y: f32) -> bool {
+    fn pointer_scrolled_inner(
+        &mut self,
+        delta_x: f32,
+        delta_y: f32,
+        event_time: PointerEventTime,
+    ) -> bool {
         if delta_x.abs() <= f32::EPSILON && delta_y.abs() <= f32::EPSILON {
             return false;
         }
@@ -519,23 +601,25 @@ where
             return false;
         }
 
-        let event = PointerEvent::new(
-            PointerEventKind::Scroll,
-            Point {
-                x: self.cursor.0,
-                y: self.cursor.1,
-            },
-            Point {
-                x: self.cursor.0,
-                y: self.cursor.1,
-            },
-        )
-        .with_buttons(self.buttons_pressed)
-        .with_scroll_delta(Point {
-            x: delta_x,
-            y: delta_y,
-        })
-        .with_source(self.pointer_source);
+        let event = self
+            .pointer_event(
+                PointerEventKind::Scroll,
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+                Point {
+                    x: self.cursor.0,
+                    y: self.cursor.1,
+                },
+                event_time,
+            )
+            .with_buttons(self.buttons_pressed)
+            .with_scroll_delta(Point {
+                x: delta_x,
+                y: delta_y,
+            })
+            .with_source(self.pointer_source);
 
         let capture_paths = hits
             .iter()
@@ -727,16 +811,17 @@ where
     /// - Mouse leaves window while button pressed
     /// - Any other gesture abort scenario
     pub fn cancel_gesture(&mut self) {
+        let event_time = self.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let _ = app_context.enter(|| {
             run_in_mutable_snapshot(|| {
-                self.cancel_gesture_inner();
+                self.cancel_gesture_inner(event_time);
             })
         });
     }
 
-    fn cancel_gesture_inner(&mut self) {
+    fn cancel_gesture_inner(&mut self, event_time: PointerEventTime) {
         let targets = self.resolve_gesture_targets(PointerId::PRIMARY);
 
         // Clear tracker and button state
@@ -744,18 +829,20 @@ where
         self.buttons_pressed = PointerButtons::NONE;
 
         if !targets.is_empty() {
-            let event = PointerEvent::new(
-                PointerEventKind::Cancel,
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-                Point {
-                    x: self.cursor.0,
-                    y: self.cursor.1,
-                },
-            )
-            .with_source(self.pointer_source);
+            let event = self
+                .pointer_event(
+                    PointerEventKind::Cancel,
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    Point {
+                        x: self.cursor.0,
+                        y: self.cursor.1,
+                    },
+                    event_time,
+                )
+                .with_source(self.pointer_source);
 
             self.dispatch_targets(targets, event, false);
         }
@@ -768,7 +855,8 @@ where
         let hovered_nodes = self.hovered_nodes.clone();
         for node_id in hovered_nodes {
             if let Some(target) = self.renderer.scene().find_target(node_id) {
-                let exit_event = PointerEvent::new(PointerEventKind::Exit, pos, pos)
+                let exit_event = self
+                    .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
                     .with_source(self.pointer_source);
                 self.dispatch_targets(std::iter::once(target), exit_event, false);
             }

@@ -7,6 +7,7 @@ use cranpose_ui_graphics::{Point, Rect};
 pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
+const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
 
 /// Slack absorbed before the ceil, so a rect that already covers a whole
 /// number of device pixels cannot gain one to float error: `51.0 / 1.4 * 1.4`
@@ -63,12 +64,7 @@ pub(crate) fn offscreen_byte_size(width: u32, height: u32) -> u64 {
 }
 
 pub(crate) fn surface_pixel_rect(rect: Rect, root_scale: f32) -> Rect {
-    Rect {
-        x: rect.x * root_scale,
-        y: rect.y * root_scale,
-        width: rect.width * root_scale,
-        height: rect.height * root_scale,
-    }
+    canonicalized_scaled_rect(rect, root_scale)
 }
 
 pub(crate) fn local_effect_pixel_rect(width: u32, height: u32) -> [f32; 4] {
@@ -104,10 +100,10 @@ pub(crate) fn content_effect_pixel_rect(
     let scale_x = width as f32 / surface_rect.width;
     let scale_y = height as f32 / surface_rect.height;
     [
-        (content.x - surface_rect.x) * scale_x,
-        (content.y - surface_rect.y) * scale_y,
-        content.width * scale_x,
-        content.height * scale_y,
+        canonicalize_device_coordinate((content.x - surface_rect.x) * scale_x),
+        canonicalize_device_coordinate((content.y - surface_rect.y) * scale_y),
+        canonicalize_device_coordinate(content.width * scale_x),
+        canonicalize_device_coordinate(content.height * scale_y),
     ]
 }
 
@@ -269,8 +265,9 @@ pub(crate) fn device_pixel_bounds_for_rect(
 /// translates across the device-pixel grid, which would change raster cache
 /// keys on every scroll step; the +1 slack column/row covers the worst-case
 /// phase instead so one cached raster size serves every translation.
-pub(crate) fn translation_stable_device_pixel_bounds(
+pub(crate) fn translation_stable_anchored_device_pixel_bounds(
     rect: Rect,
+    snap_anchor: Option<SnapAnchor>,
     root_scale: f32,
     max_texture_dim: u32,
 ) -> Option<DevicePixelBounds> {
@@ -278,10 +275,24 @@ pub(crate) fn translation_stable_device_pixel_bounds(
         return None;
     }
 
-    let min_x = (rect.x * root_scale).floor();
-    let min_y = (rect.y * root_scale).floor();
-    let width = ((rect.width * root_scale).ceil() + 1.0).max(0.0) as u32;
-    let height = ((rect.height * root_scale).ceil() + 1.0).max(0.0) as u32;
+    let device_rect = snap_anchor
+        .and_then(|anchor| {
+            axis_aligned_quad_rect(canonicalized_anchored_scaled_quad(
+                [
+                    [rect.x, rect.y],
+                    [rect.x + rect.width, rect.y],
+                    [rect.x, rect.y + rect.height],
+                    [rect.x + rect.width, rect.y + rect.height],
+                ],
+                anchor,
+                root_scale,
+            ))
+        })
+        .unwrap_or_else(|| canonicalized_scaled_rect(rect, root_scale));
+    let min_x = device_rect.x.floor();
+    let min_y = device_rect.y.floor();
+    let width = (device_rect.width.ceil() + 1.0).max(0.0) as u32;
+    let height = (device_rect.height.ceil() + 1.0).max(0.0) as u32;
     if width == 0 || height == 0 || width > max_texture_dim || height > max_texture_dim {
         return None;
     }
@@ -307,6 +318,65 @@ pub(crate) fn scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
     quad.map(|[x, y]| [x * scale, y * scale])
 }
 
+pub(crate) fn canonicalize_device_coordinate(value: f32) -> f32 {
+    if !value.is_finite() {
+        return value;
+    }
+    ((f64::from(value) * DEVICE_SNAP_SUBPIXEL_STEPS).round() / DEVICE_SNAP_SUBPIXEL_STEPS) as f32
+}
+
+pub(crate) fn canonicalized_scaled_rect(rect: Rect, scale: f32) -> Rect {
+    let left = canonicalize_device_coordinate(rect.x * scale);
+    let top = canonicalize_device_coordinate(rect.y * scale);
+    let right = canonicalize_device_coordinate((rect.x + rect.width) * scale);
+    let bottom = canonicalize_device_coordinate((rect.y + rect.height) * scale);
+    Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    }
+}
+
+pub(crate) fn canonicalized_scaled_quad(quad: [[f32; 2]; 4], scale: f32) -> [[f32; 2]; 4] {
+    quad.map(|[x, y]| {
+        [
+            canonicalize_device_coordinate(x * scale),
+            canonicalize_device_coordinate(y * scale),
+        ]
+    })
+}
+
+pub(crate) fn canonicalized_anchored_scaled_quad(
+    quad: [[f32; 2]; 4],
+    anchor: SnapAnchor,
+    root_scale: f32,
+) -> [[f32; 2]; 4] {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return canonicalized_scaled_quad(quad, root_scale);
+    }
+    let device_pixel_step =
+        if anchor.device_pixel_step.is_finite() && anchor.device_pixel_step > 0.0 {
+            anchor.device_pixel_step
+        } else {
+            1.0
+        };
+    let snapped_device_origin = |origin: f32| {
+        let snap_units = f64::from(origin) * f64::from(root_scale) / f64::from(device_pixel_step);
+        let canonical_snap_units =
+            (snap_units * DEVICE_SNAP_SUBPIXEL_STEPS).round() / DEVICE_SNAP_SUBPIXEL_STEPS;
+        (canonical_snap_units.round() * f64::from(device_pixel_step)) as f32
+    };
+    let anchor_x = snapped_device_origin(anchor.origin.x);
+    let anchor_y = snapped_device_origin(anchor.origin.y);
+    quad.map(|[x, y]| {
+        [
+            anchor_x + canonicalize_device_coordinate((x - anchor.origin.x) * root_scale),
+            anchor_y + canonicalize_device_coordinate((y - anchor.origin.y) * root_scale),
+        ]
+    })
+}
+
 pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Point {
     if !root_scale.is_finite() || root_scale <= 0.0 {
         return Point::default();
@@ -317,13 +387,18 @@ pub(crate) fn snap_delta_for_anchor(anchor: SnapAnchor, root_scale: f32) -> Poin
         } else {
             1.0
         };
+    let snapped_axis_delta = |origin: f32| {
+        let root_scale = f64::from(root_scale);
+        let device_pixel_step = f64::from(device_pixel_step);
+        let snap_units = f64::from(origin) * root_scale / device_pixel_step;
+        let canonical_snap_units =
+            (snap_units * DEVICE_SNAP_SUBPIXEL_STEPS).round() / DEVICE_SNAP_SUBPIXEL_STEPS;
+        let snapped_logical = canonical_snap_units.round() * device_pixel_step / root_scale;
+        (snapped_logical - f64::from(origin)) as f32
+    };
     Point::new(
-        ((anchor.origin.x * root_scale) / device_pixel_step).round() * device_pixel_step
-            / root_scale
-            - anchor.origin.x,
-        ((anchor.origin.y * root_scale) / device_pixel_step).round() * device_pixel_step
-            / root_scale
-            - anchor.origin.y,
+        snapped_axis_delta(anchor.origin.x),
+        snapped_axis_delta(anchor.origin.y),
     )
 }
 
@@ -381,6 +456,30 @@ pub(crate) fn snap_motion_stable_dest_quad(
     dest_quad.map(|[x, y]| [x + delta_x, y + delta_y])
 }
 
+/// Translates an axis-aligned composite as one unit so its stable transform
+/// pivot lands exactly on the canonical device pixel selected for that pivot.
+pub(crate) fn snap_dest_quad_to_stable_point(
+    dest_quad: [[f32; 2]; 4],
+    stable_point: [f32; 2],
+) -> [[f32; 2]; 4] {
+    if !quad_is_axis_aligned_rect(dest_quad)
+        || !stable_point[0].is_finite()
+        || !stable_point[1].is_finite()
+    {
+        return dest_quad;
+    }
+
+    let delta_x = canonicalize_device_coordinate(stable_point[0]).round() - stable_point[0];
+    let delta_y = canonicalize_device_coordinate(stable_point[1]).round() - stable_point[1];
+    if delta_x.abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
+        && delta_y.abs() <= COMPOSITE_DEST_SNAP_TOLERANCE
+    {
+        return dest_quad;
+    }
+
+    dest_quad.map(|[x, y]| [x + delta_x, y + delta_y])
+}
+
 pub(crate) fn quantize_motion_stable_target_scale(
     target_scale: f32,
     sample_mode: CompositeSampleMode,
@@ -399,10 +498,12 @@ pub(crate) fn quantize_motion_stable_target_scale(
 #[cfg(test)]
 mod tests {
     use super::{
-        axis_aligned_quad_rect, clamp_effect_surface_scale, device_pixel_exact_surface_rect,
-        fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
-        quantize_motion_stable_target_scale, snap_motion_stable_dest_quad, surface_target_size,
-        translation_stable_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
+        axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
+        canonicalized_scaled_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
+        device_pixel_exact_surface_rect, fit_capture_rect_to_scale_budget_for_axes,
+        offscreen_byte_size, quantize_motion_stable_target_scale, snap_dest_quad_to_stable_point,
+        snap_motion_stable_dest_quad, surface_target_size,
+        translation_stable_anchored_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::rect_to_quad;
@@ -420,6 +521,32 @@ mod tests {
     }
 
     #[test]
+    fn animated_scale_can_snap_around_a_stable_center() {
+        let center = [72.0, 433.6];
+        let snapped_center = [72.0, 434.0];
+
+        for scale in [0.85, 0.93, 1.0, 1.07, 1.15] {
+            let half_extent = 18.0 * scale;
+            let quad = [
+                [center[0] - half_extent, center[1] - half_extent],
+                [center[0] + half_extent, center[1] - half_extent],
+                [center[0] - half_extent, center[1] + half_extent],
+                [center[0] + half_extent, center[1] + half_extent],
+            ];
+            let snapped = snap_dest_quad_to_stable_point(quad, center);
+            let actual_center = [
+                (snapped[0][0] + snapped[3][0]) * 0.5,
+                (snapped[0][1] + snapped[3][1]) * 0.5,
+            ];
+
+            assert_eq!(
+                actual_center, snapped_center,
+                "scale {scale} shifted the layer"
+            );
+        }
+    }
+
+    #[test]
     fn linear_dest_quad_preserves_fractional_translation() {
         let quad = [[12.33, 8.66], [20.33, 8.66], [12.33, 18.66], [20.33, 18.66]];
 
@@ -431,13 +558,14 @@ mod tests {
 
     #[test]
     fn translation_stable_device_bounds_preserve_offscreen_source_origin() {
-        let bounds = translation_stable_device_pixel_bounds(
+        let bounds = translation_stable_anchored_device_pixel_bounds(
             Rect {
                 x: -12.25,
                 y: 8.25,
                 width: 34.5,
                 height: 10.25,
             },
+            None,
             2.0,
             4096,
         )
@@ -458,13 +586,139 @@ mod tests {
             height: 10.25,
         };
         let scale = 130.0 / 96.0;
-        let base = translation_stable_device_pixel_bounds(rect_at(-12.25), scale, 4096)
-            .expect("base bounds");
+        let base =
+            translation_stable_anchored_device_pixel_bounds(rect_at(-12.25), None, scale, 4096)
+                .expect("base bounds");
         for step in 1..=12 {
-            let moved =
-                translation_stable_device_pixel_bounds(rect_at(-12.25 + step as f32), scale, 4096)
-                    .expect("moved bounds");
+            let moved = translation_stable_anchored_device_pixel_bounds(
+                rect_at(-12.25 + step as f32),
+                None,
+                scale,
+                4096,
+            )
+            .expect("moved bounds");
             assert_eq!((base.width, base.height), (moved.width, moved.height));
+        }
+    }
+
+    #[test]
+    fn anchored_translation_stable_bounds_move_one_pixel_at_fractional_densities() {
+        for scale in [1.25, 130.0 / 96.0] {
+            let mut origin_y = 127.600_006_f32;
+            let mut previous_y = None;
+
+            for step in 0..10 {
+                let rect = Rect {
+                    x: 40.0,
+                    y: origin_y - 18.0,
+                    width: 60.0,
+                    height: 60.0,
+                };
+                let anchor = crate::scene::SnapAnchor::rigid(cranpose_ui_graphics::Point::new(
+                    0.0, origin_y,
+                ));
+                let bounds = translation_stable_anchored_device_pixel_bounds(
+                    rect,
+                    Some(anchor),
+                    scale,
+                    4096,
+                )
+                .expect("anchored shadow bounds");
+                if let Some(previous_y) = previous_y {
+                    assert_eq!(
+                        bounds.y,
+                        previous_y - 1.0,
+                        "anchored bounds jumped at step {step} with scale {scale}"
+                    );
+                }
+                previous_y = Some(bounds.y);
+                origin_y -= 1.0 / scale;
+            }
+        }
+    }
+
+    #[test]
+    fn rigid_snap_keeps_half_pixel_phase_across_one_device_pixel_steps() {
+        let scale = 1.25;
+        let logical_device_pixel = 1.0 / scale;
+        let mut origin = 127.600_006;
+        let mut previous_device_origin = None;
+
+        for step in 0..10 {
+            let anchor =
+                crate::scene::SnapAnchor::rigid(cranpose_ui_graphics::Point::new(0.0, origin));
+            let delta = super::snap_delta_for_anchor(anchor, scale);
+            let snapped_device_origin = (origin + delta.y) * scale;
+            assert_eq!(
+                snapped_device_origin.fract(),
+                0.0,
+                "step {step} did not snap to a device pixel: origin={origin:?} delta={:?}",
+                delta.y
+            );
+            if let Some(previous) = previous_device_origin {
+                assert_eq!(
+                    previous - snapped_device_origin,
+                    1.0,
+                    "step {step} changed the half-pixel rounding direction"
+                );
+            }
+            previous_device_origin = Some(snapped_device_origin);
+            origin -= logical_device_pixel;
+        }
+    }
+
+    #[test]
+    fn device_coordinate_canonicalization_absorbs_half_pixel_float_noise() {
+        assert_eq!(canonicalize_device_coordinate(338.499_94), 338.5);
+        assert_eq!(canonicalize_device_coordinate(338.500_06), 338.5);
+        assert_eq!(canonicalize_device_coordinate(f32::INFINITY), f32::INFINITY);
+    }
+
+    #[test]
+    fn scaled_geometry_canonicalization_preserves_edges_and_quad_topology() {
+        let rect = Rect {
+            x: 10.000_02,
+            y: 20.399_96,
+            width: 30.0,
+            height: 40.000_03,
+        };
+        let scaled = canonicalized_scaled_rect(rect, 1.25);
+        assert_eq!(scaled.x, 12.5);
+        assert_eq!(scaled.y, 25.5);
+        assert_eq!(scaled.width, 37.5);
+        assert_eq!(scaled.height, 50.0);
+
+        assert_eq!(
+            canonicalized_scaled_quad(crate::rect_to_quad(rect), 1.25),
+            crate::rect_to_quad(scaled)
+        );
+    }
+
+    #[test]
+    fn effect_pixel_rect_is_stable_under_accumulated_rigid_translation() {
+        let mut translation = 2_352.801;
+        let mut expected = None;
+
+        for step in 0..10 {
+            let surface = Rect {
+                x: 20.0,
+                y: translation,
+                width: 120.0,
+                height: 60.0,
+            };
+            let content = Rect {
+                x: 24.0,
+                y: translation + 7.2,
+                width: 112.0,
+                height: 48.0,
+            };
+            let actual = content_effect_pixel_rect(Some(content), surface, 150, 75);
+            if let Some(expected) = expected {
+                assert_eq!(actual, expected, "effect rect drifted at step {step}");
+            } else {
+                expected = Some(actual);
+            }
+            translation += 0.8;
         }
     }
 

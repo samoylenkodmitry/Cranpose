@@ -313,6 +313,35 @@ fn clickable_node_handles_pointer_events() {
 }
 
 #[test]
+fn clickable_on_press_runs_before_release_confirmation() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut chain = ModifierNodeChain::new();
+    let mut context = BasicModifierNodeContext::new();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let press_events = Rc::clone(&events);
+    let click_events = Rc::clone(&events);
+    let modifier = Modifier::empty().clickable_on_press(
+        move |_| press_events.borrow_mut().push("press"),
+        move |_| click_events.borrow_mut().push("click"),
+    );
+
+    chain.update_from_slice(&modifier.elements(), &mut context);
+    let mut node = chain.node_mut::<ClickableNode>(0).expect("clickable node");
+    let position = Point { x: 10.0, y: 20.0 };
+    node.on_pointer_event(
+        &mut context,
+        &PointerEvent::new(PointerEventKind::Down, position, position),
+    );
+    assert_eq!(&*events.borrow(), &["press"]);
+
+    node.on_pointer_event(
+        &mut context,
+        &PointerEvent::new(PointerEventKind::Up, position, position),
+    );
+    assert_eq!(&*events.borrow(), &["press", "click"]);
+}
+
+#[test]
 fn clickable_node_cancels_click_on_drag() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut chain = ModifierNodeChain::new();

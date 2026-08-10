@@ -547,6 +547,9 @@ run_test() {
         robot_double_click|robot_multiline_click|robot_multiline_nav)
             timeout_secs=90
             ;;
+        robot_liquid_scroll_exact_external_contract)
+            timeout_secs=480
+            ;;
         robot_memory_leak)
             timeout_secs=900
             ;;
@@ -564,13 +567,16 @@ run_test() {
 
     local headless_env="CRANPOSE_HEADLESS=1"
     case "$example" in
-        robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_markdown_default_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_regression_shader_visual_contract|robot_shader_external_x11_drag|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
+        robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_liquid_scroll_exact_external_contract|robot_markdown_default_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_renderer_micro_contract|robot_regression_shader_visual_contract|robot_shader_external_x11_drag|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
             headless_env="CRANPOSE_HEADLESS=0"
             ;;
     esac
 
     local example_env=()
     case "$example" in
+        robot_liquid_scroll_exact_external_contract)
+            example_env+=(WINIT_X11_SCALE_FACTOR=1.3541667)
+            ;;
         robot_presented_window_hidpi_geometry)
             example_env+=(WINIT_X11_SCALE_FACTOR=2)
             ;;

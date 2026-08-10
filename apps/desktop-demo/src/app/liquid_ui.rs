@@ -15,7 +15,13 @@ use cranpose::{
     composable, mutableStateOf, remember, Brush, Color, CornerRadii, GraphicsLayer, Modifier,
     Point, PointerEventKind, PointerInputScope, Rect, ScrollState, Size,
 };
+use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{Alignment, HorizontalAlignment, VerticalAlignment};
+use std::cell::RefCell;
+
+thread_local! {
+    static TAB_SWIPE_REFERENCE_PAGE_OVERRIDE: RefCell<Option<cranpose_core::MutableState<Option<usize>>>> = const { RefCell::new(None) };
+}
 
 const PAGE_PADDING: f32 = 18.0;
 const LIQUID_TAB_BAR_BOTTOM_PADDING: f32 = 19.0;
@@ -24,6 +30,9 @@ const ACCOUNT_ICON_SCALE: f32 = 0.95;
 const OPTICAL_PREVIEW_HEIGHT: f32 = 256.0;
 const OPTICAL_PREVIEW_LENS_SIZE: Size = Size::new(150.0, 82.0);
 const OPTICAL_PREVIEW_INITIAL_Y_FRACTION: f32 = 0.28;
+pub const TAB_SWIPE_REFERENCE_STAGE_WIDTH: f32 = 440.0;
+pub const TAB_SWIPE_REFERENCE_STAGE_HEIGHT: f32 = 132.0;
+pub const LIQUID_SCROLL_VIEWPORT_TAG: &str = "LiquidScrollViewport";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct TabSwipeReferenceLayout {
@@ -98,6 +107,17 @@ fn tab_swipe_reference_page(progress: f32) -> usize {
     } else {
         3
     }
+}
+
+pub fn set_tab_swipe_reference_page(page: usize) -> Result<(), String> {
+    if !matches!(page, 0 | 2 | 3) {
+        return Err(format!("unsupported tab-swipe reference page {page}"));
+    }
+    let state = TAB_SWIPE_REFERENCE_PAGE_OVERRIDE
+        .with(|cell| cell.borrow().as_ref().copied())
+        .ok_or_else(|| "tab-swipe reference page state is not installed".to_string())?;
+    state.set(Some(page));
+    Ok(())
 }
 
 fn heading_style(color: Color) -> TextStyle {
@@ -1770,6 +1790,10 @@ fn MenuOpenReferenceStage() {
 fn TabSwipeReferenceStage() {
     let selected = remember(|| mutableStateOf(0usize)).with(|state| *state);
     let timeline_started = remember(|| mutableStateOf(false)).with(|state| *state);
+    let reference_page_override = remember(|| mutableStateOf(None::<usize>)).with(|state| *state);
+    TAB_SWIPE_REFERENCE_PAGE_OVERRIDE.with(|cell| {
+        *cell.borrow_mut() = Some(reference_page_override);
+    });
     let timeline_progress = cranpose_animation::animateFloatAsState(
         if timeline_started.get() { 1.0 } else { 0.0 },
         cranpose_animation::tween(1_867, cranpose_animation::Easing::LinearEasing),
@@ -1779,7 +1803,11 @@ fn TabSwipeReferenceStage() {
         Modifier::empty().width(440.0).height(132.0),
         BoxSpec::default(),
         move || {
-            TabSwipeFixtureBackdrop(tab_swipe_reference_page(timeline_progress.get()));
+            TabSwipeFixtureBackdrop(
+                reference_page_override
+                    .get()
+                    .unwrap_or_else(|| tab_swipe_reference_page(timeline_progress.get())),
+            );
             let tab_state = selected;
             let start_timeline = timeline_started;
             Box(
@@ -1923,6 +1951,9 @@ pub fn LiquidUiTab() {
             let menu_gesture = menu_gesture.clone();
             let colors = liquid_colors();
             let scroll = remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+            super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
+                *cell.borrow_mut() = Some(scroll.clone());
+            });
             let scroll_for_bar = scroll.clone();
             // The menu anchors to the REAL composited rects of the Featured
             // videos card's trailing circles (window coords via
@@ -1960,9 +1991,14 @@ pub fn LiquidUiTab() {
             let stage_button_spec = absorbed_button_spec.clone();
 
             cranpose::widgets::Box(
-                Modifier::empty().fill_max_size().draw_behind(move |scope| {
-                    scope.draw_rect(Brush::solid(colors.background));
-                }),
+                Modifier::empty()
+                    .semantics(|config: &mut SemanticsConfiguration| {
+                        config.content_description = Some(LIQUID_SCROLL_VIEWPORT_TAG.to_string());
+                    })
+                    .fill_max_size()
+                    .draw_behind(move |scope| {
+                        scope.draw_rect(Brush::solid(colors.background));
+                    }),
                 cranpose::widgets::BoxSpec::default(),
                 move || {
                     // ---- Scrollable content (slides under the bars) ----

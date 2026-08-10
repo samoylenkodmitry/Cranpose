@@ -851,12 +851,13 @@ impl Runtime {
     pub fn needs_frame(&self) -> bool {
         // The stored flag is only half the answer. A task woken from another
         // thread cannot touch this runtime's `RefCell`s, so its waker can only
-        // set the shared `runnable` flag and ping the scheduler — same reason
-        // a cross-thread `post_ui` is visible here through the dispatcher's
-        // atomic rather than through the flag.
-        *self.inner.needs_frame.borrow()
-            || self.inner.ui_dispatcher.has_pending()
-            || self.inner.has_runnable_tasks()
+        // set the shared `runnable` flag and ping the scheduler.
+        //
+        // A merely pending UI continuation does NOT belong here: main's "Avoid
+        // frames for idle UI continuations" moved that to an update-only wake
+        // (`has_pending_ui` in the app shell), so an idle continuation no
+        // longer costs a frame.
+        *self.inner.needs_frame.borrow() || self.inner.has_runnable_tasks()
     }
 
     pub fn set_needs_frame(&self, value: bool) {

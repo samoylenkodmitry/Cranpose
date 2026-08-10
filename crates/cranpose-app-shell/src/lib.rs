@@ -246,6 +246,15 @@ where
     frame_scheduler: FrameScheduler,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Platform and animation-clock timestamps for one pointer sample.
+pub struct PointerEventTime {
+    /// Timestamp supplied by the platform, in its millisecond clock domain.
+    pub platform_time_ms: Option<i64>,
+    /// Timestamp in the animation frame-clock domain.
+    pub animation_time_nanos: u64,
+}
+
 fn update_stage_telemetry_threshold_ms() -> Option<f64> {
     static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
     *THRESHOLD_MS.get_or_init(|| {
@@ -753,7 +762,12 @@ where
     }
 
     fn needs_ui_update_in_context(&self) -> bool {
-        self.has_stale_pixels_in_context() || self.composition.should_render()
+        // Stale pixels, a queued UI continuation (which wakes an update but
+        // must never schedule a frame - see `needs_redraw`), or a
+        // composition that wants to render.
+        self.has_stale_pixels_in_context()
+            || self.composition.runtime_handle().has_pending_ui()
+            || self.composition.should_render()
     }
 
     pub fn needs_update(&self) -> bool {
@@ -862,8 +876,8 @@ where
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
         let needs_update = self.needs_update();
-        let needs_frame = needs_update
-            || self.has_active_animations()
+        let needs_frame = self.is_dirty
+            || self.should_render()
             || self.has_active_pointer_gesture()
             || self.renderer.needs_frame_warmup();
         FrameSchedule {
@@ -897,6 +911,24 @@ where
             .unwrap_or_default()
             .as_nanos()
             .min(u128::from(u64::MAX)) as u64
+    }
+
+    /// Timestamp a live input sample against the current animation clock.
+    pub fn realtime_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
+        PointerEventTime {
+            platform_time_ms,
+            animation_time_nanos: self
+                .frame_time_nanos_at(Instant::now())
+                .max(self.last_frame_time_nanos),
+        }
+    }
+
+    /// Timestamp deterministic input at the most recently processed frame.
+    pub fn exact_pointer_event_time(&self, platform_time_ms: Option<i64>) -> PointerEventTime {
+        PointerEventTime {
+            platform_time_ms,
+            animation_time_nanos: self.last_frame_time_nanos,
+        }
     }
 
     pub fn update_after_frame_interval(

@@ -97,6 +97,8 @@ fn main() {
                     step_epsilon: STEP_EPSILON,
                     fallback_trim_top_px: COMPARE_TRIM_TOP_PX,
                     fallback_trim_bottom_px: COMPARE_TRIM_BOTTOM_PX,
+                    fallback_trim_left_px: 0,
+                    fallback_trim_right_px: 0,
                     compare_search_offset_px: COMPARE_SEARCH_OFFSET_PX,
                     compare_max_adjacent_score: COMPARE_MAX_ADJACENT_SCORE,
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
