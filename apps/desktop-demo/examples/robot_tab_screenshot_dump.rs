@@ -130,6 +130,7 @@ fn tab_slug(tab: DemoTab) -> &'static str {
         DemoTab::MarkdownViewer => "markdown-viewer",
         DemoTab::Liquid => "liquid-ui",
         DemoTab::FilePicker => "file-picker",
+        DemoTab::Rotary => "rotary",
     }
 }
 

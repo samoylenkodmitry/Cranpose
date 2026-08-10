@@ -66,6 +66,10 @@ pub(crate) struct AccessibilityElement {
 /// moved since `seen_revision`. On an animation-only frame — the steady state
 /// of any game or transition — this is one integer compare, where the
 /// unconditional snapshot used to walk the full layout tree every frame.
+#[cfg(any(
+    all(feature = "desktop-shell", feature = "renderer-wgpu"),
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
 pub(crate) fn snapshot_if_changed<R>(
     shell: &mut AppShell<R>,
     seen_revision: &mut Option<u64>,
