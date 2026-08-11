@@ -552,6 +552,7 @@ fn main() {
                     fallback_trim_right_px: 0,
                     compare_search_offset_px: COMPARE_SEARCH_OFFSET_PX,
                     compare_max_adjacent_score: COMPARE_MAX_ADJACENT_SCORE,
+                    compare_max_channel_delta: 0,
                     compare_stabilized_guard_px: COMPARE_STABILIZED_GUARD_PX,
                     compare_viewport_inset_px: COMPARE_VIEWPORT_INSET_PX,
                     render_stats_env: Some(RENDER_STATS_ENV),

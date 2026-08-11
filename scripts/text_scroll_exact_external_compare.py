@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trim-right", type=int, default=0)
     parser.add_argument("--max-offset", type=int, required=True)
     parser.add_argument("--max-adjacent-score", type=int, default=0)
+    parser.add_argument("--max-channel-delta", type=int, default=0)
     parser.add_argument("--stabilized-guard", type=int, default=0)
     parser.add_argument("images", nargs="+")
     return parser.parse_args()
@@ -96,7 +97,11 @@ def save_visual_diff(reference: Image.Image, candidate: Image.Image, output_path
     boosted.save(output_path)
 
 
-def score_difference(reference: Image.Image, candidate: Image.Image) -> tuple[int, tuple[int, int, tuple[int, int, int, int], tuple[int, int, int, int]] | None]:
+def score_difference(
+    reference: Image.Image,
+    candidate: Image.Image,
+    max_channel_delta: int = 0,
+) -> tuple[int, tuple[int, int, tuple[int, int, int, int], tuple[int, int, int, int]] | None]:
     if reference.size != candidate.size:
         raise ValueError(f"size mismatch: {reference.size} vs {candidate.size}")
 
@@ -104,6 +109,8 @@ def score_difference(reference: Image.Image, candidate: Image.Image) -> tuple[in
         return 0, None
 
     diff = ImageChops.difference(reference, candidate)
+    if max_channel_delta:
+        diff = diff.point(lambda value: max(0, value - max_channel_delta))
     stat = ImageStat.Stat(diff)
     score = int(sum(stat.sum))
 
@@ -114,7 +121,7 @@ def score_difference(reference: Image.Image, candidate: Image.Image) -> tuple[in
         for x in range(width):
             before = ref_px[x, y]
             after = cand_px[x, y]
-            if before != after:
+            if any(abs(left - right) > max_channel_delta for left, right in zip(before, after)):
                 return score, (x, y, before, after)
 
     return score, None
@@ -236,6 +243,8 @@ def anchored_trim_pair(
 
 def main() -> int:
     args = parse_args()
+    if not 0 <= args.max_channel_delta <= 255:
+        raise SystemExit("--max-channel-delta must be between 0 and 255")
     image_paths = [Path(path) for path in args.images]
     images = [Image.open(path).convert("RGBA") for path in image_paths]
 
@@ -291,7 +300,7 @@ def main() -> int:
 
     report_lines = [
         "fractional_alignment_report",
-        "strict_contract=exact_pixel_match_on_adjacent_stabilized_frames",
+        f"strict_contract=adjacent_stabilized_frames_with_max_channel_delta_{args.max_channel_delta}",
         "fractional_diagnostic=apply_bilinear_vertical_shift_to_step00_anchored_stabilized_frames_for_measurement_only",
         "fractional_shift_direction=positive_moves_current_frame_down",
         "guard_px=2+ceil(abs(fractional_shift_px))",
@@ -308,7 +317,11 @@ def main() -> int:
             stabilized_images[step],
             args.stabilized_guard,
         )
-        score, first_diff = score_difference(stabilized_reference, stabilized_current)
+        score, first_diff = score_difference(
+            stabilized_reference,
+            stabilized_current,
+            args.max_channel_delta,
+        )
         exact_adjacent_scores.append(score)
         if score == 0:
             print(

@@ -460,6 +460,20 @@ fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
     return GradientSample(clamp(raw_t, 0.0, 1.0), true);
 }
 
+// The ordered-dither offset Skia adds to a gradient, in output levels.
+//
+// Kept identical to `gradient_dither_offset` in `cranpose-render-common`,
+// which carries the derivation and the tests; the CPU sampler bins by these
+// same scene device coordinates, so the two backends dither a gradient the
+// same way. `world_pos` rather than `@builtin(position)` for exactly that
+// reason — on Android the two read the same pixel anyway.
+fn gradient_dither(device_pos: vec2<f32>) -> f32 {
+    let x = u32(max(floor(device_pos.x), 0.0)) + 1u;
+    let y = u32(max(floor(device_pos.y), 0.0)) + 1u;
+    let m = ((y & 1u) << 3u) | ((x & 1u) << 2u) | (y & 2u) | ((x & 2u) >> 1u);
+    return f32(m) * (1.0 / 16.0) - (15.0 / 32.0);
+}
+
 fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
     if (count == 0u) {
         return vec4<f32>(0.0);
@@ -574,6 +588,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     var color = input.color;
+    var is_gradient = false;
 
     // Apply gradient if needed
     let brush_type = input.brush.x;
@@ -592,6 +607,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color = vec4<f32>(0.0);
         } else {
             color = sample_gradient(gradient_start, gradient_count, sample.t);
+            is_gradient = true;
         }
     } else if (brush_type == 2u) {
         // Radial gradient - use explicit center and radius from gradient_params
@@ -604,6 +620,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color = vec4<f32>(0.0);
         } else {
             color = sample_gradient(gradient_start, gradient_count, sample.t);
+            is_gradient = true;
         }
     } else if (brush_type == 3u) {
         // Sweep gradient - angle-based interpolation around center
@@ -618,7 +635,17 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
             color = vec4<f32>(0.0);
         } else {
             color = sample_gradient(gradient_start, gradient_count, sample.t);
+            is_gradient = true;
         }
+    }
+
+    // Dither the gradient, and only the gradient — a solid brush has no ramp
+    // to band, and Skia leaves it alone too, which is why solid fills already
+    // land byte-for-byte on the Compose build's.
+    if (is_gradient && color.a > 0.0) {
+        let offset = gradient_dither(world_pos) * (1.0 / 255.0);
+        color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
+                          color.a);
     }
 
     return vec4<f32>(color.rgb, color.a * alpha);
