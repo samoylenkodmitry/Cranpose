@@ -71,8 +71,9 @@ pub enum StorePhase {
     /// The difference from [`Unavailable`](Self::Unavailable) is whether
     /// waiting helps. It does not here — no backend retries a store that has
     /// said no — so an app should stop offering the purchase and say why,
-    /// rather than inviting a retry that can only fail the same way. Nothing
-    /// is owned that was not already known, and a restore will find nothing.
+    /// rather than inviting a retry that can only fail the same way.
+    /// Already-known ownership remains authoritative even though the store
+    /// cannot be queried for new purchases.
     Blocked,
     /// A backend is installed and still talking to the store. Prices are not
     /// known yet; owned entitlements may not be known yet either.

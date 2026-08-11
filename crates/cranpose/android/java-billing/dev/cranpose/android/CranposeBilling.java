@@ -309,6 +309,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
                                 connected = false;
                                 connecting = true;
                             }
+                            pushSnapshot();
                         }
                     });
         } catch (Throwable failure) {
@@ -317,6 +318,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
             synchronized (lock) {
                 connected = false;
                 connecting = false;
+                blocked = false;
                 error = String.valueOf(failure);
             }
             setBusy(false);
