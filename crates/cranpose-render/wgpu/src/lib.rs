@@ -14,6 +14,7 @@ mod frontend;
 pub(crate) mod gpu_stats;
 mod layer_events;
 mod layer_surface_cache;
+mod lazy_resource;
 mod normalized_scene;
 mod offscreen;
 mod pipeline;
@@ -65,7 +66,6 @@ use frontend::{DevOverlayCache, RendererFrontend};
 use render::GpuRenderer;
 use std::rc::Rc;
 use std::sync::Arc;
-use web_time::Instant;
 
 /// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
@@ -286,14 +286,6 @@ impl WgpuRenderer {
         let store_feed_generation = pipeline::retained_feed_generation();
         #[cfg(target_arch = "wasm32")]
         let store_feed_generation = 0;
-        // Building the renderer links every render pipeline the frontend can
-        // ever need, and on the GL backend each link ends in a blocking
-        // `glGetProgramiv(GL_LINK_STATUS)`. That is the whole distance
-        // between the app starting and its first frame, so it is worth one
-        // line: without it a slow GL implementation looks like a hang with no
-        // evidence, and the only way to find out is to attach a native
-        // debugger to a process that has not drawn yet.
-        let started = Instant::now();
         self.gpu_renderer = Some(GpuRenderer::new(
             device,
             queue,
@@ -303,11 +295,6 @@ impl WgpuRenderer {
             self.renderer_epoch,
             store_feed_generation,
         ));
-        log::info!(
-            "[gpu-init] {:?} pipelines ready in {:.1} ms",
-            adapter_backend,
-            render::instant_ms(started, Instant::now()),
-        );
     }
 
     /// Record that the surface was reconfigured (resize, format change,

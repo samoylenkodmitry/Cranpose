@@ -15,27 +15,34 @@ use cranpose_ui_graphics::{
 };
 
 use crate::gpu_stats::FrameStats;
+use crate::lazy_resource::LazyGpuResource;
 use std::cell::Cell;
 
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
 
-    // Blur pipeline (compiled once)
-    blur_pipeline: wgpu::RenderPipeline,
-    blur_rounded_mask_pipeline: wgpu::RenderPipeline,
+    blur_shader: wgpu::ShaderModule,
+    blur_rounded_mask_shader: wgpu::ShaderModule,
+    blur_pipeline_layout: wgpu::PipelineLayout,
+    blur_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blur_rounded_mask_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Offset pipeline (compiled once)
-    offset_pipeline: wgpu::RenderPipeline,
+    offset_shader: wgpu::ShaderModule,
+    offset_pipeline_layout: wgpu::PipelineLayout,
+    offset_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Blit pipelines for compositing offscreen targets to the surface
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_pipeline_dst_out: wgpu::RenderPipeline,
+    blit_shader: wgpu::ShaderModule,
+    blit_pipeline_layout: wgpu::PipelineLayout,
+    blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    projective_blit_pipeline: wgpu::RenderPipeline,
-    projective_blit_pipeline_dst_out: wgpu::RenderPipeline,
+    projective_blit_shader: wgpu::ShaderModule,
+    projective_blit_pipeline_layout: wgpu::PipelineLayout,
+    projective_blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    projective_blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
 
     // Shared bind group layouts for effect texture + uniform access
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -45,6 +52,7 @@ pub(crate) struct EffectRenderer {
     pub effect_linear_sampler: wgpu::Sampler,
 
     surface_format: wgpu::TextureFormat,
+    adapter_backend: wgpu::Backend,
 
     // Debug counters (reset each frame by GpuRenderer)
     pub(crate) debug_command_stats: Cell<FrameCommandStats>,
@@ -374,6 +382,109 @@ pub(crate) enum CompositeSampleMode {
     Nearest,
 }
 
+fn dst_out_blend_state() -> wgpu::BlendState {
+    let component = wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::Zero,
+        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+        operation: wgpu::BlendOperation::Add,
+    };
+    wgpu::BlendState {
+        color: component,
+        alpha: component,
+    }
+}
+
+fn create_fullscreen_pipeline(
+    device: &wgpu::Device,
+    label: &'static str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &'static str,
+    surface_format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("fullscreen_vs"),
+            buffers: &[],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+fn create_projective_pipeline(
+    device: &wgpu::Device,
+    label: &'static str,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    surface_format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("projective_blit_vs"),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                }],
+            }],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("projective_blit_fs"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
@@ -447,74 +558,13 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Blur Pipeline"),
-            layout: Some(&blur_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &blur_shader,
-                entry_point: Some("fullscreen_vs"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blur_shader,
-                entry_point: Some("blur_fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let blur_pipeline = LazyGpuResource::new("effect/blur");
 
         let blur_rounded_mask_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blur Rounded Mask Shader"),
             source: wgpu::ShaderSource::Wgsl(shaders::blur_rounded_mask_shader().into()),
         });
-        let blur_rounded_mask_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Blur Rounded Mask Pipeline"),
-                layout: Some(&blur_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &blur_rounded_mask_shader,
-                    entry_point: Some("fullscreen_vs"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &blur_rounded_mask_shader,
-                    entry_point: Some("blur_rounded_mask_fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let blur_rounded_mask_pipeline = LazyGpuResource::new("effect/blur-rounded-mask");
 
         // Compile offset pipeline
         let offset_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -532,37 +582,7 @@ impl EffectRenderer {
                 immediate_size: 0,
             });
 
-        let offset_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Offset Pipeline"),
-            layout: Some(&offset_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &offset_shader,
-                entry_point: Some("fullscreen_vs"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &offset_shader,
-                entry_point: Some("offset_fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let offset_pipeline = LazyGpuResource::new("effect/offset");
 
         // Compile blit pipeline
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -579,80 +599,8 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Blit Pipeline"),
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("fullscreen_vs"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("blit_fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let blit_pipeline_dst_out =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Blit Pipeline DstOut"),
-                layout: Some(&blit_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &blit_shader,
-                    entry_point: Some("fullscreen_vs"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &blit_shader,
-                    entry_point: Some("blit_fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let blit_pipeline = LazyGpuResource::new("effect/blit-src-over");
+        let blit_pipeline_dst_out = LazyGpuResource::new("effect/blit-dst-out");
 
         let projective_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Projective Blit Shader"),
@@ -667,90 +615,8 @@ impl EffectRenderer {
                 ],
                 immediate_size: 0,
             });
-        let projective_blit_vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x2,
-            }],
-        };
-        let projective_blit_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Projective Blit Pipeline"),
-                layout: Some(&projective_blit_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &projective_blit_shader,
-                    entry_point: Some("projective_blit_vs"),
-                    buffers: std::slice::from_ref(&projective_blit_vertex_layout),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &projective_blit_shader,
-                    entry_point: Some("projective_blit_fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-        let projective_blit_pipeline_dst_out =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Projective Blit Pipeline DstOut"),
-                layout: Some(&projective_blit_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &projective_blit_shader,
-                    entry_point: Some("projective_blit_vs"),
-                    buffers: &[projective_blit_vertex_layout],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &projective_blit_shader,
-                    entry_point: Some("projective_blit_fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(wgpu::BlendState {
-                            color: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                            alpha: wgpu::BlendComponent {
-                                src_factor: wgpu::BlendFactor::Zero,
-                                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                operation: wgpu::BlendOperation::Add,
-                            },
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let projective_blit_pipeline = LazyGpuResource::new("effect/projective-src-over");
+        let projective_blit_pipeline_dst_out = LazyGpuResource::new("effect/projective-dst-out");
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Effect Linear Sampler"),
@@ -763,26 +629,144 @@ impl EffectRenderer {
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
             shader_cache: ShaderPipelineCache::new(adapter_backend),
+            blur_shader,
+            blur_rounded_mask_shader,
+            blur_pipeline_layout,
             blur_pipeline,
             blur_rounded_mask_pipeline,
             blur_uniform_bind_group_layout,
+            offset_shader,
+            offset_pipeline_layout,
             offset_pipeline,
             offset_uniform_bind_group_layout,
+            blit_shader,
+            blit_pipeline_layout,
             blit_pipeline,
             blit_pipeline_dst_out,
             blit_uniform_bind_group_layout,
+            projective_blit_shader,
+            projective_blit_pipeline_layout,
             projective_blit_pipeline,
             projective_blit_pipeline_dst_out,
             effect_texture_bind_group_layout,
             effect_uniform_bind_group_layout,
             effect_linear_sampler,
             surface_format,
+            adapter_backend,
             debug_command_stats: Cell::new(FrameCommandStats::default()),
             debug_blurs: Cell::new(0),
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_upload_bytes: Cell::new(0),
         }
+    }
+
+    fn blur_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
+        self.blur_pipeline.get_or_init(self.adapter_backend, || {
+            create_fullscreen_pipeline(
+                device,
+                "Blur Pipeline",
+                &self.blur_pipeline_layout,
+                &self.blur_shader,
+                "blur_fs",
+                self.surface_format,
+                wgpu::BlendState::REPLACE,
+            )
+        })
+    }
+
+    fn blur_rounded_mask_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
+        self.blur_rounded_mask_pipeline
+            .get_or_init(self.adapter_backend, || {
+                create_fullscreen_pipeline(
+                    device,
+                    "Blur Rounded Mask Pipeline",
+                    &self.blur_pipeline_layout,
+                    &self.blur_rounded_mask_shader,
+                    "blur_rounded_mask_fs",
+                    self.surface_format,
+                    wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                )
+            })
+    }
+
+    fn offset_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
+        self.offset_pipeline.get_or_init(self.adapter_backend, || {
+            create_fullscreen_pipeline(
+                device,
+                "Offset Pipeline",
+                &self.offset_pipeline_layout,
+                &self.offset_shader,
+                "offset_fs",
+                self.surface_format,
+                wgpu::BlendState::REPLACE,
+            )
+        })
+    }
+
+    fn blit_pipeline(&self, device: &wgpu::Device, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+        let (resource, label, blend) = match blend_mode {
+            BlendMode::DstOut => (
+                &self.blit_pipeline_dst_out,
+                "Blit Pipeline DstOut",
+                dst_out_blend_state(),
+            ),
+            _ => (
+                &self.blit_pipeline,
+                "Blit Pipeline",
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            ),
+        };
+        resource.get_or_init(self.adapter_backend, || {
+            create_fullscreen_pipeline(
+                device,
+                label,
+                &self.blit_pipeline_layout,
+                &self.blit_shader,
+                "blit_fs",
+                self.surface_format,
+                blend,
+            )
+        })
+    }
+
+    fn initialized_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+        let resource = match blend_mode {
+            BlendMode::DstOut => &self.blit_pipeline_dst_out,
+            _ => &self.blit_pipeline,
+        };
+        resource
+            .get()
+            .expect("prepared composite must initialize its blit pipeline")
+    }
+
+    fn projective_blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+    ) -> &wgpu::RenderPipeline {
+        let (resource, label, blend) = match blend_mode {
+            BlendMode::DstOut => (
+                &self.projective_blit_pipeline_dst_out,
+                "Projective Blit Pipeline DstOut",
+                dst_out_blend_state(),
+            ),
+            _ => (
+                &self.projective_blit_pipeline,
+                "Projective Blit Pipeline",
+                wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+            ),
+        };
+        resource.get_or_init(self.adapter_backend, || {
+            create_projective_pipeline(
+                device,
+                label,
+                &self.projective_blit_pipeline_layout,
+                &self.projective_blit_shader,
+                self.surface_format,
+                blend,
+            )
+        })
     }
 
     fn sampler_for_mode(&self, _sample_mode: CompositeSampleMode) -> &wgpu::Sampler {
@@ -917,7 +901,7 @@ impl EffectRenderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
-        pass.set_pipeline(&self.blur_pipeline);
+        pass.set_pipeline(self.blur_pipeline(device));
         pass.set_bind_group(0, source_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = scissor {
@@ -1116,7 +1100,7 @@ impl EffectRenderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
-        pass.set_pipeline(&self.blur_rounded_mask_pipeline);
+        pass.set_pipeline(self.blur_rounded_mask_pipeline(device));
         pass.set_bind_group(0, scratch_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         let (x, y, width, height) = dest_viewport;
@@ -1174,7 +1158,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
 
-        pass.set_pipeline(&self.offset_pipeline);
+        pass.set_pipeline(self.offset_pipeline(device));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         pass.draw(0..4, 0..1);
@@ -1645,10 +1629,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
 
-        pass.set_pipeline(match options.blend_mode {
-            BlendMode::DstOut => &self.blit_pipeline_dst_out,
-            _ => &self.blit_pipeline,
-        });
+        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = options.scissor {
@@ -1703,6 +1684,7 @@ impl EffectRenderer {
     ) -> Vec<PreparedCompositeDraw<'a>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
+            self.blit_pipeline(device, item.blend_mode);
             let options = CompositePassOptions {
                 alpha: item.alpha,
                 load_op,
@@ -1744,10 +1726,7 @@ impl EffectRenderer {
         viewport: (u32, u32),
         draw: &PreparedCompositeDraw<'_>,
     ) {
-        pass.set_pipeline(match draw.blend_mode {
-            BlendMode::DstOut => &self.blit_pipeline_dst_out,
-            _ => &self.blit_pipeline,
-        });
+        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = draw.scissor {
@@ -1891,10 +1870,7 @@ impl EffectRenderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
-        pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
-            _ => &self.projective_blit_pipeline,
-        });
+        pass.set_pipeline(self.projective_blit_pipeline(device, blend_mode));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));

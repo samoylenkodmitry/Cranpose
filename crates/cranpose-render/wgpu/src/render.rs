@@ -15,6 +15,7 @@ use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
 use crate::layer_surface_cache::LayerSurfaceCache;
+use crate::lazy_resource::LazyGpuResource;
 #[cfg(test)]
 use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
@@ -2891,8 +2892,8 @@ const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
 /// uniform-mode path) still has its six-vertex draws.
 #[cfg(not(target_arch = "wasm32"))]
 struct InstancedQuadPipelines {
-    pipeline: wgpu::RenderPipeline,
-    pipeline_dst_out: wgpu::RenderPipeline,
+    pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
     /// by every instanced draw.
     index_buffer: wgpu::Buffer,
@@ -3768,14 +3769,15 @@ pub struct GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     store_feed_generation: u64,
     surface_format: wgpu::TextureFormat,
+    adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
-    pipeline: wgpu::RenderPipeline,
-    pipeline_dst_out: wgpu::RenderPipeline,
+    pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
     /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
     /// over a vertex buffer) that replay slots with a captured arc mesh draw
     /// through. Uniform-mode devices never host retained slots.
     #[cfg(not(target_arch = "wasm32"))]
-    mesh_pipeline: Option<wgpu::RenderPipeline>,
+    mesh_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     /// `Some` exactly when this renderer latched the instanced-quad path at
     /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
     /// ONCE per renderer lifetime — cached retained bundles encode the
@@ -3783,7 +3785,6 @@ pub struct GpuRenderer {
     /// [`instanced_quads_enabled`]).
     #[cfg(not(target_arch = "wasm32"))]
     instanced_quads: Option<InstancedQuadPipelines>,
-    #[cfg(target_arch = "wasm32")]
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
     /// `Some` exactly in storage mode: the 16-byte stand-in every fresh
@@ -3794,11 +3795,11 @@ pub struct GpuRenderer {
     identity_similarity_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
     replay_slots: ReplaySlotStore,
-    image_pipeline: wgpu::RenderPipeline,
-    image_pipeline_dst_out: wgpu::RenderPipeline,
-    glyph_atlas_pipeline: wgpu::RenderPipeline,
+    image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     #[cfg(not(target_arch = "wasm32"))]
-    retained_glyph_atlas_pipeline: wgpu::RenderPipeline,
+    retained_glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     image_bind_group_layout: wgpu::BindGroupLayout,
     #[cfg(not(target_arch = "wasm32"))]
     retained_glyph_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -4179,32 +4180,10 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let replay_slot_store = ReplaySlotStore::new(&device);
 
-        let pipeline = create_shape_pipeline(
-            &device,
-            surface_format,
-            &uniform_bind_group_layout,
-            &shape_bind_group_layout,
-            BlendMode::SrcOver,
-            shape_batch_limits,
-        );
-        let pipeline_dst_out = create_shape_pipeline(
-            &device,
-            surface_format,
-            &uniform_bind_group_layout,
-            &shape_bind_group_layout,
-            BlendMode::DstOut,
-            shape_batch_limits,
-        );
+        let pipeline = LazyGpuResource::new("shape/src-over");
+        let pipeline_dst_out = LazyGpuResource::new("shape/dst-out");
         #[cfg(not(target_arch = "wasm32"))]
-        let mesh_pipeline = shape_batch_limits.storage.then(|| {
-            create_mesh_shape_pipeline(
-                &device,
-                surface_format,
-                &uniform_bind_group_layout,
-                &shape_bind_group_layout,
-                shape_batch_limits,
-            )
-        });
+        let mesh_pipeline = LazyGpuResource::new("shape/mesh");
         // The instanced-quad selection is LATCHED here, once per renderer:
         // cached retained bundles encode whichever pipelines this resolves
         // to, so a per-draw env read could let a bundle replay a selection
@@ -4225,22 +4204,8 @@ impl GpuRenderer {
                     .copy_from_slice(bytemuck::cast_slice(&INSTANCED_QUAD_INDICES));
                 index_buffer.unmap();
                 InstancedQuadPipelines {
-                    pipeline: create_instanced_shape_pipeline(
-                        &device,
-                        surface_format,
-                        &uniform_bind_group_layout,
-                        &shape_bind_group_layout,
-                        BlendMode::SrcOver,
-                        shape_batch_limits,
-                    ),
-                    pipeline_dst_out: create_instanced_shape_pipeline(
-                        &device,
-                        surface_format,
-                        &uniform_bind_group_layout,
-                        &shape_bind_group_layout,
-                        BlendMode::DstOut,
-                        shape_batch_limits,
-                    ),
+                    pipeline: LazyGpuResource::new("shape/instanced-src-over"),
+                    pipeline_dst_out: LazyGpuResource::new("shape/instanced-dst-out"),
                     index_buffer,
                 }
             });
@@ -4268,33 +4233,11 @@ impl GpuRenderer {
                 ],
             });
 
-        let image_pipeline = create_image_pipeline(
-            &device,
-            surface_format,
-            &uniform_bind_group_layout,
-            &image_bind_group_layout,
-            BlendMode::SrcOver,
-        );
-        let image_pipeline_dst_out = create_image_pipeline(
-            &device,
-            surface_format,
-            &uniform_bind_group_layout,
-            &image_bind_group_layout,
-            BlendMode::DstOut,
-        );
-        let glyph_atlas_pipeline = create_glyph_atlas_pipeline(
-            &device,
-            surface_format,
-            &uniform_bind_group_layout,
-            &image_bind_group_layout,
-        );
+        let image_pipeline = LazyGpuResource::new("image/src-over");
+        let image_pipeline_dst_out = LazyGpuResource::new("image/dst-out");
+        let glyph_atlas_pipeline = LazyGpuResource::new("glyph/shared");
         #[cfg(not(target_arch = "wasm32"))]
-        let retained_glyph_atlas_pipeline = create_glyph_atlas_pipeline(
-            &device,
-            surface_format,
-            &retained_glyph_uniform_bind_group_layout,
-            &image_bind_group_layout,
-        );
+        let retained_glyph_atlas_pipeline = LazyGpuResource::new("glyph/retained");
 
         #[cfg(not(target_arch = "wasm32"))]
         let upload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -4396,6 +4339,7 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             store_feed_generation,
             surface_format,
+            adapter_backend,
             shape_batch_limits,
             pipeline,
             pipeline_dst_out,
@@ -4403,7 +4347,6 @@ impl GpuRenderer {
             mesh_pipeline,
             #[cfg(not(target_arch = "wasm32"))]
             instanced_quads,
-            #[cfg(target_arch = "wasm32")]
             uniform_bind_group_layout,
             shape_bind_group_layout,
             dummy_paint_buffer,
@@ -4517,6 +4460,99 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
         }
+    }
+
+    fn shape_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+        let resource = match blend_mode {
+            BlendMode::DstOut => &self.pipeline_dst_out,
+            _ => &self.pipeline,
+        };
+        resource.get_or_init(self.adapter_backend, || {
+            create_shape_pipeline(
+                &self.device,
+                self.surface_format,
+                &self.uniform_bind_group_layout,
+                &self.shape_bind_group_layout,
+                blend_mode,
+                self.shape_batch_limits,
+            )
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn mesh_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.mesh_pipeline.get_or_init(self.adapter_backend, || {
+            create_mesh_shape_pipeline(
+                &self.device,
+                self.surface_format,
+                &self.uniform_bind_group_layout,
+                &self.shape_bind_group_layout,
+                self.shape_batch_limits,
+            )
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn instanced_pipeline<'a>(
+        &'a self,
+        instanced: &'a InstancedQuadPipelines,
+        blend_mode: BlendMode,
+    ) -> &'a wgpu::RenderPipeline {
+        let resource = match blend_mode {
+            BlendMode::DstOut => &instanced.pipeline_dst_out,
+            _ => &instanced.pipeline,
+        };
+        resource.get_or_init(self.adapter_backend, || {
+            create_instanced_shape_pipeline(
+                &self.device,
+                self.surface_format,
+                &self.uniform_bind_group_layout,
+                &self.shape_bind_group_layout,
+                blend_mode,
+                self.shape_batch_limits,
+            )
+        })
+    }
+
+    fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+        let resource = match blend_mode {
+            BlendMode::DstOut => &self.image_pipeline_dst_out,
+            _ => &self.image_pipeline,
+        };
+        resource.get_or_init(self.adapter_backend, || {
+            create_image_pipeline(
+                &self.device,
+                self.surface_format,
+                &self.uniform_bind_group_layout,
+                &self.image_bind_group_layout,
+                blend_mode,
+            )
+        })
+    }
+
+    fn glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.glyph_atlas_pipeline
+            .get_or_init(self.adapter_backend, || {
+                create_glyph_atlas_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.uniform_bind_group_layout,
+                    &self.image_bind_group_layout,
+                )
+            })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
+        self.retained_glyph_atlas_pipeline
+            .get_or_init(self.adapter_backend, || {
+                create_glyph_atlas_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.retained_glyph_uniform_bind_group_layout,
+                    &self.image_bind_group_layout,
+                )
+            })
     }
 
     fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
@@ -9611,12 +9647,14 @@ impl GpuRenderer {
         // latched instanced-quad path when it exists (four vertex executions
         // per shape, shape index from the instance index), else the plain
         // six-vertex expansion.
-        let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+        let mesh = slot.mesh.as_ref().map(|mesh| (mesh, self.mesh_pipeline()));
         match &mesh {
             Some((_, mesh_pipeline)) => render_pass.set_pipeline(mesh_pipeline),
             None => match &self.instanced_quads {
-                Some(instanced) => render_pass.set_pipeline(&instanced.pipeline),
-                None => render_pass.set_pipeline(&self.pipeline),
+                Some(instanced) => {
+                    render_pass.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
+                }
+                None => render_pass.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
             },
         }
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -9691,7 +9729,7 @@ impl GpuRenderer {
                 last,
                 retained_index: *index as u32,
                 has_mesh: slot.is_some_and(|slot| slot.mesh.is_some())
-                    && self.mesh_pipeline.is_some(),
+                    && self.shape_batch_limits.storage,
             });
         }
         RetainedBundleKey { ops }
@@ -9727,12 +9765,14 @@ impl GpuRenderer {
             let Some(slot) = self.replay_slots.slots.get(&op.slot) else {
                 continue;
             };
-            let mesh = slot.mesh.as_ref().zip(self.mesh_pipeline.as_ref());
+            let mesh = slot.mesh.as_ref().map(|mesh| (mesh, self.mesh_pipeline()));
             match &mesh {
                 Some((_, mesh_pipeline)) => encoder.set_pipeline(mesh_pipeline),
                 None => match &self.instanced_quads {
-                    Some(instanced) => encoder.set_pipeline(&instanced.pipeline),
-                    None => encoder.set_pipeline(&self.pipeline),
+                    Some(instanced) => {
+                        encoder.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
+                    }
+                    None => encoder.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
                 },
             }
             encoder.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -9855,10 +9895,7 @@ impl GpuRenderer {
                 batch.vertex_start,
                 batch.vertex_count,
             );
-            render_pass.set_pipeline(match blend_mode {
-                BlendMode::DstOut => &instanced.pipeline_dst_out,
-                _ => &instanced.pipeline,
-            });
+            render_pass.set_pipeline(self.instanced_pipeline(instanced, blend_mode));
             render_pass.set_bind_group(0, uniform_bind_group, &[]);
             // Dynamic offset 0: ordinary batches read the identity
             // similarity transform.
@@ -9870,10 +9907,7 @@ impl GpuRenderer {
             render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
             return;
         }
-        render_pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.pipeline_dst_out,
-            _ => &self.pipeline,
-        });
+        render_pass.set_pipeline(self.shape_pipeline(blend_mode));
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
         // Dynamic offset 0: ordinary batches read the identity similarity
         // transform.
@@ -9956,10 +9990,7 @@ impl GpuRenderer {
         }
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
-        render_pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.image_pipeline_dst_out,
-            _ => &self.image_pipeline,
-        });
+        render_pass.set_pipeline(self.image_pipeline(blend_mode));
         #[cfg(not(target_arch = "wasm32"))]
         let (uniform_bind_group, vertex_buffer, index_buffer) = (
             &self.uniform_bind_group,
@@ -10010,7 +10041,7 @@ impl GpuRenderer {
         {
             self.frame_stats.bump_text();
             self.frame_stats.add_draw_calls(batch.cmds.len() as u32);
-            render_pass.set_pipeline(&self.glyph_atlas_pipeline);
+            render_pass.set_pipeline(self.glyph_atlas_pipeline());
             let (uniform_bind_group, vertex_buffer, index_buffer) = (
                 &self.wasm_uniform_batches[batch.uniform_slot].bind_group,
                 &self.wasm_image_batches[batch.image_slot].vertex_buffer,
@@ -10051,10 +10082,7 @@ impl GpuRenderer {
 
         self.frame_stats.bump_images();
         self.frame_stats.add_draw_calls(cmds.len() as u32);
-        render_pass.set_pipeline(match blend_mode {
-            BlendMode::DstOut => &self.image_pipeline_dst_out,
-            _ => &self.image_pipeline,
-        });
+        render_pass.set_pipeline(self.image_pipeline(blend_mode));
         render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
         render_pass.set_index_buffer(self.image_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
         render_pass.set_vertex_buffer(0, self.image_vertex_buffer.slice(..));
@@ -10101,7 +10129,7 @@ impl GpuRenderer {
                     index_count,
                 } => {
                     if retained_pipeline_bound || !shared_buffers_bound {
-                        render_pass.set_pipeline(&self.glyph_atlas_pipeline);
+                        render_pass.set_pipeline(self.glyph_atlas_pipeline());
                         render_pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
                         retained_pipeline_bound = false;
                     }
@@ -10122,7 +10150,7 @@ impl GpuRenderer {
                 } => {
                     shared_buffers_bound = false;
                     if !retained_pipeline_bound {
-                        render_pass.set_pipeline(&self.retained_glyph_atlas_pipeline);
+                        render_pass.set_pipeline(self.retained_glyph_atlas_pipeline());
                         render_pass.set_bind_group(1, &self.text_glyph_atlas.bind_group, &[]);
                         retained_pipeline_bound = true;
                     }
