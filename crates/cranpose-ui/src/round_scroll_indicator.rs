@@ -40,7 +40,7 @@ pub const INDICATOR_MAX_THUMB: f32 = 0.7;
 
 /// The stroke width Wear would use on a display this wide.
 pub fn indicator_width_dp(display_dp: f32) -> f32 {
-    if display_dp >= INDICATOR_LARGE_SCREEN_DP {
+    if display_dp.is_finite() && display_dp >= INDICATOR_LARGE_SCREEN_DP {
         INDICATOR_WIDTH_DP
     } else {
         INDICATOR_NARROW_WIDTH_DP
@@ -51,14 +51,32 @@ pub fn indicator_width_dp(display_dp: f32) -> f32 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct IndicatorArc {
     /// Radius of the stroke's centreline, in the same unit as the radius given.
-    pub centreline: f32,
+    centreline: f32,
     /// Stroke width, same unit.
-    pub width: f32,
+    width: f32,
     /// Half the angle the whole track covers, in radians.
-    pub half_sweep: f32,
+    half_sweep: f32,
+    /// Angular amount removed from every segment before round caps are drawn.
+    /// Wear derives this from the stroke width plus the visible gap.
+    segment_inset: f32,
 }
 
 impl IndicatorArc {
+    /// Radius of the stroke's centreline.
+    pub fn centreline(self) -> f32 {
+        self.centreline
+    }
+
+    /// Stroke width.
+    pub fn width(self) -> f32 {
+        self.width
+    }
+
+    /// Angular amount removed from each segment before its round caps draw.
+    pub fn segment_inset(self) -> f32 {
+        self.segment_inset
+    }
+
     /// The angle at which the track starts, measured the way a canvas measures
     /// it: `0` at 3 o'clock, increasing clockwise.
     pub fn start_angle(self) -> f32 {
@@ -84,33 +102,44 @@ impl IndicatorArc {
     }
 }
 
+fn height_to_sweep(height: f32, radius: f32) -> f32 {
+    if radius <= 0.0 || !radius.is_finite() {
+        return 0.0;
+    }
+    (height * 0.5 / radius).clamp(-1.0, 1.0).asin() * 2.0
+}
+
 /// Where the track's centreline sits and how far it sweeps.
 ///
 /// Wear describes the track by a height in dp, so the angle it covers depends
 /// on the radius it is drawn at — deriving it here rather than storing an angle
 /// keeps the indicator the same size in millimetres on every watch.
 ///
-/// The centreline is `radius - edgePadding - strokeWidth / 2` and the sweep is
-/// `2 * asin((height / 2) / centreline)`, which is `pixelsHeightToDegrees` in
-/// `ScrollIndicatorKt` and the size lambda in `IndicatorImpl` respectively.
+/// The centreline is `radius - edgePadding - strokeWidth / 2`. Wear converts
+/// both the track height and `(strokeWidth + gapHeight)` to angles using the
+/// padded radius, then adds the latter inset to the total sweep before each
+/// segment removes it again. The round caps restore the stroke-width share,
+/// leaving the requested visible gap.
 pub fn indicator_arc(radius: f32) -> IndicatorArc {
     let width = indicator_width_dp(radius * 2.0);
-    let centreline = radius - INDICATOR_EDGE_PADDING_DP - width * 0.5;
-    if centreline <= 0.0 {
+    let usable_radius = radius - INDICATOR_EDGE_PADDING_DP;
+    let centreline = usable_radius - width * 0.5;
+    if centreline <= 0.0 || !centreline.is_finite() {
         return IndicatorArc {
             centreline: 0.0,
             width,
             half_sweep: 0.0,
+            segment_inset: 0.0,
         };
     }
-    let half_sweep = (INDICATOR_HEIGHT_DP * 0.5 / centreline)
-        .clamp(-1.0, 1.0)
-        .asin()
+    let segment_inset = height_to_sweep(width + INDICATOR_GAP_DP, usable_radius);
+    let half_sweep = ((height_to_sweep(INDICATOR_HEIGHT_DP, usable_radius) + segment_inset) * 0.5)
         .min(FRAC_PI_2);
     IndicatorArc {
         centreline,
         width,
         half_sweep,
+        segment_inset,
     }
 }
 
@@ -186,25 +215,40 @@ pub fn indicator_segments(
     geometry: IndicatorGeometry,
     alpha: f32,
 ) -> [(IndicatorPart, IndicatorSegment); 3] {
-    let sweep = arc.sweep();
-    let top = arc.start_angle();
-    let gap = if arc.centreline > 0.0 {
-        INDICATOR_GAP_DP / arc.centreline
+    let alpha = if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
     } else {
         0.0
     };
-    let thumb_start = top + sweep * geometry.offset;
-    let thumb_sweep = sweep * geometry.thumb;
-    let below_start = thumb_start + thumb_sweep + gap;
-    let cap = arc.cap_sweep();
+    let thumb = if geometry.thumb.is_finite() {
+        geometry.thumb.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let offset = if geometry.offset.is_finite() {
+        geometry.offset.clamp(0.0, 1.0 - thumb)
+    } else {
+        0.0
+    };
+    let sweep = arc.sweep();
+    let top = arc.start_angle();
+    let thumb_start = top + sweep * offset;
+    let thumb_sweep = sweep * thumb;
+    let below_start = thumb_start + thumb_sweep;
     [
         (
             IndicatorPart::Track,
-            segment(top, thumb_start - gap - top, arc.width, cap, alpha),
+            segment(top, thumb_start - top, arc.width, arc.segment_inset, alpha),
         ),
         (
             IndicatorPart::Thumb,
-            segment(thumb_start, thumb_sweep, arc.width, cap, alpha),
+            segment(
+                thumb_start,
+                thumb_sweep,
+                arc.width,
+                arc.segment_inset,
+                alpha,
+            ),
         ),
         (
             IndicatorPart::Track,
@@ -212,7 +256,7 @@ pub fn indicator_segments(
                 below_start,
                 top + sweep - below_start,
                 arc.width,
-                cap,
+                arc.segment_inset,
                 alpha,
             ),
         ),
@@ -220,30 +264,30 @@ pub fn indicator_segments(
 }
 
 /// One segment, with Wear's cap inset applied and its too-short case handled.
-fn segment(start: f32, sweep: f32, width: f32, cap: f32, alpha: f32) -> IndicatorSegment {
-    if sweep <= 0.0 || cap <= 0.0 {
+fn segment(start: f32, sweep: f32, width: f32, inset: f32, alpha: f32) -> IndicatorSegment {
+    if sweep <= 0.0 || inset <= 0.0 {
         return IndicatorSegment::Arc {
             start,
             sweep: 0.0,
             alpha: 0.0,
         };
     }
-    if sweep < cap {
+    if sweep < inset {
         // Below one stroke width Wear stops drawing an arc and draws a circle
         // that shrinks and fades on the same fraction, so a segment leaves the
         // screen smoothly instead of collapsing into a dash.
-        let fill = sweep / cap;
+        let fill = sweep / inset;
         return IndicatorSegment::Dot {
             angle: start + sweep * 0.5,
             radius: width * 0.5 * fill,
             alpha: alpha * fill,
         };
     }
-    // `drawCurvedIndicatorSegment` starts half a cap in and runs a whole cap
-    // shorter; the round caps then put the ink back on the nominal bounds.
+    // `drawCurvedIndicatorSegment` starts half an inset in and runs a whole
+    // inset shorter; round caps restore the stroke share and leave the gap.
     IndicatorSegment::Arc {
-        start: start + cap * 0.5,
-        sweep: sweep - cap,
+        start: start + inset * 0.5,
+        sweep: sweep - inset,
         alpha,
     }
 }
@@ -257,17 +301,24 @@ mod tests {
     const SMALL_RADIUS_DP: f32 = 96.0; // 384px at density 2
 
     #[test]
+    fn stroke_width_switches_at_the_wear_large_screen_breakpoint() {
+        assert_eq!(indicator_width_dp(224.99), INDICATOR_NARROW_WIDTH_DP);
+        assert_eq!(indicator_width_dp(225.0), INDICATOR_WIDTH_DP);
+        assert_eq!(indicator_width_dp(f32::NAN), INDICATOR_NARROW_WIDTH_DP);
+    }
+
+    #[test]
     fn the_track_lands_where_the_shipping_compose_build_draws_it() {
         // Measured off the Compose build itself: the stroke's centreline sits
         // at 108.5dp on a 454px display and 91.5dp on a 384px one, and the
         // stroke is 6dp on the first and 5dp on the second.
         let large = indicator_arc(LARGE_RADIUS_DP);
-        assert!((large.centreline - 108.5).abs() < 0.01, "{large:?}");
-        assert!((large.width - 6.0).abs() < 0.01, "{large:?}");
+        assert!((large.centreline() - 108.5).abs() < 0.01, "{large:?}");
+        assert!((large.width() - 6.0).abs() < 0.01, "{large:?}");
 
         let small = indicator_arc(SMALL_RADIUS_DP);
-        assert!((small.centreline - 91.5).abs() < 0.01, "{small:?}");
-        assert!((small.width - 5.0).abs() < 0.01, "{small:?}");
+        assert!((small.centreline() - 91.5).abs() < 0.01, "{small:?}");
+        assert!((small.width() - 5.0).abs() < 0.01, "{small:?}");
     }
 
     #[test]
@@ -276,8 +327,8 @@ mod tests {
         // the whole point of storing a height rather than an angle.
         let large = indicator_arc(LARGE_RADIUS_DP).sweep().to_degrees();
         let small = indicator_arc(SMALL_RADIUS_DP).sweep().to_degrees();
-        assert!((large - 26.64).abs() < 0.05, "{large}");
-        assert!((small - 31.72).abs() < 0.05, "{small}");
+        assert!((large - 30.54).abs() < 0.05, "{large}");
+        assert!((small - 35.73).abs() < 0.05, "{small}");
         assert!(small > large);
     }
 
@@ -332,22 +383,23 @@ mod tests {
         // Every piece is an arc at this size, and the ink they cover — the
         // nominal bounds, once the round caps undo the inset — must stay inside
         // the track with the gaps left blank.
-        let bounds = |segment: IndicatorSegment| match segment {
+        let ink_bounds = |segment: IndicatorSegment| match segment {
             IndicatorSegment::Arc { start, sweep, .. } => {
                 (start - arc.cap_sweep() * 0.5, sweep + arc.cap_sweep())
             }
             other => panic!("expected an arc, got {other:?}"),
         };
-        let (above_start, above_sweep) = bounds(parts[0].1);
-        let (thumb_start, thumb_sweep) = bounds(parts[1].1);
-        let (below_start, below_sweep) = bounds(parts[2].1);
-        let gap = INDICATOR_GAP_DP / arc.centreline;
+        let (above_start, above_sweep) = ink_bounds(parts[0].1);
+        let (thumb_start, thumb_sweep) = ink_bounds(parts[1].1);
+        let (below_start, below_sweep) = ink_bounds(parts[2].1);
+        let gap = arc.segment_inset() - arc.cap_sweep();
 
-        assert!((above_start - arc.start_angle()).abs() < 1e-4);
+        assert!((above_start - arc.start_angle() - gap * 0.5).abs() < 1e-4);
         assert!((thumb_start - (above_start + above_sweep) - gap).abs() < 1e-4);
         assert!((below_start - (thumb_start + thumb_sweep) - gap).abs() < 1e-4);
         assert!(
-            (below_start + below_sweep - (arc.start_angle() + arc.sweep())).abs() < 1e-4,
+            (below_start + below_sweep + gap * 0.5 - (arc.start_angle() + arc.sweep())).abs()
+                < 1e-4,
             "the track has to end where it should"
         );
     }
@@ -366,7 +418,10 @@ mod tests {
         );
         match parts[0].1 {
             IndicatorSegment::Dot { radius, alpha, .. } => {
-                assert!(radius <= arc.width * 0.5, "a dot never exceeds the stroke");
+                assert!(
+                    radius <= arc.width() * 0.5,
+                    "a dot never exceeds the stroke"
+                );
                 assert!(alpha < 1.0, "it fades on the same fraction as it shrinks");
             }
             IndicatorSegment::Arc { sweep, .. } => {
@@ -394,7 +449,7 @@ mod tests {
     #[test]
     fn a_display_too_small_to_hold_the_track_degrades_instead_of_panicking() {
         let tiny = indicator_arc(1.0);
-        assert_eq!(tiny.centreline, 0.0);
+        assert_eq!(tiny.centreline(), 0.0);
         assert_eq!(tiny.sweep(), 0.0);
         assert_eq!(tiny.cap_sweep(), 0.0);
         // And asking for its segments must not divide by that zero.
@@ -408,6 +463,38 @@ mod tests {
         );
         for (_, segment) in parts {
             assert!(matches!(segment, IndicatorSegment::Arc { sweep: 0.0, .. }));
+        }
+    }
+
+    #[test]
+    fn invalid_public_inputs_never_emit_non_finite_draw_values() {
+        for radius in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0] {
+            let arc = indicator_arc(radius);
+            assert_eq!(arc.sweep(), 0.0);
+            assert_eq!(arc.segment_inset(), 0.0);
+        }
+
+        let parts = indicator_segments(
+            indicator_arc(LARGE_RADIUS_DP),
+            IndicatorGeometry {
+                thumb: f32::NAN,
+                offset: f32::INFINITY,
+            },
+            f32::NAN,
+        );
+        for (_, part) in parts {
+            match part {
+                IndicatorSegment::Arc {
+                    start,
+                    sweep,
+                    alpha,
+                } => assert!(start.is_finite() && sweep.is_finite() && alpha == 0.0),
+                IndicatorSegment::Dot {
+                    angle,
+                    radius,
+                    alpha,
+                } => assert!(angle.is_finite() && radius.is_finite() && alpha == 0.0),
+            }
         }
     }
 }
