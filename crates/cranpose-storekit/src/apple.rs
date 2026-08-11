@@ -28,6 +28,7 @@ const KIND_BUSY: i32 = 5;
 const PHASE_UNAVAILABLE: i32 = 0;
 const PHASE_CONNECTING: i32 = 1;
 const PHASE_READY: i32 = 2;
+const PHASE_BLOCKED: i32 = 3;
 
 const EVENT_PURCHASED: i32 = 0;
 const EVENT_CANCELLED: i32 = 1;
@@ -154,7 +155,10 @@ unsafe extern "C" fn on_message(
             state.live.phase = match arg0 {
                 PHASE_READY => StorePhase::Ready,
                 PHASE_CONNECTING => StorePhase::Connecting,
+                PHASE_BLOCKED => StorePhase::Blocked,
                 PHASE_UNAVAILABLE => StorePhase::Unavailable,
+                // An unreadable code is the phase that invites a retry, never
+                // the one that tells the user to give up.
                 _ => StorePhase::Unavailable,
             };
             state.live.error = take(a);

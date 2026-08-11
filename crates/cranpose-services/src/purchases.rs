@@ -12,13 +12,16 @@
 //! that itself, e.g.
 //!
 //! ```no_run
-//! # use cranpose_services::purchases::{store_state, StorePhase};
-//! let unlocked = match store_state().phase {
-//!     // No store on this platform — this app is free there.
-//!     StorePhase::Unavailable => true,
-//!     _ => store_state().owns("com.example.pro"),
-//! };
+//! # use cranpose_services::purchases::store_state;
+//! let state = store_state();
+//! // No store that will sell here — this app is free in that case.
+//! let unlocked = state.phase.cannot_sell() || state.owns("com.example.pro");
 //! ```
+//!
+//! The two phases that cannot sell say different things to a *user*:
+//! [`StorePhase::Unavailable`] is "not reached, try again", and
+//! [`StorePhase::Blocked`] is "this store will not sell to you here". Offering
+//! a retry for the second one only fails the same way again.
 //!
 //! # Reading state
 //!
@@ -55,15 +58,46 @@ pub struct Product {
 /// How far along the store connection is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum StorePhase {
-    /// No store on this platform, or no backend installed. Nothing is owned
-    /// and nothing can be bought.
+    /// No store on this platform, or no backend installed, or one that has
+    /// not reached the store yet. Nothing is owned and nothing can be bought
+    /// *right now* — a backend that is retrying reports this, so an app may
+    /// reasonably say "not reached" and offer to try again.
     #[default]
     Unavailable,
+    /// The store answered, and it will not sell to this app here: in-app
+    /// billing turned off on the device, an account that cannot pay, a
+    /// country the app is not distributed in.
+    ///
+    /// The difference from [`Unavailable`](Self::Unavailable) is whether
+    /// waiting helps. It does not here — no backend retries a store that has
+    /// said no — so an app should stop offering the purchase and say why,
+    /// rather than inviting a retry that can only fail the same way. Nothing
+    /// is owned that was not already known, and a restore will find nothing.
+    Blocked,
     /// A backend is installed and still talking to the store. Prices are not
     /// known yet; owned entitlements may not be known yet either.
     Connecting,
     /// Product and entitlement information has been received at least once.
     Ready,
+}
+
+impl StorePhase {
+    /// Whether nothing can be bought in this phase.
+    ///
+    /// Saves every paywall from spelling out the same two-variant match, and
+    /// keeps an app that only cares "can I sell?" from having to be updated
+    /// when a phase is added.
+    pub fn cannot_sell(self) -> bool {
+        matches!(self, Self::Unavailable | Self::Blocked)
+    }
+
+    /// Whether the store might still answer differently later.
+    ///
+    /// True while a backend is connecting or has yet to reach the store,
+    /// false once the store has said no or has already answered.
+    pub fn may_yet_change(self) -> bool {
+        matches!(self, Self::Unavailable | Self::Connecting)
+    }
 }
 
 /// Snapshot of everything known about the store right now.
@@ -270,6 +304,29 @@ mod tests {
         purchase("com.example.pro");
         restore();
         assert_eq!(take_event(), None);
+    }
+
+    #[test]
+    fn the_two_phases_that_cannot_sell_differ_on_whether_waiting_helps() {
+        assert!(StorePhase::Unavailable.cannot_sell());
+        assert!(StorePhase::Blocked.cannot_sell());
+        assert!(!StorePhase::Connecting.cannot_sell());
+        assert!(!StorePhase::Ready.cannot_sell());
+
+        assert!(StorePhase::Unavailable.may_yet_change());
+        assert!(StorePhase::Connecting.may_yet_change());
+        assert!(
+            !StorePhase::Blocked.may_yet_change(),
+            "a store that has said no is what the phase exists to say"
+        );
+        assert!(!StorePhase::Ready.may_yet_change());
+    }
+
+    #[test]
+    fn nothing_is_owned_by_default_and_blocked_is_not_the_default() {
+        // The default has to stay the phase that invites a retry: a backend
+        // that has not answered yet must not read as one that refused.
+        assert_eq!(StorePhase::default(), StorePhase::Unavailable);
     }
 
     #[test]

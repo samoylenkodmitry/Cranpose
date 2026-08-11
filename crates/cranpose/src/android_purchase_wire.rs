@@ -13,7 +13,8 @@
 //! o\t<id>                               one record per owned entitlement
 //! ```
 //!
-//! `phase` is `0`, `1` or `2` for unavailable, connecting and ready; `busy` is
+//! `phase` is `0`, `1`, `2` or `3` for unavailable, connecting, ready and
+//! blocked — the last being a store that answered and will not sell; `busy` is
 //! `1` while a purchase or restore the user asked for is still running. Names
 //! and values use the same `%09`/`%0A`/`%0D`/`%25` escaping as the
 //! launch-argument payload, because a store-authored title, description or
@@ -45,8 +46,11 @@ pub(crate) fn decode_store_snapshot(payload: &str) -> StoreState {
     let phase = match header.next() {
         Some("1") => StorePhase::Connecting,
         Some("2") => StorePhase::Ready,
+        Some("3") => StorePhase::Blocked,
         // Anything the decoder cannot read is "no store": refusing to guess is
-        // what keeps a garbled payload from granting an entitlement.
+        // what keeps a garbled payload from granting an entitlement. It is
+        // also the safer of the two unsellable phases to guess — it invites a
+        // retry, where `Blocked` tells the user to stop trying.
         _ => StorePhase::Unavailable,
     };
     let busy = matches!(header.next(), Some("1"));
@@ -206,7 +210,7 @@ mod tests {
 
     #[test]
     fn an_unreadable_payload_owns_nothing() {
-        for payload in ["", "\n", "nonsense", "3\t1\t", "o\tcom.example.pro"] {
+        for payload in ["", "\n", "nonsense", "9\t1\t", "o\tcom.example.pro"] {
             let state = decode_store_snapshot(payload);
             assert_eq!(
                 state.phase,
@@ -218,6 +222,35 @@ mod tests {
                 "payload {payload:?} must not grant an entitlement"
             );
         }
+    }
+
+    #[test]
+    fn a_store_that_will_not_sell_here_is_told_apart_from_one_not_reached() {
+        let blocked = decode_store_snapshot("3\t0\tBILLING_UNAVAILABLE");
+        assert_eq!(blocked.phase, StorePhase::Blocked);
+        assert!(blocked.phase.cannot_sell());
+        assert!(
+            !blocked.phase.may_yet_change(),
+            "a store that has said no is not worth waiting on"
+        );
+
+        let unreached = decode_store_snapshot("0\t0\tSERVICE_UNAVAILABLE");
+        assert_eq!(unreached.phase, StorePhase::Unavailable);
+        assert!(unreached.phase.cannot_sell());
+        assert!(
+            unreached.phase.may_yet_change(),
+            "a store that was merely not reached may answer on the next try"
+        );
+    }
+
+    #[test]
+    fn a_blocked_store_still_reports_what_the_account_owns() {
+        // Billing turning off does not un-buy anything: Play still answers the
+        // purchase query for an entitlement bought before, and an app that
+        // dropped it here would lock a paying user out.
+        let state = decode_store_snapshot("3\t0\t\no\tcom.example.pro");
+        assert_eq!(state.phase, StorePhase::Blocked);
+        assert!(state.owns("com.example.pro"));
     }
 
     #[test]
