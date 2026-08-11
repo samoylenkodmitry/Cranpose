@@ -639,6 +639,7 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_image_picker::register();
     crate::ios_notifier::register();
     crate::ios_haptics::register();
+    crate::ios_app_info::register();
     crate::ios_device_info::register();
     crate::ios_background::register();
     crate::ios_writable_folder::register();
