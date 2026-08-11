@@ -10,13 +10,13 @@
 //! shrank. Scale first and stack the scaled heights and the list drifts further
 //! out of place with every row.
 //!
-//! Derived from `androidx.wear.compose.foundation.lazy` 1.6.2 read with
-//! `javap -c` (`ScalingLazyColumnItemWrapper`, `calculateScaleAndAlpha`,
-//! `convertToCenterOffset`), then checked against where the shipping Compose
-//! build puts rows on 454x454 and 384x384 displays.
+//! Derived from `androidx.wear.compose.foundation.lazy`
+//! (`ScalingLazyColumnItemWrapper`, `calculateScaleAndAlpha`, and
+//! `convertToCenterOffset`), then checked against where Compose puts rows on
+//! 454x454 and 384x384 displays.
 //!
-//! Pure geometry, like [`crate::round_scroll_indicator`]: it answers where a
-//! row goes and takes no view of how it is drawn.
+//! This is pure geometry: it answers where a row goes and takes no view of how
+//! it is drawn.
 
 /// How far a row at the very edge is shrunk and faded.
 pub const EDGE_SCALE: f32 = 0.7;
@@ -49,9 +49,14 @@ impl ScaleAlpha {
 ///
 /// All three are in one unit — device pixels if you want to match Compose
 /// exactly, since it does this arithmetic on integers.
-pub fn scale_and_alpha(viewport: f32, top: f32, bottom: f32) -> ScaleAlpha {
+/// Returns `None` when the geometry is non-finite or the row has negative
+/// height.
+pub fn scale_and_alpha(viewport: f32, top: f32, bottom: f32) -> Option<ScaleAlpha> {
+    if !viewport.is_finite() || !top.is_finite() || !bottom.is_finite() || bottom < top {
+        return None;
+    }
     if viewport <= 0.0 {
-        return ScaleAlpha::UNCHANGED;
+        return Some(ScaleAlpha::UNCHANGED);
     }
     // Distance to whichever edge this row is nearer, as a share of the viewport.
     let edge = (viewport - top).min(bottom) / viewport;
@@ -62,13 +67,13 @@ pub fn scale_and_alpha(viewport: f32, top: f32, bottom: f32) -> ScaleAlpha {
     );
     let line = MIN_TRANSITION_AREA + (MAX_TRANSITION_AREA - MIN_TRANSITION_AREA) * size_ratio;
     if edge >= line || line <= 0.0 {
-        return ScaleAlpha::UNCHANGED;
+        return Some(ScaleAlpha::UNCHANGED);
     }
     let progress = ease(1.0 - edge / line);
-    ScaleAlpha {
+    Some(ScaleAlpha {
         scale: 1.0 + (EDGE_SCALE - 1.0) * progress,
         alpha: 1.0 + (EDGE_ALPHA - 1.0) * progress,
-    }
+    })
 }
 
 /// Where a row ends up once the list has scaled it.
@@ -95,20 +100,25 @@ pub struct PlacedRow {
 /// while the offset it is compared against halves in floating point — so an odd
 /// pixel height carries exactly half a pixel that a float-only implementation
 /// loses.
-pub fn place_row(viewport: f32, top: f32, height: f32, density: f32) -> PlacedRow {
-    if !(density > 0.0) {
-        let transform = scale_and_alpha(viewport, top, top + height);
-        return PlacedRow {
+///
+/// Returns `None` for non-finite geometry or a negative height.
+pub fn place_row(viewport: f32, top: f32, height: f32, density: f32) -> Option<PlacedRow> {
+    if !height.is_finite() || height < 0.0 || !density.is_finite() {
+        return None;
+    }
+    if density <= 0.0 {
+        let transform = scale_and_alpha(viewport, top, top + height)?;
+        return Some(PlacedRow {
             top,
             height: height * transform.scale,
             scale: transform.scale,
             alpha: transform.alpha,
-        };
+        });
     }
     let viewport_px = (viewport * density).round();
     let top_px = (top * density).round();
     let height_px = (height * density).round();
-    let transform = scale_and_alpha(viewport_px, top_px, top_px + height_px);
+    let transform = scale_and_alpha(viewport_px, top_px, top_px + height_px)?;
     let scaled_px = (height_px * transform.scale).round();
     // Wear's `isAboveLine`, on the same integers it uses: a row above the
     // centre line keeps its BOTTOM edge, one below keeps its top.
@@ -118,12 +128,12 @@ pub fn place_row(viewport: f32, top: f32, height: f32, density: f32) -> PlacedRo
     } else {
         top_px
     };
-    PlacedRow {
+    Some(PlacedRow {
         top: (pinned + odd_pixel(height_px) - odd_pixel(scaled_px)) / density,
         height: height_px * transform.scale / density,
         scale: transform.scale,
         alpha: transform.alpha,
-    }
+    })
 }
 
 /// Half a pixel when a pixel height is odd, nothing when it is even — what
@@ -137,7 +147,7 @@ fn inverse_lerp(start: f32, stop: f32, value: f32) -> f32 {
     ((value - start) / (stop - start)).clamp(0.0, 1.0)
 }
 
-/// Wear's transition easing, `CubicBezierEasing(0.25, 0.0, 0.75, 1.0)`.
+/// Wear's transition easing, `CubicBezierEasing(0.3, 0.0, 0.7, 1.0)`.
 ///
 /// A Compose easing curve is parametric, so the answer is the curve's y at the
 /// parameter whose x is `fraction`. Twelve bisections put the result inside
@@ -148,7 +158,7 @@ fn ease(x: f32) -> f32 {
     let mut high = 1.0f32;
     let mut t = x;
     for _ in 0..12 {
-        let value = bezier(t, 0.25, 0.75);
+        let value = bezier(t, 0.3, 0.7);
         if value < x {
             low = t;
         } else {
@@ -172,18 +182,18 @@ mod tests {
 
     #[test]
     fn a_row_in_the_middle_is_left_alone() {
-        let middle = scale_and_alpha(VIEWPORT, VIEWPORT * 0.45, VIEWPORT * 0.55);
+        let middle = scale_and_alpha(VIEWPORT, VIEWPORT * 0.45, VIEWPORT * 0.55).unwrap();
         assert_eq!(middle, ScaleAlpha::UNCHANGED);
     }
 
     #[test]
     fn a_row_at_the_edge_is_shrunk_and_faded_together() {
-        let edge = scale_and_alpha(VIEWPORT, 0.0, 20.0);
+        let edge = scale_and_alpha(VIEWPORT, 0.0, 20.0).unwrap();
         assert!(edge.scale < 1.0 && edge.scale >= EDGE_SCALE, "{edge:?}");
         assert!(edge.alpha < 1.0 && edge.alpha >= EDGE_ALPHA, "{edge:?}");
         // Both run to their limits together, so a row never fades without
         // shrinking or the reverse.
-        let top = scale_and_alpha(VIEWPORT, 0.0, 0.0);
+        let top = scale_and_alpha(VIEWPORT, 0.0, 0.0).unwrap();
         assert!((top.scale - EDGE_SCALE).abs() < 1e-3, "{top:?}");
         assert!((top.alpha - EDGE_ALPHA).abs() < 1e-3, "{top:?}");
     }
@@ -191,8 +201,9 @@ mod tests {
     #[test]
     fn the_two_edges_treat_a_row_the_same() {
         let height = 40.0;
-        let near_top = scale_and_alpha(VIEWPORT, 8.0, 8.0 + height);
-        let near_bottom = scale_and_alpha(VIEWPORT, VIEWPORT - 8.0 - height, VIEWPORT - 8.0);
+        let near_top = scale_and_alpha(VIEWPORT, 8.0, 8.0 + height).unwrap();
+        let near_bottom =
+            scale_and_alpha(VIEWPORT, VIEWPORT - 8.0 - height, VIEWPORT - 8.0).unwrap();
         assert!((near_top.scale - near_bottom.scale).abs() < 1e-5);
         assert!((near_top.alpha - near_bottom.alpha).abs() < 1e-5);
     }
@@ -205,8 +216,8 @@ mod tests {
         // the height does. The taller row has the wider band, so the same
         // distance is a larger fraction of it and it shrinks more.
         let top = VIEWPORT - 10.0;
-        let short = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.2);
-        let tall = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.62);
+        let short = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.2).unwrap();
+        let tall = scale_and_alpha(VIEWPORT, top, top + VIEWPORT * 0.62).unwrap();
         assert!(tall.scale < short.scale, "short {short:?} tall {tall:?}");
     }
 
@@ -214,8 +225,8 @@ mod tests {
     fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
         // Two rows of the same full height at the same unscaled offsets must
         // land where those offsets say, however much the first one shrank.
-        let first = place_row(VIEWPORT, 0.0, 50.0, 2.0);
-        let second = place_row(VIEWPORT, 50.0, 50.0, 2.0);
+        let first = place_row(VIEWPORT, 0.0, 50.0, 2.0).unwrap();
+        let second = place_row(VIEWPORT, 50.0, 50.0, 2.0).unwrap();
         assert!(first.scale < 1.0, "the first row is at the edge: {first:?}");
         // The second row's position is not pushed up by the first row shrinking.
         assert!(second.top >= 49.0, "{second:?}");
@@ -225,14 +236,14 @@ mod tests {
     fn a_row_above_the_centre_line_keeps_its_bottom_edge() {
         // Above the line the transform origin is the bottom, so shrinking pulls
         // the top down; below the line the top is pinned and the bottom rises.
-        let above = place_row(VIEWPORT, 4.0, 50.0, 2.0);
+        let above = place_row(VIEWPORT, 4.0, 50.0, 2.0).unwrap();
         assert!(above.scale < 1.0, "{above:?}");
         assert!(
             above.top > 4.0,
             "shrinking should pull the top down: {above:?}"
         );
 
-        let below = place_row(VIEWPORT, VIEWPORT - 54.0, 50.0, 2.0);
+        let below = place_row(VIEWPORT, VIEWPORT - 54.0, 50.0, 2.0).unwrap();
         assert!(below.scale < 1.0, "{below:?}");
         assert!(
             (below.top - (VIEWPORT - 54.0)).abs() < 0.6,
@@ -246,26 +257,37 @@ mod tests {
         // that half pixel is exactly what a float-only implementation drops.
         assert_eq!(odd_pixel(50.0), 0.0);
         assert_eq!(odd_pixel(51.0), 0.5);
-        let odd = place_row(VIEWPORT, 3.0, 25.5, 2.0);
+        let odd = place_row(VIEWPORT, 3.0, 25.5, 2.0).unwrap();
         assert!(odd.scale < 1.0, "needs to be in the scaled band: {odd:?}");
     }
 
     #[test]
     fn a_density_of_zero_falls_back_to_continuous_placement_instead_of_dividing_by_it() {
-        let placed = place_row(VIEWPORT, 10.0, 50.0, 0.0);
+        let placed = place_row(VIEWPORT, 10.0, 50.0, 0.0).unwrap();
         assert!(
             placed.top.is_finite() && placed.height.is_finite(),
             "{placed:?}"
         );
         assert_eq!(placed.top, 10.0);
-        let negative = place_row(VIEWPORT, 10.0, 50.0, -2.0);
+        let negative = place_row(VIEWPORT, 10.0, 50.0, -2.0).unwrap();
         assert_eq!(negative, placed, "a nonsense density is not a crash");
     }
 
     #[test]
     fn an_empty_viewport_leaves_everything_alone_rather_than_dividing_by_it() {
-        assert_eq!(scale_and_alpha(0.0, 0.0, 10.0), ScaleAlpha::UNCHANGED);
-        assert_eq!(scale_and_alpha(-5.0, 0.0, 10.0), ScaleAlpha::UNCHANGED);
+        assert_eq!(scale_and_alpha(0.0, 0.0, 10.0), Some(ScaleAlpha::UNCHANGED));
+        assert_eq!(
+            scale_and_alpha(-5.0, 0.0, 10.0),
+            Some(ScaleAlpha::UNCHANGED)
+        );
+    }
+
+    #[test]
+    fn invalid_geometry_is_rejected_instead_of_producing_nan() {
+        assert_eq!(scale_and_alpha(f32::NAN, 0.0, 10.0), None);
+        assert_eq!(scale_and_alpha(VIEWPORT, 10.0, 9.0), None);
+        assert_eq!(place_row(VIEWPORT, 0.0, -1.0, 2.0), None);
+        assert_eq!(place_row(VIEWPORT, 0.0, 10.0, f32::INFINITY), None);
     }
 
     #[test]
@@ -278,5 +300,10 @@ mod tests {
             assert!(value >= previous - 1e-4, "not monotonic at {step}");
             previous = value;
         }
+    }
+
+    #[test]
+    fn the_easing_matches_the_current_wear_compose_curve() {
+        assert!((ease(0.25) - 0.166_779).abs() < 1e-3, "{}", ease(0.25));
     }
 }
