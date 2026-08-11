@@ -111,7 +111,7 @@ pub(crate) struct CachedBatchMeasureInputs<'a> {
 }
 
 /// Base trait for measurement scopes.
-pub trait SubcomposeLayoutScope {
+pub trait SubcomposeLayoutScope: cranpose_ui_layout::MeasureScope {
     fn constraints(&self) -> Constraints;
 
     fn layout<I>(&mut self, width: f32, height: f32, placements: I) -> MeasureResult
@@ -439,6 +439,16 @@ impl<'a> SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'a> {
         self.layout_with_placement_builder(width, height, |scratch| {
             scratch.extend(placements);
         })
+    }
+}
+
+impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
+    fn density(&self) -> f32 {
+        crate::current_density()
+    }
+
+    fn font_scale(&self) -> f32 {
+        crate::current_font_scale()
     }
 }
 
