@@ -924,6 +924,7 @@ pub enum Phase {
     Layout,
 }
 
+pub use composer_context::note_nested_slots_host;
 pub use composer_context::with_composer as with_current_composer;
 
 #[allow(non_snake_case)]
@@ -1046,7 +1047,7 @@ where
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key_hash = hash_key(&keys);
-            let state = composer.remember_effect(DisposableEffectState::default);
+            let state = composer.remember_effect::<DisposableEffectState>();
             if state.with(|state| state.should_run(key_hash)) {
                 state.update(|state| {
                     state.run_cleanup();
@@ -3862,6 +3863,7 @@ struct ActivePassState {
 
 struct SlotsHostInner {
     table: SlotTable,
+    nested_hosts: Vec<std::rc::Weak<SlotsHost>>,
     lifecycle: slot::SlotLifecycleCoordinator,
     runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
     active_pass: Option<ActivePassState>,
@@ -3894,7 +3896,7 @@ impl Drop for SlotsHost {
 }
 
 impl SlotsHost {
-    pub(crate) fn storage_key(&self) -> usize {
+    pub fn storage_key(&self) -> usize {
         self.storage_key.get()
     }
 
@@ -3904,11 +3906,57 @@ impl SlotsHost {
             storage_key: Cell::new(storage_key),
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
+                nested_hosts: Vec::new(),
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
                 runtime_state: None,
                 active_pass: None,
             }),
         }
+    }
+
+    pub fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return;
+        };
+        inner.nested_hosts.retain(|held| held.upgrade().is_some());
+        if inner
+            .nested_hosts
+            .iter()
+            .any(|held| held.upgrade().is_some_and(|host| Rc::ptr_eq(&host, nested)))
+        {
+            return;
+        }
+        inner.nested_hosts.push(Rc::downgrade(nested));
+    }
+
+    pub(crate) fn forget_effects(&self) -> bool {
+        let (forgotten, nested, runtime_state) = {
+            let Ok(mut inner) = self.inner.try_borrow_mut() else {
+                return false;
+            };
+            if inner.active_pass.is_some() {
+                return false;
+            }
+            let drops = inner.table.take_effect_drops();
+            inner.nested_hosts.retain(|held| held.upgrade().is_some());
+            let nested: Vec<Rc<SlotsHost>> = inner
+                .nested_hosts
+                .iter()
+                .filter_map(std::rc::Weak::upgrade)
+                .collect();
+            (drops, nested, inner.runtime_state.clone())
+        };
+        let mut any = !forgotten.is_empty();
+        drop(forgotten);
+        for host in nested {
+            any |= host.forget_effects();
+        }
+        if any {
+            if let Some(runtime_state) = runtime_state {
+                runtime_state.force_recompose_host_scopes(self.storage_key());
+            }
+        }
+        any
     }
 
     pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {

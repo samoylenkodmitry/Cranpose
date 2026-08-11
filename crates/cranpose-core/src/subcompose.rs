@@ -857,7 +857,11 @@ impl SubcomposeState {
         self.live_slots.remove(&slot);
         self.current_pass_active_slots.remove(&slot);
         self.mapping.deactivate_slot(slot);
-        if allow_exact_reactivation {
+        let forgot_effects = self
+            .slot_compositions
+            .get(&slot)
+            .is_some_and(|host| host.forget_effects());
+        if allow_exact_reactivation && !forgot_effects {
             self.exact_reactivation_slots.insert(slot);
         } else {
             self.exact_reactivation_slots.remove(&slot);

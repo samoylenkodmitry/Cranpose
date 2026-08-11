@@ -149,6 +149,14 @@ impl ComposerRuntimeState {
         }
     }
 
+    pub(crate) fn force_recompose_host_scopes(&self, host_key: usize) {
+        for scope in self.scope_registry.borrow().values() {
+            if scope.slots_storage_key() == Some(host_key) {
+                scope.force_recompose();
+            }
+        }
+    }
+
     pub(crate) fn bind_applier_host(&self, applier: &Rc<dyn ApplierHost>) {
         *self.applier_host.borrow_mut() = Some(Rc::downgrade(applier));
     }
@@ -636,7 +644,7 @@ impl Composer {
         observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
     }
 
-    pub(crate) fn active_slots_host(&self) -> Rc<SlotsHost> {
+    pub fn active_slots_host(&self) -> Rc<SlotsHost> {
         self.core
             .slot_hosts
             .borrow()
@@ -711,7 +719,15 @@ impl Composer {
     ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
         slots.begin_pass(mode);
-        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
+        {
+            let mut stack = self.core.slot_hosts.borrow_mut();
+            if let Some(parent) = stack.last() {
+                if !Rc::ptr_eq(parent, &slots) {
+                    parent.note_nested_host(&slots);
+                }
+            }
+            stack.push(Rc::clone(&slots));
+        }
         SlotHostPassGuard {
             core: self.clone_core(),
             host: slots,
@@ -1275,8 +1291,8 @@ impl Composer {
         self.remember_with_kind(PayloadKind::Internal, init)
     }
 
-    pub(crate) fn remember_effect<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Effect, init)
+    pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
+        self.with_slot_session_mut(|slots| slots.remember_effect::<T>())
     }
 
     fn remember_with_kind<T: 'static>(

@@ -180,6 +180,7 @@ pub(super) struct PayloadRecord {
     pub(super) type_name: &'static str,
     pub(super) kind: PayloadKind,
     pub(super) value: Box<dyn Any>,
+    pub(super) fresh: Option<fn() -> Box<dyn Any>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

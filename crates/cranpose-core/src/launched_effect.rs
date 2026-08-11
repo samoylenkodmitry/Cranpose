@@ -356,7 +356,7 @@ where
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key_hash = hash_key(&keys);
-            let state = composer.remember_effect(LaunchedEffectState::default);
+            let state = composer.remember_effect::<LaunchedEffectState>();
             if state.with(|state| state.should_run(key_hash)) {
                 state.update(|state| state.set_key(key_hash));
                 let runtime = composer.runtime_handle();
@@ -391,7 +391,7 @@ where
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key_hash = hash_key(&keys);
-            let state = composer.remember_effect(LaunchedEffectAsyncState::default);
+            let state = composer.remember_effect::<LaunchedEffectAsyncState>();
             if state.with(|state| state.should_run(key_hash)) {
                 state.update(|state| state.set_key(key_hash));
                 let runtime = composer.runtime_handle();

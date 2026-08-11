@@ -97,6 +97,18 @@ impl SlotTable {
         self.scope_index.shrink_to_fit();
     }
 
+    pub(crate) fn take_effect_drops(&mut self) -> Vec<DeferredDrop> {
+        let mut drops = Vec::new();
+        for payload in self.payloads.iter_mut() {
+            let Some(fresh) = payload.fresh else {
+                continue;
+            };
+            let old = std::mem::replace(&mut payload.value, fresh());
+            drops.push(DeferredDrop::payload(old));
+        }
+        drops
+    }
+
     pub(crate) fn take_all_drops(&mut self) -> Vec<DeferredDrop> {
         let payload_count = self.payloads.len();
         let mut drops = Vec::with_capacity(payload_count);

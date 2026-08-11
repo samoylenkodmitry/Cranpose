@@ -300,6 +300,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
             });
 
         let slot_host = self.state.get_or_create_slots(slot_id);
+        self.parent_handle.note_slot_host(&slot_host);
         let holder_for_slot = content_holder.clone();
         let scopes = self
             .composer
@@ -727,7 +728,13 @@ impl SubcomposeLayoutNode {
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
         node.update_modifier_slices_cache();
+        node.note_host_to_the_composition_that_made_it();
         node
+    }
+
+    fn note_host_to_the_composition_that_made_it(&self) {
+        let host = Rc::clone(&self.inner.borrow().slots);
+        cranpose_core::note_nested_slots_host(&host);
     }
 
     /// Creates a SubcomposeLayoutNode with ContentTypeReusePolicy.
@@ -762,6 +769,7 @@ impl SubcomposeLayoutNode {
         let (invalidations, _) = node.inner.borrow_mut().set_modifier_collect(modifier);
         node.dispatch_modifier_invalidations(&invalidations, NodeCapabilities::empty());
         node.update_modifier_slices_cache();
+        node.note_host_to_the_composition_that_made_it();
         node
     }
 
@@ -1219,6 +1227,16 @@ pub struct SubcomposeLayoutNodeHandle {
 }
 
 impl SubcomposeLayoutNodeHandle {
+    pub(crate) fn note_slot_host(&self, slot_host: &Rc<cranpose_core::SlotsHost>) {
+        let Ok(inner) = self.inner.try_borrow() else {
+            return;
+        };
+        if Rc::ptr_eq(&inner.slots, slot_host) {
+            return;
+        }
+        inner.slots.note_nested_host(slot_host);
+    }
+
     pub(crate) fn measured_children_scratch(
         &self,
     ) -> Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>> {

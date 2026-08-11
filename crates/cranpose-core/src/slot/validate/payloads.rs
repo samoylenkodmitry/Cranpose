@@ -152,6 +152,7 @@ mod tests {
             type_name: std::any::type_name::<i32>(),
             kind: PayloadKind::Internal,
             value: Box::new(0_i32),
+            fresh: None,
         });
         table.anchors.set_active(owner, 0);
         table.payload_anchors.set_active(payload_anchor, owner, 0);

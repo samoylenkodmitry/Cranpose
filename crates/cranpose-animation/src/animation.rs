@@ -609,6 +609,7 @@ impl InfiniteTransition {
 
     fn run(&self) {
         let run_key = self.inner.run_token.get();
+        cranpose_core::label_next_ui_task(format!("loop {}", self.inner.label));
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
         cranpose_core::LaunchedEffectAsync!(run_key, move |scope| {
             Box::pin(async move {
