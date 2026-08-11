@@ -282,12 +282,7 @@ mod tests {
     /// The matrix, spelled out. Written down rather than recomputed from the
     /// same bit-twiddle it is checking, so a "simplification" of the striping
     /// has something to fail against.
-    const BAYER_4X4: [[u32; 4]; 4] = [
-        [0, 4, 1, 5],
-        [8, 12, 9, 13],
-        [2, 6, 3, 7],
-        [10, 14, 11, 15],
-    ];
+    const BAYER_4X4: [[u32; 4]; 4] = [[0, 4, 1, 5], [8, 12, 9, 13], [2, 6, 3, 7], [10, 14, 11, 15]];
 
     #[test]
     fn the_dither_lays_out_skias_bayer_matrix() {

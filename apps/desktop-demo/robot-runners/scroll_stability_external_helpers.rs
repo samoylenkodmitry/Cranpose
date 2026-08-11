@@ -33,6 +33,7 @@ pub(crate) struct ScrollStabilityConfig {
     pub fallback_trim_right_px: u32,
     pub compare_search_offset_px: u32,
     pub compare_max_adjacent_score: u32,
+    pub compare_max_channel_delta: u8,
     pub compare_stabilized_guard_px: u32,
     pub compare_viewport_inset_px: u32,
     pub render_stats_env: Option<&'static str>,
@@ -866,6 +867,8 @@ fn run_compare_script(
         .arg(config.compare_search_offset_px.to_string())
         .arg("--max-adjacent-score")
         .arg(config.compare_max_adjacent_score.to_string())
+        .arg("--max-channel-delta")
+        .arg(config.compare_max_channel_delta.to_string())
         .arg("--stabilized-guard")
         .arg(config.compare_stabilized_guard_px.to_string())
         .args(capture_paths)
@@ -1017,6 +1020,7 @@ mod tests {
             fallback_trim_right_px: 0,
             compare_search_offset_px: 4,
             compare_max_adjacent_score: 0,
+            compare_max_channel_delta: 0,
             compare_stabilized_guard_px: 0,
             compare_viewport_inset_px: 0,
             render_stats_env: None,
