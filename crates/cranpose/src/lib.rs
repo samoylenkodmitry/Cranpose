@@ -247,6 +247,9 @@ mod ios_notifier;
 mod ios_haptics;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_app_info;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_device_info;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]

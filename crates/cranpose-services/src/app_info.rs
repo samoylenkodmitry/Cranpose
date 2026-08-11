@@ -1,5 +1,5 @@
 //! How the platform packaged this app: the version a user is shown, and the
-//! build number a store orders releases by.
+//! build version a store orders releases by.
 //!
 //! An app that prints its own version usually knows it at compile time, which
 //! is fine right up until the packaging step adds something the compiler never
@@ -30,12 +30,13 @@ pub trait AppInfo {
     /// `CFBundleShortVersionString`. `None` when the platform has none.
     fn version_name(&self) -> Option<String>;
 
-    /// The monotonic build number a store orders releases by — Android's
+    /// The build identifier a store orders releases by — Android's
     /// `versionCode`, Apple's `CFBundleVersion`. `None` when unknown.
     ///
-    /// Wider than Android's `int` because `getLongVersionCode` is what a
-    /// modern Android build carries.
-    fn version_code(&self) -> Option<i64>;
+    /// This is a string because Apple build versions may contain multiple
+    /// numeric components, such as `42.3.1`. Android version codes are
+    /// converted without losing their numeric value.
+    fn build_version(&self) -> Option<String>;
 }
 
 pub type AppInfoRef = Rc<dyn AppInfo>;
@@ -47,7 +48,7 @@ impl AppInfo for DefaultAppInfo {
         None
     }
 
-    fn version_code(&self) -> Option<i64> {
+    fn build_version(&self) -> Option<String> {
         None
     }
 }
@@ -79,9 +80,9 @@ pub fn version_name() -> Option<String> {
     app_info().version_name()
 }
 
-/// The build number a store orders releases by, if the platform knows one.
-pub fn version_code() -> Option<i64> {
-    app_info().version_code()
+/// The build identifier a store orders releases by, if the platform knows one.
+pub fn build_version() -> Option<String> {
+    app_info().build_version()
 }
 
 #[cfg(test)]
@@ -95,8 +96,8 @@ mod tests {
             Some("1.4.2-debug".to_string())
         }
 
-        fn version_code(&self) -> Option<i64> {
-            Some(17)
+        fn build_version(&self) -> Option<String> {
+            Some("17.2.1".to_string())
         }
     }
 
@@ -104,7 +105,7 @@ mod tests {
     fn an_unpackaged_binary_has_no_version_to_report() {
         clear_platform_app_info();
         assert_eq!(version_name(), None);
-        assert_eq!(version_code(), None);
+        assert_eq!(build_version(), None);
     }
 
     #[test]
@@ -114,7 +115,7 @@ mod tests {
         // The suffix is the whole point: a compile-time constant cannot know
         // about it, because the packaging step is what adds it.
         assert_eq!(version_name().as_deref(), Some("1.4.2-debug"));
-        assert_eq!(version_code(), Some(17));
+        assert_eq!(build_version().as_deref(), Some("17.2.1"));
         clear_platform_app_info();
         assert_eq!(version_name(), None);
     }

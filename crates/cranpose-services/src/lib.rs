@@ -26,7 +26,10 @@ pub mod theme;
 pub mod uri_handler;
 pub mod writable_folder;
 
-pub use app_info::{app_info, clear_platform_app_info, set_platform_app_info, AppInfo, AppInfoRef};
+pub use app_info::{
+    app_info, build_version, clear_platform_app_info, set_platform_app_info, version_name, AppInfo,
+    AppInfoRef,
+};
 pub use audio::{
     clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
     AudioBus, AudioClip, AudioError, AudioPlayer, AudioPlayerRef, NoopAudioPlayer, PlaybackParams,

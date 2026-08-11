@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 struct AndroidAppInfo {
     version_name: Option<String>,
-    version_code: Option<i64>,
+    build_version: Option<String>,
 }
 
 impl AppInfo for AndroidAppInfo {
@@ -25,8 +25,8 @@ impl AppInfo for AndroidAppInfo {
         self.version_name.clone()
     }
 
-    fn version_code(&self) -> Option<i64> {
-        self.version_code
+    fn build_version(&self) -> Option<String> {
+        self.build_version.clone()
     }
 }
 
@@ -38,10 +38,10 @@ impl AppInfo for AndroidAppInfo {
 /// one that shows nothing.
 pub(crate) fn install_app_info(app: &android_activity::AndroidApp) {
     match query_app_info(app) {
-        Ok((version_name, version_code)) => {
+        Ok((version_name, build_version)) => {
             set_platform_app_info(Rc::new(AndroidAppInfo {
                 version_name,
-                version_code,
+                build_version,
             }));
         }
         Err(error) => {
@@ -52,7 +52,7 @@ pub(crate) fn install_app_info(app: &android_activity::AndroidApp) {
 
 fn query_app_info(
     app: &android_activity::AndroidApp,
-) -> Result<(Option<String>, Option<i64>), String> {
+) -> Result<(Option<String>, Option<String>), String> {
     crate::android_jni::with_android_activity_env(app, |env, activity| {
         let describe = |env: &mut jni::Env<'_>, what: &str, error: jni::errors::Error| {
             crate::android_jni::clear_pending_android_jni_exception(env);
@@ -106,7 +106,7 @@ fn query_app_info(
 
         // `getLongVersionCode` since API 28; below that the `int` field is the
         // whole story, and the same number.
-        let version_code = env
+        let build_version = env
             .call_method(&info, jni_str!("getLongVersionCode"), jni_sig!("()J"), &[])
             .and_then(|value| value.j())
             .or_else(|_| {
@@ -115,8 +115,9 @@ fn query_app_info(
                     .and_then(|value| value.i())
                     .map(i64::from)
             })
-            .ok();
+            .ok()
+            .map(|version| version.to_string());
 
-        Ok((version_name, version_code))
+        Ok((version_name, build_version))
     })
 }
