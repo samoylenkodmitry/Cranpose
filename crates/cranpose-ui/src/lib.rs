@@ -24,6 +24,7 @@ mod pointer_dispatch;
 mod primitives;
 mod render_state;
 mod renderer;
+pub mod round_scaling_list;
 pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
