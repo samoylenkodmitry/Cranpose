@@ -149,6 +149,14 @@ impl ComposerRuntimeState {
         }
     }
 
+    pub(crate) fn force_recompose_host_scopes(&self, host_key: usize) {
+        for scope in self.scope_registry.borrow().values() {
+            if scope.slots_storage_key() == Some(host_key) {
+                scope.force_recompose();
+            }
+        }
+    }
+
     pub(crate) fn bind_applier_host(&self, applier: &Rc<dyn ApplierHost>) {
         *self.applier_host.borrow_mut() = Some(Rc::downgrade(applier));
     }

@@ -3930,7 +3930,7 @@ impl SlotsHost {
     }
 
     pub(crate) fn forget_effects(&self) -> bool {
-        let (forgotten, nested) = {
+        let (forgotten, nested, runtime_state) = {
             let Ok(mut inner) = self.inner.try_borrow_mut() else {
                 return false;
             };
@@ -3944,12 +3944,17 @@ impl SlotsHost {
                 .iter()
                 .filter_map(std::rc::Weak::upgrade)
                 .collect();
-            (drops, nested)
+            (drops, nested, inner.runtime_state.clone())
         };
         let mut any = !forgotten.is_empty();
         drop(forgotten);
         for host in nested {
             any |= host.forget_effects();
+        }
+        if any {
+            if let Some(runtime_state) = runtime_state {
+                runtime_state.force_recompose_host_scopes(self.storage_key());
+            }
         }
         any
     }

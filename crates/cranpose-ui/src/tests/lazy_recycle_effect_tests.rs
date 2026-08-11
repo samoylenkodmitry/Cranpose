@@ -21,6 +21,7 @@ fn measure(composition: &mut TestComposition, root: NodeId) {
 }
 
 #[composable]
+#[allow(non_snake_case)]
 fn ParkedRow(index: usize, nested: bool) {
     let body = move || {
         if index == 0 {
@@ -49,12 +50,12 @@ fn ParkedRow(index: usize, nested: bool) {
     }
 }
 
-fn tasks_after_scroll(nested: bool) -> usize {
+fn task_counts_across_reuse(nested: bool, scroll_back: bool) -> Vec<usize> {
     let held: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
         let list_state = remember_lazy_list_state();
-        *keeper.borrow_mut() = Some(list_state.clone());
+        *keeper.borrow_mut() = Some(list_state);
         LazyColumn(
             Modifier::empty().fill_max_size(),
             list_state,
@@ -73,33 +74,49 @@ fn tasks_after_scroll(nested: bool) -> usize {
     let root = composition.root().expect("root node");
     measure(&mut composition, root);
     composition.runtime_handle().drain_ui();
-    assert_eq!(
-        composition.runtime_handle().debug_stats().tasks_len,
-        1,
-        "the first row parks one effect while it is on the screen"
-    );
+    let mut counts = vec![composition.runtime_handle().debug_stats().tasks_len];
 
-    let list_state = held.borrow().clone().expect("list state");
+    let list_state = (*held.borrow()).expect("list state");
     list_state.scroll_to_item(ROWS - 4, 0.0);
     measure(&mut composition, root);
     composition.runtime_handle().drain_ui();
-    composition.runtime_handle().debug_stats().tasks_len
+    counts.push(composition.runtime_handle().debug_stats().tasks_len);
+
+    if scroll_back {
+        list_state.scroll_to_item(0, 0.0);
+        measure(&mut composition, root);
+        composition.runtime_handle().drain_ui();
+        counts.push(composition.runtime_handle().debug_stats().tasks_len);
+    }
+    counts
 }
 
 #[test]
 fn a_recycled_lazy_row_stops_its_parked_effect() {
     assert_eq!(
-        tasks_after_scroll(false),
-        0,
-        "the row is off the screen, so its effect must be cancelled"
+        task_counts_across_reuse(false, false),
+        vec![1, 0],
+        "the row's effect must run on screen and be cancelled off screen"
     );
 }
 
 #[test]
 fn a_recycled_lazy_row_stops_the_effect_of_a_widget_one_subcompose_deeper() {
     assert_eq!(
-        tasks_after_scroll(true),
-        0,
-        "the row is off the screen, so the effect inside its SwipeToDismiss must be cancelled"
+        task_counts_across_reuse(true, false),
+        vec![1, 0],
+        "the SwipeToDismiss effect must run on screen and be cancelled off screen"
+    );
+}
+
+#[test]
+fn a_recycled_lazy_row_restarts_its_effect_when_it_returns() {
+    assert_eq!(
+        (
+            task_counts_across_reuse(false, true),
+            task_counts_across_reuse(true, true),
+        ),
+        (vec![1, 0, 1], vec![1, 0, 1]),
+        "reusing a row must restart its nested effect exactly once"
     );
 }
