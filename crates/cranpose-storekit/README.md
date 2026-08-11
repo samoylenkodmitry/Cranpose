@@ -5,17 +5,15 @@ implementing the cross-platform [`cranpose_services::purchases`] API on iOS and
 macOS.
 
 ```rust,no_run
-use cranpose_services::purchases::{self, StorePhase};
+use cranpose_services::purchases;
 
 cranpose_storekit::register();
 purchases::configure(&["com.example.app.pro"]);
 
 // Read the snapshot from the frame loop — the store answers asynchronously.
 let state = purchases::store_state();
-let unlocked = match state.phase {
-    StorePhase::Unavailable => true, // no store on this platform: free here
-    _ => state.owns("com.example.app.pro"),
-};
+// No store that will sell here: free in that case.
+let unlocked = state.phase.cannot_sell() || state.owns("com.example.app.pro");
 let price = state.display_price("com.example.app.pro").unwrap_or("");
 ```
 

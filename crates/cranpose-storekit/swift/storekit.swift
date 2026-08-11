@@ -35,6 +35,7 @@ private enum PhaseCode: Int32 {
     case unavailable = 0
     case connecting = 1
     case ready = 2
+    case blocked = 3
 }
 
 /// Mirrors `cranpose_storekit::ffi::EventCode`.
@@ -165,7 +166,9 @@ public func cranpose_storekit_start(
     guard #available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *) else {
         // Below the StoreKit 2 floor. The app's deployment target should make
         // this unreachable; report it rather than pretending to be connecting.
-        sink.send(.phase, PhaseCode.unavailable.rawValue, 0, "StoreKit 2 requires iOS 15 / macOS 12")
+        // `blocked`, not `unavailable`: the OS version cannot change while the
+        // app runs, so there is nothing here for a retry to reach.
+        sink.send(.phase, PhaseCode.blocked.rawValue, 0, "StoreKit 2 requires iOS 15 / macOS 12")
         return
     }
 

@@ -59,6 +59,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
     private static final int PHASE_UNAVAILABLE = 0;
     private static final int PHASE_CONNECTING = 1;
     private static final int PHASE_READY = 2;
+    private static final int PHASE_BLOCKED = 3;
 
     /** Mirrors the event codes in {@code android_purchase_wire.rs}. */
     private static final int EVENT_PURCHASED = 0;
@@ -86,6 +87,15 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
     private boolean ownedKnown;
     private boolean connected;
     private boolean connecting;
+
+    /**
+     * Set when setup failed with a response Play will keep giving. In-app billing turned off
+     * on the device, an account that cannot pay, a country the app is not sold in: the
+     * client reconnects on its own, and every attempt is answered the same way. Reporting
+     * that as a store we have merely not reached yet leaves an app inviting a retry that
+     * cannot work, so it becomes its own phase and the app can say why instead.
+     */
+    private boolean blocked;
     private boolean busy;
     private boolean pendingRestore;
     private String error = "";
@@ -257,6 +267,9 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
             }
             synchronized (lock) {
                 connecting = true;
+                // A fresh attempt has not been refused yet, and the app should see
+                // "connecting" rather than the verdict of the last one.
+                blocked = false;
             }
             pushSnapshot();
             client.startConnection(
@@ -267,6 +280,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
                                 synchronized (lock) {
                                     connected = true;
                                     connecting = false;
+                                    blocked = false;
                                     error = "";
                                 }
                                 queryProducts();
@@ -278,6 +292,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
                             synchronized (lock) {
                                 connected = false;
                                 connecting = false;
+                                blocked = !isRetryable(result.getResponseCode());
                             }
                             if (takePendingRestore()) {
                                 nativeBillingEvent(EVENT_FAILED, userMessage(result), 0);
@@ -294,6 +309,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
                                 connected = false;
                                 connecting = true;
                             }
+                            pushSnapshot();
                         }
                     });
         } catch (Throwable failure) {
@@ -302,6 +318,7 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
             synchronized (lock) {
                 connected = false;
                 connecting = false;
+                blocked = false;
                 error = String.valueOf(failure);
             }
             setBusy(false);
@@ -588,6 +605,8 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
                 phase = productsKnown && ownedKnown ? PHASE_READY : PHASE_CONNECTING;
             } else if (connecting) {
                 phase = PHASE_CONNECTING;
+            } else if (blocked) {
+                phase = PHASE_BLOCKED;
             } else {
                 phase = PHASE_UNAVAILABLE;
             }
