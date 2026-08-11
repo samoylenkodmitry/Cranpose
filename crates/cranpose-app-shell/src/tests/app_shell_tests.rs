@@ -1023,6 +1023,54 @@ fn two_app_shells_do_not_share_density_or_render_invalidations() {
 }
 
 #[test]
+fn app_shell_font_scale_is_per_app_context_and_asks_for_a_frame() {
+    let _guard = test_guard();
+    let mut first = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    let mut second = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    first.update();
+    second.update();
+    assert_eq!(first.debug_current_font_scale(), 1.0);
+
+    // The user moved the system font-size slider.
+    first.set_font_scale(1.3);
+    assert_eq!(first.debug_current_font_scale(), 1.3);
+    assert_eq!(second.debug_current_font_scale(), 1.0);
+    assert!(
+        first.needs_redraw(),
+        "text sizes changed and nothing redrew"
+    );
+    assert!(!second.needs_redraw());
+
+    first.update();
+    assert!(!first.needs_redraw());
+
+    // Setting the same value again is not a change and must not cost a frame.
+    first.set_font_scale(1.3);
+    assert!(!first.needs_redraw());
+
+    // Values no platform reports are refused rather than allowed to collapse
+    // every layout that reads them.
+    first.set_font_scale(0.0);
+    assert_eq!(first.debug_current_font_scale(), 1.0);
+    first.set_font_scale(f32::NAN);
+    assert_eq!(first.debug_current_font_scale(), 1.0);
+    first.set_font_scale(99.0);
+    assert_eq!(
+        first.debug_current_font_scale(),
+        cranpose_ui::MAX_FONT_SCALE
+    );
+}
+
+#[test]
 fn app_shell_initial_composition_uses_constructor_density() {
     let _guard = test_guard();
     APP_SHELL_INITIAL_DENSITIES.with(|densities| densities.borrow_mut().clear());
