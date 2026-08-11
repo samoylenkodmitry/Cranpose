@@ -14,6 +14,7 @@ mod frontend;
 pub(crate) mod gpu_stats;
 mod layer_events;
 mod layer_surface_cache;
+mod lazy_resource;
 mod normalized_scene;
 mod offscreen;
 mod pipeline;
