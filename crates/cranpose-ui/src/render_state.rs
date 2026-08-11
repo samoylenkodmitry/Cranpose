@@ -25,6 +25,7 @@ struct RenderState {
     focus_invalidated: AtomicBool,
     layout_invalidated: AtomicBool,
     density_bits: AtomicU32,
+    font_scale_bits: AtomicU32,
 }
 
 #[doc(hidden)]
@@ -113,6 +114,7 @@ impl RenderState {
             focus_invalidated: AtomicBool::new(false),
             layout_invalidated: AtomicBool::new(false),
             density_bits: AtomicU32::new(normalize_density(density).to_bits()),
+            font_scale_bits: AtomicU32::new(1.0f32.to_bits()),
         }
     }
 }
@@ -301,6 +303,27 @@ fn normalize_density(density: f32) -> f32 {
         1.0
     }
 }
+
+/// Keeps the font scale inside the range platforms actually offer.
+///
+/// Android's accessibility settings reach 2.0, and a bold-text or display-size
+/// combination can push a little past it; below 0.5 text stops being text. A
+/// nonsense value from a host is treated as "no scaling" rather than allowed to
+/// collapse or explode every layout that reads it.
+fn normalize_font_scale(scale: f32) -> f32 {
+    if scale.is_finite() && scale > 0.0 {
+        scale.clamp(MIN_FONT_SCALE, MAX_FONT_SCALE)
+    } else {
+        1.0
+    }
+}
+
+/// Smallest system font scale honoured; below this, text stops being readable
+/// as text.
+pub const MIN_FONT_SCALE: f32 = 0.5;
+/// Largest system font scale honoured. Android's own accessibility slider tops
+/// out at 2.0.
+pub const MAX_FONT_SCALE: f32 = 3.0;
 
 pub(crate) fn with_text_measurer<R>(f: impl FnOnce(&dyn crate::text::TextMeasurer) -> R) -> R {
     let context = require_current_app_context("text measurer access");
@@ -752,6 +775,33 @@ pub fn set_density(density: f32) {
     });
 }
 
+/// Returns the system font scale — the multiplier the user chose in the
+/// platform's font-size setting, `1.0` when they left it alone.
+///
+/// This is the value `Sp` is defined against: a size in `Sp` is `density *
+/// font_scale` pixels, so text follows the setting while everything measured
+/// in `Dp` does not. A platform that does not report one leaves it at `1.0`.
+pub fn current_font_scale() -> f32 {
+    with_render_state(|state| f32::from_bits(state.font_scale_bits.load(Ordering::Relaxed)))
+}
+
+/// Updates the system font scale.
+///
+/// Hosts call this when the platform reports the setting, and again whenever it
+/// changes while the app is running — on Android that is a configuration
+/// change, which arrives without the process restarting. Like density it
+/// invalidates layout, because every `Sp` size on screen has just changed.
+pub fn set_font_scale(scale: f32) {
+    let normalized = normalize_font_scale(scale);
+    let new_bits = normalized.to_bits();
+    with_render_state(|state| {
+        let old_bits = state.font_scale_bits.swap(new_bits, Ordering::Relaxed);
+        if old_bits != new_bits {
+            state.layout_invalidated.store(true, Ordering::Relaxed);
+        }
+    });
+}
+
 /// Requests that the renderer rebuild the current scene.
 pub fn request_render_invalidation() {
     with_render_state(|state| state.render_invalidated.store(true, Ordering::Relaxed));
@@ -849,6 +899,7 @@ pub fn reset_render_state_for_tests() {
     let _ = take_layout_invalidation();
     debug_reset_last_fling_velocity();
     set_density(1.0);
+    set_font_scale(1.0);
     let _ = take_layout_invalidation();
 }
 
@@ -957,6 +1008,52 @@ mod tests {
         context.enter(|| {
             crate::text::set_text_measurer(TestTextMeasurer);
         });
+    }
+
+    #[test]
+    fn the_font_scale_starts_at_one_and_invalidates_layout_when_it_moves() {
+        let context = AppContext::new();
+        context.enter(|| {
+            assert_eq!(current_font_scale(), 1.0);
+            let _ = take_layout_invalidation();
+
+            set_font_scale(1.3);
+            assert_eq!(current_font_scale(), 1.3);
+            assert!(
+                take_layout_invalidation(),
+                "every Sp on screen just changed size"
+            );
+
+            // The same value is not a change; relaying out on every read would
+            // make a per-frame poll expensive for nothing.
+            set_font_scale(1.3);
+            assert!(!take_layout_invalidation());
+        });
+    }
+
+    #[test]
+    fn a_font_scale_no_platform_reports_is_refused() {
+        let context = AppContext::new();
+        context.enter(|| {
+            for nonsense in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+                set_font_scale(1.0);
+                set_font_scale(nonsense);
+                assert_eq!(current_font_scale(), 1.0, "{nonsense} was let through");
+            }
+            set_font_scale(99.0);
+            assert_eq!(current_font_scale(), MAX_FONT_SCALE);
+            set_font_scale(0.01);
+            assert_eq!(current_font_scale(), MIN_FONT_SCALE);
+        });
+    }
+
+    #[test]
+    fn the_font_scale_is_per_app_context() {
+        let first = AppContext::new();
+        let second = AppContext::new();
+        first.enter(|| set_font_scale(1.5));
+        first.enter(|| assert_eq!(current_font_scale(), 1.5));
+        second.enter(|| assert_eq!(current_font_scale(), 1.0));
     }
 
     #[test]
