@@ -1491,6 +1491,12 @@ pub fn run(
     // change. The shell picks it up with the rest of the geometry.
     crate::android_font_scale::refresh_font_scale(&app);
 
+    // What Play actually packaged, which a version compiled into the binary
+    // cannot know: Gradle's `versionNameSuffix` and a CI-stamped version code
+    // are both applied after the compiler has been and gone. Read once — the
+    // packaged identity of a running process does not change.
+    crate::android_app_info::install_app_info(&app);
+
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info
