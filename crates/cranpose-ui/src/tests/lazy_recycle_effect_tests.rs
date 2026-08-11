@@ -96,7 +96,6 @@ fn a_recycled_lazy_row_stops_its_parked_effect() {
 }
 
 #[test]
-#[ignore = "a nested subcompose keeps its own slot host inside a layout node, which the recycled slot's table cannot reach"]
 fn a_recycled_lazy_row_stops_the_effect_of_a_widget_one_subcompose_deeper() {
     assert_eq!(
         tasks_after_scroll(true),

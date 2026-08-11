@@ -54,6 +54,17 @@ pub fn current_composer() -> Option<Composer> {
     })
 }
 
+pub fn note_nested_slots_host(host: &std::rc::Rc<crate::SlotsHost>) {
+    let Some(composer) = current_composer() else {
+        return;
+    };
+    let holder = composer.active_slots_host();
+    if std::rc::Rc::ptr_eq(&holder, host) {
+        return;
+    }
+    holder.note_nested_host(host);
+}
+
 /// Try to access the current composer from the thread-local stack.
 /// Returns None if there is no active composer.
 pub fn try_with_composer<R>(f: impl FnOnce(&Composer) -> R) -> Option<R> {

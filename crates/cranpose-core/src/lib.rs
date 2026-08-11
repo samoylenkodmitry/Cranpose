@@ -924,6 +924,7 @@ pub enum Phase {
     Layout,
 }
 
+pub use composer_context::note_nested_slots_host;
 pub use composer_context::with_composer as with_current_composer;
 
 #[allow(non_snake_case)]
@@ -3895,7 +3896,7 @@ impl Drop for SlotsHost {
 }
 
 impl SlotsHost {
-    pub(crate) fn storage_key(&self) -> usize {
+    pub fn storage_key(&self) -> usize {
         self.storage_key.get()
     }
 
@@ -3913,7 +3914,7 @@ impl SlotsHost {
         }
     }
 
-    pub(crate) fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
+    pub fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else {
             return;
         };

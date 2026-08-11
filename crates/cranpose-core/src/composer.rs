@@ -636,7 +636,7 @@ impl Composer {
         observer.observe_reads(scope_clone, move |scope_ref| scope_ref.invalidate(), block)
     }
 
-    pub(crate) fn active_slots_host(&self) -> Rc<SlotsHost> {
+    pub fn active_slots_host(&self) -> Rc<SlotsHost> {
         self.core
             .slot_hosts
             .borrow()
@@ -714,7 +714,9 @@ impl Composer {
         {
             let mut stack = self.core.slot_hosts.borrow_mut();
             if let Some(parent) = stack.last() {
-                parent.note_nested_host(&slots);
+                if !Rc::ptr_eq(parent, &slots) {
+                    parent.note_nested_host(&slots);
+                }
             }
             stack.push(Rc::clone(&slots));
         }
