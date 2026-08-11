@@ -50,6 +50,7 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 struct TextPreparedLayoutCacheEntry {
     max_width_bits: Option<u32>,
     text_generation: u64,
+    font_scale_bits: u32,
     layout: crate::text::PreparedTextLayout,
 }
 
@@ -117,11 +118,14 @@ impl TextPreparedLayoutOwner {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let max_width_bits = normalized_max_width.map(f32::to_bits);
         let text_generation = crate::text::measure::current_text_generation();
+        let font_scale_bits = crate::current_font_scale().to_bits();
 
         {
             let mut cache = self.cache.borrow_mut();
             if let Some(index) = cache.iter().position(|entry| {
-                entry.max_width_bits == max_width_bits && entry.text_generation == text_generation
+                entry.max_width_bits == max_width_bits
+                    && entry.text_generation == text_generation
+                    && entry.font_scale_bits == font_scale_bits
             }) {
                 let entry = cache.remove(index);
                 let prepared = entry.layout.clone();
@@ -144,6 +148,7 @@ impl TextPreparedLayoutOwner {
             TextPreparedLayoutCacheEntry {
                 max_width_bits,
                 text_generation,
+                font_scale_bits,
                 layout: prepared.clone(),
             },
         );
@@ -462,6 +467,76 @@ mod tests {
         line_height: f32,
     }
 
+    struct FontSizePreparedLayoutMeasurer {
+        recorded: Rc<RefCell<Vec<f32>>>,
+    }
+
+    impl crate::text::TextMeasurer for FontSizePreparedLayoutMeasurer {
+        fn measure(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+        ) -> crate::text::TextMetrics {
+            let size = style.resolve_font_size(14.0);
+            crate::text::TextMetrics {
+                width: size,
+                height: size,
+                line_height: size,
+                line_count: 1,
+            }
+        }
+
+        fn prepare_with_options_for_node(
+            &self,
+            _node_id: Option<NodeId>,
+            text: &crate::text::AnnotatedString,
+            style: &TextStyle,
+            _options: TextLayoutOptions,
+            _max_width: Option<f32>,
+        ) -> crate::text::PreparedTextLayout {
+            let size = style.resolve_font_size(14.0);
+            self.recorded.borrow_mut().push(size);
+            crate::text::PreparedTextLayout {
+                text: text.clone(),
+                visual_style: style.clone(),
+                metrics: crate::text::TextMetrics {
+                    width: size,
+                    height: size,
+                    line_height: size,
+                    line_count: 1,
+                },
+                did_overflow: false,
+            }
+        }
+
+        fn get_offset_for_position(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _x: f32,
+            _y: f32,
+        ) -> usize {
+            0
+        }
+
+        fn get_cursor_x_for_offset(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+            _offset: usize,
+        ) -> f32 {
+            0.0
+        }
+
+        fn layout(
+            &self,
+            _text: &crate::text::AnnotatedString,
+            _style: &TextStyle,
+        ) -> TextLayoutResult {
+            panic!("layout is not used in this test");
+        }
+    }
+
     impl crate::text::TextMeasurer for FixedPreparedLayoutMeasurer {
         fn measure(
             &self,
@@ -671,6 +746,43 @@ mod tests {
         let (first_height, second_height) = rx.recv().expect("receive measurement result");
         assert_eq!(first_height, 30.0);
         assert_eq!(second_height, 60.0);
+    }
+
+    #[test]
+    fn prepared_layout_cache_refreshes_when_system_font_scale_changes() {
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let recorded = Rc::new(RefCell::new(Vec::new()));
+            let app_context = crate::AppContext::new();
+            app_context.enter(|| {
+                crate::text::set_text_measurer(FontSizePreparedLayoutMeasurer {
+                    recorded: Rc::clone(&recorded),
+                });
+                let node = TextModifierNode::new(
+                    Rc::new(AnnotatedString::from("scale")),
+                    TextStyle {
+                        span_style: crate::text::SpanStyle {
+                            font_size: TextUnit::Sp(10.0),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    TextLayoutOptions::default(),
+                );
+
+                let first = node.measure_text_content(None);
+                crate::set_font_scale(1.5);
+                let second = node.measure_text_content(None);
+                tx.send((recorded.borrow().clone(), first.height, second.height))
+                    .expect("send measurement result");
+            });
+        });
+
+        let (recorded, first, second) = rx.recv().expect("receive measurement result");
+        assert_eq!(recorded, vec![10.0, 15.0]);
+        assert_eq!(first, 10.0);
+        assert_eq!(second, 15.0);
     }
 
     #[test]

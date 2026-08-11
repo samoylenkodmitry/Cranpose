@@ -831,11 +831,36 @@ where
         }
     }
 
+    /// Reports the system font scale the platform is showing text at.
+    ///
+    /// Hosts call this at startup and on every configuration change. Sizes in
+    /// `Sp` follow it, sizes in `Dp` do not, which is what lets an app grow its
+    /// text with the user's setting while its layout stays where it was.
+    pub fn set_font_scale(&mut self, font_scale: f32) {
+        let app_context = Rc::clone(&self.app_context);
+        let changed = app_context.enter(|| {
+            let previous = cranpose_ui::current_font_scale().to_bits();
+            cranpose_ui::set_font_scale(font_scale);
+            previous != cranpose_ui::current_font_scale().to_bits()
+        });
+        if changed {
+            self.request_forced_layout_pass();
+            self.mark_dirty();
+        }
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn debug_current_density(&self) -> f32 {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(cranpose_ui::current_density)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn debug_current_font_scale(&self) -> f32 {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::current_font_scale)
     }
 
     #[cfg(any(test, feature = "test-support"))]

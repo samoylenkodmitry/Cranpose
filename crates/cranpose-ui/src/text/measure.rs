@@ -671,15 +671,18 @@ pub(crate) fn current_text_generation() -> u64 {
 }
 
 pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextMetrics {
-    crate::render_state::with_text_service(|service| service.measure(None, text, style))
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| service.measure(None, text, style))
+    })
 }
 
 /// The tight glyph box `(top_offset, height)` of a `style` text line inside
 /// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
 /// full slot when the active measurer has no font metrics.
 pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
+    let style = scale_text_style_font_sizes(style, crate::current_font_scale());
     crate::render_state::with_text_service(|service| {
-        service.with_measurer(|m| m.glyph_line_box(style))
+        service.with_measurer(|m| m.glyph_line_box(&style))
     })
     .map(|(off, h)| (off.min(line_height), h.min(line_height)))
     .unwrap_or((0.0, line_height))
@@ -689,8 +692,9 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
 /// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
 /// no font metrics.
 pub fn first_baseline(style: &TextStyle) -> Option<f32> {
+    let style = scale_text_style_font_sizes(style, crate::current_font_scale());
     crate::render_state::with_text_service(|service| {
-        service.with_measurer(|m| m.first_baseline(style))
+        service.with_measurer(|m| m.first_baseline(&style))
     })
 }
 
@@ -699,7 +703,9 @@ pub fn measure_text_for_node(
     text: &crate::text::AnnotatedString,
     style: &TextStyle,
 ) -> TextMetrics {
-    crate::render_state::with_text_service(|service| service.measure(node_id, text, style))
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| service.measure(node_id, text, style))
+    })
 }
 
 pub fn measure_text_with_options(
@@ -708,8 +714,10 @@ pub fn measure_text_with_options(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    crate::render_state::with_text_service(|service| {
-        service.measure_with_options(None, text, style, options.normalized(), max_width)
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.measure_with_options(None, text, style, options.normalized(), max_width)
+        })
     })
 }
 
@@ -720,8 +728,10 @@ pub fn measure_text_with_options_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> TextMetrics {
-    crate::render_state::with_text_service(|service| {
-        service.measure_with_options(node_id, text, style, options.normalized(), max_width)
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.measure_with_options(node_id, text, style, options.normalized(), max_width)
+        })
     })
 }
 
@@ -731,8 +741,10 @@ pub fn prepare_text_layout(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    crate::render_state::with_text_service(|service| {
-        service.prepare_with_options(None, text, style, options.normalized(), max_width)
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.prepare_with_options(None, text, style, options.normalized(), max_width)
+        })
     })
 }
 
@@ -743,8 +755,10 @@ pub fn prepare_text_layout_for_node(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> PreparedTextLayout {
-    crate::render_state::with_text_service(|service| {
-        service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| {
+            service.prepare_with_options(node_id, text, style, options.normalized(), max_width)
+        })
     })
 }
 
@@ -754,7 +768,9 @@ pub fn get_offset_for_position(
     x: f32,
     y: f32,
 ) -> usize {
-    crate::render_state::with_text_measurer(|m| m.get_offset_for_position(text, style, x, y))
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_measurer(|m| m.get_offset_for_position(text, style, x, y))
+    })
 }
 
 /// Byte offset nearest the local content position (`x`, `y`), **wrap-aware** —
@@ -810,11 +826,15 @@ pub fn get_cursor_x_for_offset(
     style: &TextStyle,
     offset: usize,
 ) -> f32 {
-    crate::render_state::with_text_measurer(|m| m.get_cursor_x_for_offset(text, style, offset))
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_measurer(|m| m.get_cursor_x_for_offset(text, style, offset))
+    })
 }
 
 pub fn layout_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> TextLayoutResult {
-    crate::render_state::with_text_service(|service| service.layout(text, style))
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_service(|service| service.layout(text, style))
+    })
 }
 
 /// Returns the source-text byte range covered by each **visual** (wrapped) line
@@ -836,8 +856,10 @@ pub fn wrapped_line_ranges(
     options: TextLayoutOptions,
     max_width: Option<f32>,
 ) -> Vec<Range<usize>> {
-    crate::render_state::with_text_measurer(|m| {
-        wrapped_line_ranges_with_measurer(m, node_id, text, style, options, max_width)
+    with_system_font_scale(text, style, |text, style| {
+        crate::render_state::with_text_measurer(|m| {
+            wrapped_line_ranges_with_measurer(m, node_id, text, style, options, max_width)
+        })
     })
 }
 
@@ -1187,6 +1209,17 @@ fn scale_text_style_font_sizes(style: &TextStyle, factor: f32) -> TextStyle {
         scaled.paragraph_style.text_indent = Some(indent);
     }
     scaled
+}
+
+fn with_system_font_scale<R>(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+    block: impl FnOnce(&crate::text::AnnotatedString, &TextStyle) -> R,
+) -> R {
+    let factor = crate::current_font_scale();
+    let visual_style = scale_text_style_font_sizes(style, factor);
+    let visual_text = scale_annotated_font_sizes(text, factor);
+    block(visual_text.as_ref(), &visual_style)
 }
 
 fn scale_span_style_font_sizes(
@@ -2219,6 +2252,31 @@ mod tests {
             Some(crate::Color(0.0, 0.0, 1.0, 1.0)),
             "a color-only style change must not be served a stale prepared layout \
              (measurement hashes ignore visual attributes by design)"
+        );
+    }
+
+    #[test]
+    fn system_font_scale_changes_sp_measurement_and_prepared_text() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let text = crate::text::AnnotatedString::from("scale me");
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let unscaled = measure_text(&text, &style);
+        crate::set_font_scale(2.0);
+        let scaled = measure_text(&text, &style);
+        let prepared = prepare_text_layout(&text, &style, TextLayoutOptions::default(), None);
+
+        assert!((scaled.width - unscaled.width * 2.0).abs() <= f32::EPSILON);
+        assert!((scaled.height - unscaled.height * 2.0).abs() <= f32::EPSILON);
+        assert_eq!(
+            prepared.visual_style.span_style.font_size,
+            TextUnit::Sp(20.0)
         );
     }
 

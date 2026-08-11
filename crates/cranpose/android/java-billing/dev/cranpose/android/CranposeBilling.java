@@ -2,6 +2,8 @@ package dev.cranpose.android;
 
 import android.app.Activity;
 import android.content.Context;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import com.android.billingclient.api.AcknowledgePurchaseParams;
@@ -97,6 +99,21 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
     private boolean busy;
     private boolean pendingRestore;
     private String error = "";
+
+    /**
+     * Acknowledgement attempts still owed, by purchase token. Play revokes and refunds a
+     * purchase that is not acknowledged within three days, so a failed acknowledgement is a
+     * bug that costs the buyer their content and the developer the sale — it cannot be a log
+     * line. The count bounds the backoff; the map also stops two routes to the same purchase
+     * from acknowledging it twice at once.
+     */
+    private final Map<String, Integer> acknowledgeAttempts = new LinkedHashMap<>();
+
+    /**
+     * Retries are posted here rather than slept for: every billing callback arrives on a
+     * library thread that must be given back.
+     */
+    private final Handler retries = new Handler(Looper.getMainLooper());
 
     private CranposeBilling(Context context) {
         client =
@@ -454,19 +471,95 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
         return found.size();
     }
 
+    /** How many times one purchase is acknowledged before the attempt is left to the next start. */
+    private static final int MAX_ACKNOWLEDGE_ATTEMPTS = 6;
+    /** First retry delay; each later one doubles it, so six attempts span about a minute. */
+    private static final long ACKNOWLEDGE_RETRY_MILLIS = 1_000L;
+
     private void acknowledge(Purchase purchase) {
         if (purchase.isAcknowledged()) {
             return;
         }
+        String token = purchase.getPurchaseToken();
+        synchronized (lock) {
+            if (acknowledgeAttempts.containsKey(token)) {
+                // Already in flight. Every route the entitlement can arrive by lands here,
+                // and a second call would ask Play to acknowledge the same purchase twice.
+                return;
+            }
+            acknowledgeAttempts.put(token, 0);
+        }
+        sendAcknowledge(token);
+    }
+
+    private void sendAcknowledge(String token) {
         client.acknowledgePurchase(
-                AcknowledgePurchaseParams.newBuilder()
-                        .setPurchaseToken(purchase.getPurchaseToken())
-                        .build(),
+                AcknowledgePurchaseParams.newBuilder().setPurchaseToken(token).build(),
                 result -> {
-                    if (result.getResponseCode() != BillingClient.BillingResponseCode.OK) {
-                        Log.w(TAG, "acknowledge failed: " + describe(result));
+                    if (result.getResponseCode() == BillingClient.BillingResponseCode.OK) {
+                        synchronized (lock) {
+                            acknowledgeAttempts.remove(token);
+                        }
+                        return;
                     }
+                    if (!isRetryable(result.getResponseCode())) {
+                        // Play will not change its mind about this one. Dropping the record
+                        // lets a later start try again from scratch, which is the only thing
+                        // left that can help.
+                        synchronized (lock) {
+                            acknowledgeAttempts.remove(token);
+                        }
+                        Log.w(TAG, "acknowledge refused: " + describe(result));
+                        return;
+                    }
+                    int attempt;
+                    synchronized (lock) {
+                        Integer previous = acknowledgeAttempts.get(token);
+                        if (previous == null) {
+                            return;
+                        }
+                        attempt = previous + 1;
+                        if (attempt >= MAX_ACKNOWLEDGE_ATTEMPTS) {
+                            // Out of attempts for this run. The record is dropped so the next
+                            // start, which re-queries purchases, acknowledges it again — the
+                            // three-day window is far longer than one session.
+                            acknowledgeAttempts.remove(token);
+                            Log.w(
+                                    TAG,
+                                    "acknowledge gave up for this run after "
+                                            + attempt
+                                            + " attempts: "
+                                            + describe(result));
+                            return;
+                        }
+                        acknowledgeAttempts.put(token, attempt);
+                    }
+                    long delay = ACKNOWLEDGE_RETRY_MILLIS << (attempt - 1);
+                    Log.w(
+                            TAG,
+                            "acknowledge failed ("
+                                    + describe(result)
+                                    + "); retrying in "
+                                    + delay
+                                    + " ms");
+                    retries.postDelayed(() -> sendAcknowledge(token), delay);
                 });
+    }
+
+    /**
+     * Whether an answer from Play is worth asking again about. A network that is down or a
+     * service that is busy will pass; a purchase Play does not recognise will not.
+     */
+    private static boolean isRetryable(int responseCode) {
+        switch (responseCode) {
+            case BillingClient.BillingResponseCode.SERVICE_DISCONNECTED:
+            case BillingClient.BillingResponseCode.SERVICE_UNAVAILABLE:
+            case BillingClient.BillingResponseCode.NETWORK_ERROR:
+            case BillingClient.BillingResponseCode.ERROR:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private static ProductDetails.OneTimePurchaseOfferDetails oneTimeOffer(ProductDetails product) {
