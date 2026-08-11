@@ -745,6 +745,8 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
+    // The user's font-size setting. Sizes in Sp follow it, sizes in Dp do not.
+    shell.set_font_scale(crate::android_font_scale::font_scale());
     // Rotary detents are reported in device-independent units; the shell needs
     // a pixels-per-detent factor to match Compose. Approximates
     // `ViewConfiguration.getScaledVerticalScrollFactor()`; a host that reads
@@ -1484,6 +1486,11 @@ pub fn run(
     android_platform_env()
         .set_system_theme(system_theme_from_android(app.config().ui_mode_night()));
 
+    // Same for the font-size setting, which the NDK configuration does not
+    // carry — it is read over JNI here and again on every configuration
+    // change. The shell picks it up with the rest of the geometry.
+    crate::android_font_scale::refresh_font_scale(&app);
+
     // Install panic hook for better crash logging in Logcat
     std::panic::set_hook(Box::new(|panic_info| {
         let location = panic_info
@@ -1944,6 +1951,15 @@ pub fn run(
                         if android_platform_env().set_system_theme(theme) {
                             if let Some(shell) = &mut app_shell {
                                 shell.request_root_render();
+                            }
+                        }
+                        // So does the font-size setting: the platform changes
+                        // the configuration rather than restarting the process,
+                        // so an app that never re-read it would keep laying
+                        // text out at the size the user just moved away from.
+                        if crate::android_font_scale::refresh_font_scale(&app) {
+                            if let Some(shell) = &mut app_shell {
+                                shell.set_font_scale(crate::android_font_scale::font_scale());
                             }
                         }
                     }
