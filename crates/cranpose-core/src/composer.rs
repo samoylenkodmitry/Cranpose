@@ -711,7 +711,13 @@ impl Composer {
     ) -> SlotHostPassGuard {
         let slots = bind_slots_host_to_runtime_state(&self.core.shared_state, slots);
         slots.begin_pass(mode);
-        self.core.slot_hosts.borrow_mut().push(Rc::clone(&slots));
+        {
+            let mut stack = self.core.slot_hosts.borrow_mut();
+            if let Some(parent) = stack.last() {
+                parent.note_nested_host(&slots);
+            }
+            stack.push(Rc::clone(&slots));
+        }
         SlotHostPassGuard {
             core: self.clone_core(),
             host: slots,

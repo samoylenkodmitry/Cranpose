@@ -20,8 +20,36 @@ fn measure(composition: &mut TestComposition, root: NodeId) {
     applier.clear_runtime_handle();
 }
 
-#[test]
-fn a_recycled_lazy_row_stops_its_parked_effect() {
+#[composable]
+fn ParkedRow(index: usize, nested: bool) {
+    let body = move || {
+        if index == 0 {
+            cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
+                Box::pin(async move {
+                    std::future::pending::<()>().await;
+                })
+            });
+        }
+        Text(
+            format!("row {index}"),
+            Modifier::empty().height(ROW_HEIGHT),
+            TextStyle::default(),
+        );
+    };
+    match nested {
+        true => {
+            SwipeToDismiss(
+                Modifier::empty().fill_max_width(),
+                SwipeToDismissSpec::default(),
+                || {},
+                body,
+            );
+        }
+        false => body(),
+    }
+}
+
+fn tasks_after_scroll(nested: bool) -> usize {
     let held: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
@@ -31,25 +59,12 @@ fn a_recycled_lazy_row_stops_its_parked_effect() {
             Modifier::empty().fill_max_size(),
             list_state,
             LazyColumnSpec::default(),
-            |scope| {
+            move |scope| {
                 scope.items(
                     ROWS,
                     Some(|index: usize| index as u64),
                     None::<fn(usize) -> u64>,
-                    |index| {
-                        if index == 0 {
-                            cranpose_core::LaunchedEffectAsync!(0u32, move |_scope| {
-                                Box::pin(async move {
-                                    std::future::pending::<()>().await;
-                                })
-                            });
-                        }
-                        Text(
-                            format!("row {index}"),
-                            Modifier::empty().height(ROW_HEIGHT),
-                            TextStyle::default(),
-                        );
-                    },
+                    move |index| ParkedRow(index, nested),
                 );
             },
         );
@@ -68,10 +83,24 @@ fn a_recycled_lazy_row_stops_its_parked_effect() {
     list_state.scroll_to_item(ROWS - 4, 0.0);
     measure(&mut composition, root);
     composition.runtime_handle().drain_ui();
+    composition.runtime_handle().debug_stats().tasks_len
+}
 
+#[test]
+fn a_recycled_lazy_row_stops_its_parked_effect() {
     assert_eq!(
-        composition.runtime_handle().debug_stats().tasks_len,
+        tasks_after_scroll(false),
         0,
-        "the first row is off the screen, so its effect must be cancelled"
+        "the row is off the screen, so its effect must be cancelled"
+    );
+}
+
+#[test]
+#[ignore = "a nested subcompose keeps its own slot host inside a layout node, which the recycled slot's table cannot reach"]
+fn a_recycled_lazy_row_stops_the_effect_of_a_widget_one_subcompose_deeper() {
+    assert_eq!(
+        tasks_after_scroll(true),
+        0,
+        "the row is off the screen, so the effect inside its SwipeToDismiss must be cancelled"
     );
 }

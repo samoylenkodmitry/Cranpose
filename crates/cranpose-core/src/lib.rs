@@ -3862,6 +3862,7 @@ struct ActivePassState {
 
 struct SlotsHostInner {
     table: SlotTable,
+    nested_hosts: Vec<std::rc::Weak<SlotsHost>>,
     lifecycle: slot::SlotLifecycleCoordinator,
     runtime_state: Option<Rc<crate::composer::ComposerRuntimeState>>,
     active_pass: Option<ActivePassState>,
@@ -3904,6 +3905,7 @@ impl SlotsHost {
             storage_key: Cell::new(storage_key),
             inner: RefCell::new(SlotsHostInner {
                 table: storage,
+                nested_hosts: Vec::new(),
                 lifecycle: slot::SlotLifecycleCoordinator::default(),
                 runtime_state: None,
                 active_pass: None,
@@ -3911,21 +3913,44 @@ impl SlotsHost {
         }
     }
 
-    pub(crate) fn forget_effects(&self) {
+    pub(crate) fn note_nested_host(&self, nested: &Rc<SlotsHost>) {
         let Ok(mut inner) = self.inner.try_borrow_mut() else {
             return;
         };
-        if inner.active_pass.is_some() {
+        inner.nested_hosts.retain(|held| held.upgrade().is_some());
+        if inner
+            .nested_hosts
+            .iter()
+            .any(|held| held.upgrade().is_some_and(|host| Rc::ptr_eq(&host, nested)))
+        {
             return;
         }
-        let drops = inner.table.take_effect_drops();
-        if drops.is_empty() {
-            return;
+        inner.nested_hosts.push(Rc::downgrade(nested));
+    }
+
+    pub(crate) fn forget_effects(&self) -> bool {
+        let (forgotten, nested) = {
+            let Ok(mut inner) = self.inner.try_borrow_mut() else {
+                return false;
+            };
+            if inner.active_pass.is_some() {
+                return false;
+            }
+            let drops = inner.table.take_effect_drops();
+            inner.nested_hosts.retain(|held| held.upgrade().is_some());
+            let nested: Vec<Rc<SlotsHost>> = inner
+                .nested_hosts
+                .iter()
+                .filter_map(std::rc::Weak::upgrade)
+                .collect();
+            (drops, nested)
+        };
+        let mut any = !forgotten.is_empty();
+        drop(forgotten);
+        for host in nested {
+            any |= host.forget_effects();
         }
-        for drop in drops {
-            inner.lifecycle.queue_drop(drop);
-        }
-        inner.lifecycle.flush_pending_drops();
+        any
     }
 
     pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {
