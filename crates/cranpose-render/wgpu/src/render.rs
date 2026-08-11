@@ -342,6 +342,12 @@ fn repeated_cache_miss_admission(key: &LayerRasterCacheKey) -> bool {
     admit_layer_surface_cache_miss_impl(key, &mut observed_scene_range_misses)
 }
 
+pub static PRESENTED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn frames_presented() -> u64 {
+    PRESENTED_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn frame_stats_need_warmup_frame(snapshot: &gpu_stats::FrameStatsSnapshot) -> bool {
     snapshot.layer_cache_misses > 0
         || snapshot.shadow_shape_cache_misses > 0
@@ -6247,6 +6253,7 @@ impl GpuRenderer {
         self.frame_graph_executor.reset_upload_allocators();
         let snapshot = self.frame_stats.snapshot();
         self.last_frame_stats = Some(snapshot);
+        PRESENTED_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         update_frame_warmup_budget(&mut self.pending_frame_warmup_frames, &snapshot);
         self.frame_stats.maybe_print_snapshot(
             snapshot,

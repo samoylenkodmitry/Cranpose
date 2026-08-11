@@ -181,6 +181,31 @@ thread_local! {
 }
 
 /// Installs a platform purchase backend, replacing any previous one.
+static STORE_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Registers a callback run whenever the store has news, so an app can be told
+/// rather than having to ask.
+///
+/// [`take_event`] and [`store_state`] are polling APIs, which assume the app is
+/// already running a frame loop to poll from. An app that has gone idle has no
+/// such loop, so a purchase that finishes while nothing moves on screen sits in
+/// the queue until something unrelated wakes the app. The listener closes that
+/// gap: it is the nudge, the queue is still the source of truth.
+///
+/// Called from whatever thread the platform reports on, so the callback must be
+/// `Send + Sync` and should do as little as possible.
+pub fn set_store_listener(listener: impl Fn() + Send + Sync + 'static) {
+    let _ = STORE_LISTENER.set(Box::new(listener));
+}
+
+/// Tells the app that the store has news. Called by a purchase backend.
+pub fn note_store_news() {
+    if let Some(listener) = STORE_LISTENER.get() {
+        listener();
+    }
+}
+
 pub fn set_platform_purchases(purchases: PurchasesRef) {
     PLATFORM_PURCHASES.with(|cell| *cell.borrow_mut() = Some(purchases));
 }

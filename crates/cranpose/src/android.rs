@@ -649,6 +649,10 @@ impl PlatformFrameDriver for AndroidFrameDriver {
     }
 }
 
+/// Delay of the follow-up composition pass after one that carried work while
+/// the app runs with no surface (see the main loop).
+const OFFSCREEN_UPDATE_PERIOD: Duration = Duration::from_millis(16);
+
 fn duration_until_frame_deadline(deadline: web_time::Instant) -> Duration {
     deadline
         .checked_duration_since(web_time::Instant::now())
@@ -1569,6 +1573,8 @@ pub fn run(
     let mut key_translator = AndroidKeyTranslator::new(app.clone());
     // The soft-keyboard handler is installed once the app shell exists
     let mut soft_keyboard_installed = false;
+    // When the next off-screen composition pass may run (see below).
+    let mut next_offscreen_update: Option<web_time::Instant> = None;
 
     // Per-stage frame telemetry (system-property gated; free when off).
     let mut frame_telemetry =
@@ -1587,14 +1593,32 @@ pub fn run(
                 .unwrap_or(Duration::ZERO)
         });
 
-        if let Some(shell) = app_shell.as_ref() {
-            shell.schedule_platform_frame(&android_frame_driver);
-        } else {
-            android_frame_driver.clear_wake();
+        // A frame deadline with no surface asks for a frame nothing will draw,
+        // and an app with a running animation asks for one every turn of the
+        // loop, which is a spun core for as long as the app is off screen.
+        let no_surface = gpu_resources.is_none();
+        match app_shell.as_ref() {
+            Some(shell) if !no_surface => {
+                shell.schedule_platform_frame(&android_frame_driver);
+            }
+            _ => android_frame_driver.clear_wake(),
         }
         let frame_deadline_timeout = android_frame_driver.deadline_timeout();
-        let idle_timeout =
-            earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout);
+        let offscreen = no_surface && cranpose_services::background_active();
+        if !offscreen {
+            next_offscreen_update = None;
+        }
+        let offscreen_pending_ui = offscreen
+            && app_shell
+                .as_ref()
+                .is_some_and(|shell| shell.has_pending_ui());
+        let offscreen_timeout = next_offscreen_update.map(duration_until_frame_deadline);
+        let idle_timeout = match no_surface {
+            true => earliest_android_poll_timeout(pending_confirmation_timeout, offscreen_timeout),
+            false => {
+                earliest_android_poll_timeout(pending_confirmation_timeout, frame_deadline_timeout)
+            }
+        };
 
         // Vote the display frame rate the way HWUI does: the panel's fastest
         // rate while the user is interacting, the quiet rate while an
@@ -1625,6 +1649,11 @@ pub fn run(
 
         let poll_duration = if !pending_inputs.is_empty() {
             Some(Duration::ZERO)
+        } else if no_surface {
+            match offscreen_pending_ui {
+                true => Some(Duration::ZERO),
+                false => idle_timeout,
+            }
         } else if android_frame_driver.frame_requested() {
             // A frame request is satisfied at the next vsync, not immediately.
             // Spinning here is only invisible while every iteration ends in a
@@ -2197,6 +2226,34 @@ pub fn run(
         if should_exit.load(Ordering::Relaxed) {
             log::info!("Exiting cleanly after Destroy event");
             break;
+        }
+
+        // With the activity off screen the window is gone (`TerminateWindow`
+        // drops the GPU resources), so the render block below is skipped and
+        // composition stops. Anything the app posted to the UI dispatcher then
+        // waits for the user to come back. An app that holds a foreground
+        // service has told the OS it has work to finish, so keep composition
+        // turning; there is no surface, so nothing is presented.
+        //
+        // Work waiting on the UI thread earns a pass. A running animation does
+        // not: nothing is drawn, and paying for a composition per animation
+        // frame off screen is how an app burns a core behind the user's back.
+        // One follow-up pass is armed after a pass that carried work, so a
+        // recomposition that work asked for still runs.
+        let offscreen_due = next_offscreen_update.is_some_and(|at| at <= web_time::Instant::now());
+        if offscreen && (offscreen_pending_ui || offscreen_due) {
+            if let Some(shell) = &mut app_shell {
+                if shell.needs_update() {
+                    android_host_window::with_android_host_window_registry(
+                        &host_window_registry,
+                        || shell.update(),
+                    );
+                }
+            }
+            next_offscreen_update = match offscreen_pending_ui {
+                true => Some(web_time::Instant::now() + OFFSCREEN_UPDATE_PERIOD),
+                false => None,
+            };
         }
 
         // Render outside event callback if needed

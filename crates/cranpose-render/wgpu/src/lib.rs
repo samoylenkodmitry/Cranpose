@@ -38,6 +38,7 @@ pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use pipeline::retained_feed_generation;
+pub use render::frames_presented;
 pub use scene::{ClickAction, HitRegion, Scene};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]

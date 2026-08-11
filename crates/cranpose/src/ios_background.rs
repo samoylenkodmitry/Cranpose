@@ -12,7 +12,7 @@ use cranpose_services::{set_platform_background_activity, BackgroundActivity};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2_foundation::NSString;
-use objc2_ui_kit::UIApplication;
+use objc2_ui_kit::{UIApplication, UIApplicationState};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -71,4 +71,13 @@ fn end_task(mtm: MainThreadMarker) {
     if let Some(id) = taken {
         UIApplication::sharedApplication(mtm).endBackgroundTask(id);
     }
+}
+
+/// `true` when UIKit reports the app is off screen. Main thread only; anywhere
+/// else it answers `false`.
+pub(crate) fn app_is_off_screen() -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return false;
+    };
+    UIApplication::sharedApplication(mtm).applicationState() == UIApplicationState::Background
 }

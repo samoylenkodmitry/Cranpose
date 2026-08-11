@@ -31,8 +31,9 @@ pub use audio::{
     ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
 };
 pub use background::{
-    background_activity, clear_platform_background_activity, set_background_active,
-    set_platform_background_activity, BackgroundActivity, BackgroundActivityRef,
+    background_active, background_activity, clear_platform_background_activity,
+    set_background_active, set_platform_background_activity, BackgroundActivity,
+    BackgroundActivityRef,
 };
 pub use camera::{
     camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame,
@@ -84,8 +85,9 @@ pub use peer::{
     PeerServer, SourceResolver,
 };
 pub use purchases::{
-    clear_platform_purchases, purchases, set_platform_purchases, store_available, store_state,
-    Product, PurchaseEvent, Purchases, PurchasesRef, StorePhase, StoreState,
+    clear_platform_purchases, note_store_news, purchases, set_platform_purchases,
+    set_store_listener, store_available, store_state, Product, PurchaseEvent, Purchases,
+    PurchasesRef, StorePhase, StoreState,
 };
 pub use share_sheet::{
     clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,

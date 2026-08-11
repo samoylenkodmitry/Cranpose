@@ -65,8 +65,8 @@ pub use platform::{Clock, RuntimeScheduler};
 pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, RetentionPolicy};
 #[doc(hidden)]
 pub use runtime::{
-    current_runtime_handle, schedule_frame, schedule_node_update, DefaultScheduler, Runtime,
-    RuntimeHandle, StateId, TaskHandle,
+    current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
+    DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle,
 };
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
