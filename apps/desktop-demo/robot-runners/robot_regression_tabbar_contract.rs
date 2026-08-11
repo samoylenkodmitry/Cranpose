@@ -253,6 +253,30 @@ fn main() {
                 fail(&robot, "Hacker News tab disappeared from button semantics");
             }
 
+            let edge_probe_before = collect_tab_bounds(&robot, &labels);
+            let edge_probe_hn_before = require_tab(&edge_probe_before, "Hacker News");
+            let edge_probe_y = center(edge_probe_hn_before).1;
+            robot
+                .mouse_move(root.0 + 6.25, edge_probe_y)
+                .expect("move near the left edge of the tab row");
+            robot
+                .mouse_scroll(220.0, 0.0)
+                .expect("horizontal wheel near the left edge of the tab row");
+            std::thread::sleep(Duration::from_millis(160));
+            let _ = robot.wait_for_idle();
+            let edge_probe_after = collect_tab_bounds(&robot, &labels);
+            let edge_probe_hn_after = require_tab(&edge_probe_after, "Hacker News");
+            let edge_probe_delta = edge_probe_hn_after.0 - edge_probe_hn_before.0;
+            println!("edge_wheel_delta={edge_probe_delta:.2}");
+            if edge_probe_delta < 100.0 {
+                fail(
+                    &robot,
+                    &format!(
+                        "horizontal wheel inside the tab-row band near the window edge did not reach the row: delta={edge_probe_delta:.2}"
+                    ),
+                );
+            }
+
             println!("PASS: tab row keeps Y position and retained scroll offset");
             robot.exit().expect("exit");
         })

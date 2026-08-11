@@ -31,11 +31,11 @@ logging = ["dep:env_logger"]
 [dependencies]
 # Default features stay on: the isolated demo ships no fonts of its own and
 # renders text through the framework's embedded fallback font.
-cranpose = { version = "0.1.84" }
+cranpose = { version = "0.1.85" }
 log = "0.4"
 wasm-bindgen = { version = "0.2", optional = true }
 wasm-logger = { version = "0.2", optional = true }
-cranpose-core = "0.1.84"
+cranpose-core = "0.1.85"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }

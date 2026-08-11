@@ -345,6 +345,7 @@ public class CranposeActivity extends NativeActivity {
     /** Opens the document tree picker for a <em>writable</em> folder, taking a
      * persistent read/write grant. The chosen tree URI is reported back through
      * {@link #nativeOnWritableFolderPicked}. Called from Rust over JNI. */
+    @SuppressWarnings("deprecation")
     public void cranposePickWritableFolder(long token) {
         pendingToken = token;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
@@ -558,6 +559,7 @@ public class CranposeActivity extends NativeActivity {
         return null;
     }
 
+    @SuppressWarnings("deprecation")
     private void launch(Intent intent, long token, int flags) {
         try {
             startActivityForResult(intent, REQUEST_BASE | flags);
@@ -571,6 +573,7 @@ public class CranposeActivity extends NativeActivity {
     }
 
     @Override
+    @SuppressWarnings("deprecation")
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if ((requestCode & 0xFFFF0000) != REQUEST_BASE) {
@@ -1072,6 +1075,7 @@ public class CranposeActivity extends NativeActivity {
      * Extras Cranpose has no typed API for (arrays, {@code Parcelable}s, nested
      * bundles) are omitted rather than guessed at.
      */
+    @SuppressWarnings("deprecation")
     public String cranposeEncodeLaunchArguments() {
         StringBuilder payload = new StringBuilder();
         payload.append(isCranposeDebuggableBuild() ? '1' : '0');
@@ -1255,7 +1259,7 @@ public class CranposeActivity extends NativeActivity {
                         (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
                 return manager == null ? null : manager.getDefaultVibrator();
             }
-            return (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
+            return getSystemService(Vibrator.class);
         } catch (Exception ignored) {
             return null;
         }
@@ -1264,6 +1268,7 @@ public class CranposeActivity extends NativeActivity {
     /** Vibrates once for {@code durationMs} at {@code amplitude} (-1 for the
      * device default, otherwise 1..255). Called from Rust over JNI (any
      * thread); {@code VibrationEffect.createOneShot} needs API 26. */
+    @SuppressWarnings("deprecation")
     public void cranposeHapticOneShot(final long durationMs, final int amplitude) {
         if (durationMs <= 0) {
             return;
@@ -1290,6 +1295,7 @@ public class CranposeActivity extends NativeActivity {
      * to {@code repeat} (or -1 for a single pass). Called from Rust over JNI
      * (any thread); {@code VibrationEffect.createWaveform} needs API 26, and
      * pre-26 devices fall back to the timings alone. */
+    @SuppressWarnings("deprecation")
     public void cranposeHapticWaveform(final long[] timingsMs, final int[] amplitudes,
             final int repeat) {
         if (timingsMs == null || amplitudes == null || timingsMs.length != amplitudes.length
@@ -1521,6 +1527,7 @@ public class CranposeActivity extends NativeActivity {
 
     /** Presents ACTION_CREATE_DOCUMENT and writes the staged bytes to the
      * chosen destination. Called from Rust over JNI. */
+    @SuppressWarnings("deprecation")
     public void cranposeSaveFile(final long token, final String fileName,
             final String mimeType, final byte[] bytes) {
         runOnUiThread(() -> {

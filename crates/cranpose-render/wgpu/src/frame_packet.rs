@@ -15,9 +15,11 @@
 
 use crate::normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource};
 use crate::scene::{
-    BackdropLayer, ColorPatch, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw,
-    PendingFeedCapture, RetainedDraw, ShadowDraw, TextDraw,
+    BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
+    ShadowDraw, TextDraw,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::scene::{ColorPatch, PendingFeedCapture};
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{DrawCommandId, ProjectiveTransform};
 use cranpose_ui_graphics::{GraphicsLayer, Rect, RenderEffect};
@@ -28,6 +30,7 @@ use cranpose_ui_graphics::{GraphicsLayer, Rect, RenderEffect};
 /// (`GpuRenderer::consume_replay_ops`) just before the packet renders. This
 /// is the ONLY producer→store replay channel; the store answers with a
 /// [`ReplayAck`].
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(crate) struct ReplayFrameOps {
     /// The retained-feed generation the plan was made under. The store
@@ -42,6 +45,10 @@ pub(crate) struct ReplayFrameOps {
     pub(crate) color_patches: Vec<ColorPatch>,
     pub(crate) releases: Vec<u32>,
 }
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Default)]
+pub(crate) struct ReplayFrameOps;
 
 /// One confirmed capture: the span's identity key `(command, span slot)`
 /// mapped to the physical GPU slot the store retained it in.
@@ -81,12 +88,16 @@ pub enum PresentOutcome {
 /// planner ([`ShapeReplayState::apply_ack`](crate::shape_replay::ShapeReplayState))
 /// before the next frame's planning. Travels with the batch's emptied
 /// buffers (capacity intact) so neither side allocates per frame.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ReplayAck {
     /// The generation the confirmations are stamped with — the slot
     /// universe they verifiably exist in.
     pub(crate) generation: u64,
     pub(crate) confirmations: Vec<ReplayConfirmation>,
 }
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) struct ReplayAck;
 
 /// The lowered root a [`FramePacket`] carries: either today's direct path
 /// (the root renders straight to the surface) or a root layer surface (the
@@ -216,6 +227,11 @@ const _: () = {
     assert_send::<RenderReturns>();
     assert_send::<CancelReason>();
     assert_send::<PresentOutcome>();
+};
+
+#[cfg(not(target_arch = "wasm32"))]
+const _: () = {
+    const fn assert_send<T: Send>() {}
     assert_send::<ColorPatch>();
     assert_send::<PendingFeedCapture>();
 };

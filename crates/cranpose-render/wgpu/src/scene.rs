@@ -30,6 +30,7 @@ impl SnapAnchor {
 /// by the present-side replay store; crosses the frame boundary inside
 /// [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
 #[derive(Clone, Copy)]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ColorPatch {
     pub slot: u32,
     pub shape_index: u32,
@@ -40,6 +41,7 @@ pub(crate) struct ColorPatch {
 /// ordinary emission pushed for one capture-marked span. Planned
 /// producer-side, honored by the present-side replay store; crosses the
 /// frame boundary inside [`ReplayFrameOps`](crate::frame_packet::ReplayFrameOps).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct PendingFeedCapture {
     pub key: (cranpose_render_common::graph::DrawCommandId, u32),
     pub shape_start: usize,
@@ -200,6 +202,7 @@ impl SimilarityTransform {
         _pad: [0.0; 2],
     };
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn new(center: [f32; 2], angle: f32, scale: f32) -> Self {
         Self {
             center,
@@ -245,6 +248,7 @@ pub(crate) enum DrawOpKind {
     Text(usize),
     Shadow(usize),
     /// Index into [`CompositorScene::retained_draws`].
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     Retained(usize),
 }
 
@@ -430,6 +434,7 @@ impl CompositorScene {
     }
 
     /// Pushes one retained-batch draw at the next z position and returns it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn push_retained_draw(&mut self, draw: RetainedDraw) {
         if std::env::var_os("CRANPOSE_RETAINED_DIAG").is_some() {
             eprintln!(
