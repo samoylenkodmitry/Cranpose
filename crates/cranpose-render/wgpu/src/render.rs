@@ -61,6 +61,7 @@ use crate::surface_requirements::SurfaceRequirement;
 use crate::surface_requirements::SurfaceRequirementSet;
 use crate::DebugCpuAllocationStats;
 use bytemuck::{Pod, Zeroable};
+#[cfg(any(not(target_arch = "wasm32"), test))]
 use cranpose_core::collections::map::HashMap;
 use cranpose_core::{hash::default as default_hash, NodeId};
 use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
@@ -7514,6 +7515,8 @@ impl GpuRenderer {
         root_scale: f32,
         load_op: wgpu::LoadOp<wgpu::Color>,
     ) -> Result<SegmentRenderOutcome, String> {
+        #[cfg(target_arch = "wasm32")]
+        let _ = retained_draws;
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(outcome) = self.render_segment_draw_chunk_fused_native(
             frame_encoder,

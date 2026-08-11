@@ -63,6 +63,9 @@ use xkcd::xkcd_tab;
 pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 pub use markdown::{markdown_scroll_stress_fixture, MARKDOWN_SCROLL_STABILITY_TARGET_TEXT};
 
+const DEMO_PAGE_PADDING: f32 = 20.0;
+const DEMO_TAB_BAR_PADDING: f32 = 8.0;
+
 thread_local! {
     pub static TEST_COMPOSITION_LOCAL_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };
     pub static TEST_ACTIVE_TAB_STATE: RefCell<Option<MutableState<DemoTab>>> = const { RefCell::new(None) };
@@ -406,14 +409,24 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
     Row(
         Modifier::empty()
             .fill_max_width()
-            .padding(8.0)
             .clip_to_bounds()
             .horizontal_scroll(tabs_scroll_state, false),
-        RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+        RowSpec::new(),
         move || {
-            for tab in DEMO_TABS {
-                TabButton(tab, active_tab, 10.0);
-            }
+            Row(
+                Modifier::empty().padding_each(
+                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                    DEMO_PAGE_PADDING + DEMO_TAB_BAR_PADDING,
+                    DEMO_TAB_BAR_PADDING,
+                ),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move || {
+                    for tab in DEMO_TABS {
+                        TabButton(tab, active_tab, 10.0);
+                    }
+                },
+            );
         },
     );
 }
@@ -467,7 +480,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
     });
 
     Column(
-        Modifier::empty().fill_max_size().padding(20.0),
+        Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
         move || {
             TabBarHorizontal(active_tab);
@@ -481,7 +494,12 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 active_tab,
                 startup,
                 winamp_tab_state,
-                Modifier::empty().fill_max_width().weight(1.0),
+                Modifier::empty().fill_max_width().weight(1.0).padding_each(
+                    DEMO_PAGE_PADDING,
+                    0.0,
+                    DEMO_PAGE_PADDING,
+                    DEMO_PAGE_PADDING,
+                ),
             );
         },
     );

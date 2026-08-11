@@ -2450,6 +2450,7 @@ fn backdrop_scene_prefix_hash(
     scene: &CompositorScene,
     prior_child_contributions: &[BackdropPrefixChildContribution],
     z_end: usize,
+    capture_rect: Rect,
     target_size: (u32, u32),
     root_scale: f32,
 ) -> u64 {
@@ -2459,30 +2460,58 @@ fn backdrop_scene_prefix_hash(
     hash_f32_bits(root_scale, &mut hasher);
     z_end.hash(&mut hasher);
 
-    for draw_op in scene_range_draw_ops(&scene.draw_ops, 0, z_end) {
+    for draw_op in scene_range_draw_ops(&scene.draw_ops, 0, z_end)
+        .iter()
+        .filter(|draw_op| {
+            draw_op_visible_bounds(scene, **draw_op)
+                .is_none_or(|bounds| rects_intersect(bounds, capture_rect))
+        })
+    {
         0u8.hash(&mut hasher);
         hash_draw_op(scene, draw_op, &mut hasher);
     }
     for effect_layer in scene
         .effect_layers
         .iter()
-        .filter(|layer| layer.z_end <= z_end)
+        .filter(|layer| layer.z_end <= z_end && rects_intersect(layer.rect, capture_rect))
     {
         1u8.hash(&mut hasher);
         hash_effect_layer(effect_layer, &mut hasher);
     }
-    for backdrop_layer in scene
-        .backdrop_layers
-        .iter()
-        .filter(|layer| layer.z_index < z_end)
-    {
+    for backdrop_layer in scene.backdrop_layers.iter().filter(|layer| {
+        layer.z_index < z_end
+            && rects_intersect(
+                backdrop_output_rect(
+                    layer.rect,
+                    layer.clip,
+                    &layer.effect,
+                    root_scale,
+                    target_size,
+                ),
+                capture_rect,
+            )
+    }) {
         2u8.hash(&mut hasher);
         hash_backdrop_layer(backdrop_layer, &mut hasher);
     }
-    for child in prior_child_contributions
-        .iter()
-        .filter(|child| child.z_index < z_end)
-    {
+    for child in prior_child_contributions.iter().filter(|child| {
+        if child.z_index >= z_end {
+            return false;
+        }
+        let capture_pixels = surface_pixel_rect(capture_rect, root_scale);
+        dest_quad_intersects_rect(child.dest_quad, capture_pixels)
+            && child.scissor.is_none_or(|(x, y, width, height)| {
+                rects_intersect(
+                    Rect {
+                        x: x as f32,
+                        y: y as f32,
+                        width: width as f32,
+                        height: height as f32,
+                    },
+                    capture_pixels,
+                )
+            })
+    }) {
         3u8.hash(&mut hasher);
         hash_backdrop_prefix_child(child, &mut hasher);
     }
@@ -3882,6 +3911,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 local_scene,
                 &prior_child_contributions,
                 child.z_index,
+                child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
                 (width, height),
                 target_scale,
             );
@@ -5754,9 +5784,10 @@ mod tests {
         let later_child_left = [child_prefix_contribution(2, 20.0)];
         let later_child_right = [child_prefix_contribution(2, 80.0)];
 
-        let left_prefix = backdrop_scene_prefix_hash(&scene, &later_child_left, 1, (200, 120), 1.0);
+        let left_prefix =
+            backdrop_scene_prefix_hash(&scene, &later_child_left, 1, layer.rect, (200, 120), 1.0);
         let right_prefix =
-            backdrop_scene_prefix_hash(&scene, &later_child_right, 1, (200, 120), 1.0);
+            backdrop_scene_prefix_hash(&scene, &later_child_right, 1, layer.rect, (200, 120), 1.0);
         let left_key = backdrop_effect_cache_key(&layer, left_prefix, layer.rect, (60, 40), 1.0);
         let right_key = backdrop_effect_cache_key(&layer, right_prefix, layer.rect, (60, 40), 1.0);
 
@@ -5777,13 +5808,49 @@ mod tests {
         let black_scene = scene_with_prefix_shape(Color::BLACK);
         let red_scene = scene_with_prefix_shape(Color::RED);
 
-        let black_prefix = backdrop_scene_prefix_hash(&black_scene, &[], 1, (200, 120), 1.0);
-        let red_prefix = backdrop_scene_prefix_hash(&red_scene, &[], 1, (200, 120), 1.0);
+        let black_prefix =
+            backdrop_scene_prefix_hash(&black_scene, &[], 1, layer.rect, (200, 120), 1.0);
+        let red_prefix =
+            backdrop_scene_prefix_hash(&red_scene, &[], 1, layer.rect, (200, 120), 1.0);
 
         assert_ne!(
             backdrop_effect_cache_key(&layer, black_prefix, layer.rect, (60, 40), 1.0),
             backdrop_effect_cache_key(&layer, red_prefix, layer.rect, (60, 40), 1.0),
             "prior scene pixels must invalidate cached backdrop output"
+        );
+    }
+
+    #[test]
+    fn backdrop_cache_key_ignores_prior_content_outside_capture_rect() {
+        let layer = test_backdrop_layer(Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 40.0,
+        });
+        let mut black_scene = scene_with_prefix_shape(Color::BLACK);
+        let mut red_scene = scene_with_prefix_shape(Color::RED);
+        for scene in [&mut black_scene, &mut red_scene] {
+            let rect = Rect {
+                x: 120.0,
+                y: 80.0,
+                width: 40.0,
+                height: 30.0,
+            };
+            scene.shapes[0].rect = rect;
+            scene.shapes[0].local_rect = rect;
+            scene.shapes[0].quad = crate::rect_to_quad(rect);
+        }
+
+        let black_prefix =
+            backdrop_scene_prefix_hash(&black_scene, &[], 1, layer.rect, (200, 120), 1.0);
+        let red_prefix =
+            backdrop_scene_prefix_hash(&red_scene, &[], 1, layer.rect, (200, 120), 1.0);
+
+        assert_eq!(
+            backdrop_effect_cache_key(&layer, black_prefix, layer.rect, (60, 40), 1.0),
+            backdrop_effect_cache_key(&layer, red_prefix, layer.rect, (60, 40), 1.0),
+            "content outside the sampled backdrop capture must not invalidate cached glass"
         );
     }
 
@@ -5799,14 +5866,39 @@ mod tests {
         let prior_child_left = [child_prefix_contribution(0, 20.0)];
         let prior_child_right = [child_prefix_contribution(0, 80.0)];
 
-        let left_prefix = backdrop_scene_prefix_hash(&scene, &prior_child_left, 1, (200, 120), 1.0);
+        let left_prefix =
+            backdrop_scene_prefix_hash(&scene, &prior_child_left, 1, layer.rect, (200, 120), 1.0);
         let right_prefix =
-            backdrop_scene_prefix_hash(&scene, &prior_child_right, 1, (200, 120), 1.0);
+            backdrop_scene_prefix_hash(&scene, &prior_child_right, 1, layer.rect, (200, 120), 1.0);
 
         assert_ne!(
             backdrop_effect_cache_key(&layer, left_prefix, layer.rect, (60, 40), 1.0),
             backdrop_effect_cache_key(&layer, right_prefix, layer.rect, (60, 40), 1.0),
             "prior child movement changes the pixels sampled by a later backdrop"
+        );
+    }
+
+    #[test]
+    fn backdrop_cache_key_ignores_prior_child_motion_outside_capture_rect() {
+        let scene = scene_with_prefix_shape(Color::BLACK);
+        let layer = test_backdrop_layer(Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 40.0,
+        });
+        let prior_child_left = [child_prefix_contribution(0, 100.0)];
+        let prior_child_right = [child_prefix_contribution(0, 140.0)];
+
+        let left_prefix =
+            backdrop_scene_prefix_hash(&scene, &prior_child_left, 1, layer.rect, (200, 120), 1.0);
+        let right_prefix =
+            backdrop_scene_prefix_hash(&scene, &prior_child_right, 1, layer.rect, (200, 120), 1.0);
+
+        assert_eq!(
+            backdrop_effect_cache_key(&layer, left_prefix, layer.rect, (60, 40), 1.0),
+            backdrop_effect_cache_key(&layer, right_prefix, layer.rect, (60, 40), 1.0),
+            "isolated content outside the sampled backdrop capture must not invalidate cached glass"
         );
     }
 

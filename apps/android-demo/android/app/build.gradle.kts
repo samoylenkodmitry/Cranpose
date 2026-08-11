@@ -131,6 +131,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.1")
 }
 
+tasks.withType<JavaCompile>().configureEach {
+    options.compilerArgs.add("-Xlint:deprecation")
+}
+
 // Check if cargo-ndk is available
 fun checkCargoNdk() {
     val result = providers.exec {

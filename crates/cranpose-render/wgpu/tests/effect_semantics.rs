@@ -1350,6 +1350,54 @@ fn cached_nested_backdrop_blur_radius_changes_rendered_pixels() {
 }
 
 #[test]
+fn static_backdrop_reuses_cache_when_non_overlapping_content_animates() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping spatial backdrop cache assertion because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(spatial_backdrop_cache_fixture(Color::RED));
+    renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("backdrop cache warmup should succeed");
+    let warmup_stats = renderer
+        .last_frame_stats()
+        .expect("backdrop warmup frame stats");
+
+    renderer.scene_mut().graph = Some(spatial_backdrop_cache_fixture(Color::BLUE));
+    let animated_frame = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("non-overlapping animation frame should succeed");
+    let animated_stats = renderer
+        .last_frame_stats()
+        .expect("non-overlapping animation frame stats");
+
+    assert!(
+        warmup_stats.blur_passes > 0,
+        "the warmup frame must materialize the backdrop effect: {warmup_stats:?}"
+    );
+    assert!(
+        animated_stats.layer_cache_hits > 0,
+        "static glass should hit its retained backdrop surface: {animated_stats:?}"
+    );
+    assert_eq!(
+        animated_stats.blur_passes, 0,
+        "content outside the sampled backdrop region must not rerun the glass blur: {animated_stats:?}"
+    );
+    let animated_pixel = rgba(&animated_frame, 112, 80);
+    assert!(
+        animated_pixel[2] > animated_pixel[0],
+        "the non-overlapping animated content must still update: {animated_pixel:?}"
+    );
+}
+
+#[test]
 fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
@@ -1698,6 +1746,37 @@ fn backdrop_fixture() -> RenderGraph {
                 height: FRAME_HEIGHT as f32,
             },
             Color::BLUE,
+        ),
+        RenderNode::Layer(Box::new(backdrop_layer)),
+    ])
+}
+
+fn spatial_backdrop_cache_fixture(animated_color: Color) -> RenderGraph {
+    let backdrop_layer = layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 30.0,
+        },
+        ProjectiveTransform::translation(10.0, 10.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(8.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![],
+    );
+
+    graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        solid_rect(
+            Rect {
+                x: 100.0,
+                y: 68.0,
+                width: 24.0,
+                height: 24.0,
+            },
+            animated_color,
         ),
         RenderNode::Layer(Box::new(backdrop_layer)),
     ])
