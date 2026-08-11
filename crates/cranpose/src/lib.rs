@@ -18,6 +18,8 @@ mod accessibility;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
 #[cfg(all(feature = "android", target_os = "android"))]
+mod android_app_info;
+#[cfg(all(feature = "android", target_os = "android"))]
 mod android_font_scale;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_frame_rate;
