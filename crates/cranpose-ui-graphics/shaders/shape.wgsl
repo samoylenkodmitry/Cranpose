@@ -465,9 +465,8 @@ fn remap_gradient_t(raw_t: f32, tile_mode: u32) -> GradientSample {
 // Kept identical to `gradient_dither_offset` in `cranpose-render-common`,
 // which carries the derivation and the tests; the CPU sampler bins by these
 // same scene device coordinates, so the two backends dither a gradient the
-// same way. Fragment `@builtin(position)` is the render-target pixel coordinate;
-// scene coordinates move with content and would shift the matrix phase while
-// scrolling at fractional density.
+// same way. `world_pos` rather than `@builtin(position)` for exactly that
+// reason — on Android the two read the same pixel anyway.
 fn gradient_dither(device_pos: vec2<f32>) -> f32 {
     let x = u32(max(floor(device_pos.x), 0.0)) + 1u;
     let y = u32(max(floor(device_pos.y), 0.0)) + 1u;
@@ -644,7 +643,7 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     // to band, and Skia leaves it alone too, which is why solid fills already
     // land byte-for-byte on the Compose build's.
     if (is_gradient && color.a > 0.0) {
-        let offset = gradient_dither(input.clip_position.xy) * (1.0 / 255.0);
+        let offset = gradient_dither(world_pos) * (1.0 / 255.0);
         color = vec4<f32>(clamp(color.rgb + vec3<f32>(offset), vec3<f32>(0.0), vec3<f32>(1.0)),
                           color.a);
     }
