@@ -1275,8 +1275,8 @@ impl Composer {
         self.remember_with_kind(PayloadKind::Internal, init)
     }
 
-    pub(crate) fn remember_effect<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Effect, init)
+    pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
+        self.with_slot_session_mut(|slots| slots.remember_effect::<T>())
     }
 
     fn remember_with_kind<T: 'static>(

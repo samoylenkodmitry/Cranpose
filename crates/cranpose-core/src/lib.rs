@@ -1046,7 +1046,7 @@ where
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
             let key_hash = hash_key(&keys);
-            let state = composer.remember_effect(DisposableEffectState::default);
+            let state = composer.remember_effect::<DisposableEffectState>();
             if state.with(|state| state.should_run(key_hash)) {
                 state.update(|state| {
                     state.run_cleanup();
@@ -3909,6 +3909,23 @@ impl SlotsHost {
                 active_pass: None,
             }),
         }
+    }
+
+    pub(crate) fn forget_effects(&self) {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return;
+        };
+        if inner.active_pass.is_some() {
+            return;
+        }
+        let drops = inner.table.take_effect_drops();
+        if drops.is_empty() {
+            return;
+        }
+        for drop in drops {
+            inner.lifecycle.queue_drop(drop);
+        }
+        inner.lifecycle.flush_pending_drops();
     }
 
     pub(crate) fn bind_runtime_state(&self, state: &Rc<crate::composer::ComposerRuntimeState>) {

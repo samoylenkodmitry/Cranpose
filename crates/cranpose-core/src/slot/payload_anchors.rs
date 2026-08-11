@@ -686,6 +686,7 @@ mod tests {
                 type_name: std::any::type_name::<i32>(),
                 kind: crate::slot::PayloadKind::Internal,
                 value: Box::new(value),
+                fresh: None,
             });
         }
 

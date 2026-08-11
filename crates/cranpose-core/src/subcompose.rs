@@ -861,6 +861,9 @@ impl SubcomposeState {
             self.exact_reactivation_slots.insert(slot);
         } else {
             self.exact_reactivation_slots.remove(&slot);
+            if let Some(host) = self.slot_compositions.get(&slot) {
+                host.forget_effects();
+            }
         }
 
         let content_type = self.slot_content_types.get(&slot).copied();

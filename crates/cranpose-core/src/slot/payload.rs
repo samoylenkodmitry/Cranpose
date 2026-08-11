@@ -25,6 +25,7 @@ pub(in crate::slot) struct PayloadInit<'a> {
     type_id: TypeId,
     type_name: &'static str,
     make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
+    fresh: Option<fn() -> Box<dyn std::any::Any>>,
 }
 
 impl<'a> PayloadInit<'a> {
@@ -35,6 +36,19 @@ impl<'a> PayloadInit<'a> {
             type_id: TypeId::of::<T>(),
             type_name: std::any::type_name::<T>(),
             make,
+            fresh: None,
+        }
+    }
+
+    pub(in crate::slot) fn new_startable<T: 'static>(
+        make: &'a mut dyn FnMut() -> Box<dyn std::any::Any>,
+        fresh: fn() -> Box<dyn std::any::Any>,
+    ) -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            type_name: std::any::type_name::<T>(),
+            make,
+            fresh: Some(fresh),
         }
     }
 
@@ -52,6 +66,7 @@ fn replace_payload_record(
     record.type_id = init.type_id;
     record.type_name = init.type_name;
     record.kind = kind;
+    record.fresh = init.fresh;
     old_value
 }
 
@@ -278,6 +293,7 @@ impl SlotTable {
                 type_name: init.type_name,
                 kind,
                 value: init.make_value(),
+                fresh: init.fresh,
             },
         );
         if refresh_index {

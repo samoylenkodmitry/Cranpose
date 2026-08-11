@@ -133,6 +133,20 @@ impl SlotWriteSession<'_> {
         self.remember_with_kind(PayloadKind::Remember, init)
     }
 
+    pub(crate) fn remember_effect<T: Default + 'static>(&mut self) -> Owned<T> {
+        let mut made = false;
+        let mut make = move || -> Box<dyn std::any::Any> {
+            assert!(!made, "payload init must run at most once");
+            made = true;
+            Box::new(Owned::new(T::default()))
+        };
+        let mut init = PayloadInit::new_startable::<Owned<T>>(&mut make, || {
+            Box::new(Owned::new(T::default())) as Box<dyn std::any::Any>
+        });
+        let slot = self.value_slot_with_kind_dyn(PayloadKind::Effect, &mut init);
+        self.table.read_value::<Owned<T>>(slot).clone()
+    }
+
     pub(crate) fn remember_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,

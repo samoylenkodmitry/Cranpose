@@ -272,6 +272,10 @@ mod anchor_async_tests;
 mod animated_visibility_tests;
 
 #[cfg(test)]
+#[path = "tests/lazy_recycle_effect_tests.rs"]
+mod lazy_recycle_effect_tests;
+
+#[cfg(test)]
 #[path = "tests/animation_frame_pump_tests.rs"]
 mod animation_frame_pump_tests;
 

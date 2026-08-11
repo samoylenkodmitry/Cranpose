@@ -311,6 +311,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
         type_name: std::any::type_name::<i32>(),
         kind: super::PayloadKind::Internal,
         value: Box::new(0_i32),
+        fresh: None,
     });
     table.payload_anchors.set_active(extra_anchor, owner, 1);
 
