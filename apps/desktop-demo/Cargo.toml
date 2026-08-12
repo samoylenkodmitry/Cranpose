@@ -109,6 +109,11 @@ path = "examples/robot_tab_walk_text_visual_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_credits_shot"
+path = "examples/robot_credits_shot.rs"
+required-features = ["desktop", "robot-app", "cranorbit-credits"]
+
+[[example]]
 name = "robot_novsync_free_runs"
 path = "examples/robot_novsync_free_runs.rs"
 required-features = ["desktop", "robot-app"]

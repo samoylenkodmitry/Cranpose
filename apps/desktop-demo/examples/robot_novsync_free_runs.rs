@@ -1,24 +1,36 @@
-//! Pressing NoVSync must actually free-run.
+//! Pressing NoVSync must actually free-run. Currently it does not.
 //!
-//! Opens the Async Runtime tab, presses the NoVSync control in the dev overlay,
-//! lets the app run for a wall-clock window, and asserts the observed frame
-//! rate clears 120fps.
+//! Opens a continuously animating tab, presses the NoVSync control in the dev
+//! overlay, and asserts the frame rate the app reaches on its own clears
+//! 120fps. It reports ~60 instead.
 //!
-//! Two things about this test are deliberate.
+//! Four things about this test are deliberate, and each one is a way it was
+//! wrong first.
 //!
-//! It measures `fps`, not `work_fps`, and it never calls `pump_frames`. Pumping
-//! frames forces the loop to produce them, which is exactly the thing under
-//! test -- a pumped run reports healthy throughput no matter how badly the
-//! pacing is broken, because the harness is supplying the frames the pacing
-//! failed to ask for. The only honest measurement here is how many frames the
-//! app produces on its own in a known stretch of wall-clock time.
+//! It turns OFF the robot's poll forcing around each measurement. A driven run
+//! pins the event loop to `ControlFlow::Poll` so commands are serviced without
+//! waiting on the display -- and polling is exactly the mechanism that lets a
+//! loop outrun vsync. With it on, this test measured the harness free-running
+//! and passed at 470fps against a build where pressing NoVSync does nothing.
 //!
-//! The threshold is 120 rather than something larger because the point is to
-//! separate "free-running" from "pinned to the panel". A 60Hz display that
-//! reports 60fps and a 120Hz one that reports 120 both mean the same failure:
-//! the loop is following the display instead of running ahead of it. Async
-//! Runtime is animated through `frame_clock().next_frame()`, so it is the page
-//! that catches a pacing bug tied to frame callbacks.
+//! It never calls `pump_frames`, and reads `fps` rather than `work_fps`.
+//! Pumping supplies the very frames the broken pacing failed to ask for, so a
+//! pumped run reports healthy throughput however broken the pacing is.
+//!
+//! It measures several windows and judges on the WORST. The failure is
+//! intermittent by nature -- `free_running_frame` is gated on `needs_redraw`,
+//! so whether the loop keeps polling depends on whether pixels happen to be
+//! stale when the control flow is chosen -- and a single window caught a good
+//! streak and read 260fps on a clamped build.
+//!
+//! It measures a tab that animates forever on its own. A page that settles
+//! reports 0fps once poll forcing is off, which is the idle-is-0fps invariant
+//! working correctly and says nothing about pacing. Async Runtime looks like it
+//! animates when a human is driving the window, but goes quiet under a robot.
+//!
+//! The threshold is 120 because the question is "free-running or pinned to the
+//! panel", not "how fast". 60 on a 60Hz display and 120 on a 120Hz one are the
+//! same failure.
 
 use cranpose::{AppLauncher, FramePacingMode};
 use cranpose_testing::find_text_in_semantics;
@@ -28,18 +40,37 @@ const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 700;
 /// Long enough that a 60fps run and a free-running one cannot be confused, and
 /// short enough to keep the example quick.
-const MEASURE_FOR: Duration = Duration::from_millis(2000);
+const MEASURE_FOR: Duration = Duration::from_millis(1500);
+/// Windows measured; the worst one is the verdict.
+const MEASURE_WINDOWS: usize = 3;
 /// Thrown away. Long enough to get GPU pipeline compilation out of the way.
 const WARMUP_FOR: Duration = Duration::from_millis(1500);
 const MIN_FPS: f32 = 120.0;
+/// Which tab to measure. It must animate continuously and on its own: a page
+/// that settles reports 0fps once poll forcing is off, which is the idle
+/// invariant working correctly and tells us nothing about pacing.
+const TAB: &str = "Animations";
 
 /// Frames the app produced on its own, per second of wall clock.
+///
+/// Poll forcing is off for the window. A robot-driven run otherwise pins the
+/// event loop to `ControlFlow::Poll` so commands are serviced promptly, and
+/// polling is precisely what lets a loop outrun vsync -- leaving it on makes
+/// the harness free-run and reports a pass against a build where NoVSync does
+/// nothing. It goes back on afterwards so the rest of the driver stays
+/// responsive.
 fn measure(robot: &cranpose::Robot, window: Duration) -> f32 {
+    robot
+        .set_poll_forcing(false)
+        .expect("stop forcing poll for the measurement");
     let started = Instant::now();
     robot.reset_fps_stats().expect("reset fps stats");
     std::thread::sleep(window);
     let elapsed = started.elapsed();
     let stats = robot.fps_stats().expect("read fps stats");
+    robot
+        .set_poll_forcing(true)
+        .expect("resume poll forcing after the measurement");
     stats.frame_count as f32 / elapsed.as_secs_f32()
 }
 
@@ -58,11 +89,11 @@ fn main() {
 
             // Open the tab whose animation is driven by frame callbacks.
             // Bounds arrive as (x, y, width, height).
-            let (tab_x, tab_y, tab_w, tab_h) = find_text_in_semantics(&robot, "Async Runtime")
-                .expect("the Async Runtime tab must be on screen");
+            let (tab_x, tab_y, tab_w, tab_h) = find_text_in_semantics(&robot, TAB)
+                .expect("the tab under test must be on screen");
             robot
                 .click(tab_x + tab_w * 0.5, tab_y + tab_h * 0.5)
-                .expect("click the Async Runtime tab");
+                .expect("click the tab under test");
             let _ = robot.wait_for_idle();
             std::thread::sleep(Duration::from_millis(300));
 
@@ -87,21 +118,35 @@ fn main() {
             let warm = measure(&robot, WARMUP_FOR);
             println!("novsync_free_run stage=warmup observed_fps={warm:.1}");
 
-            let (observed, stats, elapsed) = {
-                let started = Instant::now();
-                robot.reset_fps_stats().expect("reset fps stats");
-                std::thread::sleep(MEASURE_FOR);
-                let elapsed = started.elapsed();
-                let stats = robot.fps_stats().expect("read fps stats");
-                (
-                    stats.frame_count as f32 / elapsed.as_secs_f32(),
-                    stats,
-                    elapsed,
-                )
-            };
+            // Several windows, and the verdict is the WEAKEST of them.
+            //
+            // The failure is intermittent by nature: `free_running_frame` is
+            // gated on `needs_redraw`, so whether the loop keeps polling
+            // depends on whether pixels happen to be stale at the instant the
+            // control flow is chosen. One window can catch a good streak and
+            // read 260fps on a build that spends most of its time clamped to
+            // the panel. Taking the best -- or a single sample -- would make
+            // this test pass on a broken build often enough to be useless. The
+            // requirement is that NoVSync ALWAYS frees the loop, so the window
+            // that did worst is the one that decides.
+            let windows: Vec<f32> = (0..MEASURE_WINDOWS)
+                .map(|_| measure(&robot, MEASURE_FOR))
+                .collect();
+            let observed = windows.iter().copied().fold(f32::INFINITY, f32::min);
+            let best = windows.iter().copied().fold(0.0f32, f32::max);
+            println!(
+                "novsync_free_run windows={} worst={observed:.1} best={best:.1}",
+                windows
+                    .iter()
+                    .map(|fps| format!("{fps:.1}"))
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+            let stats = robot.fps_stats().expect("read fps stats");
+            let elapsed = MEASURE_FOR;
 
             println!(
-                "novsync_free_run stage=async_runtime fps={:.1} work_fps={:.1} \
+                "novsync_free_run stage={TAB} fps={:.1} work_fps={:.1} \
                  avg_ms={:.2} frames={} over={:.2}s",
                 stats.fps,
                 stats.work_fps,
@@ -114,11 +159,10 @@ fn main() {
 
             if observed <= MIN_FPS {
                 println!(
-                    "FAIL: NoVSync must free-run past {MIN_FPS:.0}fps, observed {observed:.1}fps \
-                     ({} frames in {:.2}s). A result at or near the display's refresh rate means \
-                     the loop is following the panel rather than running ahead of it.",
-                    stats.frame_count,
-                    elapsed.as_secs_f32(),
+                    "FAIL: NoVSync must free-run past {MIN_FPS:.0}fps in EVERY window, worst \
+                     was {observed:.1}fps (best {best:.1}). A result at or near the display's \
+                     refresh rate means the loop is following the panel rather than running \
+                     ahead of it.",
                 );
                 robot.exit().ok();
                 std::process::exit(1);

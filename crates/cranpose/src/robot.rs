@@ -212,6 +212,7 @@ pub(crate) enum RobotCommand {
     GetRenderStats,
     GetFpsStats,
     GetPacingControlCenter(cranpose_app_shell::FramePacingMode),
+    SetPollForcing(bool),
     ResetFpsStats,
     GetLastFlingVelocity,
     ResetLastFlingVelocity,
@@ -1011,6 +1012,28 @@ impl Robot {
             .map_err(|e| format!("Failed to send FPS stats command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::FpsStats(stats)) => Ok(stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Stop (or resume) pinning the event loop to `ControlFlow::Poll` for the
+    /// robot's benefit.
+    ///
+    /// A driven run polls continuously so robot commands are serviced without
+    /// waiting on the display. That is invisible in most tests and fatal in one
+    /// measuring frame pacing: polling is exactly what lets a loop outrun
+    /// vsync, so a test that leaves it on records the harness free-running and
+    /// reports a pass against a build where the app cannot. Turn it off around
+    /// a measurement window, and back on to keep the rest of the test
+    /// responsive.
+    pub fn set_poll_forcing(&self, enabled: bool) -> Result<(), String> {
+        self.tx
+            .send(RobotCommand::SetPollForcing(enabled))
+            .map_err(|e| format!("Failed to send poll forcing command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::Ok) => Ok(()),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),
