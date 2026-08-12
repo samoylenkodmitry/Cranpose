@@ -19,6 +19,13 @@
 //! frame-rate reading partly a measurement of itself.
 
 #![allow(dead_code)]
+// The vendored files are carried as-is, so that refreshing them stays a plain
+// copy. These three lints fire on shapes the source has and the app they come
+// from does not deny; editing them here would make the copy diverge from the
+// thing it exists to mirror.
+#![allow(clippy::excessive_precision)]
+#![allow(clippy::neg_cmp_op_on_partial_ord)]
+#![allow(clippy::too_many_arguments)]
 
 mod draw;
 mod font;

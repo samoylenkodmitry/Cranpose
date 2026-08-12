@@ -49,7 +49,10 @@ pub fn screen_density() -> f32 {
 /// ignored, leaving the last good one in place.
 pub fn set_font_scale(scale: f32) {
     if scale.is_finite() && scale > 0.0 {
-        FONT_SCALE_MILLI.store((scale.clamp(0.5, 3.0) * 1000.0).round() as u32, Ordering::Relaxed);
+        FONT_SCALE_MILLI.store(
+            (scale.clamp(0.5, 3.0) * 1000.0).round() as u32,
+            Ordering::Relaxed,
+        );
     }
 }
 

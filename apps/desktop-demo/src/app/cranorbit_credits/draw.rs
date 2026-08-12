@@ -484,7 +484,6 @@ impl<'a> Painter<'a> {
     }
 }
 
-
 fn band_alpha(peak: f32, fraction: f32) -> f32 {
     let alpha = peak * fraction * fraction;
     if alpha <= FALLOFF_FLOOR {

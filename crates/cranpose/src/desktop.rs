@@ -543,6 +543,7 @@ struct App {
     /// test measuring whether NoVSync frees the loop measures the harness
     /// instead of the app, and passes against a build where NoVSync does
     /// nothing at all. A driver turns this off around a measurement window.
+    #[cfg(feature = "robot")]
     robot_force_poll: bool,
     primary_surface_dirty: bool,
     /// True while the very first frame still owes the surface a present. macOS
@@ -621,6 +622,7 @@ impl App {
             frame_pacing_mode,
             last_frame_start_time: None,
             primary_redraw_pending: false,
+            #[cfg(feature = "robot")]
             robot_force_poll: true,
             primary_surface_dirty: false,
             primary_initial_present_pending: false,

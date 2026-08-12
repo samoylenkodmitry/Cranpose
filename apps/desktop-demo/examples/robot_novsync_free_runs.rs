@@ -89,8 +89,8 @@ fn main() {
 
             // Open the tab whose animation is driven by frame callbacks.
             // Bounds arrive as (x, y, width, height).
-            let (tab_x, tab_y, tab_w, tab_h) = find_text_in_semantics(&robot, TAB)
-                .expect("the tab under test must be on screen");
+            let (tab_x, tab_y, tab_w, tab_h) =
+                find_text_in_semantics(&robot, TAB).expect("the tab under test must be on screen");
             robot
                 .click(tab_x + tab_w * 0.5, tab_y + tab_h * 0.5)
                 .expect("click the tab under test");

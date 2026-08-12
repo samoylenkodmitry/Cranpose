@@ -1,7 +1,7 @@
-use super::rows::{RowKind, SettingsRow};
 use super::draw::Painter;
 use super::font::{draw_text, text_width, Align, Face, Typography};
 use super::layout::Slot;
+use super::rows::{RowKind, SettingsRow};
 use super::theme::{ColorScheme, GamePalette};
 use cranpose_ui_graphics::{Color, StrokeCap};
 
@@ -156,7 +156,16 @@ pub fn draw_scroll_indicator(
     let below_start = thumb_start + thumb_sweep + gap;
     let below = top + sweep - below_start;
     let cap = unit_width / unit_radius;
-    indicator_segment(painter, unit_radius, top, above, unit_width, cap, track, alpha);
+    indicator_segment(
+        painter,
+        unit_radius,
+        top,
+        above,
+        unit_width,
+        cap,
+        track,
+        alpha,
+    );
     indicator_segment(
         painter,
         unit_radius,
@@ -945,7 +954,12 @@ fn switch(
     } else {
         scheme.outline
     };
-    painter.dot_px(thumb_x, centre_y, thumb_radius, super::theme::faded_by_layer(thumb, alpha));
+    painter.dot_px(
+        thumb_x,
+        centre_y,
+        thumb_radius,
+        super::theme::faded_by_layer(thumb, alpha),
+    );
     if checked {
         let unit = typography.dp(1.0) * scale;
         let stroke = typography.dp(TICK_STROKE_DP) * scale;
