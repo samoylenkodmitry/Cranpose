@@ -141,8 +141,8 @@ struct RobotScrollSequence {
 
 #[cfg(feature = "robot")]
 impl RobotController {
-    fn new() -> (Self, Robot) {
-        let (channel, robot) = RobotChannel::new();
+    fn new(wake_event_loop: impl Fn() + Send + Sync + 'static) -> (Self, Robot) {
+        let (channel, robot) = RobotChannel::new(wake_event_loop);
         let RobotChannel { rx, tx } = channel;
 
         let controller = RobotController {
@@ -198,6 +198,24 @@ impl RobotController {
         self.idle_structure_clean_frames = 0;
     }
 
+    /// Whether the driver is waiting on something the loop has to turn to give.
+    ///
+    /// Everything here is a state machine that advances one step per
+    /// `about_to_wait`: a command staged for this iteration, an idle wait, a
+    /// frame the driver asked for, a scroll sequence mid-flight. While any of
+    /// them is live the loop must keep turning. When none is, the driver is
+    /// between commands and the loop is free to pace like the app it is
+    /// running -- which is the only state in which a frame-rate reading from a
+    /// robot test means anything.
+    fn awaiting_progress(&mut self) -> bool {
+        self.waiting_for_idle
+            || self.waiting_for_present_generation.is_some()
+            || self.waiting_for_pump_present_generation.is_some()
+            || self.scroll_sequence.is_some()
+            || self.synthetic_primary_down
+            || self.stage_pending_command()
+    }
+
     fn record_idle_update_result(&mut self, result: FrameUpdateResult) {
         if !self.waiting_for_idle {
             return;
@@ -236,7 +254,6 @@ struct NativeWindowSurface {
     platform: DesktopWinitPlatform,
     last_cursor_position: Option<(f32, f32)>,
     last_cursor_physical_position: Option<PhysicalPosition<f64>>,
-    frame_pacing_mode: FramePacingMode,
     last_frame_start_time: Option<Instant>,
     vsync_interval: Duration,
     pending_outer_positions: PendingNativeWindowPositions,
@@ -474,7 +491,7 @@ impl PendingNativeWindowPositions {
 
 impl NativeWindowSurface {
     fn frame_interval(&self) -> Option<Duration> {
-        frame_interval_for_mode(self.frame_pacing_mode, self.vsync_interval)
+        frame_interval_for_mode(self.app.frame_pacing_mode(), self.vsync_interval)
     }
 }
 
@@ -532,19 +549,16 @@ struct App {
     launch_error: Rc<RefCell<Option<LaunchError>>>,
     /// Event-loop wake path used when the primary declaration host is hidden.
     event_proxy: EventLoopProxy,
-    frame_pacing_mode: FramePacingMode,
+    /// The pacing mode the surfaces and this loop are currently configured for.
+    ///
+    /// The app shell owns the mode itself: it draws the dev overlay and takes
+    /// the presses that change it. This is only the loop's record of what it
+    /// has already applied, so it can notice a change and reconfigure. Treating
+    /// it as a second source of truth is what let a run report `[NoVSync]` in
+    /// the overlay while the swapchain and the frame cap still followed vsync.
+    applied_frame_pacing_mode: FramePacingMode,
     last_frame_start_time: Option<Instant>,
     primary_redraw_pending: bool,
-    /// Whether a robot-driven run pins the event loop to `ControlFlow::Poll`.
-    ///
-    /// Polling keeps robot commands serviced promptly, which is what a driver
-    /// wants almost all of the time. It is also indistinguishable, from the
-    /// loop's point of view, from the app itself asking to free-run -- so a
-    /// test measuring whether NoVSync frees the loop measures the harness
-    /// instead of the app, and passes against a build where NoVSync does
-    /// nothing at all. A driver turns this off around a measurement window.
-    #[cfg(feature = "robot")]
-    robot_force_poll: bool,
     primary_surface_dirty: bool,
     /// True while the very first frame still owes the surface a present. macOS
     /// can drop the `request_redraw` issued during `resumed`, leaving a static
@@ -572,7 +586,7 @@ impl App {
             .map(crate::recorder::InputRecorder::new);
         #[cfg(feature = "robot")]
         let robot_app_hook = settings.robot_app_hook.take();
-        let frame_pacing_mode = settings.frame_pacing_mode;
+        let applied_frame_pacing_mode = settings.frame_pacing_mode;
 
         // Wrap the app content once with the platform environment (system
         // theme, insets) so every composition — primary or native sub-window —
@@ -619,11 +633,9 @@ impl App {
             recorder,
             launch_error,
             event_proxy,
-            frame_pacing_mode,
+            applied_frame_pacing_mode,
             last_frame_start_time: None,
             primary_redraw_pending: false,
-            #[cfg(feature = "robot")]
-            robot_force_poll: true,
             primary_surface_dirty: false,
             primary_initial_present_pending: false,
             vsync_interval: default_vsync_interval(),
@@ -642,8 +654,64 @@ impl App {
         event_loop.exit();
     }
 
+    /// The mode the app shell currently reports, which is the only copy that
+    /// matters: it is what the overlay draws and what a press on it changes.
+    fn frame_pacing_mode(&self) -> FramePacingMode {
+        self.app
+            .as_ref()
+            .map_or(self.settings.frame_pacing_mode, |app| {
+                app.frame_pacing_mode()
+            })
+    }
+
     fn frame_interval(&self) -> Option<Duration> {
-        frame_interval_for_mode(self.frame_pacing_mode, self.vsync_interval)
+        frame_interval_for_mode(self.frame_pacing_mode(), self.vsync_interval)
+    }
+
+    /// Follow the app shell's pacing mode onto every surface this loop drives.
+    ///
+    /// A mode change reaches the shell through an ordinary pointer press, from
+    /// whatever produced it, so the loop cannot be told about it at one input
+    /// call site — it observes the shell instead. Until the surface is
+    /// reconfigured the swapchain still paces on the display it was built for,
+    /// which is a `[NoVSync]` overlay over a loop that is still waiting for
+    /// vsync in `get_current_texture`.
+    fn sync_frame_pacing(&mut self) {
+        let mode = self.frame_pacing_mode();
+        if mode == self.applied_frame_pacing_mode {
+            return;
+        }
+        self.applied_frame_pacing_mode = mode;
+
+        if let (Some(app), Some(surface), Some(surface_config)) =
+            (&mut self.app, &self.surface, &mut self.surface_config)
+        {
+            apply_frame_pacing_mode(
+                app,
+                surface,
+                surface_config,
+                self.surface_caps.as_ref(),
+                mode,
+            );
+        }
+        // The frame-cap anchor belongs to the mode that set it; a cap measured
+        // from the previous mode's cadence would hold the first frame back.
+        self.last_frame_start_time = None;
+        if let Some(window) = self.window.clone() {
+            request_redraw_once(&window, &mut self.primary_redraw_pending);
+        }
+
+        for native in self.native_windows.values_mut() {
+            apply_frame_pacing_mode(
+                &mut native.app,
+                &native.surface,
+                &mut native.surface_config,
+                Some(&native.surface_caps),
+                mode,
+            );
+            native.last_frame_start_time = None;
+            native.window.request_redraw();
+        }
     }
 
     fn refresh_native_window_requests(&mut self) {
@@ -660,6 +728,15 @@ impl App {
 
     fn handle_primary_frame_requested(&mut self, event_loop: &dyn ActiveEventLoop) {
         let registry = Rc::clone(&self.native_window_registry);
+        let frame_interval = self.frame_interval();
+        // A host with no surface still has a pacing mode. Rendering here on
+        // every frame-waker wake regardless of the cap is a host that runs flat
+        // out in every mode, and a frame rate measured on one says nothing
+        // about the mode it was measured in.
+        let waiting_for_frame_cap = self
+            .last_frame_start_time
+            .and_then(|started_at| frame_interval.map(|interval| started_at + interval))
+            .is_some_and(|deadline| deadline > Instant::now());
         let direct_declaration_update = {
             let Some(app) = &mut self.app else {
                 return;
@@ -672,29 +749,34 @@ impl App {
                 self.settings.primary_window_visible,
                 self.settings.headless,
                 needs_redraw,
-                false,
+                waiting_for_frame_cap,
             );
             if direct_declaration_update {
                 trace_native_window(format_args!(
                     "primary declaration host proxy update visible={} headless={}",
                     self.settings.primary_window_visible, self.settings.headless
                 ));
-                let frame_started_at = Instant::now();
-                let update_result = update_app_with_native_window_registry(app, &registry);
+                let update_result = update_declaration_host_frame(
+                    app,
+                    &registry,
+                    &mut self.last_frame_start_time,
+                    frame_interval,
+                );
                 #[cfg(feature = "robot")]
                 if let Some(controller) = &mut self.robot_controller {
                     controller.record_idle_update_result(update_result);
                 }
-                if update_result.visual_changed {
-                    app.record_presented_frame(frame_started_at, Instant::now());
-                    self.last_frame_start_time = Some(frame_started_at);
-                }
+                #[cfg(not(feature = "robot"))]
+                let _ = update_result;
             }
             direct_declaration_update
         };
 
         if direct_declaration_update {
             self.sync_native_windows(event_loop);
+        } else if waiting_for_frame_cap {
+            // `about_to_wait` owns the deadline; it schedules the wake that
+            // produces this frame once the cap has run out.
         } else if let Some(window) = &self.window {
             request_redraw_once(window, &mut self.primary_redraw_pending);
         }
@@ -1329,7 +1411,8 @@ impl App {
         ));
         let surface_caps = surface.get_capabilities(&context.adapter);
         let surface_format = select_surface_format(&surface_caps)?;
-        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode);
+        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
+        log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
         let size = window.surface_size();
         let surface_config = surface_config_for_window(
             &surface_caps,
@@ -1338,7 +1421,7 @@ impl App {
             size.height.max(1),
             present_mode,
             options.transparent,
-            self.frame_pacing_mode,
+            self.frame_pacing_mode(),
         )?;
         surface.configure(&context.device, &surface_config);
         trace_native_window_timing(format_args!(
@@ -1381,7 +1464,7 @@ impl App {
             )
         });
         let mut dev_options = self.settings.dev_options.clone();
-        dev_options.frame_pacing_mode = self.frame_pacing_mode;
+        dev_options.frame_pacing_mode = self.frame_pacing_mode();
         dev_options.frame_pacing_controls = false;
         app.set_dev_options(dev_options);
         // Enable/disable the platform IME with text-field focus so composing
@@ -1423,7 +1506,6 @@ impl App {
             platform,
             last_cursor_position: None,
             last_cursor_physical_position: None,
-            frame_pacing_mode: self.frame_pacing_mode,
             last_frame_start_time: None,
             vsync_interval: default_vsync_interval(),
             pending_outer_positions: PendingNativeWindowPositions::default(),
@@ -2567,21 +2649,52 @@ fn apply_frame_pacing_mode(
     mode: FramePacingMode,
 ) {
     app.set_frame_pacing_mode(mode);
-    if let Some(caps) = surface_caps {
-        let present_mode = crate::present_mode::select_present_mode_for_frame_pacing(caps, mode);
-        let frame_latency = desired_frame_latency(mode);
-        if surface_config.present_mode != present_mode
-            || surface_config.desired_maximum_frame_latency != frame_latency
-        {
-            let Some(device) = app.renderer().try_device() else {
-                log::error!("desktop surface reconfigure skipped: GPU renderer is not initialized");
-                return;
-            };
-            surface_config.present_mode = present_mode;
-            surface_config.desired_maximum_frame_latency = frame_latency;
-            surface.configure(device, surface_config);
-        }
+    let Some(caps) = surface_caps else {
+        // The pacing mode reaches the app but not the swapchain, which is a
+        // free-running loop feeding a surface that still waits for vsync in
+        // `get_current_texture`. Nothing about that is visible in the overlay.
+        log::error!(
+            "desktop surface pacing not applied for {}: surface capabilities are unknown",
+            mode.label()
+        );
+        return;
+    };
+    // Same rule as the surface was built with, override included: a run pinned
+    // to a present mode by `CRANPOSE_PRESENT_MODE` must stay pinned when the
+    // pacing mode changes, or the surface silently stops matching the pin.
+    let present_mode = desktop_present_mode(caps, mode);
+    let frame_latency = desired_frame_latency(mode);
+    if surface_config.present_mode == present_mode
+        && surface_config.desired_maximum_frame_latency == frame_latency
+    {
+        return;
     }
+    let Some(device) = app.renderer().try_device() else {
+        log::error!("desktop surface reconfigure skipped: GPU renderer is not initialized");
+        return;
+    };
+    surface_config.present_mode = present_mode;
+    surface_config.desired_maximum_frame_latency = frame_latency;
+    surface.configure(device, surface_config);
+    log_desktop_present_mode(mode, present_mode, caps);
+}
+
+/// What the swapchain was actually given for a pacing mode.
+///
+/// The fallback when a surface cannot do what a mode asks for is silent, so a
+/// surface that never left `Fifo` is indistinguishable from one that free-runs
+/// -- and that is the first thing worth knowing when a NoVSync run reads the
+/// panel's refresh rate.
+fn log_desktop_present_mode(
+    mode: FramePacingMode,
+    present_mode: wgpu::PresentMode,
+    caps: &wgpu::SurfaceCapabilities,
+) {
+    log::info!(
+        "desktop present mode: pacing={} chose {present_mode:?}; surface offers {:?}",
+        mode.label(),
+        caps.present_modes,
+    );
 }
 
 fn desired_frame_latency(mode: FramePacingMode) -> u32 {
@@ -2600,8 +2713,48 @@ fn frame_interval_for_mode(mode: FramePacingMode, vsync_interval: Duration) -> O
     }
 }
 
+/// Run one frame for a declaration host, which has no surface to present to.
+///
+/// Both paths that drive such a host -- the frame waker's wake through the
+/// event-loop proxy and `about_to_wait` -- land here, so a host counts its
+/// frames and holds its cadence the same way whichever one produced the frame.
+fn update_declaration_host_frame(
+    app: &mut AppShell<WgpuRenderer>,
+    registry: &Rc<native_window::NativeWindowRegistry>,
+    last_frame_start_time: &mut Option<Instant>,
+    frame_interval: Option<Duration>,
+) -> FrameUpdateResult {
+    let frame_started_at = Instant::now();
+    let update_result = update_app_with_native_window_registry(app, registry);
+    if update_result.visual_changed {
+        app.record_presented_frame(frame_started_at, Instant::now());
+        *last_frame_start_time = Some(next_frame_anchor(
+            *last_frame_start_time,
+            frame_started_at,
+            frame_interval,
+        ));
+    }
+    update_result
+}
+
 fn should_chain_no_vsync_redraw(frame_interval: Option<Duration>, needs_frame: bool) -> bool {
     frame_interval.is_none() && needs_frame
+}
+
+/// Whether the loop must keep turning under its own power for this frame.
+///
+/// A free-running mode has no deadline to wait for, so the loop only ever gets
+/// the next frame by coming back around for it. Parking hands the cadence to
+/// whatever the platform does with an outstanding redraw request, which on a
+/// display-driven backend is the refresh rate -- the app then free-runs or
+/// follows the panel depending on whether it happened to have work pending at
+/// the instant the control flow was chosen.
+fn free_running_frame(
+    frame_interval: Option<Duration>,
+    needs_redraw: bool,
+    redraw_pending: bool,
+) -> bool {
+    frame_interval.is_none() && (needs_redraw || redraw_pending)
 }
 
 /// Per-second counters for the desktop frame loop, enabled by
@@ -4062,7 +4215,8 @@ impl ApplicationHandler for App {
             }
         };
 
-        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode);
+        let present_mode = desktop_present_mode(&surface_caps, self.frame_pacing_mode());
+        log_desktop_present_mode(self.frame_pacing_mode(), present_mode, &surface_caps);
         let surface_config = match surface_config_for_window(
             &surface_caps,
             surface_format,
@@ -4070,7 +4224,7 @@ impl ApplicationHandler for App {
             size.height.max(1),
             present_mode,
             false,
-            self.frame_pacing_mode,
+            self.frame_pacing_mode(),
         ) {
             Ok(config) => config,
             Err(error) => {
@@ -4132,7 +4286,7 @@ impl ApplicationHandler for App {
 
         // Apply dev options (FPS counter, etc.)
         let mut dev_options = self.settings.dev_options.clone();
-        dev_options.frame_pacing_mode = self.frame_pacing_mode;
+        dev_options.frame_pacing_mode = self.frame_pacing_mode();
         app.set_dev_options(dev_options);
 
         // Enable/disable the platform IME with text-field focus so composing
@@ -4202,6 +4356,7 @@ impl ApplicationHandler for App {
         window_id: WinitWindowId,
         event: WindowEvent,
     ) {
+        self.sync_frame_pacing();
         let Some(window) = &self.window else {
             self.native_window_event(event_loop, window_id, event);
             return;
@@ -4416,31 +4571,6 @@ impl ApplicationHandler for App {
                 }
                 match state {
                     ElementState::Pressed => {
-                        if let Some(mode) = app.handle_dev_overlay_click(logical.x, logical.y) {
-                            apply_frame_pacing_mode(
-                                app,
-                                surface,
-                                surface_config,
-                                self.surface_caps.as_ref(),
-                                mode,
-                            );
-                            self.frame_pacing_mode = mode;
-                            self.last_frame_start_time = None;
-                            request_redraw_once(window, &mut self.primary_redraw_pending);
-                            for native in self.native_windows.values_mut() {
-                                apply_frame_pacing_mode(
-                                    &mut native.app,
-                                    &native.surface,
-                                    &mut native.surface_config,
-                                    Some(&native.surface_caps),
-                                    mode,
-                                );
-                                native.frame_pacing_mode = mode;
-                                native.last_frame_start_time = None;
-                                native.window.request_redraw();
-                            }
-                            return;
-                        }
                         let request = pointer_button_frame_request(
                             app.pointer_pressed_at_event_time(event_time),
                         );
@@ -4644,7 +4774,11 @@ impl ApplicationHandler for App {
             self.sync_native_windows(event_loop);
         }
 
-        let frame_interval = self.frame_interval();
+        // A press that lands on a pacing control changes the shell's mode, and
+        // the robot dispatches presses straight into the shell from here, so
+        // the loop picks the change up on the way in as well as on the way out.
+        self.sync_frame_pacing();
+
         let last_frame_start_time = self.last_frame_start_time;
         let registry = Rc::clone(&self.native_window_registry);
         let Some(app) = &mut self.app else { return };
@@ -4981,10 +5115,6 @@ impl ApplicationHandler for App {
                     }
                     RobotCommand::GetFpsStats => {
                         let _ = controller.tx.send(RobotResponse::FpsStats(app.fps_stats()));
-                    }
-                    RobotCommand::SetPollForcing(enabled) => {
-                        self.robot_force_poll = enabled;
-                        let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::GetPacingControlCenter(mode) => {
                         let center = app.dev_overlay_control_center(mode);
@@ -5339,6 +5469,10 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Re-read the mode: a robot command handled above can have pressed a
+        // pacing control, and this iteration's control flow must already obey
+        // the mode the shell now reports rather than the one it opened with.
+        let frame_interval = frame_interval_for_mode(app.frame_pacing_mode(), self.vsync_interval);
         let frame_schedule = app.frame_schedule();
         let has_active_animations = app.has_active_animations();
         let needs_update = frame_schedule.needs_update;
@@ -5372,12 +5506,12 @@ impl ApplicationHandler for App {
                     self.settings.primary_window_visible, self.settings.headless
                 ));
                 record_pacing_event(|diag| &mut diag.direct_updates);
-                let frame_started_at = Instant::now();
-                let update_result = update_app_with_native_window_registry(app, &registry);
-                if update_result.visual_changed {
-                    app.record_presented_frame(frame_started_at, Instant::now());
-                    self.last_frame_start_time = Some(frame_started_at);
-                }
+                update_declaration_host_frame(
+                    app,
+                    &registry,
+                    &mut self.last_frame_start_time,
+                    frame_interval,
+                );
             } else {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);
             }
@@ -5455,29 +5589,43 @@ impl ApplicationHandler for App {
             }
         }
 
-        // Smart ControlFlow: only Poll when necessary
+        // Smart ControlFlow: only Poll when necessary.
+        //
+        // A robot that is waiting on something -- a command mid-flight, an idle
+        // wait, a frame it asked for -- needs the loop to keep turning. A robot
+        // that is merely attached does not: pinning the loop to `Poll` for the
+        // whole of a driven run makes it free-run no matter what pacing mode
+        // the app is in, which is indistinguishable from the app free-running
+        // and makes every frame-rate measurement in a robot test a measurement
+        // of the harness. Commands sent while the loop is parked wake it
+        // through the event-loop proxy, so nothing is lost by parking.
         #[cfg(feature = "robot")]
-        let robot_needs_poll = self.robot_controller.is_some() && self.robot_force_poll;
+        let robot_needs_poll = self
+            .robot_controller
+            .as_mut()
+            .is_some_and(RobotController::awaiting_progress);
 
         #[cfg(not(feature = "robot"))]
         let robot_needs_poll = false;
 
         // Poll continuously when:
         // - Active animations are running
-        // - Robot test is active
+        // - The robot is waiting for the loop to make progress
         // Free-running (NoVsync) chains its own redraw after each present, but a
         // bare `request_redraw` is serviced by the platform's display cycle, so
         // parking the loop in `Wait` silently clamps the app to the refresh rate.
-        // Polling is what actually lets the frame rate exceed vsync.
-        let free_running_frame = frame_interval.is_none() && needs_redraw;
-        if robot_needs_poll
-            || free_running_frame
+        // Polling is what actually lets the frame rate exceed vsync -- and that
+        // has to include the window between asking for a frame and being handed
+        // it, or the loop parks on the frame it just requested and takes the
+        // display's cadence for it. Which frames those are is a matter of
+        // timing, and is exactly why the clamp came and went between runs.
+        let control_flow = if robot_needs_poll
+            || free_running_frame(frame_interval, needs_redraw, self.primary_redraw_pending)
             || primary_pointer_polled
             || native_drag_deadline.is_some()
             || native_position_poll_deadline.is_some_and(|deadline| deadline <= now)
         {
-            record_pacing_event(|diag| &mut diag.control_flow_poll);
-            event_loop.set_control_flow(ControlFlow::Poll);
+            ControlFlow::Poll
         } else if let Some(deadline) = [
             next_frame_time.filter(|_| waiting_for_frame_cap),
             native_frame_cap_deadline,
@@ -5487,22 +5635,63 @@ impl ApplicationHandler for App {
         .flatten()
         .min()
         {
-            record_pacing_event(|diag| &mut diag.control_flow_wait_until);
-            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+            ControlFlow::WaitUntil(deadline)
         } else if has_active_animations || native_has_active_animations {
-            record_pacing_event(|diag| &mut diag.control_flow_poll);
-            event_loop.set_control_flow(ControlFlow::Poll);
+            ControlFlow::Poll
         } else if let Some(next_time) = [primary_next_event_time, native_next_event_time]
             .into_iter()
             .flatten()
             .min()
         {
             // Cursor blink uses timer-based scheduling (not continuous poll)
-            event_loop.set_control_flow(ControlFlow::WaitUntil(next_time));
+            ControlFlow::WaitUntil(next_time)
         } else {
-            record_pacing_event(|diag| &mut diag.control_flow_wait);
-            event_loop.set_control_flow(ControlFlow::Wait);
-        }
+            ControlFlow::Wait
+        };
+
+        #[cfg(feature = "robot")]
+        let control_flow = bound_park_for_robot(control_flow, self.robot_controller.is_some(), now);
+
+        // Count what the loop was actually told to do. A histogram of the
+        // intent rather than the outcome is a diagnostic that agrees with the
+        // code and disagrees with the machine.
+        record_pacing_event(match control_flow {
+            ControlFlow::Poll => |diag: &mut PacingDiag| &mut diag.control_flow_poll,
+            ControlFlow::WaitUntil(_) => |diag: &mut PacingDiag| &mut diag.control_flow_wait_until,
+            ControlFlow::Wait => |diag: &mut PacingDiag| &mut diag.control_flow_wait,
+        });
+        event_loop.set_control_flow(control_flow);
+    }
+}
+
+/// How long a driven run may park before it looks at the command channel again.
+///
+/// Only a backstop: commands wake the loop through the event-loop proxy, and
+/// the proxy wake-up is documented as droppable under contention on Windows.
+/// Losing one would otherwise hang the driver on a response that can never
+/// come, so a parked loop with a robot attached comes up for air instead.
+#[cfg(feature = "robot")]
+const ROBOT_PARKED_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Cap how long a driven run parks, without changing what it does when it wakes.
+///
+/// This does not produce frames: a wake with nothing to do falls straight back
+/// through `about_to_wait`. The app's pacing mode still decides the frame rate,
+/// which is what makes a frame rate measured under a robot the app's own.
+#[cfg(feature = "robot")]
+fn bound_park_for_robot(
+    control_flow: ControlFlow,
+    robot_attached: bool,
+    now: Instant,
+) -> ControlFlow {
+    if !robot_attached {
+        return control_flow;
+    }
+    let bound = now + ROBOT_PARKED_COMMAND_POLL_INTERVAL;
+    match control_flow {
+        ControlFlow::Poll => ControlFlow::Poll,
+        ControlFlow::Wait => ControlFlow::WaitUntil(bound),
+        ControlFlow::WaitUntil(deadline) => ControlFlow::WaitUntil(deadline.min(bound)),
     }
 }
 
@@ -5526,7 +5715,8 @@ pub fn try_run(
     // Spawn test driver if present
     #[cfg(feature = "robot")]
     let robot_controller = if let Some(driver) = settings.test_driver.take() {
-        let (controller, robot) = RobotController::new();
+        let wake_proxy = event_proxy.clone();
+        let (controller, robot) = RobotController::new(move || wake_proxy.wake_up());
         let panic_tx = robot.command_sender();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -5663,22 +5853,24 @@ fn resolve_robot_screenshot_params_with_scale(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "robot")]
+    use super::{bound_park_for_robot, ControlFlow, ROBOT_PARKED_COMMAND_POLL_INTERVAL};
     use super::{
-        clamp_rect_to_monitor_delta, frame_interval_for_mode, initial_present_redraw_needed,
-        native_window_graph_position, native_window_options_change_is_position_only,
-        native_window_position_poll_needed, nearest_monitor_to_rect, next_frame_anchor,
-        physical_outer_origin_from_surface, physical_surface_local_pointer,
-        physical_surface_origin_from_outer, physical_surface_rect_contains_pointer,
-        pointer_button_frame_request, primary_declaration_host_needs_direct_update,
-        primary_frame_waker_uses_event_proxy, primary_launch_requires_initial_redraw,
-        primary_pointer_gesture_poll_action, primary_pointer_move_should_recover_press,
-        primary_surface_redraw_drives_app, primary_viewport_for_surface_size,
-        recovered_native_window_drag_start_pointer, scroll_frame_request,
-        should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw, App, DesktopRect,
-        FramePacingMode, NativeWindowDragSession, NativeWindowGraphPositionSource,
-        NativeWindowOptions, NativeWindowPointerState, NativeWindowPollingDragSession,
-        NativeWindowPositionObservation, NativeWindowPositionOrigin, PendingNativeWindowPositions,
-        PrimaryPointerGesturePollAction,
+        clamp_rect_to_monitor_delta, frame_interval_for_mode, free_running_frame,
+        initial_present_redraw_needed, native_window_graph_position,
+        native_window_options_change_is_position_only, native_window_position_poll_needed,
+        nearest_monitor_to_rect, next_frame_anchor, physical_outer_origin_from_surface,
+        physical_surface_local_pointer, physical_surface_origin_from_outer,
+        physical_surface_rect_contains_pointer, pointer_button_frame_request,
+        primary_declaration_host_needs_direct_update, primary_frame_waker_uses_event_proxy,
+        primary_launch_requires_initial_redraw, primary_pointer_gesture_poll_action,
+        primary_pointer_move_should_recover_press, primary_surface_redraw_drives_app,
+        primary_viewport_for_surface_size, recovered_native_window_drag_start_pointer,
+        scroll_frame_request, should_chain_no_vsync_redraw, surface_reconfigure_requires_redraw,
+        App, DesktopRect, FramePacingMode, NativeWindowDragSession,
+        NativeWindowGraphPositionSource, NativeWindowOptions, NativeWindowPointerState,
+        NativeWindowPollingDragSession, NativeWindowPositionObservation,
+        NativeWindowPositionOrigin, PendingNativeWindowPositions, PrimaryPointerGesturePollAction,
     };
     use crate::launcher::AppSettings;
     use std::time::Instant;
@@ -5841,6 +6033,104 @@ mod tests {
             frame_interval_for_mode(FramePacingMode::Vsync, vsync_interval),
             true
         ));
+    }
+
+    #[test]
+    fn free_running_loop_never_parks_on_a_frame_it_already_asked_for() {
+        let vsync_interval = std::time::Duration::from_nanos(16_666_667);
+        let no_vsync = frame_interval_for_mode(FramePacingMode::NoVsync, vsync_interval);
+
+        // The frame the loop chained after the last present is in flight, and
+        // the schedule reports no further work yet. Parking here is what let
+        // the platform deliver that redraw on its own display cycle, which read
+        // as NoVSync clamped to the refresh rate in some runs and not others.
+        assert!(free_running_frame(no_vsync, false, true));
+        assert!(free_running_frame(no_vsync, true, false));
+        assert!(!free_running_frame(no_vsync, false, false));
+
+        // A capped mode still waits: its deadline is the whole point.
+        assert!(!free_running_frame(
+            frame_interval_for_mode(FramePacingMode::Vsync, vsync_interval),
+            true,
+            true
+        ));
+        assert!(!free_running_frame(
+            frame_interval_for_mode(FramePacingMode::Hard120, vsync_interval),
+            true,
+            true
+        ));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn a_driven_run_never_parks_longer_than_its_command_poll() {
+        let now = Instant::now();
+        let far = now + std::time::Duration::from_secs(5);
+        let soon = now + std::time::Duration::from_millis(1);
+        let bound = now + ROBOT_PARKED_COMMAND_POLL_INTERVAL;
+
+        // A dropped proxy wake-up must cost latency, never the whole run.
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::Wait, true, now),
+            ControlFlow::WaitUntil(bound)
+        );
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::WaitUntil(far), true, now),
+            ControlFlow::WaitUntil(bound)
+        );
+        // A deadline the app already owns is nearer, and stays.
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::WaitUntil(soon), true, now),
+            ControlFlow::WaitUntil(soon)
+        );
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::Poll, true, now),
+            ControlFlow::Poll
+        );
+        // Nothing changes for a run with no robot attached.
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::Wait, false, now),
+            ControlFlow::Wait
+        );
+        assert_eq!(
+            bound_park_for_robot(ControlFlow::WaitUntil(far), false, now),
+            ControlFlow::WaitUntil(far)
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn an_idle_robot_lets_the_loop_park() {
+        let (mut controller, robot) = RobotController::new(|| {});
+
+        // Nothing outstanding: the loop must be free to pace like the app it is
+        // running, or every frame rate a robot test reads is the harness's.
+        assert!(!controller.awaiting_progress());
+
+        robot
+            .command_sender()
+            .send(crate::robot::RobotCommand::PumpFrames { count: 1 })
+            .expect("robot command channel should remain open");
+        assert!(controller.awaiting_progress());
+        assert!(matches!(
+            controller.next_command(),
+            Some(crate::robot::RobotCommand::PumpFrames { count: 1 })
+        ));
+        assert!(!controller.awaiting_progress());
+
+        controller.start_idle_wait();
+        assert!(controller.awaiting_progress());
+        controller.finish_idle_wait();
+        assert!(!controller.awaiting_progress());
+
+        controller.waiting_for_pump_present_generation = Some(7);
+        assert!(controller.awaiting_progress());
+        controller.waiting_for_pump_present_generation = None;
+
+        controller.begin_synthetic_primary_gesture();
+        assert!(controller.awaiting_progress());
+        controller.end_synthetic_primary_gesture();
+        assert!(!controller.awaiting_progress());
     }
 
     #[test]
@@ -6408,7 +6698,7 @@ mod tests {
     #[cfg(feature = "robot")]
     #[test]
     fn robot_controller_tracks_synthetic_primary_button_lifetime() {
-        let (mut controller, _robot) = RobotController::new();
+        let (mut controller, _robot) = RobotController::new(|| {});
 
         assert!(!controller.synthetic_primary_down());
         controller.begin_synthetic_primary_gesture();
@@ -6420,7 +6710,7 @@ mod tests {
     #[cfg(feature = "robot")]
     #[test]
     fn robot_controller_stages_commands_during_continuous_frame_wakes() {
-        let (mut controller, robot) = RobotController::new();
+        let (mut controller, robot) = RobotController::new(|| {});
         robot
             .command_sender()
             .send(crate::robot::RobotCommand::PumpFrames { count: 2 })

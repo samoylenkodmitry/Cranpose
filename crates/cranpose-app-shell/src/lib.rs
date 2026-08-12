@@ -680,17 +680,27 @@ where
             })
     }
 
-    pub fn handle_dev_overlay_click(&mut self, x: f32, y: f32) -> Option<FramePacingMode> {
+    /// Take a press on a dev-overlay pacing control, if it lands on one.
+    ///
+    /// Every pointer press runs through here before the composition sees it, so
+    /// the controls answer to whatever produced the press: a mouse, a finger,
+    /// or a robot injecting one. A platform shell that hit-tested the overlay
+    /// itself would only make the controls work for the one input path it owns
+    /// -- which is how they came to do nothing under a robot at all.
+    pub(crate) fn dev_overlay_press(&mut self, x: f32, y: f32) -> bool {
         if !self.dev_options.frame_pacing_controls {
-            return None;
+            return false;
         }
-        let mode = self
+        let Some(mode) = self
             .dev_overlay_controls
             .iter()
             .find(|control| control.bounds.contains(x, y))
-            .map(|control| control.mode)?;
+            .map(|control| control.mode)
+        else {
+            return false;
+        };
         self.set_frame_pacing_mode(mode);
-        Some(mode)
+        true
     }
 
     fn invalidate_dev_overlay_text(&mut self) {

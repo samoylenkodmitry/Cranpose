@@ -11,6 +11,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::Renderer;
@@ -212,7 +213,6 @@ pub(crate) enum RobotCommand {
     GetRenderStats,
     GetFpsStats,
     GetPacingControlCenter(cranpose_app_shell::FramePacingMode),
-    SetPollForcing(bool),
     ResetFpsStats,
     GetLastFlingVelocity,
     ResetLastFlingVelocity,
@@ -263,7 +263,7 @@ pub(crate) struct RobotChannel {
 }
 
 impl RobotChannel {
-    pub(crate) fn new() -> (Self, Robot) {
+    pub(crate) fn new(wake_event_loop: impl Fn() + Send + Sync + 'static) -> (Self, Robot) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (resp_tx, resp_rx) = mpsc::channel();
 
@@ -273,7 +273,10 @@ impl RobotChannel {
         };
 
         let robot = Robot {
-            tx: cmd_tx,
+            tx: RobotCommandSender {
+                tx: cmd_tx,
+                wake_event_loop: Arc::new(wake_event_loop),
+            },
             rx: resp_rx,
         };
 
@@ -281,9 +284,32 @@ impl RobotChannel {
     }
 }
 
+/// The driver's end of the command channel, which wakes the event loop for
+/// every command it sends.
+///
+/// Commands are drained by the shell on its way into a wait, so a command sent
+/// while the loop is parked would sit in the channel until something else
+/// happened to wake it. The alternative -- keeping the loop spinning for as
+/// long as a robot is attached -- makes a driven run free-run regardless of the
+/// app's pacing mode, and any frame rate a robot test reads is then the
+/// harness's, not the app's.
+#[derive(Clone)]
+pub(crate) struct RobotCommandSender {
+    tx: mpsc::Sender<RobotCommand>,
+    wake_event_loop: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl RobotCommandSender {
+    pub(crate) fn send(&self, command: RobotCommand) -> Result<(), mpsc::SendError<RobotCommand>> {
+        self.tx.send(command)?;
+        (self.wake_event_loop)();
+        Ok(())
+    }
+}
+
 /// Robot handle for test drivers
 pub struct Robot {
-    tx: mpsc::Sender<RobotCommand>,
+    tx: RobotCommandSender,
     rx: mpsc::Receiver<RobotResponse>,
 }
 
@@ -1018,28 +1044,6 @@ impl Robot {
         }
     }
 
-    /// Stop (or resume) pinning the event loop to `ControlFlow::Poll` for the
-    /// robot's benefit.
-    ///
-    /// A driven run polls continuously so robot commands are serviced without
-    /// waiting on the display. That is invisible in most tests and fatal in one
-    /// measuring frame pacing: polling is exactly what lets a loop outrun
-    /// vsync, so a test that leaves it on records the harness free-running and
-    /// reports a pass against a build where the app cannot. Turn it off around
-    /// a measurement window, and back on to keep the rest of the test
-    /// responsive.
-    pub fn set_poll_forcing(&self, enabled: bool) -> Result<(), String> {
-        self.tx
-            .send(RobotCommand::SetPollForcing(enabled))
-            .map_err(|e| format!("Failed to send poll forcing command: {}", e))?;
-        match self.rx.recv() {
-            Ok(RobotResponse::Ok) => Ok(()),
-            Ok(RobotResponse::Error(e)) => Err(e),
-            Ok(_) => Err("Unexpected response".to_string()),
-            Err(e) => Err(format!("Failed to receive response: {}", e)),
-        }
-    }
-
     /// Where the dev overlay draws a frame-pacing control, in logical pixels.
     ///
     /// The overlay is renderer-drawn and carries no semantics, so this is how a
@@ -1300,7 +1304,7 @@ impl Robot {
 
     /// Clone of the command channel. Shells use this to surface a panicking
     /// test driver back into the event loop as a `DriverPanicked` command.
-    pub(crate) fn command_sender(&self) -> mpsc::Sender<RobotCommand> {
+    pub(crate) fn command_sender(&self) -> RobotCommandSender {
         self.tx.clone()
     }
 

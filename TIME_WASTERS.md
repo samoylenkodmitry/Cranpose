@@ -544,3 +544,41 @@ the expected presented-frame cadence is unavailable. Use the real X11 display
 for production visual contracts. If isolation is necessary, explicitly create
 an adequately sized Xvfb screen such as `-screen 0 1920x1080x24`, and do not use
 its timing as production-performance evidence.
+
+- Robot frame-pacing measurement trap (2026-08-12): a frame rate read from a
+  robot run is not the app's unless the test pins the mode. `with_test_driver`
+  lifts the pacing mode to `NoVsync` unless the harness called
+  `with_frame_pacing_mode` (which sets `frame_pacing_explicit`), so a pacing
+  test that starts in the default mode is already in the mode it means to
+  switch into, and cannot tell a working control from a dead one. Pin the mode
+  at launch, and check an absolute cap (`60fps` reads ~60) rather than only
+  "NoVSync is fast": fast is also what a run does when nothing happened.
+- Xvfb presents in tens of milliseconds (2026-08-12): five presented-cadence
+  robots -- `robot_markdown_default_visual_contract`, `robot_shader_backdrop_drag`,
+  `robot_shader_external_x11_drag`, `robot_shader_full_demo_external_perf`,
+  `robot_shader_rect_external_animation` -- fail under
+  `xvfb-run -a -s "-screen 0 1600x1200x24"` with `p95_present_ms≈25-30` and
+  `cadence_fps≈35-45` against 120/150Hz contracts, while `work_fps` stays in the
+  hundreds or thousands. They fail identically on clean main, and pass on a real
+  display. The same cost shows up in `robot_novsync_free_runs`, whose NoVSync
+  stage reads ~160fps under Xvfb and ~2500fps on a real display with the loop in
+  pure `Poll` (`CRANPOSE_PACING_DIAG=1` shows `poll=55 wait=0` — 55 iterations a
+  second because each one waits out a present). Judge presented-cadence robots on
+  a real display; judge loop pacing on the cadence-to-`work_fps` ratio.
+- Windowed Fifo on this box blocks a whole second per frame (2026-08-12):
+  running a robot example against `DISPLAY=:0` in `VSync` (Fifo) crawls at ~1fps
+  with `present_ms≈998` in `CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS=1` telemetry --
+  the X display has no consumer for the swapchain, so every present waits out
+  its timeout. It looks exactly like a pacing bug and is not one. Run robot
+  examples under `xvfb-run -a -s "-screen 0 1600x1200x24"` (as CI does);
+  `run_robot_test.sh` needs a DISPLAY even for `CRANPOSE_HEADLESS=1`, because
+  winit still builds an event loop. A windowed `NoVsync` probe is unaffected
+  (Immediate never blocks), which is why only the capped modes hang.
+- Robot-driven cadence numbers changed with the #377 fix (2026-08-12): a driven
+  run no longer pins `ControlFlow::Poll` for its lifetime, so external perf
+  contracts now measure what production does rather than the harness spinning.
+  `robot_shader_external_x11_drag` went from `frames=892 fps=1215.9` to a
+  deterministic `frames=84 fps≈310-355` (2 frames per xdotool motion step) with
+  identical per-frame work (`p95_total_ms` 0.81 -> 0.86). Both clear the
+  contract (>=48 frames, >=150fps, p95 <= 6.67ms); the margin is smaller because
+  the number is now real. Do not "restore" the old figure by re-forcing polling.

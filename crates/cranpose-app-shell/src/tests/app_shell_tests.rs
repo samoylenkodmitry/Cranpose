@@ -5128,6 +5128,72 @@ fn dev_overlay_reuses_text_inside_refresh_window_and_updates_after_it() {
 }
 
 #[test]
+fn a_press_on_a_pacing_control_changes_the_mode_whatever_produced_the_press() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, box_content);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_dev_options(DevOptions {
+        fps_counter: true,
+        frame_pacing_controls: true,
+        ..Default::default()
+    });
+    shell.update();
+
+    assert_eq!(shell.frame_pacing_mode(), FramePacingMode::Vsync);
+    let (x, y) = shell
+        .dev_overlay_control_center(FramePacingMode::NoVsync)
+        .expect("the overlay must lay out a control for every pacing mode");
+
+    // A robot injects presses straight into the shell, exactly like a touch
+    // screen does. When the overlay was hit-tested by the desktop shell's mouse
+    // path instead, every one of those presses went through the controls into
+    // the app underneath and the mode never changed.
+    shell.set_cursor(x, y);
+    assert!(
+        shell.pointer_pressed(),
+        "a press on a pacing control is the shell's to take"
+    );
+    shell.pointer_released_at_position(x, y);
+
+    assert_eq!(shell.frame_pacing_mode(), FramePacingMode::NoVsync);
+    assert!(
+        shell.needs_redraw(),
+        "the overlay has to redraw to show which mode is now selected"
+    );
+
+    // A press that misses every control is the app's, as before.
+    shell.update();
+    shell.set_cursor(x, y + 400.0);
+    shell.pointer_pressed();
+    shell.pointer_released_at_position(x, y + 400.0);
+    assert_eq!(shell.frame_pacing_mode(), FramePacingMode::NoVsync);
+}
+
+#[test]
+fn pacing_controls_stay_out_of_the_way_when_they_are_switched_off() {
+    let _guard = test_guard();
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, box_content);
+    shell.set_viewport(1200.0, 800.0);
+    shell.set_dev_options(DevOptions {
+        fps_counter: true,
+        ..Default::default()
+    });
+    shell.update();
+
+    assert!(
+        shell
+            .dev_overlay_control_center(FramePacingMode::NoVsync)
+            .is_none(),
+        "an overlay without pacing controls must not lay any out"
+    );
+    shell.set_cursor(1000.0, 12.0);
+    shell.pointer_pressed();
+    assert_eq!(shell.frame_pacing_mode(), FramePacingMode::Vsync);
+}
+
+#[test]
 fn pointer_invalidation_without_scene_changes_skips_scene_rebuild() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
