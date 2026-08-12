@@ -20,6 +20,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 mod animations;
+#[cfg(feature = "cranorbit-credits")]
+mod cranorbit_credits;
 mod hacker_news;
 mod images;
 mod interactive_anim;
@@ -99,6 +101,9 @@ pub enum DemoTab {
     MarkdownViewer,
     FilePicker,
     Rotary,
+    /// cranorbit's Credits screen, drawn by cranorbit itself.
+    #[cfg(feature = "cranorbit-credits")]
+    CranorbitCredits,
 }
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Liquid;
@@ -128,6 +133,8 @@ impl DemoTab {
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
             DemoTab::Rotary => "Rotary Input",
+            #[cfg(feature = "cranorbit-credits")]
+            DemoTab::CranorbitCredits => "Credits (cranorbit)",
         }
     }
 
@@ -166,7 +173,9 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 22] = [
+// A slice, not a fixed-length array: the Credits tab is behind a feature, so
+// the count depends on the build.
+pub const DEMO_TABS: &[DemoTab] = &[
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -189,6 +198,8 @@ pub const DEMO_TABS: [DemoTab; 22] = [
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
     DemoTab::Rotary,
+    #[cfg(feature = "cranorbit-credits")]
+    DemoTab::CranorbitCredits,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -411,7 +422,7 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
             .horizontal_scroll(tabs_scroll_state, false),
         RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
         move || {
-            for tab in DEMO_TABS {
+            for tab in DEMO_TABS.iter().copied() {
                 TabButton(tab, active_tab, 10.0);
             }
         },
@@ -552,6 +563,8 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::FilePicker => file_picker_tab(),
         DemoTab::Rotary => rotary_tab(),
+        #[cfg(feature = "cranorbit-credits")]
+        DemoTab::CranorbitCredits => cranorbit_credits::cranorbit_credits_tab(),
         DemoTab::Liquid => LiquidUiTab(),
     }
 }

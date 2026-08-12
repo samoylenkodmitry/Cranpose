@@ -26,6 +26,10 @@ required-features = ["ios"]
 
 [features]
 default = ["renderer-wgpu", "desktop-http"]
+# The cranorbit Credits screen, as its own tab, for measuring a real
+# text-heavy scrolling list. Off by default: it needs the cranorbit checkout
+# beside this one, and the framework must build on its own without it.
+cranorbit-credits = ["dep:cranorbit"]
 renderer-pixels = ["cranpose/renderer-pixels"]
 renderer-wgpu = ["cranpose/renderer-wgpu"]
 desktop = ["cranpose/desktop"]
@@ -56,6 +60,11 @@ cranpose-animation = { path = "../../crates/cranpose-animation" }
 cranpose-core = { path = "../../crates/cranpose-core" }
 cranpose-ui = { path = "../../crates/cranpose-ui" }
 cranpose-foundation = { path = "../../crates/cranpose-foundation" }
+# The Credits tab draws the real cranorbit screen rather than a copy of it, so
+# the fixture cannot drift from the app it stands in for. Optional, and off
+# unless `cranorbit-credits` is on.
+# Package is `cranorbit`; its library target is `cranorbit_app`.
+cranorbit = { path = "../../../cranorbit/app", default-features = false, features = ["renderer-wgpu", "desktop"], optional = true }
 log = "0.4"
 instant = { version = "0.1", features = ["wasm-bindgen"] }
 wasm-bindgen = { version = "0.2", optional = true }
