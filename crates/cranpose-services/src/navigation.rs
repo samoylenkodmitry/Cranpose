@@ -128,8 +128,13 @@ pub fn request_exit() {
 }
 
 /// Take (and clear) a pending exit request. Drained by the platform backend.
+///
+/// Read before written: this runs on every turn of the platform's loop, and a
+/// bare `swap` would dirty the cache line each time even with nothing to take.
+/// The load is the common case by a very long way — an app asks to close once,
+/// ever.
 pub fn take_exit_request() -> bool {
-    EXIT_REQUESTED.swap(false, Ordering::SeqCst)
+    EXIT_REQUESTED.load(Ordering::SeqCst) && EXIT_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 #[cfg(test)]
