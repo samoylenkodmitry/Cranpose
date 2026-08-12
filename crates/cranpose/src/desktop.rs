@@ -5008,6 +5008,12 @@ impl ApplicationHandler for App {
                     RobotCommand::GetFpsStats => {
                         let _ = controller.tx.send(RobotResponse::FpsStats(app.fps_stats()));
                     }
+                    RobotCommand::GetPacingControlCenter(mode) => {
+                        let center = app.dev_overlay_control_center(mode);
+                        let _ = controller
+                            .tx
+                            .send(RobotResponse::PacingControlCenter(center));
+                    }
                     RobotCommand::ResetFpsStats => {
                         app.reset_fps_stats();
                         let _ = controller.tx.send(RobotResponse::Ok);

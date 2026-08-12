@@ -211,6 +211,7 @@ pub(crate) enum RobotCommand {
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
     GetFpsStats,
+    GetPacingControlCenter(cranpose_app_shell::FramePacingMode),
     ResetFpsStats,
     GetLastFlingVelocity,
     ResetLastFlingVelocity,
@@ -242,6 +243,7 @@ pub(crate) enum RobotResponse {
     #[cfg(feature = "renderer-wgpu")]
     RenderStats(Box<Option<RenderStatsSnapshot>>),
     FpsStats(cranpose_app_shell::FpsStats),
+    PacingControlCenter(Option<(f32, f32)>),
     F32(f32),
     #[cfg(feature = "renderer-wgpu")]
     RenderCpuAllocationStats(Box<DebugCpuAllocationStats>),
@@ -1009,6 +1011,25 @@ impl Robot {
             .map_err(|e| format!("Failed to send FPS stats command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::FpsStats(stats)) => Ok(stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// Where the dev overlay draws a frame-pacing control, in logical pixels.
+    ///
+    /// The overlay is renderer-drawn and carries no semantics, so this is how a
+    /// test presses one without hard-coding a coordinate that quietly rots.
+    pub fn pacing_control_center(
+        &self,
+        mode: cranpose_app_shell::FramePacingMode,
+    ) -> Result<Option<(f32, f32)>, String> {
+        self.tx
+            .send(RobotCommand::GetPacingControlCenter(mode))
+            .map_err(|e| format!("Failed to send pacing control command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::PacingControlCenter(center)) => Ok(center),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),

@@ -662,6 +662,24 @@ where
         self.mark_dirty();
     }
 
+    /// Where the dev overlay draws the control for `mode`, in logical pixels.
+    ///
+    /// The overlay is drawn by the renderer rather than composed, so it has no
+    /// semantics for a test to search. Without this a test that wants to press
+    /// a pacing control has to hard-code a coordinate and silently starts
+    /// passing against empty space the moment the overlay's text changes.
+    pub fn dev_overlay_control_center(&self, mode: FramePacingMode) -> Option<(f32, f32)> {
+        self.dev_overlay_controls
+            .iter()
+            .find(|control| control.mode == mode)
+            .map(|control| {
+                (
+                    control.bounds.x + control.bounds.width * 0.5,
+                    control.bounds.y + control.bounds.height * 0.5,
+                )
+            })
+    }
+
     pub fn handle_dev_overlay_click(&mut self, x: f32, y: f32) -> Option<FramePacingMode> {
         if !self.dev_options.frame_pacing_controls {
             return None;
