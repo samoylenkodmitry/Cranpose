@@ -2810,11 +2810,22 @@ fn desktop_present_mode(
     surface_caps: &wgpu::SurfaceCapabilities,
     frame_pacing_mode: FramePacingMode,
 ) -> wgpu::PresentMode {
-    if std::env::var_os("CRANPOSE_PRESENT_MODE").is_some() {
+    let chosen = if std::env::var_os("CRANPOSE_PRESENT_MODE").is_some() {
         crate::present_mode::select_present_mode(surface_caps)
     } else {
         crate::present_mode::select_present_mode_for_frame_pacing(surface_caps, frame_pacing_mode)
-    }
+    };
+    // Which present mode a surface actually got is the first thing anyone
+    // needs when a NoVsync run still reads the panel's refresh rate, and it
+    // was previously unknowable without a debugger: the fallback is silent, so
+    // a surface that cannot do Immediate looks identical to one that can.
+    log::warn!(
+        "desktop present mode: pacing={:?} chose {:?}; surface offers {:?}",
+        frame_pacing_mode,
+        chosen,
+        surface_caps.present_modes,
+    );
+    chosen
 }
 
 fn surface_config_for_window(
@@ -4551,6 +4562,14 @@ impl ApplicationHandler for App {
                             return;
                         }
                         SurfaceFrame::Skip => {
+                            // Skipping a present must not end the free-running
+                            // chain -- see the `else` arm below.
+                            if should_chain_no_vsync_redraw(
+                                frame_interval,
+                                app.frame_schedule().needs_frame,
+                            ) {
+                                request_redraw_once(window, &mut self.primary_redraw_pending);
+                            }
                             return;
                         }
                     };
@@ -4605,6 +4624,25 @@ impl ApplicationHandler for App {
                     #[cfg(feature = "robot")]
                     {
                         self.robot_visible_surface_dirty = app.needs_redraw();
+                    }
+                    // NoVsync free-runs by chaining a redraw off the last one,
+                    // and this arm is a redraw that presented nothing -- the
+                    // frame's work produced no visual change. Re-arming only on
+                    // the presenting path meant one such frame ended the chain
+                    // for good: the loop dropped back to whatever else happened
+                    // to wake it, which is the display's own cadence, and the
+                    // overlay read 60fps while still labelled NoVSync. It came
+                    // back only when an unrelated event -- switching tabs and
+                    // returning -- happened to restart the chain.
+                    //
+                    // The `needs_frame` half of the condition is what keeps a
+                    // genuinely idle window at 0fps, so re-arming here does not
+                    // spin: it only continues a chain the app still wants.
+                    if should_chain_no_vsync_redraw(
+                        frame_interval,
+                        app.frame_schedule().needs_frame,
+                    ) {
+                        request_redraw_once(window, &mut self.primary_redraw_pending);
                     }
                 }
             }
