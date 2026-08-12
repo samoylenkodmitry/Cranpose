@@ -8693,3 +8693,127 @@ fn the_shell_stores_the_frame_rate_preference_it_is_given() {
         crate::FrameRatePreference::Exact(60.0)
     );
 }
+
+thread_local! {
+    /// (position, global_position) of every Down the translated node saw.
+    static TRANSLATED_LAYER_POINTER_EVENTS: RefCell<Vec<(Point, Point)>> =
+        const { RefCell::new(Vec::new()) };
+    /// The same, from a handler outside the translated node.
+    static UNTRANSLATED_PARENT_POINTER_EVENTS: RefCell<Vec<(Point, Point)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// How far the inner node is pushed right. Any non-zero value does; 60 is far
+/// enough that a shifted reading cannot be mistaken for rounding.
+const TRANSLATED_LAYER_OFFSET: f32 = 60.0;
+
+/// A pointer handler on a translated node, and another on its untranslated
+/// parent — the two places a drag gesture can be read from.
+#[composable]
+fn translated_layer_pointer_probe() {
+    Box(
+        Modifier::empty().fill_max_size().pointer_input(
+            (),
+            move |scope: PointerInputScope| async move {
+                scope
+                    .await_pointer_event_scope(|await_scope| async move {
+                        loop {
+                            let event = await_scope.await_pointer_event().await;
+                            if event.kind == PointerEventKind::Down {
+                                UNTRANSLATED_PARENT_POINTER_EVENTS.with(|slot| {
+                                    slot.borrow_mut()
+                                        .push((event.position, event.global_position));
+                                });
+                            }
+                        }
+                    })
+                    .await;
+            },
+        ),
+        BoxSpec::default(),
+        || {
+            Box(
+                Modifier::empty()
+                    .fill_max_size()
+                    .graphics_layer(|| GraphicsLayer {
+                        translation_x: TRANSLATED_LAYER_OFFSET,
+                        ..Default::default()
+                    })
+                    .pointer_input((), move |scope: PointerInputScope| async move {
+                        scope
+                            .await_pointer_event_scope(|await_scope| async move {
+                                loop {
+                                    let event = await_scope.await_pointer_event().await;
+                                    if event.kind == PointerEventKind::Down {
+                                        TRANSLATED_LAYER_POINTER_EVENTS.with(|slot| {
+                                            slot.borrow_mut()
+                                                .push((event.position, event.global_position));
+                                        });
+                                    }
+                                }
+                            })
+                            .await;
+                    }),
+                BoxSpec::default(),
+                || {},
+            );
+        },
+    );
+}
+
+/// A pointer position is in its own node's space, so a translated node reports
+/// a finger short by the translation — while `global_position` does not move.
+///
+/// This is the contract a drag gesture is built on, and getting it wrong is
+/// silent: put the handler on the node the drag itself translates and the
+/// offset ends up measuring itself (`offset = (finger - start) / 2`), so it
+/// converges on half the travel and a half-width dismiss threshold can never
+/// be crossed. `SwipeToDismiss` avoids it both ways at once — the gesture is
+/// read on the outer node, and it reads `global_position` — and the
+/// `graphics_layer` docs say so. This is what holds them to it.
+#[test]
+fn a_pointer_inside_a_translated_layer_reports_the_translation() {
+    let _guard = test_guard();
+    TRANSLATED_LAYER_POINTER_EVENTS.with(|slot| slot.borrow_mut().clear());
+    UNTRANSLATED_PARENT_POINTER_EVENTS.with(|slot| slot.borrow_mut().clear());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        translated_layer_pointer_probe,
+    );
+    shell.set_viewport(400.0, 400.0);
+    shell.update();
+
+    let tap_x = 200.0;
+    assert!(
+        shell.set_cursor(tap_x, 200.0),
+        "the probe should be hovered"
+    );
+    shell.update();
+    assert!(shell.pointer_pressed(), "pointer down should hit the probe");
+    shell.update();
+
+    let (local, global) = TRANSLATED_LAYER_POINTER_EVENTS
+        .with(|slot| slot.borrow().first().copied())
+        .expect("the translated node should have received the pointer down");
+    assert!(
+        (local.x - (tap_x - TRANSLATED_LAYER_OFFSET)).abs() < 0.5,
+        "a node translated by {TRANSLATED_LAYER_OFFSET} must see the tap {TRANSLATED_LAYER_OFFSET} \
+         to its left, got {local:?}"
+    );
+    assert!(
+        (global.x - tap_x).abs() < 0.5,
+        "global_position must be untouched by the layer, got {global:?}"
+    );
+
+    let (parent_local, parent_global) = UNTRANSLATED_PARENT_POINTER_EVENTS
+        .with(|slot| slot.borrow().first().copied())
+        .expect("the untranslated parent should have received the pointer down too");
+    assert!(
+        (parent_local.x - tap_x).abs() < 0.5 && (parent_global.x - tap_x).abs() < 0.5,
+        "a handler outside the translated node sees the tap where it happened, got \
+         {parent_local:?} / {parent_global:?}"
+    );
+}
