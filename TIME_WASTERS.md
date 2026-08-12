@@ -553,18 +553,25 @@ its timing as production-performance evidence.
   switch into, and cannot tell a working control from a dead one. Pin the mode
   at launch, and check an absolute cap (`60fps` reads ~60) rather than only
   "NoVSync is fast": fast is also what a run does when nothing happened.
-- Xvfb presents in tens of milliseconds (2026-08-12): five presented-cadence
-  robots -- `robot_markdown_default_visual_contract`, `robot_shader_backdrop_drag`,
+- Xvfb presents in tens of milliseconds, and the suite used to make you say so
+  (2026-08-12): five presented-cadence robots --
+  `robot_markdown_default_visual_contract`, `robot_shader_backdrop_drag`,
   `robot_shader_external_x11_drag`, `robot_shader_full_demo_external_perf`,
-  `robot_shader_rect_external_animation` -- fail under
+  `robot_shader_rect_external_animation` -- failed under
   `xvfb-run -a -s "-screen 0 1600x1200x24"` with `p95_present_ms≈25-30` and
-  `cadence_fps≈35-45` against 120/150Hz contracts, while `work_fps` stays in the
-  hundreds or thousands. They fail identically on clean main, and pass on a real
-  display. The same cost shows up in `robot_novsync_free_runs`, whose NoVSync
-  stage reads ~160fps under Xvfb and ~2500fps on a real display with the loop in
-  pure `Poll` (`CRANPOSE_PACING_DIAG=1` shows `poll=55 wait=0` — 55 iterations a
-  second because each one waits out a present). Judge presented-cadence robots on
-  a real display; judge loop pacing on the cadence-to-`work_fps` ratio.
+  `cadence_fps≈35-45` against 120/150Hz contracts while `work_fps` stayed in the
+  hundreds or thousands. They failed identically on a clean tree, which made them
+  look environmental; they were not. CI passed because both robot jobs set
+  `CRANPOSE_ROBOT_SOFTWARE_RENDERER=1`, which is what relaxes those assertions,
+  and a hand-run suite did not. `run_robot_test.sh` now owns that decision
+  (`CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS=1` enforces them), so a plain
+  `./run_robot_test.sh --sequential` is green and means the same thing as CI.
+  Do not conclude "environmental" from "fails on clean main too" -- a shared
+  harness mistake fails on clean main as well. The presentation cost is real
+  though: `robot_novsync_free_runs` reads ~160fps under Xvfb and ~2500fps on a
+  real display with the loop in pure `Poll` (`CRANPOSE_PACING_DIAG=1` shows
+  `poll=55 wait=0` — 55 iterations a second because each waits out a present),
+  so judge loop pacing on the cadence-to-`work_fps` ratio, never on cadence.
 - Windowed Fifo on this box blocks a whole second per frame (2026-08-12):
   running a robot example against `DISPLAY=:0` in `VSync` (Fifo) crawls at ~1fps
   with `present_ms≈998` in `CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS=1` telemetry --
