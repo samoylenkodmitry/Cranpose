@@ -4759,6 +4759,14 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        // The app asked to be closed -- `cranpose_services::request_exit`.
+        // Checked here rather than inside an event handler because the request
+        // usually comes from composition, which runs from this loop, and
+        // `exit()` only takes effect at the next turn of it anyway.
+        if cranpose_services::take_exit_request() {
+            event_loop.exit();
+            return;
+        }
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
             self.refresh_native_window_requests();

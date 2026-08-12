@@ -72,8 +72,8 @@ pub use launch_args::{
     LaunchArgs, LaunchArgsRef, ProvideLaunchArgs,
 };
 pub use navigation::{
-    back_interception_enabled, push_back_request, set_back_interception, set_back_request_listener,
-    take_back_requests,
+    back_interception_enabled, push_back_request, request_exit, set_back_interception,
+    set_back_request_listener, take_back_requests, take_exit_request,
 };
 pub use network_status::{
     clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,

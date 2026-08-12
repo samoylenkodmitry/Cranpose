@@ -2244,6 +2244,17 @@ pub fn run(
             current_host_window_size,
         );
 
+        // The app asked to be closed -- `cranpose_services::request_exit`. Not
+        // a break: this loop leaving would drop the surface while the activity
+        // is still up. `ANativeActivity_finish` asks the platform to tear the
+        // activity down, which arrives back here as `MainEvent::Destroy` and
+        // takes the ordinary exit below. So the app's request and the system's
+        // own back both end the same way.
+        if cranpose_services::take_exit_request() {
+            log::info!("App requested exit; finishing the activity");
+            crate::android_finish::finish_activity(app.activity_as_ptr());
+        }
+
         // Check if Destroy event requested exit
         if should_exit.load(Ordering::Relaxed) {
             log::info!("Exiting cleanly after Destroy event");

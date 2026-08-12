@@ -16,6 +16,9 @@
 //!   fallback, so it always pushes a request regardless of interception.
 //! - **Desktop/web**: no OS back control; apps may map keys themselves and
 //!   call [`push_back_request`] directly.
+//!
+//! [`request_exit`] is the other direction: the app, rather than the platform,
+//! deciding that it is time to leave.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
@@ -27,6 +30,8 @@ type BackListener = Box<dyn Fn() + Send + Sync + 'static>;
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
 static BACK_LISTENER: OnceLock<BackListener> = OnceLock::new();
+/// A flag rather than a count: closing twice is closing once.
+static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Record a system back request (called by the platform backend's gesture /
 /// button handler).
@@ -78,6 +83,55 @@ pub fn back_interception_enabled() -> bool {
     BACK_INTERCEPTION.load(Ordering::SeqCst)
 }
 
+/// Ask the platform to close the app.
+///
+/// The counterpart to [`set_back_interception`]`(false)`: interception says
+/// "let the platform's own back control take me out of here", and this says
+/// the same thing when the app is the one that decided. An app needs it
+/// whenever it owns the affordance that means "leave":
+///
+/// - a screen-level dismiss gesture the app draws itself. On Android a
+///   `NativeActivity` consumes every pointer event on the display, so the
+///   platform's window-level swipe never fires and the app's own gesture is
+///   the only one there is — completing it has to close the app, and there is
+///   no back key on a watch to fall back on.
+/// - a Quit item in the app's own menu.
+///
+/// It is a request, not a teardown: the platform decides when the frame loop
+/// stops, so it is safe to call from the middle of one — including from a
+/// gesture's settle animation, which is where the decision usually lands.
+///
+/// The backend drains it on its next turn of the loop, which is the following
+/// frame for the usual caller. An app that calls this from another thread while
+/// the loop is parked — nothing animating, no input — should wake it the same
+/// way it would for a back request; registering
+/// [`set_back_request_listener`] is enough, because this nudges that listener
+/// too.
+///
+/// Platform behaviour, and where it does nothing:
+///
+/// - **Android**: finishes the activity, the same outcome as Compose's
+///   `backDispatcher.onBackPressed()` on a screen with no `BackHandler`.
+/// - **Desktop**: exits the event loop, closing the window.
+/// - **iOS**: nothing. Apple's guidelines forbid an app terminating itself and
+///   there is no supported API for it; the request is dropped rather than
+///   faked, so an app can call this unconditionally.
+/// - **Web**: nothing. A page cannot close a tab it did not open.
+pub fn request_exit() {
+    EXIT_REQUESTED.store(true, Ordering::SeqCst);
+    if let Some(listener) = BACK_LISTENER.get() {
+        // The same nudge a back request gets, and for the same reason: an app
+        // that has gone idle has no frame loop to notice the flag, and the
+        // platform drains it from that loop.
+        listener();
+    }
+}
+
+/// Take (and clear) a pending exit request. Drained by the platform backend.
+pub fn take_exit_request() -> bool {
+    EXIT_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +146,10 @@ mod tests {
         assert_eq!(take_back_requests(), 0);
     }
 
+    /// The listener is a `OnceLock`, so exactly one test in this process can
+    /// own it -- a second registration is silently ignored, and a test that
+    /// registered its own would sit there hearing nothing. Everything that has
+    /// to observe the nudge is therefore checked here.
     #[test]
     fn a_registered_listener_hears_every_request() {
         let heard = Arc::new(AtomicUsize::new(0));
@@ -104,6 +162,34 @@ mod tests {
         push_back_request();
         assert_eq!(heard.load(Ordering::SeqCst), before + 2);
         let _ = take_back_requests();
+
+        // An exit request nudges it too. The flag is drained from the frame
+        // loop, and an app with nothing moving has parked that loop; without
+        // the nudge the request would sit there until something unrelated
+        // woke the app.
+        let before = heard.load(Ordering::SeqCst);
+        request_exit();
+        assert_eq!(
+            heard.load(Ordering::SeqCst),
+            before + 1,
+            "an exit request has to wake an idle app the way a back request does"
+        );
+        let _ = take_exit_request();
+    }
+
+    #[test]
+    fn an_exit_request_is_taken_once() {
+        let _ = take_exit_request(); // clear any residue
+        assert!(!take_exit_request());
+        request_exit();
+        // Twice, because closing twice is closing once and a settle animation
+        // can easily ask on two consecutive frames.
+        request_exit();
+        assert!(take_exit_request());
+        assert!(
+            !take_exit_request(),
+            "a drained request came back; the platform would close twice"
+        );
     }
 
     #[test]
