@@ -680,27 +680,30 @@ fn line_prefix_widths_key(
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct FontScaleMetricsKey {
-    font_hash: u64,
-    glyph_font_size_bits: u32,
-}
-
+/// A glyph's advance, in font units.
+///
+/// Font units rather than pixels, because everything ab_glyph reports for a
+/// scaled font is the unscaled value times one horizontal scale factor. Caching
+/// the scaled number buys nothing and costs the key: the font size has to join
+/// it, and text whose size moves -- a scaling list, a zoom, a spring on a font
+/// size -- then misses on every glyph of every frame and re-reads the font
+/// tables for all of them. In font units such a page pays for each glyph once
+/// and multiplies from then on.
 #[derive(Clone, Copy, Debug)]
 struct CachedGlyphMetrics {
     glyph_id: GlyphId,
-    advance: f32,
+    advance_unscaled: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct GlyphMetricsKey {
-    font: FontScaleMetricsKey,
+    font_hash: u64,
     ch: char,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct KernMetricsKey {
-    font: FontScaleMetricsKey,
+    font_hash: u64,
     previous_id: u32,
     glyph_id: u32,
 }
@@ -737,10 +740,11 @@ impl SoftwareTextGlyphMetricsCache {
         self.stats
     }
 
+    /// Glyph id and advance in font units. Multiply the advance by the run's
+    /// horizontal scale factor, which is what ab_glyph would have done.
     fn glyph_metrics<F, S>(
         &mut self,
         font: &SoftwareTextFont,
-        glyph_font_size: f32,
         scaled_font: &S,
         ch: char,
     ) -> CachedGlyphMetrics
@@ -748,30 +752,30 @@ impl SoftwareTextGlyphMetricsCache {
         F: Font,
         S: ScaleFont<F>,
     {
-        let font_key = FontScaleMetricsKey {
+        let key = GlyphMetricsKey {
             font_hash: font.content_hash(),
-            glyph_font_size_bits: glyph_font_size.to_bits(),
+            ch,
         };
-        let key = GlyphMetricsKey { font: font_key, ch };
         if let Some(metrics) = self.glyphs.get(&key).copied() {
             self.stats.glyph_hits = self.stats.glyph_hits.saturating_add(1);
             return metrics;
         }
 
-        let glyph_id = scaled_font.glyph_id(ch);
+        let glyph_id = scaled_font.font().glyph_id(ch);
         let metrics = CachedGlyphMetrics {
             glyph_id,
-            advance: scaled_font.h_advance(glyph_id).max(0.0),
+            advance_unscaled: scaled_font.font().h_advance_unscaled(glyph_id).max(0.0),
         };
         self.glyphs.put(key, metrics);
         self.stats.glyph_misses = self.stats.glyph_misses.saturating_add(1);
         metrics
     }
 
+    /// Kerning between two glyphs in font units, scaled by the caller like the
+    /// advance beside it.
     fn kern<F, S>(
         &mut self,
         font: &SoftwareTextFont,
-        glyph_font_size: f32,
         scaled_font: &S,
         previous_id: GlyphId,
         glyph_id: GlyphId,
@@ -780,12 +784,8 @@ impl SoftwareTextGlyphMetricsCache {
         F: Font,
         S: ScaleFont<F>,
     {
-        let font_key = FontScaleMetricsKey {
-            font_hash: font.content_hash(),
-            glyph_font_size_bits: glyph_font_size.to_bits(),
-        };
         let key = KernMetricsKey {
-            font: font_key,
+            font_hash: font.content_hash(),
             previous_id: previous_id.0.into(),
             glyph_id: glyph_id.0.into(),
         };
@@ -794,7 +794,7 @@ impl SoftwareTextGlyphMetricsCache {
             return kern;
         }
 
-        let kern = scaled_font.kern(previous_id, glyph_id);
+        let kern = scaled_font.font().kern_unscaled(previous_id, glyph_id);
         self.kerns.put(key, kern);
         self.stats.kern_misses = self.stats.kern_misses.saturating_add(1);
         kern
@@ -2954,21 +2954,19 @@ fn cached_line_advance_width(
     glyph_metrics: &mut SoftwareTextGlyphMetricsCache,
 ) -> f32 {
     let scaled_font = font.font.as_scaled(PxScale::from(glyph_font_size));
+    // One scale factor for the whole run: the cache keeps font units, and this
+    // is the multiply ab_glyph would have applied per lookup.
+    let h_scale = scaled_font.h_scale_factor();
     let mut width = 0.0f32;
     let mut previous = None;
 
     for ch in text.chars() {
-        let metrics = glyph_metrics.glyph_metrics(font, glyph_font_size, &scaled_font, ch);
+        let metrics = glyph_metrics.glyph_metrics(font, &scaled_font, ch);
         if let Some(previous_id) = previous {
-            width += glyph_metrics.kern(
-                font,
-                glyph_font_size,
-                &scaled_font,
-                previous_id,
-                metrics.glyph_id,
-            );
+            width +=
+                glyph_metrics.kern(font, &scaled_font, previous_id, metrics.glyph_id) * h_scale;
         }
-        width += metrics.advance;
+        width += metrics.advance_unscaled * h_scale;
         previous = Some(metrics.glyph_id);
     }
 
@@ -3066,29 +3064,28 @@ fn append_font_prefix_width_segment_cached(
         .max(style_synthesis.visual_overhang_px());
 
     let mut previous = None;
+    // One scale factor for the whole run: the cache keeps font units.
+    let h_scale = scaled_font.h_scale_factor();
 
     for (index, ch) in segment.chars().enumerate() {
-        let metrics = cache
-            .glyph_metrics
-            .glyph_metrics(font, glyph_font_size, &scaled_font, ch);
+        let metrics = cache.glyph_metrics.glyph_metrics(font, &scaled_font, ch);
         let separator = if index == 0 {
             0.0
         } else {
             previous
                 .map(|previous_id| {
-                    weight_synthesis.apply_width(cache.glyph_metrics.kern(
-                        font,
-                        glyph_font_size,
-                        &scaled_font,
-                        previous_id,
-                        metrics.glyph_id,
-                    ))
+                    weight_synthesis.apply_width(
+                        cache
+                            .glyph_metrics
+                            .kern(font, &scaled_font, previous_id, metrics.glyph_id)
+                            * h_scale,
+                    )
                 })
                 .unwrap_or(0.0)
                 + letter_spacing
         };
         sink.separator_before.push(separator);
-        sink.width += separator + weight_synthesis.apply_width(metrics.advance);
+        sink.width += separator + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
         sink.prefix_widths.push(sink.width.max(0.0));
         previous = Some(metrics.glyph_id);
     }
@@ -5633,6 +5630,61 @@ mod tests {
             stats_after_first,
             "repeat frames of an unchanged string must not re-shape against the app face"
         );
+    }
+
+    #[test]
+    fn a_font_size_animation_measures_each_glyph_once_rather_than_once_per_size() {
+        let font = default_software_text_font().expect("bundled default test font");
+        let measurer = SoftwareTextMeasurer::new(font, 64);
+        let text = AnnotatedString::from("Scaling list row");
+
+        let sized = |size: f32| TextStyle {
+            span_style: SpanStyle {
+                font_size: cranpose_ui::text::TextUnit::Sp(size),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // One size to fill the cache with this string's glyphs and pairs.
+        let first = measurer.measure(&text, &sized(14.0));
+        let after_first = measurer.lock_cache().glyph_metrics.stats();
+
+        // A scaling list re-draws the same rows at a new size every frame. Font
+        // metrics are linear in the size, so nothing here is new work: what the
+        // cache holds is font units, and only the multiply changes.
+        for step in 0..120 {
+            let size = 14.0 + step as f32 * 0.137;
+            let measured = measurer.measure(&text, &sized(size));
+            assert!(
+                measured.width > 0.0,
+                "a scaled measurement must still produce a width"
+            );
+        }
+
+        // Hits climb, which is the point. What must not move is the misses:
+        // every one of those is a font-table read, and keying by size made them
+        // grow with every frame a scaling list drew.
+        let after_scaling = measurer.lock_cache().glyph_metrics.stats();
+        assert_eq!(
+            (after_scaling.glyph_misses, after_scaling.kern_misses),
+            (after_first.glyph_misses, after_first.kern_misses),
+            "measuring the same glyphs at a new size must not re-read the font: {after_scaling:?}"
+        );
+        assert!(
+            after_scaling.glyph_hits > after_first.glyph_hits,
+            "the scaled measurements must have come from the cache"
+        );
+
+        // And the scaling stays honest: twice the size is twice the advance.
+        let single = measurer.measure(&AnnotatedString::from("W"), &sized(20.0));
+        let double = measurer.measure(&AnnotatedString::from("W"), &sized(40.0));
+        let ratio = double.width / single.width.max(f32::EPSILON);
+        assert!(
+            (ratio - 2.0).abs() < 0.01,
+            "advances must scale with the font size: {single:?} -> {double:?} (ratio {ratio})"
+        );
+        let _ = first;
     }
 
     #[test]

@@ -176,6 +176,25 @@ if [ "$BUILD_ONLY" = "1" ] && [ "$SKIP_BUILD" = "1" ]; then
     exit 1
 fi
 
+# The strict frame-rate contracts inside the robot runners measure presented
+# cadence, which belongs to the display the suite happens to be pointed at. A
+# suite run is not that measurement: under Xvfb a present costs tens of
+# milliseconds, so the cadence assertions fail on a tree that is perfectly
+# healthy, and a run on a real display is measuring that display. Every real
+# caller of this script therefore relaxed them by hand, which left the default
+# as a trap: forget the variable and five green tests come back red.
+#
+# The suite owns the decision now. `perf_robot_fps.sh` is where frame-rate
+# budgets are gated, and CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS=1 turns
+# them back on here for anyone who wants them against a known display.
+if [ -n "${CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS:-}" ]; then
+    echo "Hardware frame-rate contracts: ENFORCED (CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS)"
+else
+    export CRANPOSE_ROBOT_SOFTWARE_RENDERER="${CRANPOSE_ROBOT_SOFTWARE_RENDERER:-1}"
+    echo "Hardware frame-rate contracts: relaxed (presented cadence belongs to the display, not the tree)"
+    echo "  set CRANPOSE_ROBOT_FORCE_HARDWARE_PERF_CONTRACTS=1 to enforce them"
+fi
+
 if ! [[ "$STAGE_ARTIFACT_SHARDS" =~ ^[1-9][0-9]*$ ]]; then
     echo "--stage-artifact-shards must be a positive integer"
     exit 1
