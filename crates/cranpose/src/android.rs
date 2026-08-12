@@ -2252,7 +2252,7 @@ pub fn run(
         // own back both end the same way.
         if cranpose_services::take_exit_request() {
             log::info!("App requested exit; finishing the activity");
-            crate::android_finish::finish_activity(app.activity_as_ptr());
+            crate::android_finish::finish_activity(&app);
         }
 
         // Check if Destroy event requested exit

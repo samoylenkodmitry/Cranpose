@@ -1,36 +1,33 @@
-//! Closing the activity from inside the app.
+//! Closing the activity from inside the app: the Android half of
+//! [`crate::request_exit`].
 //!
-//! One NDK symbol, `ANativeActivity_finish`, and the safe call through it. It
-//! is the whole of the platform API behind [`crate::request_exit`] on Android:
-//! `android-activity` hands out the `ANativeActivity*` but wraps nothing that
-//! finishes it, and the C function is documented as safe to call from any
-//! thread — it posts a message to the activity's own looper rather than tearing
-//! anything down where it is called.
+//! It is a JNI call to `Activity.finish()`, and it has to be.
+//! `ANativeActivity_finish` looks like the obvious answer and is a trap:
+//! `AndroidApp::activity_as_ptr` returns a **jobject** global reference to the
+//! Activity, not an `ANativeActivity*` — android-activity's own source says so,
+//! and `android_jni` in this crate has always treated it as a jobject. Passing
+//! it to the NDK function type-confuses the two. Measured on a Pixel Watch 3
+//! before this was understood: `app died, no saved state` and `exited due to
+//! signal 9 (Killed)`, followed by a second of black while the system cleaned
+//! up. That reads exactly like a working-but-slow exit, which is what makes it
+//! worth a module of its own with the reason written down.
 //!
 //! `finish()` does not end the process or stop this frame. The activity is
 //! destroyed asynchronously and arrives back at the run loop as
 //! `MainEvent::Destroy`, which is the same path the system's own back takes, so
 //! an app-requested exit and a user-requested one leave through the same door.
 
-#![allow(unsafe_code)]
-
-use std::ffi::c_void;
-
-extern "C" {
-    fn ANativeActivity_finish(activity: *mut c_void);
-}
+use crate::android_jni::with_android_activity_env;
+use jni::{jni_sig, jni_str};
 
 /// Asks the platform to finish the activity.
-///
-/// `activity` must be the `ANativeActivity*` from the `AndroidApp` the run loop
-/// was handed; a null pointer is ignored rather than passed on.
-pub(crate) fn finish_activity(activity: *mut c_void) {
-    if activity.is_null() {
-        log::warn!("cannot finish the activity: no ANativeActivity pointer");
-        return;
+pub(crate) fn finish_activity(app: &android_activity::AndroidApp) {
+    let finished = with_android_activity_env(app, |env, activity| {
+        env.call_method(&activity, jni_str!("finish"), jni_sig!("()V"), &[])
+            .map(|_| ())
+            .map_err(|error| format!("Activity.finish() failed: {error}"))
+    });
+    if let Err(error) = finished {
+        log::error!("could not finish the activity: {error}");
     }
-    // SAFETY: the pointer comes from `AndroidApp::activity_as_ptr` and the
-    // activity outlives the run loop that owns that handle. The call posts to
-    // the activity's looper and returns; it dereferences nothing here.
-    unsafe { ANativeActivity_finish(activity) };
 }

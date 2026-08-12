@@ -1141,8 +1141,6 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         "android_services.rs",
         "android_surface.rs",
         "android_file_picker.rs",
-        // One `ANativeActivity_finish`: how `request_exit` closes the app.
-        "android_finish.rs",
         // The Play Billing bridge: the exported symbols
         // `dev.cranpose.android.CranposeBilling` calls back through. Decoding
         // what they carry lives in safe Rust next door, in
@@ -1336,7 +1334,6 @@ fn workspace_ffi_boundaries_are_explicit() {
         "crates/cranpose/src/android_services.rs",
         "crates/cranpose/src/android_surface.rs",
         "crates/cranpose/src/android_file_picker.rs",
-        "crates/cranpose/src/android_finish.rs",
         // The Play Billing bridge: the exported symbols
         // `dev.cranpose.android.CranposeBilling` calls back through, and
         // nothing else. Decoding the payloads they carry lives in safe Rust in
