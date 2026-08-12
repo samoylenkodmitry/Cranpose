@@ -535,6 +535,15 @@ struct App {
     frame_pacing_mode: FramePacingMode,
     last_frame_start_time: Option<Instant>,
     primary_redraw_pending: bool,
+    /// Whether a robot-driven run pins the event loop to `ControlFlow::Poll`.
+    ///
+    /// Polling keeps robot commands serviced promptly, which is what a driver
+    /// wants almost all of the time. It is also indistinguishable, from the
+    /// loop's point of view, from the app itself asking to free-run -- so a
+    /// test measuring whether NoVSync frees the loop measures the harness
+    /// instead of the app, and passes against a build where NoVSync does
+    /// nothing at all. A driver turns this off around a measurement window.
+    robot_force_poll: bool,
     primary_surface_dirty: bool,
     /// True while the very first frame still owes the surface a present. macOS
     /// can drop the `request_redraw` issued during `resumed`, leaving a static
@@ -612,6 +621,7 @@ impl App {
             frame_pacing_mode,
             last_frame_start_time: None,
             primary_redraw_pending: false,
+            robot_force_poll: true,
             primary_surface_dirty: false,
             primary_initial_present_pending: false,
             vsync_interval: default_vsync_interval(),
@@ -4970,6 +4980,16 @@ impl ApplicationHandler for App {
                     RobotCommand::GetFpsStats => {
                         let _ = controller.tx.send(RobotResponse::FpsStats(app.fps_stats()));
                     }
+                    RobotCommand::SetPollForcing(enabled) => {
+                        self.robot_force_poll = enabled;
+                        let _ = controller.tx.send(RobotResponse::Ok);
+                    }
+                    RobotCommand::GetPacingControlCenter(mode) => {
+                        let center = app.dev_overlay_control_center(mode);
+                        let _ = controller
+                            .tx
+                            .send(RobotResponse::PacingControlCenter(center));
+                    }
                     RobotCommand::ResetFpsStats => {
                         app.reset_fps_stats();
                         let _ = controller.tx.send(RobotResponse::Ok);
@@ -5435,7 +5455,7 @@ impl ApplicationHandler for App {
 
         // Smart ControlFlow: only Poll when necessary
         #[cfg(feature = "robot")]
-        let robot_needs_poll = self.robot_controller.is_some();
+        let robot_needs_poll = self.robot_controller.is_some() && self.robot_force_poll;
 
         #[cfg(not(feature = "robot"))]
         let robot_needs_poll = false;
