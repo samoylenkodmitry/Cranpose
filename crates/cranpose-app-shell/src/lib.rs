@@ -947,7 +947,6 @@ where
         // a running animation -- which does dirty state -- reached 500.
         let needs_frame = self.is_dirty
             || self.should_render()
-            || self.runtime.runtime_handle().has_frame_callbacks()
             || self.has_active_pointer_gesture()
             || self.renderer.needs_frame_warmup();
         FrameSchedule {

@@ -29,7 +29,19 @@ const WINDOW_HEIGHT: u32 = 700;
 /// Long enough that a 60fps run and a free-running one cannot be confused, and
 /// short enough to keep the example quick.
 const MEASURE_FOR: Duration = Duration::from_millis(2000);
+/// Thrown away. Long enough to get GPU pipeline compilation out of the way.
+const WARMUP_FOR: Duration = Duration::from_millis(1500);
 const MIN_FPS: f32 = 120.0;
+
+/// Frames the app produced on its own, per second of wall clock.
+fn measure(robot: &cranpose::Robot, window: Duration) -> f32 {
+    let started = Instant::now();
+    robot.reset_fps_stats().expect("reset fps stats");
+    std::thread::sleep(window);
+    let elapsed = started.elapsed();
+    let stats = robot.fps_stats().expect("read fps stats");
+    stats.frame_count as f32 / elapsed.as_secs_f32()
+}
 
 fn main() {
     let _ = env_logger::try_init();
@@ -66,11 +78,27 @@ fn main() {
             // belong to neither mode.
             std::thread::sleep(Duration::from_millis(400));
 
-            robot.reset_fps_stats().expect("reset fps stats");
-            let started = Instant::now();
-            std::thread::sleep(MEASURE_FOR);
-            let elapsed = started.elapsed();
-            let stats = robot.fps_stats().expect("read fps stats");
+            // Discard a warm-up window before measuring. The first seconds of
+            // a cold process are spent compiling GPU pipelines, and a window
+            // that overlaps that measures the compiler, not the pacing: the
+            // very first run of this example reported 60fps for exactly that
+            // reason while every later run reported 400. Reporting both makes
+            // a cold run visible instead of letting it decide the verdict.
+            let warm = measure(&robot, WARMUP_FOR);
+            println!("novsync_free_run stage=warmup observed_fps={warm:.1}");
+
+            let (observed, stats, elapsed) = {
+                let started = Instant::now();
+                robot.reset_fps_stats().expect("reset fps stats");
+                std::thread::sleep(MEASURE_FOR);
+                let elapsed = started.elapsed();
+                let stats = robot.fps_stats().expect("read fps stats");
+                (
+                    stats.frame_count as f32 / elapsed.as_secs_f32(),
+                    stats,
+                    elapsed,
+                )
+            };
 
             println!(
                 "novsync_free_run stage=async_runtime fps={:.1} work_fps={:.1} \
@@ -82,7 +110,6 @@ fn main() {
                 elapsed.as_secs_f32(),
             );
 
-            let observed = stats.frame_count as f32 / elapsed.as_secs_f32();
             println!("novsync_free_run observed_fps={observed:.1}");
 
             if observed <= MIN_FPS {
