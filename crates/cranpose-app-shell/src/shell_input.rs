@@ -215,6 +215,12 @@ where
 
     /// Dispatch primary-button down with an already resolved event timestamp.
     pub fn pointer_pressed_at_event_time(&mut self, event_time: PointerEventTime) -> bool {
+        // The dev overlay is drawn over the composition and is not part of it,
+        // so it gets the press first and keeps it. Nothing below it is armed:
+        // no button state, no hit path, so the matching release is inert.
+        if self.dev_overlay_press(self.cursor.0, self.cursor.1) {
+            return true;
+        }
         let _event_handler = enter_event_handler_scope();
         let app_context = Rc::clone(&self.app_context);
         let result = app_context.enter(|| {
