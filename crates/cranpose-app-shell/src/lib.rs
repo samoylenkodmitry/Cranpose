@@ -913,8 +913,23 @@ where
 
     fn compute_frame_schedule(&self) -> FrameSchedule {
         let needs_update = self.needs_update();
+        // A registered frame callback is a reason to want another frame, and
+        // the runtime already says so -- `clear_needs_frame_if_idle` counts it
+        // among the four complete reasons. Leaving it out here made an app
+        // animated the idiomatic way, through `frame_clock().next_frame()`,
+        // report that it wanted nothing the instant a frame ended: the callback
+        // for the next frame is registered, but no state is dirty yet, because
+        // the callback has not run.
+        //
+        // Under Vsync that was invisible -- the display asked for the next
+        // frame anyway. Under NoVSync, which free-runs by chaining a redraw off
+        // this flag, the chain died every frame and the loop fell back to
+        // whatever else woke it: the panel's own cadence. That is why NoVSync
+        // read 60fps on any withFrameNanos-driven page while a page animated by
+        // a running animation -- which does dirty state -- reached 500.
         let needs_frame = self.is_dirty
             || self.should_render()
+            || self.runtime.runtime_handle().has_frame_callbacks()
             || self.has_active_pointer_gesture()
             || self.renderer.needs_frame_warmup();
         FrameSchedule {
