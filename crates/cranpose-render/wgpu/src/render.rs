@@ -1345,6 +1345,7 @@ fn create_shape_pipeline(
     shape_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
+    fragment_entry: &'static str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
@@ -1370,7 +1371,7 @@ fn create_shape_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
@@ -1469,6 +1470,7 @@ fn create_instanced_shape_pipeline(
     shape_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
+    fragment_entry: &'static str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Instanced Shader"),
@@ -1495,7 +1497,7 @@ fn create_instanced_shape_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
@@ -2269,6 +2271,11 @@ struct ReplaySlot {
     /// released and recaptured — new bind group, new buffers, same id — can
     /// never be drawn through a bundle recorded against the old capture.
     capture_epoch: u64,
+    /// Whether any captured shape carries gradient stops. False routes the
+    /// slot's quad-expansion draws through the `fs_solid` pipelines; fixed
+    /// for the life of the capture, so bundle keys need nothing beyond the
+    /// capture epoch they already carry.
+    has_gradient: bool,
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
@@ -2894,6 +2901,10 @@ const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
 struct InstancedQuadPipelines {
     pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    /// `fs_solid` twin of `pipeline` (SrcOver only): chosen for draws whose
+    /// shapes carry no gradient stops, which is nearly every draw of an
+    /// arc-heavy scene.
+    pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
     /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
     /// by every instanced draw.
     index_buffer: wgpu::Buffer,
@@ -3773,6 +3784,8 @@ pub struct GpuRenderer {
     shape_batch_limits: ShapeBatchLimits,
     pipeline: LazyGpuResource<wgpu::RenderPipeline>,
     pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    /// `fs_solid` twin of `pipeline` (SrcOver only), for gradient-free draws.
+    pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
     /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
     /// over a vertex buffer) that replay slots with a captured arc mesh draw
     /// through. Uniform-mode devices never host retained slots.
@@ -4179,6 +4192,7 @@ impl GpuRenderer {
 
         let pipeline = LazyGpuResource::new("shape/src-over");
         let pipeline_dst_out = LazyGpuResource::new("shape/dst-out");
+        let pipeline_solid = LazyGpuResource::new("shape/solid-src-over");
         #[cfg(not(target_arch = "wasm32"))]
         let mesh_pipeline = LazyGpuResource::new("shape/mesh");
         // The instanced-quad selection is LATCHED here, once per renderer:
@@ -4203,6 +4217,7 @@ impl GpuRenderer {
                 InstancedQuadPipelines {
                     pipeline: LazyGpuResource::new("shape/instanced-src-over"),
                     pipeline_dst_out: LazyGpuResource::new("shape/instanced-dst-out"),
+                    pipeline_solid: LazyGpuResource::new("shape/instanced-solid"),
                     index_buffer,
                 }
             });
@@ -4340,6 +4355,7 @@ impl GpuRenderer {
             shape_batch_limits,
             pipeline,
             pipeline_dst_out,
+            pipeline_solid,
             #[cfg(not(target_arch = "wasm32"))]
             mesh_pipeline,
             #[cfg(not(target_arch = "wasm32"))]
@@ -4472,6 +4488,25 @@ impl GpuRenderer {
                 &self.shape_bind_group_layout,
                 blend_mode,
                 self.shape_batch_limits,
+                "fs_main",
+            )
+        })
+    }
+
+    /// The `fs_solid` twin of [`Self::shape_pipeline`], SrcOver only. Callers
+    /// pick it exactly when the draw's shapes carry zero gradient stops; the
+    /// coverage math is byte-identical, the gradient machinery is compiled
+    /// out of the fragment stage.
+    fn shape_pipeline_solid(&self) -> &wgpu::RenderPipeline {
+        self.pipeline_solid.get_or_init(self.adapter_backend, || {
+            create_shape_pipeline(
+                &self.device,
+                self.surface_format,
+                &self.uniform_bind_group_layout,
+                &self.shape_bind_group_layout,
+                BlendMode::SrcOver,
+                self.shape_batch_limits,
+                "fs_solid",
             )
         })
     }
@@ -4507,8 +4542,30 @@ impl GpuRenderer {
                 &self.shape_bind_group_layout,
                 blend_mode,
                 self.shape_batch_limits,
+                "fs_main",
             )
         })
+    }
+
+    /// The `fs_solid` twin of [`Self::instanced_pipeline`], SrcOver only.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn instanced_pipeline_solid<'a>(
+        &'a self,
+        instanced: &'a InstancedQuadPipelines,
+    ) -> &'a wgpu::RenderPipeline {
+        instanced
+            .pipeline_solid
+            .get_or_init(self.adapter_backend, || {
+                create_instanced_shape_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.uniform_bind_group_layout,
+                    &self.shape_bind_group_layout,
+                    BlendMode::SrcOver,
+                    self.shape_batch_limits,
+                    "fs_solid",
+                )
+            })
     }
 
     fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
@@ -7137,12 +7194,14 @@ impl GpuRenderer {
                         end,
                         blend_mode,
                     } => {
+                        let mut has_gradient = false;
                         for (_, item) in &ordered_items[start..end] {
-                            if !matches!(item, SegmentDrawItem::Shape(_)) {
+                            let SegmentDrawItem::Shape(shape_index) = item else {
                                 return Err(format!(
                                     "shape batch contains non-shape draw item: {item:?}"
                                 ));
-                            }
+                            };
+                            has_gradient |= shape_gradient_stop_count(&shapes[*shape_index]) > 0;
                         }
                         let shape_count = end - start;
                         if shape_count > 0 {
@@ -7150,6 +7209,7 @@ impl GpuRenderer {
                                 batch: PreparedShapeBatch {
                                     vertex_start: shape_cursor * 6,
                                     vertex_count: shape_count as u32 * 6,
+                                    has_gradient,
                                 },
                                 blend_mode,
                             });
@@ -8970,6 +9030,7 @@ impl GpuRenderer {
         Some(PreparedShapeBatch {
             vertex_start: 0,
             vertex_count: shape_count as u32 * 6,
+            has_gradient: total_gradient_stops > 0,
             #[cfg(target_arch = "wasm32")]
             shape_slot,
             #[cfg(target_arch = "wasm32")]
@@ -9092,6 +9153,7 @@ impl GpuRenderer {
             PreparedShapeBatch {
                 vertex_start: 0,
                 vertex_count: shape_count as u32 * 6,
+                has_gradient: total_gradient_stops > 0,
             },
             upload_base,
         ))
@@ -9567,6 +9629,7 @@ impl GpuRenderer {
                 paint_mirror: paint,
                 mesh,
                 capture_epoch,
+                has_gradient: total_gradient_stops > 0,
             },
         );
         Some(id)
@@ -9648,9 +9711,13 @@ impl GpuRenderer {
         match &mesh {
             Some((_, mesh_pipeline)) => render_pass.set_pipeline(mesh_pipeline),
             None => match &self.instanced_quads {
+                Some(instanced) if !slot.has_gradient => {
+                    render_pass.set_pipeline(self.instanced_pipeline_solid(instanced))
+                }
                 Some(instanced) => {
                     render_pass.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
                 }
+                None if !slot.has_gradient => render_pass.set_pipeline(self.shape_pipeline_solid()),
                 None => render_pass.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
             },
         }
@@ -9765,10 +9832,17 @@ impl GpuRenderer {
             let mesh = slot.mesh.as_ref().map(|mesh| (mesh, self.mesh_pipeline()));
             match &mesh {
                 Some((_, mesh_pipeline)) => encoder.set_pipeline(mesh_pipeline),
+                // The solid-vs-gradient choice is fixed per capture, and the
+                // op key already carries the capture epoch, so a cached
+                // bundle can never encode a stale pipeline for a slot id.
                 None => match &self.instanced_quads {
+                    Some(instanced) if !slot.has_gradient => {
+                        encoder.set_pipeline(self.instanced_pipeline_solid(instanced))
+                    }
                     Some(instanced) => {
                         encoder.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
                     }
+                    None if !slot.has_gradient => encoder.set_pipeline(self.shape_pipeline_solid()),
                     None => encoder.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
                 },
             }
@@ -9892,7 +9966,11 @@ impl GpuRenderer {
                 batch.vertex_start,
                 batch.vertex_count,
             );
-            render_pass.set_pipeline(self.instanced_pipeline(instanced, blend_mode));
+            if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
+                render_pass.set_pipeline(self.instanced_pipeline_solid(instanced));
+            } else {
+                render_pass.set_pipeline(self.instanced_pipeline(instanced, blend_mode));
+            }
             render_pass.set_bind_group(0, uniform_bind_group, &[]);
             // Dynamic offset 0: ordinary batches read the identity
             // similarity transform.
@@ -9904,7 +9982,11 @@ impl GpuRenderer {
             render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
             return;
         }
-        render_pass.set_pipeline(self.shape_pipeline(blend_mode));
+        if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
+            render_pass.set_pipeline(self.shape_pipeline_solid());
+        } else {
+            render_pass.set_pipeline(self.shape_pipeline(blend_mode));
+        }
         render_pass.set_bind_group(0, uniform_bind_group, &[]);
         // Dynamic offset 0: ordinary batches read the identity similarity
         // transform.
@@ -12128,6 +12210,9 @@ struct PreparedShapeBatch {
     /// multiples of 6 so `vs_main`'s `vertex_index / 6` lands on whole shapes.
     vertex_start: u32,
     vertex_count: u32,
+    /// Whether any shape in the batch carries gradient stops. False routes
+    /// a SrcOver draw through the `fs_solid` pipeline.
+    has_gradient: bool,
     #[cfg(target_arch = "wasm32")]
     shape_slot: usize,
     #[cfg(target_arch = "wasm32")]
