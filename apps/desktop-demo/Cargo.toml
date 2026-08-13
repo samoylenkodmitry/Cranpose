@@ -105,8 +105,8 @@ path = "examples/robot_novsync_free_runs.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
-name = "robot_credits_watch_fps"
-path = "examples/robot_credits_watch_fps.rs"
+name = "robot_wear_watch_fps"
+path = "examples/robot_wear_watch_fps.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]
