@@ -25,7 +25,7 @@ never silently pretend.
 | notifier          | ■   | ■ channels + deep-link Java | ■ zero-dep CLI (notify-send/osascript/PowerShell) | ■ Notification API | |
 | network status    | □   | ■ ConnectivityManager Java | ● explicit assumption | ■ `navigator.onLine` | iOS NWPathMonitor still open |
 | device info       | ■   | ● /proc/meminfo | ● linux; □ mac/win | ■ `navigator.deviceMemory` (reflective) | |
-| clipboard         | ■   | ■ ClipboardManager JNI | ■ arboard | ● in-process fallback | web system-write bridge still open |
+| clipboard         | ■   | ■ ClipboardManager JNI | ■ arboard | ■ Async Clipboard API (`web_clipboard`) | web reads are a promise, so the bridge takes the *paste* (`request_paste`) instead of answering `read_text` |
 | back requests     | ■   | ■ back key → `push_back_request` behind `set_back_interception` | □ (apps map keys themselves) | □ | predictive back must stay off (`enableOnBackInvokedCallback=false`) |
 | safe-area insets  | ■   | ■ WindowInsets listener → `local_safe_area_insets` | ● zero | ● zero | replaced cranscan's marker-file bridge |
 | system theme      | ■ `window.theme()` polled | ■ uiMode + ConfigChanged | ■ winit `ThemeChanged` (+ cached env probe) | ■ `prefers-color-scheme` listener | drives LiquidTheme Auto |
@@ -65,7 +65,7 @@ never silently pretend.
 - iOS network monitor (NWPathMonitor) and export-style save dialog.
 - Android camera2 backend for `cranpose_services::camera` (cranscan keeps its
   app-side system-camera round-trip + preview until then).
-- Web system-clipboard write bridge; web camera (getUserMedia).
+- Web camera (getUserMedia).
 - Web launch arguments from the URL query string (`launch_args()` is empty on
   wasm today; the shell would install a snapshot from `location.search`).
 - `local_*()` accessor seams for `camera`/`device_info`/`network`/`background`.

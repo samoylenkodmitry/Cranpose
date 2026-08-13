@@ -29,7 +29,7 @@
 //! be decoded in lock step.
 
 use cranpose_services::purchases::{Product, PurchaseEvent, StorePhase, StoreState};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One-shot event codes, mirroring the constants in `CranposeBilling.java`.
 /// Both sides live in this repository and change together.
@@ -58,11 +58,19 @@ pub(crate) fn decode_store_snapshot(payload: &str) -> StoreState {
 
     let mut products = Vec::new();
     let mut owned = BTreeSet::new();
+    let mut orders = BTreeMap::new();
     for record in lines {
         let mut fields = record.split('\t');
         match fields.next() {
             Some("p") => products.extend(decode_product(&mut fields)),
-            Some("o") => owned.extend(decode_owned(&mut fields)),
+            Some("o") => {
+                if let Some((id, order)) = decode_owned(&mut fields) {
+                    if let Some(order) = order {
+                        orders.insert(id.clone(), order);
+                    }
+                    owned.insert(id);
+                }
+            }
             _ => {}
         }
     }
@@ -71,6 +79,7 @@ pub(crate) fn decode_store_snapshot(payload: &str) -> StoreState {
         phase,
         products,
         owned,
+        orders,
         error,
         busy,
     }
@@ -119,9 +128,25 @@ fn decode_product<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<Prod
     })
 }
 
-fn decode_owned<'a>(fields: &mut impl Iterator<Item = &'a str>) -> Option<String> {
+/// An owned record: the product id, and the order id if the store had one.
+///
+/// The order id is OPTIONAL and always has been on the wire -- Play does not
+/// always have one to give (a test purchase has none, and a restore can report
+/// ownership before the receipt is back), and a bridge built before this field
+/// existed simply does not append it. A record with no second field is a normal
+/// owned product, not a malformed one.
+fn decode_owned<'a>(
+    fields: &mut impl Iterator<Item = &'a str>,
+) -> Option<(String, Option<String>)> {
     let id = unescape(fields.next()?);
-    (!id.is_empty()).then_some(id)
+    if id.is_empty() {
+        return None;
+    }
+    let order = fields
+        .next()
+        .map(unescape)
+        .filter(|order| !order.is_empty());
+    Some((id, order))
 }
 
 fn unescape(value: &str) -> String {
@@ -138,6 +163,36 @@ fn unescape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_owned_row_carries_the_order_id_when_the_store_had_one() {
+        let state = decode_store_snapshot(concat!(
+            "2\t0\t\n",
+            "o\tcom.example.pro\tGPA.3311-9944-1234-56789\n",
+            // No order id: Play has none for a test purchase, and a restore can
+            // report ownership before the receipt is back. Still owned.
+            "o\tcom.example.hints"
+        ));
+
+        assert!(state.owns("com.example.pro"));
+        assert_eq!(
+            state.order_id("com.example.pro"),
+            Some("GPA.3311-9944-1234-56789")
+        );
+
+        assert!(
+            state.owns("com.example.hints"),
+            "a row without an order id is a normal owned product"
+        );
+        assert_eq!(state.order_id("com.example.hints"), None);
+    }
+
+    #[test]
+    fn an_order_id_containing_a_tab_survives_the_wire() {
+        // Nothing in Play's format forbids it, and the row is tab separated.
+        let state = decode_store_snapshot(concat!("2\t0\t\n", "o\tcom.example.pro\tGPA%09odd"));
+        assert_eq!(state.order_id("com.example.pro"), Some("GPA\todd"));
+    }
 
     #[test]
     fn decoding_recovers_prices_and_owned_entitlements() {

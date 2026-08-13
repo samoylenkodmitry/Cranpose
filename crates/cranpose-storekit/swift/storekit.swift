@@ -333,15 +333,21 @@ private func describe(_ error: Error) -> String {
     return error.localizedDescription
 }
 
-/// Product ids this Apple ID currently owns, signature-verified.
+/// Product ids this Apple ID currently owns, signature-verified, each with the
+/// id of the transaction that granted it.
+///
+/// The transaction id is the paper trail an app needs to quote if an
+/// entitlement is ever in dispute; ownership itself is the product id being
+/// present. StoreKit always has one here, unlike Play, but a caller must still
+/// treat it as optional -- the Android backend cannot always supply it.
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
-private func ownedProductIds() async -> [String] {
-    var owned: [String] = []
+private func ownedProductIds() async -> [(id: String, orderId: String)] {
+    var owned: [(id: String, orderId: String)] = []
     for await entitlement in Transaction.currentEntitlements {
         guard case .verified(let transaction) = entitlement else { continue }
         if transaction.revocationDate != nil { continue }
         if let expires = transaction.expirationDate, expires < Date() { continue }
-        owned.append(transaction.productID)
+        owned.append((transaction.productID, String(transaction.id)))
     }
     return owned
 }
@@ -373,8 +379,8 @@ private func refreshSnapshot() async {
             product.description
         )
     }
-    for id in owned {
-        sink.send(.owned, 0, 0, id)
+    for entitlement in owned {
+        sink.send(.owned, 0, 0, entitlement.id, entitlement.orderId)
     }
     // Entitlements are authoritative even when the product lookup failed, so
     // a store outage never revokes an unlock the user already paid for: the

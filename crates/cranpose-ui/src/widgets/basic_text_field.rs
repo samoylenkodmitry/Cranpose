@@ -6,13 +6,15 @@
 #![allow(non_snake_case)]
 
 use crate::bring_into_view::local_bring_into_view_responder;
-use crate::clipboard_session::{clipboard_read_text, clipboard_write_text};
+use crate::clipboard_session::{
+    clipboard_can_paste, clipboard_paste_into_focus, clipboard_write_text,
+};
 use crate::composable;
 use crate::layout::policies::EmptyMeasurePolicy;
 use crate::modifier::Modifier;
 use crate::safe_area::local_ime_insets;
 use crate::text::{measure_text, AnnotatedString, TextStyle};
-use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_paste, dispatch_select_all};
+use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all};
 use crate::text_field_modifier_node::{
     TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
 };
@@ -573,7 +575,7 @@ fn SelectionHandles(
         // and rematerializes after release (the widget runs the measured
         // timings; it stays composed while fading).
         if caret_menu_open.value() {
-            let can_paste = clipboard_read_text().is_some();
+            let can_paste = clipboard_can_paste();
             let can_undo = state.can_undo();
             let can_redo = state.can_redo();
             let undo_state = state.clone();
@@ -586,9 +588,7 @@ fn SelectionHandles(
                 can_undo,
                 can_redo,
                 move || {
-                    if let Some(text) = clipboard_read_text() {
-                        dispatch_paste(&text);
-                    }
+                    clipboard_paste_into_focus();
                     caret_menu_open.set(false);
                 },
                 move || {
@@ -699,7 +699,7 @@ fn SelectionHandles(
         // rematerializes after release (the widget runs the measured timings;
         // it stays composed while fading).
         if menu_open.value() {
-            let can_paste = clipboard_read_text().is_some();
+            let can_paste = clipboard_can_paste();
             // A claimed long-press feeds the menu its live finger position:
             // sliding over items highlights them, the release fires.
             let slide_point = if controller.gesture_claimed() {
@@ -741,9 +741,7 @@ fn SelectionHandles(
                     menu_open.set(false);
                 },
                 move || {
-                    if let Some(text) = clipboard_read_text() {
-                        dispatch_paste(&text);
-                    }
+                    clipboard_paste_into_focus();
                     menu_open.set(false);
                 },
                 move || {

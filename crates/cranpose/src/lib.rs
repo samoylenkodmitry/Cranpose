@@ -208,10 +208,9 @@ mod winit_pointer;
 #[cfg_attr(not(all(feature = "ios", target_os = "ios")), allow(dead_code))]
 mod winit_touch;
 
-/// Mouse-wheel to rotary-input translation, so Wear OS rotary handling is
-/// developable and testable on the desktop.
+/// winit's mouse wheel, normalized into the shell's shared wheel sample.
 #[cfg(feature = "desktop-shell")]
-mod winit_rotary;
+mod winit_wheel;
 
 /// Renderer-agnostic robot testing harness shared by the desktop shells.
 #[cfg(all(
@@ -284,8 +283,20 @@ pub mod web;
 ))]
 mod web_surface_scale;
 
+// The browser's wheel units and sign convention are likewise pure arithmetic,
+// and likewise silent when wrong: compile them under `test` so the host suite
+// pins the direction the web scrolls.
+#[cfg(any(
+    all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"),
+    test
+))]
+mod web_wheel;
+
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_accessibility;
+
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_clipboard;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_services;

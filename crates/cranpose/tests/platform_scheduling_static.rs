@@ -564,6 +564,48 @@ fn android_play_billing_reaches_the_purchase_registry() {
     );
 }
 
+/// The writer's half of the owned row's order id.
+///
+/// Nothing in CI compiles or runs `CranposeBilling.java` -- no app in this
+/// workspace enables the `playbilling` feature -- so the decoder's tests are
+/// the only executable coverage the wire has, and they would keep passing with
+/// the Java side of the field deleted: `order_id()` would simply return `None`
+/// on every Android device, forever, which is also what a legitimately absent
+/// order id looks like.
+#[test]
+fn the_play_billing_bridge_sends_the_order_id_that_granted_each_entitlement() {
+    let java_source = workspace_source(
+        "crates/cranpose/android/java-billing/dev/cranpose/android/CranposeBilling.java",
+    );
+
+    assert!(
+        java_source.contains("purchase.getOrderId()"),
+        "the bridge must read Play's order id; the product id is what the app already knew"
+    );
+    assert!(
+        java_source.contains("escape(orderId)"),
+        "the order id must be escaped onto the owned row like every other field: the row is \
+         tab separated and nothing in Play's format forbids a tab"
+    );
+
+    // The two maps are one fact split in half. Refilling `owned` without
+    // refilling `orders` in the same breath leaves an order id outliving the
+    // purchase that produced it -- a paper trail pointing at the wrong sale.
+    let apply = java_source
+        .split("private int apply(")
+        .nth(1)
+        .expect("the snapshot bridge should apply purchase lists in one place");
+    let apply = apply
+        .split("\n    private")
+        .next()
+        .expect("a method body is delimited by the next member");
+    assert!(
+        apply.contains("owned.clear()") && apply.contains("orders.clear()"),
+        "ownership and its order ids must be replaced together, or an order id survives the \
+         purchase it belongs to"
+    );
+}
+
 #[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");
@@ -2009,6 +2051,40 @@ fn gradle_cargo_tasks_declare_the_jni_library_directory_they_write() {
              mergeNativeLibs -- both consume the directory it writes"
         );
     }
+}
+
+/// `web.rs` compiles only for `wasm32`, so nothing in `cargo test` links it —
+/// reading the source is the only guard available on the host, and the
+/// alternative is finding out in a browser. This contract regressed silently
+/// once already: the wheel listener grew its own copy of the desktop's policy,
+/// inverted, and never offered the wheel to rotary at all.
+#[test]
+fn the_browser_host_shares_the_wheel_policy() {
+    let web = crate_source("src/web.rs");
+
+    assert!(
+        web.contains("app_mut.wheel_scrolled(wheel)"),
+        "the browser wheel listener must go through the shell's shared wheel policy, \
+         so zoom, rotary and scroll mean the same thing they do on every other host"
+    );
+    assert!(
+        !web.contains("app_mut.pointer_scrolled("),
+        "the browser host must not reach past wheel_scrolled to the scroll step: that \
+         skips rotary and re-opens the sign question the shared policy settles"
+    );
+}
+
+/// The same unreachable-source problem for the clipboard: with no bridge
+/// installed the in-tree selection menu's Copy reaches an in-process clipboard
+/// that nothing outside the page can read, and every platform but the browser
+/// had one.
+#[test]
+fn the_browser_host_installs_a_platform_clipboard() {
+    assert!(
+        crate_source("src/web.rs").contains("crate::web_clipboard::install("),
+        "the browser host must install a platform clipboard, or the in-tree selection \
+         menu's Copy/Cut never leave the page"
+    );
 }
 
 fn is_crate_root_source(path: &Path) -> bool {

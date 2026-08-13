@@ -589,3 +589,31 @@ its timing as production-performance evidence.
   identical per-frame work (`p95_total_ms` 0.81 -> 0.86). Both clear the
   contract (>=48 frames, >=150fps, p95 <= 6.67ms); the margin is smaller because
   the number is now real. Do not "restore" the old figure by re-forcing polling.
+- Backdrop-under-a-transform bugs are invisible from the source (2026-08-13):
+  the bottom bar's press lift showed the world behind its glass shrunk ~20% and
+  slid toward the bar's corner. Reading the underlay path end to end argued the
+  code was *correct* — the underlay is copied from the child's post-transform
+  dest quad and squeezed into its logical rect, which the composite unsqueezes,
+  so registration looked like it cancelled out. What actually cracked it, in
+  order: an A/B on the running app (zero the `graphics_layer` lift, rebuild,
+  re-measure: the drift vanished), then `CRANPOSE_BACKDROP_DIAG=1` on the real
+  binary, whose `prepare node=…` lines showed the same backdrop being prepared
+  in *root* space at rest and in *surface-local* space (`y: 31.31`) while
+  pressed, with a scissor implying scale 1.693 against a root scale of 1.354 —
+  the missing 1.25 is `magnifying_layer_scale`, which quantizes a scaling
+  layer's surface UP to the next quarter step. The underlay was built at the
+  parent's scale and addressed at the child's. Measure the displacement before
+  theorizing: two background lines through the glass gave scale 0.688 about a
+  fixed point, which is what identified the culprit as a *rect ratio* rather
+  than the 1.03 lift everyone would suspect.
+- A magnifying layer needs BOTH halves in a renderer test (2026-08-13): the
+  first regression test for the above passed against the bug. `test_support::
+  layer_node` takes `transform_to_parent` and `graphics_layer` independently, and
+  the surface plan reads them from different places — `NonTranslationTransform`
+  (which is what makes the layer take a surface at all) comes from the
+  *transform matrix* via `direct_translation`, while the magnification factor
+  comes from `graphics_layer.scale` via `layer_surface_scale`. A
+  `GraphicsLayer { scale: 1.25 }` beside a plain translation transform is a
+  layer that never isolates, so the whole path under test is skipped. Build the
+  transform with `layer_transform_to_parent(bounds, placement, &layer)` — the
+  same call the scene builder makes — and pass the same `GraphicsLayer`.

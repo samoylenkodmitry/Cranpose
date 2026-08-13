@@ -755,16 +755,58 @@ fn flush_pending_clear<B: SurfaceExecutionBackend>(
     }
 }
 
+/// The scale a child layer's own surface renders at, and therefore the scale
+/// every texture handed to that surface has to be built at.
+///
+/// A magnifying layer is composited by mapping its surface through its own
+/// transform, so the texture carries that magnification's worth of detail
+/// instead of resampling a 1x raster upward — which means the child's scale is
+/// **not** the parent's whenever a layer scales. Both the surface and its
+/// backdrop underlay resolve it here so they cannot disagree.
+fn child_surface_target_scale(
+    child: &ChildLayerComposite,
+    root_scale: f32,
+    translation_context: TranslationRenderContext,
+) -> f32 {
+    layer_surface_target_scale(
+        translation_context.inherited_content_translation || child.translated_content_context,
+        translation_context.surface_capture_active,
+        child.surface_requirements,
+        root_scale,
+        child.surface_scale,
+    )
+}
+
+/// Projects the content behind a child layer into an underlay that layer's own
+/// nested backdrops can sample.
+///
+/// Two different scales meet here, and conflating them silently rescales every
+/// backdrop inside the child:
+///
+/// * `parent_scale` maps the parent surface's logical coordinates to its pixels,
+///   and is what `child_dest_quad` — the region of the parent this content is
+///   read from — is expressed against.
+/// * `child_scale` is the scale the child's own surface renders at, which
+///   [`layer_surface_target_scale`] quantizes *up* for a magnifying layer (a
+///   1.03x press lift becomes 1.25x). Everything inside that surface, the
+///   nested backdrop capture included, addresses this texture at `child_scale`,
+///   so that is the resolution it has to be built at.
+///
+/// They are equal for every layer that does not magnify, which is why sharing
+/// one scale looked correct until a glass surface grew a press transform: the
+/// backdrop then showed the world at `1 / child_scale * parent_scale` of its
+/// true size, anchored at the surface origin.
 fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
     backend: &mut B,
     parent_target: &OffscreenTarget,
     parent_underlay: Option<&OffscreenTarget>,
     child_logical_rect: Rect,
     child_dest_quad: [[f32; 2]; 4],
-    root_scale: f32,
+    parent_scale: f32,
+    child_scale: f32,
 ) -> OffscreenTarget {
     let (width, height) =
-        surface_target_size(child_logical_rect, root_scale, backend.max_texture_dim());
+        surface_target_size(child_logical_rect, child_scale, backend.max_texture_dim());
     let underlay = backend.acquire_frame_surface(width, height);
     let child_source_rect = Rect {
         x: 0.0,
@@ -773,7 +815,7 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
         height: height as f32,
     };
     if let Some(source_pixel_rect) =
-        axis_aligned_quad_rect(scaled_quad(child_dest_quad, root_scale))
+        axis_aligned_quad_rect(scaled_quad(child_dest_quad, parent_scale))
     {
         if let Some(ancestor_underlay) = parent_underlay {
             let composites = [
@@ -807,7 +849,7 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
     }
     let transform = ProjectiveTransform::from_rect_to_quad(
         child_source_rect,
-        scaled_quad(child_dest_quad, root_scale),
+        scaled_quad(child_dest_quad, parent_scale),
     );
     let dest_quad = target_quad(width, height);
     let parent_composite = ProjectiveSurfaceComposite {
@@ -2100,16 +2142,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         translation_context.surface_capture_active,
         surface_requirements,
     );
-    let target_scale = layer_surface_target_scale(
-        direct_translated_content_context,
-        translation_context.surface_capture_active,
-        surface_requirements,
-        root_scale,
-        // A scaling layer is composited by mapping this surface through its own
-        // transform, so the texture has to carry that magnification's worth of
-        // detail or the composite just resamples a 1x raster upward.
-        child.surface_scale,
-    );
+    let target_scale = child_surface_target_scale(child, root_scale, translation_context);
     let translation_context = layer_surface_translation_context(
         translation_context,
         activates_nested_capture
@@ -3823,6 +3856,12 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             );
             flush_pending_clear(backend, &target.view, &mut next_load_op);
         }
+        let child_translation_context = TranslationRenderContext {
+            inherited_content_translation: effective_translated_content_context,
+            translated_content_axes: effective_translated_content_axes,
+            surface_capture_active: translation_context.surface_capture_active,
+            local_picture_capture_active: translation_context.local_picture_capture_active,
+        };
         let child_underlay = child.needs_nested_underlay.then(|| {
             create_projected_child_underlay(
                 backend,
@@ -3831,6 +3870,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 resolved_child.logical_rect,
                 child_dest_quad,
                 target_scale,
+                child_surface_target_scale(&child, target_scale, child_translation_context),
             )
         });
         let child_surface = render_layer_surface(
@@ -3843,12 +3883,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 logical_rect_override: Some(resolved_child.logical_rect),
                 capture_clip_override: resolved_child.surface_clip,
                 activates_nested_capture: true,
-                translation_context: TranslationRenderContext {
-                    inherited_content_translation: effective_translated_content_context,
-                    translated_content_axes: effective_translated_content_axes,
-                    surface_capture_active: translation_context.surface_capture_active,
-                    local_picture_capture_active: translation_context.local_picture_capture_active,
-                },
+                translation_context: child_translation_context,
             },
         )?;
 
