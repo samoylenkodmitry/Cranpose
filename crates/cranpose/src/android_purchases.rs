@@ -203,6 +203,11 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingSn
         Outcome::Err(_) | Outcome::Panic(_) => return,
     };
     *snapshot() = Some(decode_store_snapshot(&payload));
+    // Tell the app, rather than leaving it to ask. Waking the loop alone means
+    // the store is only ever read by an app that re-reads it every frame --
+    // and an app that has gone idle, which is the right thing to be on a
+    // screen showing a price, has no frame to re-read it from.
+    cranpose_services::note_store_news();
     wake_native_loop();
 }
 
@@ -233,5 +238,6 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingEv
     }
     events.push_back(event);
     drop(events);
+    cranpose_services::note_store_news();
     wake_native_loop();
 }
