@@ -35,13 +35,20 @@ const SETTLE_MS_ENV: &str = "ROBOT_SHOT_SETTLE_MS";
 /// tabs are sampled mid-animation. A nonzero diff on these tabs is not on
 /// its own evidence of a renderer regression; inspect the diff image before
 /// drawing conclusions.
-const NONDETERMINISTIC_TABS: [DemoTab; 6] = [
+const NONDETERMINISTIC_TABS: [DemoTab; 7] = [
     DemoTab::HackerNews,
     DemoTab::WebFetch,
     DemoTab::Xkcd,
     DemoTab::Animations,
     DemoTab::InteractiveAnim,
     DemoTab::ShaderRect,
+    // Scrolls forever: `CreditsState::advance` runs the list to the end, turns
+    // around and runs it back, every frame, with no state it settles into. A
+    // capture taken after a fixed settle is therefore taken wherever the scroll
+    // happened to be, and two runs of this dump will never agree on it. Left
+    // out of the list, that showed up as a large permanent pixel delta on a tab
+    // nothing was wrong with -- the exact reading this list exists to prevent.
+    DemoTab::CranorbitCredits,
 ];
 
 fn main() {
