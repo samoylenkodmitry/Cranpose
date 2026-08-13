@@ -564,6 +564,80 @@ fn android_play_billing_reaches_the_purchase_registry() {
     );
 }
 
+/// The accessibility payload is a positional record split on tabs on the Java
+/// side, so the two ends have to agree on how many fields there are. Rust
+/// builds the record and Java rejects any record of the wrong width, which
+/// means a field added on one side alone does not fail loudly — it makes the
+/// app silently unreachable to a screen reader. Hence this check.
+#[test]
+fn android_accessibility_record_width_agrees_across_the_jni_boundary() {
+    let wire_source = crate_source("src/android_accessibility_wire.rs");
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+
+    let rust_fields = wire_source
+        .lines()
+        .find(|line| line.trim_start().starts_with("\"{}\\t"))
+        .map(|line| line.matches("{}").count())
+        .expect("the accessibility record format string should be one line");
+    let java_fields = java_source
+        .lines()
+        .find(|line| line.contains("ACCESSIBILITY_FIELDS ="))
+        .and_then(|line| {
+            line.rsplit('=')
+                .next()
+                .map(|value| value.trim().trim_end_matches(';').to_string())
+        })
+        .and_then(|value| value.parse::<usize>().ok())
+        .expect("CranposeActivity should declare the accessibility record width");
+
+    assert_eq!(
+        rust_fields, java_fields,
+        "the encoder writes {rust_fields} fields but CranposeActivity parses {java_fields}"
+    );
+    assert!(
+        java_source.contains("if (fields.length != ACCESSIBILITY_FIELDS) continue;"),
+        "a record of the wrong width should be skipped, not indexed past its end"
+    );
+}
+
+/// A custom action is the only screen-reader command with no position to
+/// synthesise a tap at, so it is the one that needs a dispatch path of its
+/// own — declared in Java, exported from the JNI boundary, and resolved back
+/// to a handler on the frame loop.
+#[test]
+fn android_accessibility_custom_actions_reach_the_frame_loop() {
+    let java_source =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    let boundary_source = crate_source("src/android_accessibility.rs");
+    let loop_source = crate_source("src/android.rs");
+    let projection_source = crate_source("src/accessibility.rs");
+
+    assert!(
+        java_source.contains(
+            "private static native void nativeOnAccessibilityCustomAction(int virtualViewId, int actionIndex);"
+        ) && java_source.contains("nativeOnAccessibilityCustomAction(element.id, customIndex);"),
+        "the provider should route a custom action back by identity rather than by synthesising a tap it has no position for"
+    );
+    assert!(
+        boundary_source.contains(
+            "Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityCustomAction"
+        ) && boundary_source.contains("pub(crate) fn drain_custom_actions()"),
+        "the JNI boundary should park custom actions for the frame loop instead of running app code on the Java thread"
+    );
+    assert!(
+        loop_source.contains("crate::android_accessibility::drain_custom_actions()")
+            && loop_source.contains("crate::accessibility::resolve_element_id(")
+            && loop_source.contains("crate::accessibility::perform_custom_action("),
+        "the frame loop should resolve the virtual view id and run the action against the live semantics tree"
+    );
+    assert!(
+        projection_source.contains("pub(crate) fn perform_custom_action(")
+            && projection_source.contains("pub(crate) fn element_ids("),
+        "resolving an accessibility id and running its action are platform-neutral and belong outside the JNI boundary"
+    );
+}
+
 #[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");

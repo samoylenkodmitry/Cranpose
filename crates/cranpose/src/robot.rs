@@ -31,6 +31,8 @@ pub struct SemanticElement {
     pub role: String,
     /// Text content if available
     pub text: Option<String>,
+    /// Compose's `stateDescription` — what the control currently reads as.
+    pub state_description: Option<String>,
     /// Geometric bounds in logical pixels
     pub bounds: SemanticRect,
     /// Whether this element has click actions
@@ -1509,15 +1511,25 @@ where
         .iter()
         .any(|action| matches!(action, SemanticsAction::Click { .. }));
     let bounds = bounds_for(sem_node.node_id);
-    let children = sem_node
-        .children
+    // Controls the node drew rather than laid out come first, in publication
+    // order. Without them a robot snapshot of an immediate-mode screen shows
+    // one node where a screen reader sees a list.
+    let mut children: Vec<SemanticElement> = sem_node
+        .canvas_children
         .iter()
-        .map(|child| semantic_element_from_semantics_node(child, bounds_for))
+        .map(|child| semantic_element_from_canvas_node(child, bounds))
         .collect();
+    children.extend(
+        sem_node
+            .children
+            .iter()
+            .map(|child| semantic_element_from_semantics_node(child, bounds_for)),
+    );
 
     SemanticElement {
         role,
         text,
+        state_description: sem_node.state_description.clone(),
         bounds,
         clickable,
         editable_text: sem_node.editable_text,
@@ -1525,6 +1537,37 @@ where
             .text_selection
             .map(|range| (range.start, range.end)),
         children,
+    }
+}
+
+fn semantic_element_from_canvas_node(
+    node: &cranpose_ui::CanvasSemanticsNode,
+    owner: SemanticRect,
+) -> SemanticElement {
+    SemanticElement {
+        role: node.role.map_or_else(
+            || {
+                if node.clickable {
+                    "Button".to_string()
+                } else {
+                    "Text".to_string()
+                }
+            },
+            |role| format!("{role:?}"),
+        ),
+        text: Some(node.label.clone()),
+        state_description: node.state_description.clone(),
+        // Canvas bounds are relative to the node that drew them.
+        bounds: SemanticRect {
+            x: owner.x + node.bounds.x,
+            y: owner.y + node.bounds.y,
+            width: node.bounds.width,
+            height: node.bounds.height,
+        },
+        clickable: node.clickable,
+        editable_text: false,
+        text_selection: None,
+        children: Vec::new(),
     }
 }
 
@@ -1816,9 +1859,64 @@ mod tests {
             actions,
             children,
             description: description.map(str::to_string),
-            editable_text: false,
-            text_selection: None,
+            ..SemanticsNode::default()
         }
+    }
+
+    /// A robot snapshot of an immediate-mode screen has to show the controls
+    /// the app drew, or a canvas app can only ever be asserted as one node.
+    #[test]
+    fn robot_snapshots_report_the_controls_a_canvas_published() {
+        use cranpose_ui::{CanvasSemanticsNode, SemanticsWidgetRole};
+
+        let mut canvas = sample_semantics_node(2, SemanticsRole::Layout, false, None, Vec::new());
+        canvas.canvas_children = vec![
+            CanvasSemanticsNode::control(
+                1,
+                cranpose_ui::Rect {
+                    x: 4.0,
+                    y: 8.0,
+                    width: 100.0,
+                    height: 52.0,
+                },
+                "Haptics",
+            )
+            .with_role(SemanticsWidgetRole::Switch)
+            .with_state_description("On"),
+            CanvasSemanticsNode::text(
+                2,
+                cranpose_ui::Rect {
+                    x: 4.0,
+                    y: 70.0,
+                    width: 100.0,
+                    height: 20.0,
+                },
+                "CROWN",
+            ),
+        ];
+
+        let mut bounds_for = |node_id: NodeId| {
+            assert_eq!(node_id, 2);
+            SemanticRect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 200.0,
+            }
+        };
+        let element = semantic_element_from_semantics_node(&canvas, &mut bounds_for);
+
+        assert_eq!(element.children.len(), 2);
+        let switch = &element.children[0];
+        assert_eq!(switch.role, "Switch");
+        assert_eq!(switch.text.as_deref(), Some("Haptics"));
+        assert_eq!(switch.state_description.as_deref(), Some("On"));
+        assert!(switch.clickable);
+        assert_eq!((switch.bounds.x, switch.bounds.y), (14.0, 28.0));
+
+        let header = &element.children[1];
+        assert_eq!(header.role, "Text");
+        assert!(!header.clickable);
     }
 
     fn sample_semantics_and_layout() -> (SemanticsNode, LayoutBox) {

@@ -18,6 +18,7 @@ use cranpose_core::useState;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::*;
+use cranpose_ui::SemanticsWidgetRole;
 use cranpose_ui::{Color, Modifier, TextStyle};
 use std::time::Duration;
 
@@ -67,7 +68,7 @@ fn test_app() {
                     .padding(8.0)
                     .background(Color(0.3, 0.3, 0.5, 1.0))
                     .semantics(|c| {
-                        c.is_button = true;
+                        c.role = Some(SemanticsWidgetRole::Button);
                         c.content_description = Some("Change Colors".into());
                     }),
                 ButtonSpec::default(),

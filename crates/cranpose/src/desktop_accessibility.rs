@@ -3,8 +3,8 @@
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 use accesskit::{
-    Action, ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler, Node, NodeId,
-    Rect, Role, Tree, TreeId, TreeUpdate,
+    Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
+    DeactivationHandler, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
@@ -55,6 +55,7 @@ pub(crate) struct DesktopAccessibilityBridge {
     initial_tree: Arc<Mutex<Option<TreeUpdate>>>,
     actions: Arc<Mutex<Vec<ActionRequest>>>,
     centers: HashMap<NodeId, (f32, f32)>,
+    pending_custom_actions: Vec<(NodeId, usize)>,
     previous: Vec<AccessibilityElement>,
     seen_revision: Option<u64>,
 }
@@ -77,6 +78,7 @@ impl DesktopAccessibilityBridge {
             initial_tree,
             actions,
             centers: HashMap::new(),
+            pending_custom_actions: Vec::new(),
             previous: Vec::new(),
             seen_revision: None,
         }
@@ -96,10 +98,13 @@ impl DesktopAccessibilityBridge {
         }
         self.previous = elements;
         let update = tree_update(&self.previous);
-        self.centers = self
-            .previous
-            .iter()
-            .map(|element| (NodeId(element.node_id as u64), element.bounds.center()))
+        // Keyed by the shared element id, not the layout node id: several
+        // elements can share one layout node once that node publishes drawn
+        // controls, and a click has to land on the one AccessKit named.
+        self.centers = accessibility::element_ids(&self.previous)
+            .into_iter()
+            .zip(&self.previous)
+            .map(|(id, element)| (NodeId(id as u64), element.bounds.center()))
             .collect();
         *self
             .initial_tree
@@ -109,33 +114,86 @@ impl DesktopAccessibilityBridge {
     }
 
     pub(crate) fn drain_clicks(&mut self) -> Vec<(f32, f32)> {
-        std::mem::take(
+        let requests = std::mem::take(
             &mut *self
                 .actions
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
-        .into_iter()
-        .filter(|request| request.action == Action::Click)
-        .filter_map(|request| self.centers.get(&request.target_node).copied())
-        .collect()
+        );
+        let mut clicks = Vec::new();
+        for request in requests {
+            match request.action {
+                Action::Click => {
+                    if let Some(center) = self.centers.get(&request.target_node) {
+                        clicks.push(*center);
+                    }
+                }
+                // A custom action has no position to synthesise a click at, so
+                // it is parked by identity and run against the live semantics
+                // tree on the next frame, exactly as the Android bridge does.
+                Action::CustomAction => {
+                    if let Some(ActionData::CustomAction(index)) = request.data {
+                        if index >= 0 {
+                            self.pending_custom_actions
+                                .push((request.target_node, index as usize));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        clicks
+    }
+
+    /// Runs the custom actions a screen reader picked. Returns whether any ran,
+    /// so the caller knows whether a redraw is owed.
+    pub(crate) fn run_custom_actions(&mut self, shell: &mut AppShell<WgpuRenderer>) -> bool {
+        if self.pending_custom_actions.is_empty() {
+            return false;
+        }
+        let pending = std::mem::take(&mut self.pending_custom_actions);
+        let ids = accessibility::element_ids(&self.previous);
+        let Some(tree) = shell.semantics_tree() else {
+            return false;
+        };
+        let mut ran = false;
+        for (target, index) in pending {
+            let Some(element) = ids
+                .iter()
+                .position(|id| NodeId(*id as u64) == target)
+                .and_then(|position| self.previous.get(position))
+            else {
+                continue;
+            };
+            ran |= accessibility::perform_custom_action(
+                tree.root(),
+                element.node_id,
+                element.canvas_key,
+                index,
+            );
+        }
+        ran
     }
 }
 
 fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
-    let children: Vec<NodeId> = elements
-        .iter()
-        .map(|element| NodeId(element.node_id as u64))
-        .collect();
+    let ids = accessibility::element_ids(elements);
+    let children: Vec<NodeId> = ids.iter().map(|id| NodeId(*id as u64)).collect();
     let mut root = Node::new(Role::Window);
     root.set_label("Cranpose application");
     root.set_children(children);
     let mut nodes = vec![(ROOT_ID, root)];
-    nodes.extend(elements.iter().map(|element| {
+    nodes.extend(ids.iter().zip(elements).map(|(id, element)| {
         let role = match element.role {
             AccessibilityRole::Button => Role::Button,
             AccessibilityRole::StaticText => Role::Label,
             AccessibilityRole::TextField => Role::TextInput,
+            AccessibilityRole::Checkbox => Role::CheckBox,
+            AccessibilityRole::Switch => Role::Switch,
+            AccessibilityRole::RadioButton => Role::RadioButton,
+            AccessibilityRole::Tab => Role::Tab,
+            AccessibilityRole::Image => Role::Image,
+            AccessibilityRole::Header => Role::Heading,
         };
         let mut node = Node::new(role);
         if element.role == AccessibilityRole::StaticText {
@@ -146,6 +204,25 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
         if let Some(value) = &element.value {
             node.set_value(value.as_str());
         }
+        // AccessKit's `description` is the supplementary phrase a screen
+        // reader reads after the label, which is the role Compose's
+        // `stateDescription` plays.
+        if let Some(state) = &element.state_description {
+            node.set_description(state.as_str());
+        }
+        if let Some(selected) = element.selected {
+            node.set_selected(selected);
+        }
+        if let Some(toggled) = element.toggled {
+            node.set_toggled(if toggled {
+                Toggled::True
+            } else {
+                Toggled::False
+            });
+        }
+        if !element.enabled {
+            node.set_disabled();
+        }
         node.set_bounds(Rect {
             x0: element.bounds.x as f64,
             y0: element.bounds.y as f64,
@@ -155,7 +232,21 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
         if element.clickable {
             node.add_action(Action::Click);
         }
-        (NodeId(element.node_id as u64), node)
+        if !element.custom_actions.is_empty() {
+            node.add_action(Action::CustomAction);
+            node.set_custom_actions(
+                element
+                    .custom_actions
+                    .iter()
+                    .enumerate()
+                    .map(|(index, label)| CustomAction {
+                        id: index as i32,
+                        description: label.as_str().into(),
+                    })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        (NodeId(*id as u64), node)
     }));
     let mut tree = Tree::new(ROOT_ID);
     tree.toolkit_name = Some("Cranpose".into());
@@ -294,18 +385,17 @@ mod tests {
             AccessibilityElement {
                 node_id: 7,
                 label: "Items".into(),
-                value: None,
                 bounds: AccessibilityRect::new(10.0, 20.0, 80.0, 44.0),
                 role: AccessibilityRole::Button,
                 clickable: true,
+                ..AccessibilityElement::default()
             },
             AccessibilityElement {
                 node_id: 8,
                 label: "Receipts".into(),
-                value: None,
                 bounds: AccessibilityRect::new(10.0, 70.0, 120.0, 24.0),
                 role: AccessibilityRole::StaticText,
-                clickable: false,
+                ..AccessibilityElement::default()
             },
         ];
 
@@ -318,5 +408,52 @@ mod tests {
         let label = &update.nodes[2].1;
         assert_eq!(label.role(), Role::Label);
         assert_eq!(label.value(), Some("Receipts"));
+    }
+
+    /// Drawn controls all hang off one layout node, so a bridge that keyed
+    /// AccessKit nodes by layout node id published one node for a whole
+    /// settings list and clicked the wrong row.
+    #[test]
+    fn drawn_controls_sharing_a_layout_node_become_separate_accesskit_nodes() {
+        let elements = vec![
+            AccessibilityElement {
+                node_id: 4,
+                canvas_key: Some(1),
+                label: "Haptics".into(),
+                state_description: Some("On".into()),
+                bounds: AccessibilityRect::new(0.0, 0.0, 100.0, 50.0),
+                role: AccessibilityRole::Switch,
+                clickable: true,
+                toggled: Some(true),
+                ..AccessibilityElement::default()
+            },
+            AccessibilityElement {
+                node_id: 4,
+                canvas_key: Some(2),
+                label: "Sound effects".into(),
+                bounds: AccessibilityRect::new(0.0, 60.0, 100.0, 50.0),
+                role: AccessibilityRole::Switch,
+                clickable: true,
+                toggled: Some(false),
+                enabled: false,
+                ..AccessibilityElement::default()
+            },
+        ];
+
+        let update = tree_update(&elements);
+        let ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids.len(), 3, "root plus one node per drawn control");
+        assert_ne!(ids[1], ids[2]);
+        assert_eq!(update.nodes[0].1.children(), &ids[1..]);
+
+        let haptics = &update.nodes[1].1;
+        assert_eq!(haptics.role(), Role::Switch);
+        assert_eq!(haptics.toggled(), Some(Toggled::True));
+        assert_eq!(haptics.description(), Some("On"));
+        assert!(!haptics.is_disabled());
+
+        let sound = &update.nodes[2].1;
+        assert_eq!(sound.toggled(), Some(Toggled::False));
+        assert!(sound.is_disabled());
     }
 }

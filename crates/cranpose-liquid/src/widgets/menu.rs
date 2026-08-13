@@ -12,6 +12,7 @@ use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text,
 };
+use cranpose_ui::SemanticsWidgetRole;
 use cranpose_ui::{
     rememberMutableInteractionSource, Modifier, PointerEventKind, PointerInputScope,
     PressInteractionPress, Size,
@@ -1703,7 +1704,7 @@ fn menu_item_row(
         .fill_max_width()
         .report_window_rect(rect_sink)
         .semantics(move |config| {
-            config.is_button = true;
+            config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some(row_label.clone());
         })

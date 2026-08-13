@@ -4,7 +4,6 @@
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 use crate::ios_file_picker::root_view_controller;
 use cranpose_app_shell::{AppShell, PointerSource};
-use cranpose_core::NodeId;
 use cranpose_render_common::Renderer;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
@@ -15,7 +14,9 @@ use objc2_ui_kit::{
     NSObjectUIAccessibility, NSObjectUIAccessibilityContainer, UIAccessibilityElement,
     UIAccessibilityIdentification, UIAccessibilityLayoutChangedNotification,
     UIAccessibilityPostNotification, UIAccessibilityScreenChangedNotification,
-    UIAccessibilityTraitButton, UIAccessibilityTraitNone, UIAccessibilityTraitStaticText, UIView,
+    UIAccessibilityTraitButton, UIAccessibilityTraitHeader, UIAccessibilityTraitImage,
+    UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
+    UIAccessibilityTraitStaticText, UIView,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -24,9 +25,12 @@ use std::rc::Rc;
 use winit::event_loop::EventLoopProxy;
 
 struct AccessibilityElementIvars {
-    node_id: NodeId,
+    /// The shared accessibility element id, not the layout node id: a node
+    /// that publishes drawn controls owns several elements, and VoiceOver has
+    /// to activate the one it is focused on.
+    element_id: i32,
     actionable: Cell<bool>,
-    pending_activations: Rc<RefCell<Vec<NodeId>>>,
+    pending_activations: Rc<RefCell<Vec<i32>>>,
     wake_proxy: EventLoopProxy,
 }
 
@@ -50,7 +54,7 @@ define_class!(
             self.ivars()
                 .pending_activations
                 .borrow_mut()
-                .push(self.ivars().node_id);
+                .push(self.ivars().element_id);
             self.ivars().wake_proxy.wake_up();
             Bool::YES
         }
@@ -60,13 +64,13 @@ define_class!(
 impl NativeAccessibilityElement {
     fn new(
         container: &AnyObject,
-        node_id: NodeId,
-        pending_activations: Rc<RefCell<Vec<NodeId>>>,
+        element_id: i32,
+        pending_activations: Rc<RefCell<Vec<i32>>>,
         wake_proxy: EventLoopProxy,
         mtm: MainThreadMarker,
     ) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(AccessibilityElementIvars {
-            node_id,
+            element_id,
             actionable: Cell::new(false),
             pending_activations,
             wake_proxy,
@@ -84,9 +88,10 @@ impl NativeAccessibilityElement {
 /// Owns UIKit's retained accessibility elements and dispatches their actions.
 pub(crate) struct IosAccessibilityBridge {
     host_view: Retained<UIView>,
-    native_elements: HashMap<NodeId, Retained<NativeAccessibilityElement>>,
+    native_elements: HashMap<i32, Retained<NativeAccessibilityElement>>,
     snapshot: Vec<AccessibilityElement>,
-    pending_activations: Rc<RefCell<Vec<NodeId>>>,
+    snapshot_ids: Vec<i32>,
+    pending_activations: Rc<RefCell<Vec<i32>>>,
     wake_proxy: EventLoopProxy,
     published_once: bool,
 }
@@ -103,6 +108,7 @@ impl IosAccessibilityBridge {
             host_view,
             native_elements: HashMap::new(),
             snapshot: Vec::new(),
+            snapshot_ids: Vec::new(),
             pending_activations: Rc::new(RefCell::new(Vec::new())),
             wake_proxy: event_proxy,
             published_once: false,
@@ -121,27 +127,29 @@ impl IosAccessibilityBridge {
         }
 
         let structure_changed = !same_structure(&self.snapshot, &next);
-        let current_ids: HashSet<NodeId> = next.iter().map(|element| element.node_id).collect();
+        let next_ids = accessibility::element_ids(&next);
+        let current_ids: HashSet<i32> = next_ids.iter().copied().collect();
         self.native_elements
-            .retain(|node_id, _| current_ids.contains(node_id));
+            .retain(|element_id, _| current_ids.contains(element_id));
 
         let mtm = MainThreadMarker::new().expect("accessibility sync runs on UIKit's main thread");
-        for element in &next {
-            if !self.native_elements.contains_key(&element.node_id) {
-                let native = self.create_element(element, mtm);
-                self.native_elements.insert(element.node_id, native);
+        for (element_id, element) in next_ids.iter().zip(&next) {
+            if !self.native_elements.contains_key(element_id) {
+                let native = self.create_element(*element_id, mtm);
+                self.native_elements.insert(*element_id, native);
             }
             let native = self
                 .native_elements
-                .get(&element.node_id)
+                .get(element_id)
                 .expect("accessibility element inserted above");
             update_native_element(native, element);
         }
 
         if structure_changed {
-            self.publish_container(&next, mtm);
+            self.publish_container(&next_ids, mtm);
         }
         self.snapshot = next;
+        self.snapshot_ids = next_ids;
     }
 
     /// Runs queued VoiceOver/XCTest activations through Cranpose pointer input.
@@ -152,11 +160,12 @@ impl IosAccessibilityBridge {
     {
         let pending = self.pending_activations.take();
         let mut changed = false;
-        for node_id in pending {
+        for element_id in pending {
             let Some(element) = self
-                .snapshot
+                .snapshot_ids
                 .iter()
-                .find(|element| element.node_id == node_id)
+                .position(|id| *id == element_id)
+                .and_then(|index| self.snapshot.get(index))
             else {
                 continue;
             };
@@ -171,29 +180,28 @@ impl IosAccessibilityBridge {
 
     fn create_element(
         &self,
-        element: &AccessibilityElement,
+        element_id: i32,
         mtm: MainThreadMarker,
     ) -> Retained<NativeAccessibilityElement> {
         let container: &AnyObject = self.host_view.as_ref();
         let native = NativeAccessibilityElement::new(
             container,
-            element.node_id,
+            element_id,
             Rc::clone(&self.pending_activations),
             self.wake_proxy.clone(),
             mtm,
         );
         native.setIsAccessibilityElement(true);
         native.setAccessibilityIdentifier(Some(&NSString::from_str(&format!(
-            "cranpose-node-{}",
-            element.node_id
+            "cranpose-node-{element_id}"
         ))));
         native
     }
 
-    fn publish_container(&mut self, next: &[AccessibilityElement], mtm: MainThreadMarker) {
-        let ordered: Vec<Retained<AnyObject>> = next
+    fn publish_container(&mut self, next_ids: &[i32], mtm: MainThreadMarker) {
+        let ordered: Vec<Retained<AnyObject>> = next_ids
             .iter()
-            .filter_map(|element| self.native_elements.get(&element.node_id))
+            .filter_map(|element_id| self.native_elements.get(element_id))
             .map(|element| element.retain().into())
             .collect();
         let array = NSArray::from_retained_slice(&ordered);
@@ -222,20 +230,51 @@ impl IosAccessibilityBridge {
 fn update_native_element(native: &NativeAccessibilityElement, element: &AccessibilityElement) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
-    native.setAccessibilityValue(element.value.as_deref().map(NSString::from_str).as_deref());
+    // VoiceOver reads the value after the label, which is where Compose's
+    // `stateDescription` belongs; a text field's own text still wins, since it
+    // is the value in the literal sense.
+    let value = element
+        .value
+        .as_deref()
+        .or(element.state_description.as_deref());
+    native.setAccessibilityValue(value.map(NSString::from_str).as_deref());
+    // The click label is a verb phrase ("Pause"), which is exactly what a hint
+    // is for: VoiceOver reads it as what activating will do.
+    native.setAccessibilityHint(
+        element
+            .click_label
+            .as_deref()
+            .map(NSString::from_str)
+            .as_deref(),
+    );
     native.setAccessibilityFrameInContainerSpace(CGRect::new(
         CGPoint::new(element.bounds.x as f64, element.bounds.y as f64),
         CGSize::new(element.bounds.width as f64, element.bounds.height as f64),
     ));
     // SAFETY: UIKit accessibility trait constants are immutable process-wide
     // values exported by the linked framework.
-    let traits = unsafe {
+    let mut traits = unsafe {
         match element.role {
-            AccessibilityRole::Button => UIAccessibilityTraitButton,
+            AccessibilityRole::Button
+            | AccessibilityRole::Checkbox
+            | AccessibilityRole::Switch
+            | AccessibilityRole::RadioButton => UIAccessibilityTraitButton,
             AccessibilityRole::StaticText => UIAccessibilityTraitStaticText,
             AccessibilityRole::TextField => UIAccessibilityTraitNone,
+            AccessibilityRole::Tab => UIAccessibilityTraitButton,
+            AccessibilityRole::Image => UIAccessibilityTraitImage,
+            AccessibilityRole::Header => UIAccessibilityTraitHeader,
         }
     };
+    // SAFETY: as above — immutable framework constants.
+    unsafe {
+        if element.selected == Some(true) {
+            traits |= UIAccessibilityTraitSelected;
+        }
+        if !element.enabled {
+            traits |= UIAccessibilityTraitNotEnabled;
+        }
+    }
     native.setAccessibilityTraits(traits);
 }
 
@@ -247,6 +286,7 @@ fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement
                 && current.value == next.value
                 && current.role == next.role
                 && current.clickable == next.clickable
+                && current.canvas_key == next.canvas_key
         })
 }
 
@@ -259,10 +299,10 @@ mod tests {
         AccessibilityElement {
             node_id: 7,
             label: "Library".into(),
-            value: None,
             bounds: AccessibilityRect::new(x, 20.0, 80.0, 64.0),
             role: AccessibilityRole::Button,
             clickable: true,
+            ..AccessibilityElement::default()
         }
     }
 
