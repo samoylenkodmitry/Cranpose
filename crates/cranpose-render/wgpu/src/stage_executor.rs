@@ -51,9 +51,14 @@ pub(crate) enum Stage {
 /// wake, and one core does it faster alone.
 const MIN_POOLED_ITEMS: usize = 256;
 
-/// Producer fan-outs split into this many chunks per lane; the bound on
-/// present-stage queue delay is one such chunk's execution time.
-const PRODUCER_CHUNK_FACTOR: usize = 4;
+/// Producer fan-outs split into this many chunks per lane. Finer chunking
+/// (the factor was 4) existed to bound present-stage queue delay, but no
+/// present stage submits today — the depth-one pipeline lost on-device —
+/// while every extra chunk is a cross-thread wake: a hot-watch profile
+/// showed the render thread spending 19% of its time in
+/// `pthread_cond_signal` alone. One chunk per lane is the coarsest split
+/// that still uses every core.
+const PRODUCER_CHUNK_FACTOR: usize = 1;
 
 #[derive(Default)]
 struct TelemetryCounters {
