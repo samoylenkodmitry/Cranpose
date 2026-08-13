@@ -219,10 +219,19 @@ fn element_id(node_id: NodeId, canvas_key: Option<u64>) -> i32 {
         // widgets Cranpose lays out do not move because canvas semantics now
         // exist next to them.
         None => node_id as u64,
-        // Fibonacci hashing of the app's key, folded into the node it belongs
-        // to. Distinct keys on one node land far apart, which keeps the probe
-        // loop above from degenerating on a list of adjacent row indices.
-        Some(key) => (node_id as u64) ^ (key.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 29),
+        // Two odd multipliers, so both halves are bijections on `u64` and stay
+        // injective in the low 31 bits the id is cut from: two drawn controls
+        // on one node never collide, and neither do the same key on two nodes.
+        // The node half is rotated so that key 0 — the default, and the first
+        // index any app reaches for — does not land exactly on the node's own
+        // id, which would collide with the layout node's element every time and
+        // push some unrelated node off the id its cursor was parked on.
+        Some(key) => {
+            (node_id as u64)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                .rotate_left(17)
+                ^ key.wrapping_mul(0xd6e8_feb8_6659_fd93)
+        }
     };
     ((mixed & 0x7fff_ffff) as i32).max(1)
 }
@@ -498,6 +507,8 @@ mod tests {
     /// app publishes a different set: a screen reader's cursor lives on the id.
     #[test]
     fn drawn_controls_get_distinct_ids_that_do_not_move_with_list_position() {
+        // Key 0 is deliberately included: it is `CanvasSemanticsNode`'s default
+        // and the first index an app reaches for.
         let rows: Vec<_> = (0..24).map(|key| element_with(7, Some(key))).collect();
         let ids = element_ids(&rows);
 
@@ -511,9 +522,18 @@ mod tests {
         let scrolled = element_ids(&rows[1..]);
         assert_eq!(scrolled, ids[1..]);
 
-        // And the layout node itself is untouched by the drawn controls
-        // hanging off it.
+        // The layout node itself is untouched by the drawn controls hanging off
+        // it — including by the one keyed 0, which must not land on the node's
+        // own id and probe an unrelated element off its cursor.
         assert_eq!(element_ids(&[element_with(7, None)]), vec![7]);
+        assert!(
+            !ids.contains(&7),
+            "a drawn control took the layout node's id"
+        );
+
+        // The same key on two nodes is two elements, not one.
+        let across = element_ids(&[element_with(7, Some(3)), element_with(8, Some(3))]);
+        assert_ne!(across[0], across[1]);
     }
 
     #[test]
