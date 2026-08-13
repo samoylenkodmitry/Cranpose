@@ -9,8 +9,7 @@
 //!
 //! Two answers were on the table. Widening `Placement` with a transform is the
 //! obvious one, and it is the wrong one: `Placement` is consumed by the layout
-//! engine to set a node's position, the engine deliberately folds only
-//! translation into hit testing, and a scale arriving that way would be a
+//! engine to set a node's position, and a scale arriving that way would be a
 //! second transform path competing with the one every renderer backend already
 //! honours — `GraphicsLayer` — with a merge rule to invent at every backend.
 //!
@@ -30,10 +29,17 @@
 //!   and composited scaled — which is why Wear's scaled rows are softer than
 //!   rows redrawn at a smaller font.
 //!
-//! The cost to know about: the layout pass folds translation but not scale, so
-//! a shrunk row's **hit rectangle stays its unscaled box**. Rows near the
-//! centre line, which are the ones a finger reaches for, are at scale 1 and
-//! unaffected; an edge row has a hit target up to 30 % larger than it looks.
+//! A cost this was once documented to have, and does not: a shrunk row's touch
+//! target is **not** its unscaled box. Hit testing in this engine is done on
+//! the render graph, and a layer's `transform_to_parent` is built by
+//! `layer_transform_to_parent` from the same resolved `GraphicsLayer` the
+//! renderer draws with — scale about the transform origin included.
+//! `HitRegion::contains` inverts that transform and tests the point against
+//! the node's local bounds, so the target is the drawn quad. A tap in the gap
+//! between two shrunken rows hits neither, and a tap outside a shrunken row's
+//! narrowed width misses it too. Measured and pinned by
+//! `a_shrunken_row_is_only_tappable_where_it_is_drawn` in
+//! `cranpose-render-common`'s `scaling_list_scene` test.
 //!
 //! # What this list is and is not
 //!
