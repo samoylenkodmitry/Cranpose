@@ -1974,6 +1974,85 @@ fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
     }
 }
 
+/// Every Gradle task that runs `cargo ndk` must declare the directory it writes
+/// as an output.
+///
+/// The `.so` lands in a directory the Android plugin has already been told to
+/// read as `jniLibs`, and the merge/package tasks depend on the cargo task, so
+/// the ordering looks right. It is not enough: a task that writes files outside
+/// its declared outputs leaves Gradle's file-system snapshot of that directory
+/// untouched, so the packaging tasks downstream check a pre-cargo snapshot,
+/// report UP-TO-DATE, and build the APK around the PREVIOUS run's library.
+///
+/// Nothing about that is visible from the build log — it says BUILD SUCCESSFUL
+/// — and nothing is visible on device either, beyond code behaving as it did
+/// one build ago. It costs whole debugging sessions: a fix verified on the host
+/// "does not reproduce" on the phone or the watch, which reads as a
+/// platform-specific defect and sends the search into the framework. Run the
+/// build twice and the symptom evaporates, which makes it look intermittent on
+/// top of that.
+///
+/// `outputs.upToDateWhen { false }` does not cover this. It decides whether the
+/// cargo task itself re-runs; it says nothing about what the task changed.
+#[test]
+fn gradle_cargo_tasks_declare_the_jni_library_directory_they_write() {
+    let gradle_files = [
+        "apps/android-demo/android/app/build.gradle.kts",
+        "apps/isolated-demo/android/app/build.gradle.kts",
+    ];
+
+    for relative in gradle_files {
+        let source = workspace_source(relative);
+        assert!(
+            source.contains("jniLibs.directories.add(\"../target/android\")"),
+            "{relative} should still read the cargo-ndk output directory as jniLibs"
+        );
+
+        let mut checked = 0usize;
+        for task in source.split("tasks.register<Exec>(").skip(1) {
+            let body = task
+                .split("\ntasks.register")
+                .next()
+                .unwrap_or(task)
+                .split("\nafterEvaluate")
+                .next()
+                .unwrap_or(task);
+            if !body.contains("cargo ndk") {
+                continue;
+            }
+            checked += 1;
+            let name = body.split('"').nth(1).unwrap_or("<unnamed>");
+            assert!(
+                body.contains("outputs.dir(rootProject.file(\"target/android\"))"),
+                "{relative}: task {name} runs cargo ndk without declaring \
+                 outputs.dir(rootProject.file(\"target/android\")), so Gradle keeps a stale \
+                 snapshot of the jniLibs directory and the APK ships the previous build's .so"
+            );
+            assert!(
+                body.contains("outputs.upToDateWhen { false }"),
+                "{relative}: task {name} declares an output directory, so it also needs \
+                 outputs.upToDateWhen {{ false }} or Gradle will skip the cargo build whenever \
+                 that directory happens to be unchanged"
+            );
+        }
+        assert!(
+            checked >= 2,
+            "{relative}: expected the debug and release cargo-ndk tasks to be checked, saw {checked}"
+        );
+
+        // `mergeJniLibFolders` collects the source directories and
+        // `mergeNativeLibs` collects the libraries inside them; both read the
+        // directory cargo writes, so both have to wait for it. Wiring only one
+        // is what Gradle reports as an implicit dependency once the output is
+        // declared above.
+        assert!(
+            source.contains("it.name.contains(\"JniLibFolders\")"),
+            "{relative}: the cargo build must be wired to mergeJniLibFolders as well as \
+             mergeNativeLibs -- both consume the directory it writes"
+        );
+    }
+}
+
 /// `web.rs` compiles only for `wasm32`, so nothing in `cargo test` links it —
 /// reading the source is the only guard available on the host, and the
 /// alternative is finding out in a browser. This contract regressed silently

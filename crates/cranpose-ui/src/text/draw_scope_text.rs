@@ -57,10 +57,15 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
 
 /// Measures draw-scope text against the app's fonts.
 ///
-/// Every call lands in [`super::measure_text`], which is the same entry point
-/// the `Text` composable's layout uses and is backed by the app context's
-/// metrics cache — so measuring an unchanged string every frame is a hash
-/// lookup, not a shaping pass.
+/// Every call lands in [`super::measure::measure_resolved_text`], backed by the
+/// app context's metrics cache — so measuring an unchanged string every frame
+/// is a hash lookup, not a shaping pass.
+///
+/// "Resolved" is the whole point: a [`DrawTextStyle`] states final sizes, and a
+/// scene lowers a text primitive with `style.resolved_font_size()` untouched,
+/// so the system font scale must not be folded in here. It is applied where an
+/// unresolved size lives instead — the `Text` composable's `Sp` values — and
+/// that path carries the scaled style through to the renderer with it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AppContextTextMeasurer;
 
@@ -86,13 +91,13 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 
         let text_style = text_style_for_draw_style(style);
         let annotated = super::shared_plain_annotated_string(text);
-        let metrics = super::measure_text(&annotated, &text_style);
+        let metrics = super::measure::measure_resolved_text(&annotated, &text_style);
         let line_height = if metrics.line_height.is_finite() && metrics.line_height > 0.0 {
             metrics.line_height
         } else {
             estimate_text_measurement(text, style).line_height
         };
-        let first_baseline = super::measure::first_baseline(&text_style)
+        let first_baseline = super::measure::resolved_first_baseline(&text_style)
             .unwrap_or_else(|| estimate_text_measurement(text, style).first_baseline);
 
         if text.is_empty() {

@@ -676,6 +676,37 @@ pub fn measure_text(text: &crate::text::AnnotatedString, style: &TextStyle) -> T
     })
 }
 
+/// Measures `text` at the sizes `style` literally carries — no system font
+/// scale applied.
+///
+/// Use this for a style that is already resolved, which on the drawing side
+/// means every style: a
+/// [`DrawScope`](cranpose_ui_graphics::DrawScope) text run is described by a
+/// flat [`cranpose_ui_graphics::TextStyle`] whose sizes are final, and a scene
+/// lowers that run with `style.resolved_font_size()` and nothing else. Scaling
+/// here would report a box the rasterizer never fills, and every wrap, centring
+/// and hit rect a caller derives from the measurement would be out by the
+/// setting — on the devices where it is not 1.0 and nowhere else.
+///
+/// The `Text` composable is the other case and keeps [`measure_text`]: its
+/// style carries real [`crate::text::TextUnit::Sp`] sizes, and its prepared
+/// layout hands the SCALED style on to the renderer, so both sides move
+/// together there.
+pub(crate) fn measure_resolved_text(
+    text: &crate::text::AnnotatedString,
+    style: &TextStyle,
+) -> TextMetrics {
+    crate::render_state::with_text_service(|service| service.measure(None, text, style))
+}
+
+/// [`first_baseline`] for an already-resolved style — see
+/// [`measure_resolved_text`] for why the drawing side does not scale.
+pub(crate) fn resolved_first_baseline(style: &TextStyle) -> Option<f32> {
+    crate::render_state::with_text_service(|service| {
+        service.with_measurer(|m| m.first_baseline(style))
+    })
+}
+
 /// The tight glyph box `(top_offset, height)` of a `style` text line inside
 /// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
 /// full slot when the active measurer has no font metrics.

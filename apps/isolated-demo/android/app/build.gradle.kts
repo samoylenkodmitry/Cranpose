@@ -78,6 +78,18 @@ tasks.register<Exec>("buildRustDebug") {
     inputs.file("../../Cargo.toml")
     inputs.file("../../Cargo.lock")
 
+    // cargo-ndk writes the .so here and `jniLibs.directories` above reads it
+    // back, so this directory is this task's output and has to say so.
+    // Without it Gradle never learns the directory changed: the merge and
+    // package tasks that depend on this one check the snapshot taken before
+    // cargo ran, report UP-TO-DATE, and the APK ships the PREVIOUS build's
+    // library. The failure is silent and reads as a device bug -- what runs on
+    // screen is one build behind what is on disk, so a fix "does not work on
+    // device" until some unrelated change forces a repackage.
+    outputs.dir(rootProject.file("target/android"))
+
+    // Separate from the output declaration above: this only forces THIS task
+    // to run again, and says nothing about what the task changed on disk.
     outputs.upToDateWhen { false }
 
     doFirst {
@@ -103,6 +115,14 @@ tasks.register<Exec>("buildRustRelease") {
     description = "Build Rust library for Android (release, all ABIs)"
     group = "rust"
 
+    // The directory cargo-ndk writes and `jniLibs.directories` reads. See
+    // `buildRustDebug`: undeclared, it leaves the packaging tasks looking at a
+    // pre-cargo snapshot and the APK ships the previous build's library.
+    outputs.dir(rootProject.file("target/android"))
+    // Cargo owns incrementality here; a task with a declared output would
+    // otherwise be skipped whenever that output happened to be unchanged.
+    outputs.upToDateWhen { false }
+
     doFirst {
         checkCargoNdk()
     }
@@ -127,7 +147,15 @@ tasks.register<Exec>("buildRustRelease") {
 }
 
 afterEvaluate {
-    tasks.matching { it.name.startsWith("merge") && it.name.contains("NativeLibs") }.configureEach {
+    // Both merge tasks read `target/android`: `mergeJniLibFolders` collects the
+    // source directories and `mergeNativeLibs` collects the libraries in them.
+    // Wiring only the second leaves the first racing the cargo build, which
+    // Gradle reports as an implicit dependency once the cargo tasks declare the
+    // directory as their output.
+    tasks.matching {
+        it.name.startsWith("merge") &&
+            (it.name.contains("NativeLibs") || it.name.contains("JniLibFolders"))
+    }.configureEach {
         if (name.contains("Debug", ignoreCase = true)) {
             dependsOn("buildRustDebug")
         } else if (name.contains("Release", ignoreCase = true)) {

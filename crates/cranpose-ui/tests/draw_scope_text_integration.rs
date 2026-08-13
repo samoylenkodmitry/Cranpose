@@ -10,8 +10,8 @@ use std::rc::Rc;
 
 use cranpose_ui::text::{AnnotatedString, TextLayoutResult};
 use cranpose_ui::{
-    collect_slices_from_modifier, execute_draw_commands, set_text_measurer, AppContext,
-    DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
+    collect_slices_from_modifier, execute_draw_commands, set_font_scale, set_text_measurer,
+    AppContext, DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
 };
 use cranpose_ui_graphics::{
     estimate_text_measurement, Brush, Color, DrawPrimitive, DrawScope, Point, Rect, Size,
@@ -203,6 +203,99 @@ fn an_unchanged_string_measures_once_across_repeated_frames() {
         measured.borrow().len(),
         1,
         "a stable string must be shaped once and served from the metrics cache after that"
+    );
+}
+
+/// Reports one em of advance per character, so the font size a measurement was
+/// taken at is readable straight off the width.
+struct EmWidthMeasurer;
+
+impl TextMeasurer for EmWidthMeasurer {
+    fn measure(&self, text: &AnnotatedString, style: &TextStyle) -> TextMetrics {
+        let font_size = style.resolve_font_size(14.0);
+        TextMetrics {
+            width: text.text.chars().count() as f32 * font_size,
+            height: font_size,
+            line_height: font_size,
+            line_count: 1,
+        }
+    }
+
+    fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
+        Some(style.resolve_font_size(14.0) * 0.8)
+    }
+
+    fn get_offset_for_position(
+        &self,
+        _text: &AnnotatedString,
+        _style: &TextStyle,
+        _x: f32,
+        _y: f32,
+    ) -> usize {
+        0
+    }
+
+    fn get_cursor_x_for_offset(
+        &self,
+        _text: &AnnotatedString,
+        _style: &TextStyle,
+        _offset: usize,
+    ) -> f32 {
+        0.0
+    }
+
+    fn layout(&self, text: &AnnotatedString, style: &TextStyle) -> TextLayoutResult {
+        let font_size = style.resolve_font_size(14.0);
+        TextLayoutResult::monospaced(&text.text, font_size, font_size)
+    }
+}
+
+/// A draw scope's text is measured at the size the style names, whatever the
+/// system font scale is.
+///
+/// The rasterizer takes its font size straight off the primitive's
+/// `DrawTextStyle` — that style is documented as fully resolved, and a scene is
+/// lowered with `text.style.resolved_font_size()` and nothing else. So a
+/// measurement that quietly multiplied by the system font scale would hand the
+/// caller a box the glyphs never fill: every wrap decision, every centred label
+/// and every hit rect computed from `measure_text` would be out by exactly that
+/// factor, on the devices where the setting is not 1.0 and nowhere else.
+///
+/// A `Text` composable is the other case and stays scaled: its style carries
+/// real `Sp` sizes, and its prepared layout hands the SCALED style on to the
+/// renderer, so both sides move together there.
+#[test]
+fn draw_scope_text_is_measured_at_the_size_the_style_names() {
+    const FONT_SIZE: f32 = 10.0;
+    const TEXT: &str = "ABCD";
+
+    let app_context = AppContext::new();
+    let commands: Vec<DrawCommand> = collect_slices_from_modifier(&Modifier::empty().draw_behind(
+        |scope: &mut dyn DrawScope| {
+            scope.draw_text_from(
+                Point::ZERO,
+                Brush::solid(Color::WHITE),
+                TEXT,
+                &DrawTextStyle::new(FONT_SIZE),
+            );
+        },
+    ))
+    .draw_commands()
+    .to_vec();
+
+    let primitives = app_context.enter(|| {
+        set_text_measurer(EmWidthMeasurer);
+        set_font_scale(2.0);
+        execute_draw_commands(&commands, Size::new(500.0, 100.0))
+    });
+
+    let text = text_primitive(&primitives);
+    // The size the renderer will rasterize at, untouched by the setting.
+    assert_eq!(text.style.font_size, FONT_SIZE);
+    assert_eq!(
+        text.rect.width,
+        TEXT.chars().count() as f32 * FONT_SIZE,
+        "the block the caller was told about must be the block the glyphs fill"
     );
 }
 
