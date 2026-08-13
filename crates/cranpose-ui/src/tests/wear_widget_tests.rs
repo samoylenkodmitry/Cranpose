@@ -649,3 +649,126 @@ fn the_switch_slots_resolve_to_the_colours_the_framebuffer_shows() {
         Color::from_rgb_u8(0x5E, 0x7E, 0x93)
     );
 }
+
+/// A whole Credits screen: a scaffold over a list of real, text-measured rows.
+///
+/// Every other test here feeds the list `Spacer`s of a fixed height, so that
+/// what is under test is the list's geometry and not the text measurer's. This
+/// one deliberately does the opposite, because an app does: a `ListHeader`, a
+/// pile of wrapping `Text`, and a `WearButton`, all sized by measuring their
+/// own strings.
+fn compose_credits_screen() -> TestComposition {
+    run_test_composition(|| {
+        crate::set_density(PX);
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        let inner = state.clone();
+        ScreenScaffold(
+            Modifier::empty().fill_max_size(),
+            state,
+            ScreenScaffoldSpec::default()
+                .indicator(ScrollIndicatorSpec::default().colors(measured_colors())),
+            move || {
+                WearScalingLazyColumn(
+                    Modifier::empty().fill_max_size(),
+                    inner.clone(),
+                    WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
+                    move |scope| {
+                        let lines = [
+                            "ORBIT BREAKER",
+                            "Version 1.0.0-debug",
+                            "Designed and built for Wear OS.",
+                            "Every graphic and sound in this game is generated inside the project.",
+                            "Back",
+                        ];
+                        scope.items(lines.len(), move |index| match index {
+                            0 => {
+                                ListHeader(
+                                    Modifier::empty(),
+                                    ListHeaderSpec::default().colors(measured_colors()),
+                                    lines[0].to_string(),
+                                );
+                            }
+                            4 => {
+                                WearButton(
+                                    Modifier::empty().fill_max_width(),
+                                    WearButtonSpec::default().colors(measured_colors()),
+                                    lines[4].to_string(),
+                                    None,
+                                    || {},
+                                );
+                            }
+                            other => {
+                                Text(
+                                    lines[other].to_string(),
+                                    Modifier::empty().fill_max_width(),
+                                    WearTextStyle::BODY_LARGE
+                                        .at_size(12.0)
+                                        .with_line_height(16.0)
+                                        .resolve(measured_colors().content),
+                                );
+                            }
+                        });
+                    },
+                );
+            },
+        );
+    })
+}
+
+#[test]
+fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
+    let mut composition = compose_credits_screen();
+    let root = composition.root().expect("credits root");
+    let tree = tree(&mut composition, root);
+    let layers = item_layers(&tree);
+    assert_eq!(
+        layers.len(),
+        5,
+        "one graphics layer per item, however tall the item measured"
+    );
+    for (index, (y, height, _)) in layers.iter().enumerate() {
+        assert!(
+            *height > 0.0,
+            "item {index} measured {height} tall at y={y}; a row whose height \
+             is zero draws nothing, which is what an empty screen looks like"
+        );
+    }
+    // And they are stacked, not piled on one coordinate.
+    let tops: Vec<f32> = layers.iter().map(|(y, _, _)| *y).collect();
+    assert!(
+        tops.windows(2).all(|pair| pair[1] > pair[0]),
+        "items should descend the screen, got tops {tops:?}"
+    );
+}
+
+#[test]
+fn a_credits_screen_emits_a_text_primitive_for_every_row_it_composed() {
+    // Layout is not paint. Every other test here stops at the layout tree,
+    // which is why a screen whose rows measure perfectly and rasterise to
+    // nothing passes all of them and shows a blank watch face.
+    let mut composition = compose_credits_screen();
+    let root = composition.root().expect("credits root");
+    let tree = tree(&mut composition, root);
+    let scene = crate::renderer::HeadlessRenderer::new().render(&tree);
+    let texts: Vec<&str> = scene
+        .operations()
+        .iter()
+        .filter_map(|op| match op {
+            crate::renderer::RenderOp::Text { value, .. } => Some(value.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        texts.iter().any(|t| t.contains("ORBIT BREAKER")),
+        "the ListHeader's own string should reach the scene; got {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("Wear OS")),
+        "a credit line's string should reach the scene; got {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|t| t.contains("Back")),
+        "the button's label should reach the scene; got {texts:?}"
+    );
+}

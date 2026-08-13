@@ -22,7 +22,7 @@ use crate::text::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle,
     PlatformParagraphStyle, SpanStyle, TextStyle,
 };
-use crate::text::{FontWeight, TextUnit};
+use crate::text::{FontFamily, FontWeight, TextUnit};
 
 /// The colour roles these widgets read.
 ///
@@ -116,6 +116,25 @@ pub struct WearTextStyle {
 }
 
 impl WearTextStyle {
+    /// The family Wear's type scale resolves to on a real device.
+    ///
+    /// Wear's `TypefaceTokens.Brand` is `DeviceFontFamilyName("roboto-flex")`,
+    /// and naming that here would be the faithful-looking answer and the wrong
+    /// one. On the Wear OS 5 system image these widgets are measured against,
+    /// `/system/etc/fonts.xml` declares a `roboto-flex` family whose every entry
+    /// points at `RobotoFlex-Regular.ttf` — **a file the image does not ship**.
+    /// A family whose files cannot be opened is dropped, so the token does not
+    /// resolve and the platform falls back to `sans-serif`, which is Roboto.
+    /// That is what the pixels show, and it is what this names.
+    ///
+    /// Naming a family at all is not optional. A `TextStyle` that leaves
+    /// `font_family` as `None` only draws if some face happens to answer for the
+    /// default, and an app that registers the system fonts under their own
+    /// families — which is what a port matching Android's text has to do — has
+    /// no such face. The text then measures, lays out and rasterises to nothing:
+    /// a screen with correct geometry and no glyphs on it.
+    pub const BRAND_FAMILY: FontFamily = FontFamily::SansSerif;
+
     /// `titleMedium` — what a `ListHeader` draws with.
     pub const TITLE_MEDIUM: Self = Self {
         size_sp: 16.0,
@@ -182,12 +201,21 @@ impl WearTextStyle {
     /// setting once, at measure time. Pre-scaling them here and handing the
     /// result to a `Text` would apply it twice.
     pub fn resolve(self, color: Color) -> TextStyle {
+        self.resolve_in(color, Self::BRAND_FAMILY)
+    }
+
+    /// The same, drawn in a family the caller names.
+    ///
+    /// For a device whose `roboto-flex` really does resolve, or an app that
+    /// registered Wear's brand face under a name of its own.
+    pub fn resolve_in(self, color: Color, family: FontFamily) -> TextStyle {
         TextStyle {
             span_style: SpanStyle {
                 color: Some(color),
                 font_size: TextUnit::Sp(self.size_sp),
                 font_weight: Some(FontWeight(self.weight)),
                 letter_spacing: TextUnit::Sp(self.tracking_sp),
+                font_family: Some(family),
                 ..SpanStyle::default()
             },
             paragraph_style: ParagraphStyle {
@@ -274,6 +302,35 @@ mod tests {
         assert_eq!(centred.size_sp, 12.0);
         assert_eq!(centred.line_height_sp, 16.0);
         assert_eq!(centred.weight, WearTextStyle::BODY_LARGE.weight);
+    }
+
+    #[test]
+    fn every_entry_names_a_family_so_its_text_has_a_face_to_draw_with() {
+        // A `TextStyle` with no family draws only if some face answers for the
+        // default. An app that registers the system fonts under their own
+        // families has none, and the text then measures, lays out and
+        // rasterises to nothing -- correct geometry, no glyphs.
+        for style in [
+            WearTextStyle::TITLE_MEDIUM,
+            WearTextStyle::LABEL_MEDIUM,
+            WearTextStyle::LABEL_SMALL,
+            WearTextStyle::BODY_LARGE,
+        ] {
+            assert_eq!(
+                style.resolve(Color::WHITE).span_style.font_family,
+                Some(FontFamily::SansSerif),
+                "Wear's brand token resolves to sans-serif on a device with no \
+                 RobotoFlex-Regular.ttf, which is every Wear OS 5 image measured"
+            );
+        }
+        assert_eq!(
+            WearTextStyle::BODY_LARGE
+                .resolve_in(Color::WHITE, FontFamily::Monospace)
+                .span_style
+                .font_family,
+            Some(FontFamily::Monospace),
+            "a caller can still name its own"
+        );
     }
 
     #[test]
