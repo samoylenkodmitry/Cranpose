@@ -32,6 +32,7 @@ mod semantics;
 mod shadow;
 mod size;
 mod slices;
+mod toggleable;
 mod weight;
 
 pub use crate::draw::{DrawCacheBuilder, DrawCommand};

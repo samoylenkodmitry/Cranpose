@@ -1326,6 +1326,39 @@ pub fn resolve_text_measure_width(
     width
 }
 
+/// How much of the slack a `TextAlign` puts *before* the text: 0 at the start
+/// edge, 0.5 centred, 1 at the end edge.
+///
+/// Split out because the same fraction has to be applied twice and by two
+/// different pieces of code. Compose aligns a paragraph **line by line** —
+/// `TextAlign.Center` centres each line in the paragraph's width, it does not
+/// centre the paragraph's box in its parent — so the block offset computed
+/// here and the per-line offset the rasteriser applies inside the block are
+/// two halves of one rule. They telescope: block at `(box - block) * f`, line
+/// at `(block - line) * f`, which sums to `(box - line) * f`, exactly the
+/// offset Compose gives that line. Getting one without the other leaves every
+/// wrapped continuation line start-aligned under a centred first line.
+pub fn text_align_fraction(text_style: &TextStyle, text: &str) -> f32 {
+    let paragraph_style = &text_style.paragraph_style;
+    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
+    let rtl = direction == cranpose_ui::text::ResolvedTextDirection::Rtl;
+    match paragraph_style.text_align {
+        TextAlign::Center => 0.5,
+        TextAlign::End | TextAlign::Right => 1.0,
+        // `Left` follows the direction here rather than being absolute. That
+        // is not what Compose means by `TextAlign.Left`, but it is what this
+        // function has always done and no Wear screen is RTL; changing it is a
+        // separate question from where a wrapped line starts.
+        TextAlign::Start | TextAlign::Left | TextAlign::Justify | TextAlign::Unspecified => {
+            if rtl {
+                1.0
+            } else {
+                0.0
+            }
+        }
+    }
+}
+
 fn resolve_text_horizontal_offset(
     text_style: &TextStyle,
     text: &str,
@@ -1333,26 +1366,7 @@ fn resolve_text_horizontal_offset(
     measured_width: f32,
 ) -> f32 {
     let remaining = (content_width - measured_width).max(0.0);
-    let paragraph_style = &text_style.paragraph_style;
-    let direction = resolve_text_direction(text, Some(paragraph_style.text_direction));
-    match paragraph_style.text_align {
-        TextAlign::Center => remaining * 0.5,
-        TextAlign::End | TextAlign::Right => remaining,
-        TextAlign::Start | TextAlign::Left | TextAlign::Justify => {
-            if direction == cranpose_ui::text::ResolvedTextDirection::Rtl {
-                remaining
-            } else {
-                0.0
-            }
-        }
-        TextAlign::Unspecified => {
-            if direction == cranpose_ui::text::ResolvedTextDirection::Rtl {
-                remaining
-            } else {
-                0.0
-            }
-        }
-    }
+    remaining * text_align_fraction(text_style, text)
 }
 
 #[cfg(test)]

@@ -42,13 +42,13 @@ const NONDETERMINISTIC_TABS: [DemoTab; 7] = [
     DemoTab::Animations,
     DemoTab::InteractiveAnim,
     DemoTab::ShaderRect,
-    // Scrolls forever: `CreditsState::advance` runs the list to the end, turns
+    // Scrolls forever: `WearState::advance` runs the list to the end, turns
     // around and runs it back, every frame, with no state it settles into. A
     // capture taken after a fixed settle is therefore taken wherever the scroll
     // happened to be, and two runs of this dump will never agree on it. Left
     // out of the list, that showed up as a large permanent pixel delta on a tab
     // nothing was wrong with -- the exact reading this list exists to prevent.
-    DemoTab::CranorbitCredits,
+    DemoTab::Wear,
 ];
 
 fn main() {
@@ -138,7 +138,7 @@ fn tab_slug(tab: DemoTab) -> &'static str {
         DemoTab::Liquid => "liquid-ui",
         DemoTab::FilePicker => "file-picker",
         DemoTab::Rotary => "rotary",
-        DemoTab::CranorbitCredits => "credits-watch",
+        DemoTab::Wear => "wear-watch",
     }
 }
 

@@ -327,3 +327,7 @@ mod swipe_to_dismiss_render_tests;
 #[cfg(test)]
 #[path = "tests/lazy_list_recompose_tests.rs"]
 mod lazy_list_recompose_tests;
+
+#[cfg(test)]
+#[path = "tests/wear_widget_tests.rs"]
+mod wear_widget_tests;

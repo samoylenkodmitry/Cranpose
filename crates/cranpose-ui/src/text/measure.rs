@@ -88,10 +88,12 @@ impl TextLinePrefixWidths {
         let mut separator_before = Vec::with_capacity(char_count);
         let mut width = 0.0f32;
         prefix_widths.push(width);
-        for index in 0..char_count {
-            let separator = if index == 0 { 0.0 } else { letter_spacing };
-            separator_before.push(separator);
-            width += separator + char_width;
+        for _ in 0..char_count {
+            // One letter space per character rather than per gap, matching
+            // Minikin's half-a-space-each-side rule, and nothing to drop at a
+            // line's leading edge because there is no kerning here.
+            separator_before.push(0.0);
+            width += char_width + letter_spacing;
             prefix_widths.push(width);
         }
         Self::from_parts(prefix_widths, separator_before, 0.0)
@@ -363,11 +365,15 @@ impl TextMeasurer for MonospacedTextMeasurer {
         line_range: Range<usize>,
         style: &TextStyle,
     ) -> Option<TextLinePrefixWidths> {
-        let (char_width, _) = Self::get_metrics(style);
+        // `get_metrics` has already folded the tracking into its per-character
+        // advance, so hand the table the RAW width and let it add the spacing
+        // once. Passing both double-counted it, and the table's old n-1 rule
+        // then disagreed with `measure`'s n by a whole letter space.
+        let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
         let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
         TextLinePrefixWidths::monospaced(
             text.text[line_range].chars().count(),
-            char_width,
+            font_size * Self::CHAR_WIDTH_RATIO,
             letter_spacing,
         )
     }
@@ -1781,9 +1787,17 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             );
         }
 
+        // A break chosen at a word boundary leaves the space on the line it
+        // broke after, whether or not that boundary happened to be `best`. The
+        // space is not drawn and Compose does not count it towards the line's
+        // width, so leaving it in shifts a centred line half a space left.
+        let broke_at_word_boundary = effective_wrap_idx > start_idx
+            && line_text[boundaries[effective_wrap_idx - 1]..boundaries[effective_wrap_idx]]
+                .chars()
+                .all(char::is_whitespace);
         let segment_start = boundaries[start_idx];
         let mut segment_end = boundaries[effective_wrap_idx];
-        if wrap_idx != best {
+        if wrap_idx != best || broke_at_word_boundary {
             segment_end = trim_segment_end_whitespace(line_text, segment_start, segment_end);
         }
         let segment_end_idx = boundary_index_for_byte(&boundaries, segment_end);
@@ -1793,7 +1807,7 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
             segment_end_idx,
         ));
 
-        start_idx = if wrap_idx != best {
+        start_idx = if wrap_idx != best || broke_at_word_boundary {
             skip_leading_whitespace(line_text, &boundaries, wrap_idx)
         } else {
             effective_wrap_idx
@@ -1938,7 +1952,14 @@ fn choose_wrap_break(
         return best;
     }
 
-    for idx in (start_idx + 1..best).rev() {
+    // `..=best`, not `..best`. `best` is the widest prefix that still fits, and
+    // when the character before it is a space that prefix ends on a word
+    // boundary: it is already the greedy break, and the right one. Excluding it
+    // sent the search back to the PREVIOUS space and dropped a word that fitted
+    // — "Designed and built for Wear / OS." came out "Designed and built for /
+    // Wear OS.". It bites whenever the trailing space fits and the next word's
+    // first glyph does not, which on a narrow watch column is most lines.
+    for idx in (start_idx + 1..=best).rev() {
         let prev = &line[boundaries[idx - 1]..boundaries[idx]];
         if prev.chars().all(char::is_whitespace) {
             return idx;
@@ -3431,6 +3452,53 @@ mod tests {
             assert!(prepared.text.text.is_char_boundary(span.range.start));
             assert!(prepared.text.text.is_char_boundary(span.range.end));
         }
+    }
+
+    #[test]
+    fn a_word_that_fits_stays_on_the_line_when_the_space_after_it_fits_too() {
+        // The greedy break has to consider the widest prefix that fits as a
+        // break candidate in its own right. When that prefix ends on a space —
+        // the whole word fitted, and so did the space after it, and only the
+        // NEXT word's first glyph did not — breaking there is the greedy
+        // answer. Searching strictly before it threw the last word onto the
+        // next line: on the Wear Credits screen "Designed and built for Wear /
+        // OS." came out "Designed and built for / Wear OS.".
+        let _app_context = crate::render_state::app_context_test_scope();
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(10.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = TextLayoutOptions {
+            overflow: TextOverflow::Clip,
+            soft_wrap: true,
+            max_lines: usize::MAX,
+            min_lines: 1,
+        };
+        let width_of = |text: &str| {
+            measure_text_with_options(
+                &crate::text::AnnotatedString::from(text.to_string()),
+                &style,
+                options,
+                None,
+            )
+            .width
+        };
+        // Wide enough for "aa bb " and not for "aa bb c" — the exact case.
+        let fits = width_of("aa bb ");
+        let overflows = width_of("aa bb c");
+        assert!(overflows > fits, "the fixture needs a real gap here");
+        let max_width = (fits + overflows) * 0.5;
+
+        let prepared = prepare_text_layout(
+            &crate::text::AnnotatedString::from("aa bb cc".to_string()),
+            &style,
+            options,
+            Some(max_width),
+        );
+        assert_eq!(prepared.text.text, "aa bb\ncc");
     }
 
     #[test]

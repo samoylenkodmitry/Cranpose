@@ -5,6 +5,9 @@ pub struct FontVerticalMetrics {
     pub ascent: f32,
     pub descent: f32,
     pub natural_line_height: f32,
+    /// `hhea.lineGap` at this size. Read only by a style that asks for
+    /// Android's `includeFontPadding`; every other line box ignores it.
+    pub line_gap: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +36,7 @@ pub fn vertical_metrics(font: &impl Font, font_size: f32) -> FontVerticalMetrics
         ascent,
         descent,
         natural_line_height: (ascent - descent).ceil(),
+        line_gap: scaled_font.line_gap(),
     }
 }
 

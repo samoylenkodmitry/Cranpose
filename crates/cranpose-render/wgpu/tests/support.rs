@@ -153,7 +153,29 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
     Ok(())
 }
 
+/// A headless renderer whose surface format is `Bgra8Unorm` rather than the
+/// shared harness's `Bgra8UnormSrgb`.
+///
+/// An `*UnormSrgb` target makes the GPU gamma-encode whatever the shader wrote
+/// on the way into the texture, so a readback is the encoding of the colour
+/// rather than the colour. That is fine for tests that count lit pixels and
+/// useless for a test that has to compare a composited channel against an exact
+/// value: the encode-then-quantise destroys the very level the comparison is
+/// about. This gives back the shader's own bytes.
+pub fn headless_renderer_parts_unencoded() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String>
+{
+    let lock = lock_gpu_test();
+    let renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
+    Ok((lock, renderer))
+}
+
 fn create_headless_renderer() -> Result<WgpuRenderer, String> {
+    create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8UnormSrgb)
+}
+
+fn create_headless_renderer_with_format(
+    surface_format: wgpu::TextureFormat,
+) -> Result<WgpuRenderer, String> {
     let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_descriptor.backends = wgpu::Backends::all();
     let instance = wgpu::Instance::new(instance_descriptor);
@@ -177,7 +199,7 @@ fn create_headless_renderer() -> Result<WgpuRenderer, String> {
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),
-        wgpu::TextureFormat::Bgra8UnormSrgb,
+        surface_format,
         adapter.get_info().backend,
     );
     Ok(renderer)

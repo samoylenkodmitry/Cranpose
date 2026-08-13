@@ -453,3 +453,73 @@ fn startup_selection_keeps_shader_section_for_shaders_tab() {
     assert_eq!(startup.initial_tab, Some(DemoTab::Shaders));
     assert_eq!(startup.initial_shader_section, Some(ShaderSection::MaskApi));
 }
+
+/// The Wear tab composes a real widget tree, not a canvas.
+///
+/// It replaced a vendored copy of an app's own list, draw, font, layout and
+/// theme stack that drew the same screen through a single `Canvas`. This is the
+/// check that the widgets it replaced that copy with actually lay out: a round
+/// screen filling its box, a scaling list inside it, and rows placed down the
+/// middle rather than stacked at the origin.
+#[test]
+fn the_wear_tab_lays_out_a_watch_screen_of_real_widgets() {
+    use crate::app::wear::wear_tab;
+    use cranpose_ui::{measure_layout, run_test_composition};
+
+    let mut composition = run_test_composition(|| {
+        cranpose_ui::set_density(2.0);
+        wear_tab();
+    });
+    let root = composition.root().expect("wear tab root");
+    let handle = composition.runtime_handle();
+    let tree = {
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        let tree = measure_layout(
+            &mut applier,
+            root,
+            Size {
+                width: 600.0,
+                height: 600.0,
+            },
+        )
+        .expect("layout measurement")
+        .into_layout_tree()
+        .expect("layout tree");
+        applier.clear_runtime_handle();
+        tree
+    };
+
+    fn rows(node: &cranpose_ui::LayoutBox, out: &mut Vec<cranpose_ui::Rect>) {
+        if node.node_data.modifier_slices().graphics_layer().is_some() {
+            out.push(node.rect);
+        }
+        for child in &node.children {
+            rows(child, out);
+        }
+    }
+    let mut placed = Vec::new();
+    rows(tree.root(), &mut placed);
+    // This used to require all fifteen rows. The list virtualises now, so the
+    // count it places is the count a 600pt viewport can show — the fixture's
+    // point is that the rows it DOES place are real widgets that measured
+    // themselves, not that every row in the list is on screen at once.
+    assert!(
+        placed.len() >= 5,
+        "the visible part of the settings screen is composed: {}",
+        placed.len()
+    );
+    assert!(
+        placed.len() < 15,
+        "a 600pt viewport cannot be showing all fifteen rows: {}",
+        placed.len()
+    );
+    // The rows run down the screen in order and none of them is left at the
+    // origin, which is what an unplaced node would look like.
+    for pair in placed.windows(2) {
+        assert!(pair[1].y > pair[0].y, "{:?}", placed);
+    }
+    assert!(placed
+        .iter()
+        .all(|rect| rect.width > 0.0 && rect.height > 0.0));
+}
