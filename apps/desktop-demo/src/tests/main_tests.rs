@@ -500,9 +500,18 @@ fn the_wear_tab_lays_out_a_watch_screen_of_real_widgets() {
     }
     let mut placed = Vec::new();
     rows(tree.root(), &mut placed);
+    // This used to require all fifteen rows. The list virtualises now, so the
+    // count it places is the count a 600pt viewport can show — the fixture's
+    // point is that the rows it DOES place are real widgets that measured
+    // themselves, not that every row in the list is on screen at once.
     assert!(
-        placed.len() >= 15,
-        "every row of the settings screen is composed: {}",
+        placed.len() >= 5,
+        "the visible part of the settings screen is composed: {}",
+        placed.len()
+    );
+    assert!(
+        placed.len() < 15,
+        "a 600pt viewport cannot be showing all fifteen rows: {}",
         placed.len()
     );
     // The rows run down the screen in order and none of them is left at the

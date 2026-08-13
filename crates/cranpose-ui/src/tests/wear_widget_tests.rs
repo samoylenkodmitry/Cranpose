@@ -314,8 +314,13 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
         let tree = tree(&mut composition, root);
         let layers = item_layers(&tree);
         // What this frame's anchor says every row should be, worked out from
-        // the library geometry rather than from the widget.
-        let expected = expected_rows(8, state.anchor());
+        // the library geometry rather than from the widget — then narrowed to
+        // the rows the viewport can see, because those are the ones the list
+        // places. The rest are the list's business and nobody else's.
+        let expected: Vec<_> = expected_rows(8, state.anchor())
+            .into_iter()
+            .filter(|row| row.top < WATCH && row.top + row.height > 0.0)
+            .collect();
         assert_eq!(layers.len(), expected.len());
         for (index, ((top, _, slices), row)) in layers.iter().zip(expected.iter()).enumerate() {
             let layer = slices.graphics_layer().expect("item layer");
@@ -377,22 +382,102 @@ fn a_shrunk_item_reaches_the_renderer_through_a_layer_pinned_to_its_top_edge() {
 }
 
 #[test]
-fn an_item_off_the_bottom_is_still_placed_and_reports_as_not_visible() {
-    // Every item gets a real position; the list clips. Leaving one unplaced
-    // would leave the node holding the rectangle it had last frame, which the
-    // next frame's ramp would then read back as though it were current.
+fn an_item_off_the_bottom_is_neither_composed_nor_placed() {
+    // This used to assert the opposite — that all thirty rows were placed, on
+    // the reasoning that an unplaced node would keep last frame's rectangle.
+    // That reasoning was wrong twice over: a subcomposing list disposes the
+    // slot rather than leaving a node behind, and a placed off-screen row at an
+    // alpha below one still buys an offscreen render target under
+    // `CompositingStrategy::Auto` for pixels the clip then discards. Twenty-six
+    // of those, on a screen showing four rows, is what this list used to cost.
     let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 30], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
-    assert_eq!(layers.len(), 30, "all thirty are placed");
-    let visible = state().layout_info().visible;
-    assert!(visible > 0 && visible < 30, "{visible} of 30 on screen");
+    let info = state().layout_info();
+    assert_eq!(info.item_count, 30, "the list still knows how long it is");
+    assert!(info.visible > 0 && info.visible < 30, "{info:?}");
+    assert_eq!(
+        layers.len(),
+        info.visible,
+        "only the visible rows are placed"
+    );
     let on_screen = layers
         .iter()
         .filter(|(top, height, _)| *top < WATCH && top + height > 0.0)
         .count();
-    assert_eq!(on_screen, visible);
+    assert_eq!(on_screen, info.visible);
+    // And the composed window is the visible rows plus the beyond-bounds band
+    // at each end, not the list.
+    assert!(
+        info.composed >= info.visible && info.composed <= info.visible + 4,
+        "{info:?}"
+    );
+    assert!(info.composed < 30, "{info:?}");
+}
+
+#[test]
+fn the_composed_window_does_not_grow_with_the_list() {
+    // The measured regression this whole pass exists for: the cost tracked item
+    // count rather than visible count, so Settings' 24 rows cost three times
+    // what Credits' 9 did with the same four rows on screen.
+    let mut short = compose_fixed_rows(vec![ROW_HEIGHT; 9], settings_spec());
+    let root = short.root().expect("list root");
+    let _ = tree(&mut short, root);
+    let nine = state().layout_info();
+    drop(short);
+
+    let mut long = compose_fixed_rows(vec![ROW_HEIGHT; 60], settings_spec());
+    let root = long.root().expect("list root");
+    let _ = tree(&mut long, root);
+    let sixty = state().layout_info();
+
+    assert_eq!(nine.item_count, 9);
+    assert_eq!(sixty.item_count, 60);
+    assert_eq!(
+        nine.composed, sixty.composed,
+        "same rows on screen, same rows composed: {nine:?} vs {sixty:?}"
+    );
+    assert_eq!(nine.visible, sixty.visible);
+}
+
+#[test]
+fn the_anchored_items_top_does_not_depend_on_the_heights_above_it() {
+    // The arithmetic the virtualising walk rests on. `centre_offset` subtracts
+    // the anchored slot's top and the placement adds it straight back; that
+    // cancels exactly — rather than nearly — because every slot top is a whole
+    // number of device pixels and `round_to_px` commutes with a whole pixel.
+    // If it did not, the walk would have to measure everything above the anchor
+    // to place the anchor, which is the thing it exists not to do.
+    //
+    // Two lists with wildly different rows above the anchor, and one identical
+    // anchored row: its top has to land in the same place.
+    let mut thin = compose_fixed_rows(vec![7.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
+    let root = thin.root().expect("list root");
+    let tree_thin = tree(&mut thin, root);
+    let thin_anchor = item_layers(&tree_thin)[1].0;
+    drop(thin);
+
+    let mut fat = compose_fixed_rows(vec![101.5, ROW_HEIGHT, ROW_HEIGHT], settings_spec());
+    let root = fat.root().expect("list root");
+    let tree_fat = tree(&mut fat, root);
+    let fat_layers = item_layers(&tree_fat);
+    // The tall first row is off the top of the screen, so the anchored row is
+    // whichever layer sits on the centre line.
+    let fat_anchor = fat_layers
+        .iter()
+        .map(|(top, _, _)| *top)
+        .find(|top| (top - thin_anchor).abs() < 1e-3);
+    assert_eq!(
+        fat_anchor,
+        Some(thin_anchor),
+        "the anchored row moved when a row above it changed height; \
+         placed tops were {:?} against {thin_anchor}",
+        fat_layers
+            .iter()
+            .map(|(top, _, _)| *top)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -816,10 +901,17 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
+    let info = state().layout_info();
+    assert_eq!(info.item_count, 5);
     assert_eq!(
         layers.len(),
-        5,
-        "one graphics layer per item, however tall the item measured"
+        info.visible,
+        "one graphics layer per VISIBLE item, however tall the item measured"
+    );
+    assert!(
+        layers.len() >= 4,
+        "a 227pt screen holds at least four of these rows; got {}",
+        layers.len()
     );
     for (index, (y, height, _)) in layers.iter().enumerate() {
         assert!(
@@ -837,22 +929,19 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
 }
 
 #[test]
-fn a_credits_screen_emits_a_text_primitive_for_every_row_it_composed() {
+fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
     // Layout is not paint. Every other test here stops at the layout tree,
     // which is why a screen whose rows measure perfectly and rasterise to
     // nothing passes all of them and shows a blank watch face.
+    //
+    // The "Back" button used to be asserted here too, and it is now checked in
+    // `a_row_below_the_fold_paints_once_it_is_scrolled_to` instead: at rest it
+    // is below the fold, so a virtualising list neither places nor paints it —
+    // which is the point, not a regression.
     let mut composition = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);
-    let scene = crate::renderer::HeadlessRenderer::new().render(&tree);
-    let texts: Vec<&str> = scene
-        .operations()
-        .iter()
-        .filter_map(|op| match op {
-            crate::renderer::RenderOp::Text { value, .. } => Some(value.as_str()),
-            _ => None,
-        })
-        .collect();
+    let texts = scene_texts(&tree);
     assert!(
         texts.iter().any(|t| t.contains("ORBIT BREAKER")),
         "the ListHeader's own string should reach the scene; got {texts:?}"
@@ -861,8 +950,44 @@ fn a_credits_screen_emits_a_text_primitive_for_every_row_it_composed() {
         texts.iter().any(|t| t.contains("Wear OS")),
         "a credit line's string should reach the scene; got {texts:?}"
     );
+}
+
+#[test]
+fn a_row_below_the_fold_paints_once_it_is_scrolled_to() {
+    // The other half of virtualisation, and the half that actually breaks: a
+    // row the first frame never composed has to compose, place and paint when
+    // the list reaches it. Asserting only that off-screen rows are skipped
+    // would pass on a list that never shows anything but its first screen.
+    let mut composition = compose_credits_screen();
+    let root = composition.root().expect("credits root");
+    let list = state();
+    assert!(
+        !scene_texts(&tree(&mut composition, root)).contains(&"Back".to_string()),
+        "the button starts below the fold, or this test proves nothing"
+    );
+
+    // Scroll to the end of the travel the list reports.
+    let travel = list.layout_info().travel();
+    assert!(travel > 0.0, "the credits list has to be scrollable");
+    list.scroll_by(travel);
+    composition
+        .process_invalid_scopes()
+        .expect("scroll recomposition");
+    let texts = scene_texts(&tree(&mut composition, root));
     assert!(
         texts.iter().any(|t| t.contains("Back")),
-        "the button's label should reach the scene; got {texts:?}"
+        "the button's label should reach the scene once scrolled to; got {texts:?}"
     );
+}
+
+fn scene_texts(tree: &crate::LayoutTree) -> Vec<String> {
+    crate::renderer::HeadlessRenderer::new()
+        .render(tree)
+        .operations()
+        .iter()
+        .filter_map(|op| match op {
+            crate::renderer::RenderOp::Text { value, .. } => Some(value.clone()),
+            _ => None,
+        })
+        .collect()
 }
