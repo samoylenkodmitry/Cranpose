@@ -52,10 +52,13 @@ const REFERENCE_TAB: &str = "Shader Rect";
 /// How much more CPU work per frame the demo's heaviest text page may cost
 /// than a page with none.
 ///
-/// Measured at 7.7x on this machine (0.495ms against 0.065ms), and the reason
-/// is legible in the same reading: the page reports ~1845 recompositions a
-/// second against ~1877 frames, so the whole non-virtualised list recomposes
-/// every frame while it scrolls. The reference page reports zero. The bound
+/// Measured at 7.8x on this machine (0.504ms against 0.064ms), and the reason
+/// is legible in the same reading: the page reports ~1799 recompositions a
+/// second against ~1764 frames, so the list recomposes once per frame while it
+/// scrolls. The reference page reports zero. Virtualising the list — composing
+/// the rows it can show rather than the rows it has — moved this by less than
+/// the host noise (7.67x before, 7.83x after), which is the tell that the cost
+/// is the per-frame recomposition rather than the row count. The bound
 /// sits above that with room for host noise rather than at it — this guards
 /// against a text pipeline or a per-row layer tree that starts costing a
 /// multiple of what it costs today, not against the scroll's own recomposition,

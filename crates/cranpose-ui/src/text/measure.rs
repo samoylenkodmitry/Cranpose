@@ -88,10 +88,12 @@ impl TextLinePrefixWidths {
         let mut separator_before = Vec::with_capacity(char_count);
         let mut width = 0.0f32;
         prefix_widths.push(width);
-        for index in 0..char_count {
-            let separator = if index == 0 { 0.0 } else { letter_spacing };
-            separator_before.push(separator);
-            width += separator + char_width;
+        for _ in 0..char_count {
+            // One letter space per character rather than per gap, matching
+            // Minikin's half-a-space-each-side rule, and nothing to drop at a
+            // line's leading edge because there is no kerning here.
+            separator_before.push(0.0);
+            width += char_width + letter_spacing;
             prefix_widths.push(width);
         }
         Self::from_parts(prefix_widths, separator_before, 0.0)
@@ -363,11 +365,15 @@ impl TextMeasurer for MonospacedTextMeasurer {
         line_range: Range<usize>,
         style: &TextStyle,
     ) -> Option<TextLinePrefixWidths> {
-        let (char_width, _) = Self::get_metrics(style);
+        // `get_metrics` has already folded the tracking into its per-character
+        // advance, so hand the table the RAW width and let it add the spacing
+        // once. Passing both double-counted it, and the table's old n-1 rule
+        // then disagreed with `measure`'s n by a whole letter space.
+        let font_size = style.resolve_font_size(Self::DEFAULT_SIZE);
         let letter_spacing = style.resolve_letter_spacing(Self::DEFAULT_SIZE);
         TextLinePrefixWidths::monospaced(
             text.text[line_range].chars().count(),
-            char_width,
+            font_size * Self::CHAR_WIDTH_RATIO,
             letter_spacing,
         )
     }

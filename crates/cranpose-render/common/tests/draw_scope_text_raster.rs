@@ -256,34 +256,79 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
 }
 
 #[test]
-fn letter_spacing_moves_the_glyphs_it_widened_the_block_for() {
-    // A style that measures wide and draws narrow leaves centred text visibly
-    // off-centre, because the caller centres the box measurement reported.
+fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
+    // Android resolves `letterSpacing` in Minikin, which puts HALF a letter
+    // space on each side of every cluster: `LayoutCore.cpp` adds
+    // `letterSpaceHalf` before a script run's first glyph, a full `letterSpace`
+    // at each cluster boundary, and `letterSpaceHalf` after the last. So a run
+    // of n characters is n letter spaces wider than an untracked one -- not
+    // n-1 -- and its ink starts half a letter space in.
+    //
+    // This test previously asserted the n-1 rule and no lead-in. It was wrong
+    // in both halves: a five-letter word came out one whole letter space narrow
+    // and its ink half a letter space to the left of where Compose puts it.
+    //
+    // (The trailing half is real on the platform these widgets are measured
+    // against. The `sdk_gwear` emulator runs Android 14, whose `Layout.cpp` has
+    // no letter-spacing code at all; the edge trimming that removes the two
+    // half spaces arrives in Android 15 and is opt-in per run even there.)
+    const WORD: &str = "ORBIT";
+    const TRACKING: f32 = 5.0;
     let plain = TextStyle::new(20.0);
-    let tracked = TextStyle::new(20.0).with_letter_spacing(5.0);
+    let tracked = TextStyle::new(20.0).with_letter_spacing(TRACKING);
     let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    // `(block width, ink left, ink right)`.
     let mut spans = |style: &TextStyle| {
-        let (rect, ui_style) = measured_block((0.0, 0.0), "ORBIT", style);
-        let run = collect(rect, "ORBIT", &ui_style, style, &mut cache);
-        let ink = run
+        let (rect, ui_style) = measured_block((0.0, 0.0), WORD, style);
+        let run = collect(rect, WORD, &ui_style, style, &mut cache);
+        let left = run
+            .iter()
+            .map(|glyph| glyph.placement().x as f32)
+            .fold(f32::INFINITY, f32::min);
+        let right = run
             .iter()
             .map(|glyph| {
                 let placement = glyph.placement();
                 placement.x as f32 + placement.width as f32
             })
             .fold(0.0_f32, f32::max);
-        (rect.width, ink)
+        (rect.width, left, right)
     };
 
-    let (plain_width, plain_ink) = spans(&plain);
-    let (tracked_width, tracked_ink) = spans(&tracked);
+    let (plain_width, plain_left, plain_right) = spans(&plain);
+    let (tracked_width, tracked_left, tracked_right) = spans(&tracked);
 
-    let gaps = "ORBIT".chars().count() as f32 - 1.0;
-    assert!((tracked_width - plain_width - gaps * 5.0).abs() < 0.5);
+    let chars = WORD.chars().count() as f32;
     assert!(
-        (tracked_ink - plain_ink - gaps * 5.0).abs() < 2.0,
-        "ink grew by {} where the block grew by {}",
-        tracked_ink - plain_ink,
-        tracked_width - plain_width
+        (tracked_width - plain_width - chars * TRACKING).abs() < 0.5,
+        "the block grew by {} where {chars} characters of {TRACKING}pt tracking \
+         should have widened it by {}",
+        tracked_width - plain_width,
+        chars * TRACKING
+    );
+    assert!(
+        (tracked_left - plain_left - TRACKING * 0.5).abs() < 2.0,
+        "ink starts {} further in where the lead-in is half a letter space, {}",
+        tracked_left - plain_left,
+        TRACKING * 0.5
+    );
+    assert!(
+        (tracked_right - plain_right - (chars * TRACKING - TRACKING * 0.5)).abs() < 2.0,
+        "ink ends {} further out; the last glyph carries every gap but not the \
+         trailing half space, so it should be {}",
+        tracked_right - plain_right,
+        chars * TRACKING - TRACKING * 0.5
+    );
+
+    // The consequence that matters for parity: because the two half spaces are
+    // symmetric, the ink stays centred in the block it was measured for. A
+    // centred string does not move when tracking is added -- only a start- or
+    // end-aligned one does, and it moves by exactly half a letter space.
+    let plain_slack = (plain_width - plain_right) - plain_left;
+    let tracked_slack = (tracked_width - tracked_right) - tracked_left;
+    assert!(
+        (tracked_slack - plain_slack).abs() < 2.0,
+        "tracked ink sits {tracked_slack} off-centre in its block where plain ink \
+         sits {plain_slack}; the edge halves must balance"
     );
 }
