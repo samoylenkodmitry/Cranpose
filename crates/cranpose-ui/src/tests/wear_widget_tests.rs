@@ -6,8 +6,8 @@
 //! density 2. Where a test names a pixel, that pixel was measured.
 //!
 //! Everything is stated in **layout points** and converted with `PX`, because a
-//! Cranpose point is a dp: the 454px display is 227 points across, and 139px is
-//! 69.5 points.
+//! Cranpose point is a dp: the 454px display is 227 points across, and 175px is
+//! 87.5 points.
 
 use super::*;
 use crate::modifier::{ModifierNodeSlices, PointerEvent, PointerEventKind};
@@ -139,35 +139,76 @@ fn item_layers(tree: &crate::LayoutTree) -> Vec<(f32, f32, Rc<ModifierNodeSlices
 
 #[test]
 fn the_settings_screen_puts_its_first_two_rows_where_the_framebuffer_has_them() {
-    // Measured on the device: the "SETTINGS" header row spans y = 139..235 and
-    // the "Haptics" switch row y = 243..347. Everything that produces those two
-    // numbers is under test here at once — the 48dp and 52dp floors, the 4dp
-    // item spacing, `AutoCenteringParams(itemIndex = 1)`, and the fact that the
-    // 34dp vertical content padding stacks ON TOP of auto-centring rather than
-    // being absorbed by it.
+    // Measured on the device: the "SETTINGS" header row spans y = 71..167 and
+    // the "Haptics" switch row y = 175..279. Both the accessibility tree
+    // (`[120,71][334,167]`, `[36,175][418,279]`) and the framebuffer — the
+    // #0F364E card band runs 175..278 inclusive — say so. Everything that
+    // produces those two numbers is under test here at once: the 48dp and 52dp
+    // floors, the 4dp item spacing, `AutoCenteringParams(itemIndex = 1)`, and
+    // the fact that the 34dp vertical content padding is absorbed rather than
+    // added.
     let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
     assert_eq!(layers.len(), 2, "both rows are on screen");
-    assert_eq!(layers[0].0 * PX, 139.0, "the header row's top, in pixels");
-    assert_eq!(layers[1].0 * PX, 243.0, "the switch row's top, in pixels");
-    assert_eq!((layers[0].0 + layers[0].1) * PX, 235.0);
-    assert_eq!((layers[1].0 + layers[1].1) * PX, 347.0);
+    assert_eq!(layers[0].0 * PX, 71.0, "the header row's top, in pixels");
+    assert_eq!(layers[1].0 * PX, 175.0, "the switch row's top, in pixels");
+    assert_eq!((layers[0].0 + layers[0].1) * PX, 167.0);
+    assert_eq!((layers[1].0 + layers[1].1) * PX, 279.0);
 }
 
 #[test]
-fn content_padding_and_auto_centring_stack_rather_than_cancel() {
-    // The anchored item's centre lands at H/2 PLUS the vertical padding, not at
-    // H/2. Reading `ScalingLazyColumn` as though `contentPadding` were absorbed
-    // by the auto-centring spacer puts every Settings row 68px too high.
+fn content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it() {
+    // The anchored item's centre lands on H/2 and nowhere else, whatever the
+    // vertical content padding is. Wear's `LazyColumn` pushes item 0 down by
+    // `beforeContentPadding`, and `scrollToItem` subtracts the same
+    // `beforeContentPaddingPx` from the offset it asks for
+    // (`ScalingLazyListState.kt:499`), so the two cancel. The auto-centring
+    // spacer never gets in the way: it holds `centreLine - size/2` of content
+    // above the anchor and the scroll wants `centreLine - padding - size/2`,
+    // so the scroll is never clamped short.
+    //
+    // Reading it the other way — as padding stacked on top of auto-centring —
+    // puts every row 68px too LOW, which is what the composed Credits screen
+    // did.
     let mut composition = compose_fixed_rows(vec![HEADER_HEIGHT, ROW_HEIGHT], settings_spec());
     let root = composition.root().expect("list root");
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
     let anchored_centre = layers[1].0 + layers[1].1 * 0.5;
-    assert_eq!(anchored_centre, WATCH * 0.5 + SCREEN_VERTICAL);
-    assert_eq!(anchored_centre * PX, 295.0, "the measured row centre");
+    assert_eq!(anchored_centre, WATCH * 0.5);
+    assert_eq!(anchored_centre * PX, 227.0, "the measured row centre");
+}
+
+#[test]
+fn a_list_with_no_content_padding_centres_its_anchor_in_the_same_place() {
+    // The other half of the previous test, and the reason it has to be a
+    // separate one: a `TestComposition` owns the app context while it lives,
+    // so two of them cannot be built side by side. Padding or no padding, the
+    // anchored item's centre is the centre line.
+    let mut composition = compose_fixed_rows(
+        vec![HEADER_HEIGHT, ROW_HEIGHT],
+        WearScalingLazyColumnSpec::default(),
+    );
+    let root = composition.root().expect("list root");
+    let tree = tree(&mut composition, root);
+    let layers = item_layers(&tree);
+    assert_eq!(layers[1].0 + layers[1].1 * 0.5, WATCH * 0.5);
+}
+
+#[test]
+fn a_top_aligned_list_still_starts_one_content_padding_down() {
+    // `autoCentering = null` leaves a plain `LazyColumn`, and there the
+    // padding is the whole story: item 0's top is `beforeContentPadding`.
+    let mut composition = compose_fixed_rows(
+        vec![HEADER_HEIGHT, ROW_HEIGHT],
+        settings_spec().auto_centering(None),
+    );
+    let root = composition.root().expect("list root");
+    let tree = tree(&mut composition, root);
+    let layers = item_layers(&tree);
+    assert_eq!(layers[0].0 * PX, SCREEN_VERTICAL * PX);
 }
 
 #[test]
@@ -209,9 +250,23 @@ fn a_row_is_placed_from_the_full_heights_above_it_not_the_scaled_ones() {
 }
 
 #[test]
-fn the_second_switch_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
-    // Measured: the "Sound effects" row, unscaled 382x104px with its top at
-    // y = 355, draws 340x92px, and its #0F364E container comes out #0C2C40.
+fn a_row_shrinks_and_fades_by_the_amounts_the_pixels_show() {
+    // Measured at rest on `sdk_gwear`: the third switch row starts at
+    // y = 287 and the ramp leaves it alone — `[36,287][418,391]`, the full
+    // 382x104 — while the fourth starts at 399 and draws `[78,399][376,454]`,
+    // 298px wide against an unscaled 382. Both are the ramp's answer at the
+    // edge of where it starts to bite, so they pin the transition point from
+    // either side.
+    let untouched = scale_and_alpha(454.0, 287.0, 287.0 + 104.0).expect("in range");
+    assert_eq!(untouched.scale, 1.0);
+    let biting = scale_and_alpha(454.0, 399.0, 399.0 + 104.0).expect("in range");
+    assert_eq!((382.0 * biting.scale).round(), 298.0);
+
+    // And the row the spec validated its colour prediction with. That capture
+    // had the list scrolled, so 355 is not where this row sits at rest — but
+    // the ramp's answer at a given top is the ramp's answer: unscaled
+    // 382x104px at y = 355 draws 340x92px and its #0F364E container comes out
+    // #0C2C40.
     let top_px = 355.0;
     let height_px = 104.0;
     let transform = scale_and_alpha(454.0, top_px, top_px + height_px).expect("in range");
@@ -295,7 +350,9 @@ fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling
     use crate::round_scaling_list::{centre_offset, place_row, stack_into, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
-    let offset = SCREEN_VERTICAL + centre_offset(&slots, WATCH, anchor, PX);
+    // No content padding term: auto-centring absorbs it. See
+    // `content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it`.
+    let offset = centre_offset(&slots, WATCH, anchor, PX);
     slots
         .iter()
         .map(|slot| place_row(WATCH, slot.top + offset, slot.height, PX).expect("in range"))

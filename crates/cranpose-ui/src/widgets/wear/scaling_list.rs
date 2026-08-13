@@ -566,9 +566,11 @@ impl MeasurePolicy for WearScalingListPolicy {
         } else {
             constraints.min_width
         };
-        // Wear scales against the FULL component height. Content padding shifts
-        // where rows sit inside it and never shrinks it, so a row 34dp from the
-        // top of the padded area is still 34dp from the top of the ramp.
+        // Wear scales against the FULL component height: `calculateItemInfo`
+        // passes `viewPortStartPx = 0, viewPortEndPx = viewportHeightPx` and
+        // `viewportHeightPx` is `constraints.maxHeight`, with no padding taken
+        // off. A row near the top of the padded area is therefore already well
+        // down the ramp.
         let viewport = if constraints.max_height.is_finite() {
             constraints.max_height
         } else {
@@ -597,11 +599,28 @@ impl MeasurePolicy for WearScalingListPolicy {
             &mut slots,
         );
 
-        let padding_top = density.dp(self.spec.content_padding_top);
+        // Auto-centring absorbs the vertical content padding; a top-aligned
+        // list does not. Wear's `LazyColumn` places item 0 one
+        // `beforeContentPadding` down, and `ScalingLazyListState.scrollToItem`
+        // asks for `beforeContentPaddingPx - viewportCenterLinePx + size/2`,
+        // whose first term exists to take that back
+        // (`ScalingLazyListState.kt:499`). The auto-centring spacer is sized
+        // without seeing the padding, so it is exactly one padding short of
+        // holding the anchor on the centre line by itself -- but it is never
+        // the thing that decides, because the initial scroll is never clamped
+        // by it: the spacer is `centreLine - size/2` of content above the
+        // anchor and the scroll asks for `centreLine - padding - size/2`, which
+        // is less. So the anchored item's centre lands on the centre line, and
+        // the padding does not move the column at all.
+        //
+        // Measured on `sdk_gwear` at density 2, viewport 454, 34dp vertical
+        // padding: Settings' header row is [36,175]..[418,279] in both the
+        // framebuffer and the accessibility tree, centre 227 = 454/2, and
+        // Credits' `"Version 1.0.0-debug"` is [60,211]..[394,243], centre 227.
         let offset = if self.top_aligned {
-            padding_top
+            density.dp(self.spec.content_padding_top)
         } else {
-            padding_top + centre_offset(&slots, viewport, self.anchor, self.density)
+            centre_offset(&slots, viewport, self.anchor, self.density)
         };
 
         let transforms = self.transforms.borrow();
