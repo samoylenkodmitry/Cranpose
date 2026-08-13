@@ -663,14 +663,249 @@ pub trait FocusNode: ModifierNode {
     }
 }
 
+/// What kind of control a node is, as screen readers announce it.
+///
+/// This is Compose's `SemanticsProperties.Role` (`Modifier.semantics { role =
+/// Role.RadioButton }`), not a description of where the node sits in the tree.
+/// A screen reader turns it into the trailing noun it speaks after the label —
+/// TalkBack says "CAMPAIGN, radio button, selected" — and into the on/off
+/// wording it uses for a switch. Compose keeps this separate from the node's
+/// structural kind for the same reason Cranpose does: a `Row` that happens to
+/// be clickable is still a row, and a drawn ring segment that is a radio button
+/// has no layout node of its own at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SemanticsWidgetRole {
+    Button,
+    Checkbox,
+    Switch,
+    RadioButton,
+    Tab,
+    Image,
+    /// Compose's `heading()`, which is a property rather than a `Role`, but
+    /// reaches the platform through the same field on every backend Cranpose
+    /// targets (`AccessibilityNodeInfo.setHeading`, `Role::Heading`,
+    /// `<h*>`/`UIAccessibilityTraitHeader`).
+    Header,
+}
+
+/// A screen-reader action that is not a click, e.g. Compose's
+/// `customActions = listOf(CustomAccessibilityAction("Pause") { … })`.
+///
+/// TalkBack surfaces these through its actions menu rather than by activating
+/// the node, which is the only way to reach a command that has no on-screen
+/// control — pausing a game whose whole surface is one tap-to-launch target.
+#[derive(Clone)]
+pub struct SemanticsCustomAction {
+    /// What the screen reader reads out in its actions menu.
+    pub label: String,
+    handler: Rc<dyn Fn()>,
+}
+
+impl SemanticsCustomAction {
+    pub fn new(label: impl Into<String>, handler: impl Fn() + 'static) -> Self {
+        Self {
+            label: label.into(),
+            handler: Rc::new(handler),
+        }
+    }
+
+    pub fn invoke(&self) {
+        (self.handler)();
+    }
+}
+
+impl fmt::Debug for SemanticsCustomAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticsCustomAction")
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Two custom actions are the same action when they read the same.
+///
+/// The handler is deliberately excluded. A semantics recorder runs on every
+/// collection, so the closure is a fresh `Rc` each time and comparing handler
+/// identity would report "the tree changed" on every frame — which on Android
+/// means re-serialising and re-publishing the whole virtual-view tree across
+/// JNI 60 times a second. Handlers are looked up in the live semantics tree at
+/// the moment the action fires (see `perform_custom_action`), so a handler that
+/// is newer than the last published snapshot is still the one that runs.
+impl PartialEq for SemanticsCustomAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.label == other.label
+    }
+}
+
+impl Eq for SemanticsCustomAction {}
+
+/// A semantics node for content that is *drawn* rather than laid out.
+///
+/// An immediate-mode surface — one `Canvas` that paints a whole screen — has
+/// exactly one layout node, so the semantics tree built from layout has exactly
+/// one node to offer a screen reader. This is the escape hatch: the drawing
+/// code already knows where it put every control, so it publishes those
+/// rectangles as semantics directly. Android's own answer for a canvas-drawn
+/// `View` is the same shape (`ExploreByTouchHelper` feeding virtual view ids
+/// into an `AccessibilityNodeProvider`), and Cranpose's Android bridge is
+/// already an `AccessibilityNodeProvider`, so these land as first-class
+/// virtual views next to the ones layout produces.
+///
+/// `bounds` is in the publishing node's own coordinates (logical px, origin at
+/// that node's top-left), because that is what a draw scope works in.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasSemanticsNode {
+    /// Identity that must survive a redraw.
+    ///
+    /// A screen reader parks its cursor on a virtual view id; if the id for
+    /// "the Haptics switch" changes when the list scrolls, the cursor jumps.
+    /// Derive this from what the control *is* (a row index, an enum
+    /// discriminant), never from where it currently sits.
+    pub key: u64,
+    /// Where the control was drawn, relative to the publishing node.
+    pub bounds: cranpose_ui_graphics::Rect,
+    pub label: String,
+    pub role: Option<SemanticsWidgetRole>,
+    /// Compose's `stateDescription` — what the control currently reads as
+    /// ("CAMPAIGN", "3 of 18 gold"), spoken after the label and re-spoken on
+    /// its own when only the state changed.
+    pub state_description: Option<String>,
+    /// Compose's `onClick(label = …)`. TalkBack reads it as "double tap to
+    /// <label>", so it is a verb phrase, not a repeat of the label.
+    pub on_click_label: Option<String>,
+    pub clickable: bool,
+    /// Compose's `selected`, for `Role.RadioButton`/`Role.Tab`.
+    pub selected: Option<bool>,
+    /// Compose's `toggleableState`, for `Role.Switch`/`Role.Checkbox`.
+    pub toggled: Option<bool>,
+    pub enabled: bool,
+    pub custom_actions: Vec<SemanticsCustomAction>,
+}
+
+impl Default for CanvasSemanticsNode {
+    fn default() -> Self {
+        Self {
+            key: 0,
+            bounds: cranpose_ui_graphics::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            label: String::new(),
+            role: None,
+            state_description: None,
+            on_click_label: None,
+            clickable: false,
+            selected: None,
+            toggled: None,
+            // Matches Compose: a node is enabled unless `disabled()` says
+            // otherwise, so an app that never thinks about it gets the right
+            // answer.
+            enabled: true,
+            custom_actions: Vec::new(),
+        }
+    }
+}
+
+impl CanvasSemanticsNode {
+    /// A clickable control drawn at `bounds`.
+    pub fn control(key: u64, bounds: cranpose_ui_graphics::Rect, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            bounds,
+            label: label.into(),
+            clickable: true,
+            ..Self::default()
+        }
+    }
+
+    /// A drawn label that is read but not activated.
+    pub fn text(key: u64, bounds: cranpose_ui_graphics::Rect, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            bounds,
+            label: label.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn with_role(mut self, role: SemanticsWidgetRole) -> Self {
+        self.role = Some(role);
+        self
+    }
+
+    pub fn with_state_description(mut self, state: impl Into<String>) -> Self {
+        self.state_description = Some(state.into());
+        self
+    }
+
+    pub fn with_click_label(mut self, label: impl Into<String>) -> Self {
+        self.on_click_label = Some(label.into());
+        self.clickable = true;
+        self
+    }
+
+    pub fn with_selected(mut self, selected: bool) -> Self {
+        self.selected = Some(selected);
+        self
+    }
+
+    pub fn with_toggled(mut self, toggled: bool) -> Self {
+        self.toggled = Some(toggled);
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    pub fn with_custom_action(mut self, action: SemanticsCustomAction) -> Self {
+        self.custom_actions.push(action);
+        self
+    }
+}
+
 /// Semantics configuration for accessibility.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsConfiguration {
     pub content_description: Option<String>,
-    pub is_button: bool,
+    /// Compose's `stateDescription`.
+    pub state_description: Option<String>,
+    /// Compose's `onClick(label = …)`; implies clickable.
+    pub on_click_label: Option<String>,
+    /// Compose's `Role`.
+    pub role: Option<SemanticsWidgetRole>,
+    pub selected: Option<bool>,
+    pub toggled: Option<bool>,
+    pub enabled: bool,
     pub is_clickable: bool,
     pub is_editable_text: bool,
     pub text_selection: Option<crate::text::TextRange>,
+    pub custom_actions: Vec<SemanticsCustomAction>,
+    /// Controls this node drew itself instead of laying out. See
+    /// [`CanvasSemanticsNode`].
+    pub canvas_children: Vec<CanvasSemanticsNode>,
+}
+
+impl Default for SemanticsConfiguration {
+    fn default() -> Self {
+        Self {
+            content_description: None,
+            state_description: None,
+            on_click_label: None,
+            role: None,
+            selected: None,
+            toggled: None,
+            enabled: true,
+            is_clickable: false,
+            is_editable_text: false,
+            text_selection: None,
+            custom_actions: Vec::new(),
+            canvas_children: Vec::new(),
+        }
+    }
 }
 
 impl SemanticsConfiguration {
@@ -678,12 +913,39 @@ impl SemanticsConfiguration {
         if let Some(description) = &other.content_description {
             self.content_description = Some(description.clone());
         }
-        self.is_button |= other.is_button;
+        if let Some(state) = &other.state_description {
+            self.state_description = Some(state.clone());
+        }
+        if let Some(label) = &other.on_click_label {
+            self.on_click_label = Some(label.clone());
+        }
+        if let Some(role) = other.role {
+            self.role = Some(role);
+        }
+        if let Some(selected) = other.selected {
+            self.selected = Some(selected);
+        }
+        if let Some(toggled) = other.toggled {
+            self.toggled = Some(toggled);
+        }
+        // Disabling wins: a chain that disables the node anywhere disables it,
+        // matching how Compose's `disabled()` is not undone by an inner node.
+        self.enabled &= other.enabled;
         self.is_clickable |= other.is_clickable;
         self.is_editable_text |= other.is_editable_text;
         if let Some(selection) = other.text_selection {
             self.text_selection = Some(selection);
         }
+        self.custom_actions
+            .extend(other.custom_actions.iter().cloned());
+        self.canvas_children
+            .extend(other.canvas_children.iter().cloned());
+    }
+
+    /// Whether a screen reader should offer activation. A named click label is
+    /// how Compose declares `onClick`, so it implies the action the same way.
+    pub fn is_activatable(&self) -> bool {
+        self.is_clickable || self.on_click_label.is_some()
     }
 }
 

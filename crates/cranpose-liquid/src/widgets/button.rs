@@ -11,7 +11,7 @@ use cranpose_services::{default_haptics, HapticFeedback};
 use cranpose_ui::rememberMutableInteractionSource;
 use cranpose_ui::text::TextStyle;
 use cranpose_ui::widgets::{Box, BoxSpec, Text};
-use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, Size};
+use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::cell::{Cell, RefCell};
@@ -25,7 +25,7 @@ const TAP_EXIT_SLOP: f32 = 12.0;
 
 fn with_button_semantics(modifier: Modifier) -> Modifier {
     modifier.semantics(|config| {
-        config.is_button = true;
+        config.role = Some(SemanticsWidgetRole::Button);
         config.is_clickable = true;
     })
 }
@@ -893,7 +893,7 @@ pub fn GlassIconButtonGroup(
                     ..Default::default()
                 })
                 .semantics(move |config| {
-                    config.is_button = true;
+                    config.role = Some(SemanticsWidgetRole::Button);
                     config.is_clickable = true;
                     config.content_description = Some(description.clone());
                 });
@@ -995,7 +995,7 @@ mod tests {
         let semantics =
             cranpose_ui::collect_semantics_from_modifier(&with_button_semantics(Modifier::empty()))
                 .expect("glass button semantics");
-        assert!(semantics.is_button);
+        assert_eq!(semantics.role, Some(SemanticsWidgetRole::Button));
         assert!(semantics.is_clickable);
     }
 

@@ -452,22 +452,40 @@ impl Modifier {
     where
         F: Fn(&mut SemanticsConfiguration) + 'static,
     {
-        let mut preview = SemanticsConfiguration::default();
-        recorder(&mut preview);
-        let description = preview.content_description.clone();
-        let is_button = preview.is_button;
-        let is_clickable = preview.is_clickable;
-        let metadata = inspector_metadata("semantics", move |info| {
-            if let Some(desc) = &description {
-                info.add_property("contentDescription", desc.clone());
-            }
-            if is_button {
-                info.add_property("isButton", "true");
-            }
-            if is_clickable {
-                info.add_property("isClickable", "true");
-            }
-        });
+        let recorder: std::rc::Rc<dyn Fn(&mut SemanticsConfiguration)> = std::rc::Rc::new(recorder);
+        // Run the recorder for the inspector only when the inspector is on. A
+        // recorder that publishes canvas semantics allocates one node per drawn
+        // control, and this modifier is rebuilt on every recomposition, so the
+        // preview used to double that cost on every frame of a scrolling list
+        // for metadata nothing was reading.
+        let metadata = if inspector_metadata_enabled() {
+            let mut preview = SemanticsConfiguration::default();
+            recorder(&mut preview);
+            let description = preview.content_description.clone();
+            let state_description = preview.state_description.clone();
+            let role = preview.role;
+            let is_clickable = preview.is_activatable();
+            let canvas_children = preview.canvas_children.len();
+            inspector_metadata("semantics", move |info| {
+                if let Some(desc) = &description {
+                    info.add_property("contentDescription", desc.clone());
+                }
+                if let Some(state) = &state_description {
+                    info.add_property("stateDescription", state.clone());
+                }
+                if let Some(role) = role {
+                    info.add_property("role", format!("{role:?}"));
+                }
+                if is_clickable {
+                    info.add_property("isClickable", "true");
+                }
+                if canvas_children > 0 {
+                    info.add_property("canvasSemanticsChildren", canvas_children.to_string());
+                }
+            })
+        } else {
+            inspector_metadata("semantics", |_| {})
+        };
         let element = SemanticsElement::new(recorder);
         let modifier =
             Modifier::from_parts(vec![modifier_element(element)]).with_inspector_metadata(metadata);

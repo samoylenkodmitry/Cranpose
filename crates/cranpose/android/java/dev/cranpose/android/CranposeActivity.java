@@ -85,6 +85,8 @@ public class CranposeActivity extends NativeActivity {
 
     private static native void nativeOnAccessibilityActivate(float x, float y);
 
+    private static native void nativeOnAccessibilityCustomAction(int virtualViewId, int actionIndex);
+
     /** Publishes Cranpose's semantic tree through Android's native virtual-view API. */
     public void cranposeSetAccessibilityElements(String payload) {
         final List<CranposeAccessibilityElement> elements = parseAccessibilityElements(payload);
@@ -105,12 +107,26 @@ public class CranposeActivity extends NativeActivity {
         });
     }
 
+    /** Field count of one accessibility record; see android_accessibility_wire.rs. */
+    private static final int ACCESSIBILITY_FIELDS = 17;
+
+    /** Separator packing a node's custom action labels into one field. */
+    private static final String ACCESSIBILITY_ACTION_SEPARATOR = String.valueOf((char) 0x1f);
+
+    /**
+     * First id handed to a custom action. Custom action ids only have to avoid
+     * the framework's standard actions, which are bit flags well below this;
+     * androidx solves the same problem by using R.id values, which live in the
+     * app's 0x7f resource space, so this starts there too.
+     */
+    private static final int ACCESSIBILITY_CUSTOM_ACTION_BASE = 0x7f000000;
+
     private static List<CranposeAccessibilityElement> parseAccessibilityElements(String payload) {
         if (payload == null || payload.isEmpty()) return Collections.emptyList();
         ArrayList<CranposeAccessibilityElement> result = new ArrayList<>();
         for (String record : payload.split("\\n", -1)) {
             String[] fields = record.split("\\t", -1);
-            if (fields.length != 11) continue;
+            if (fields.length != ACCESSIBILITY_FIELDS) continue;
             try {
                 result.add(new CranposeAccessibilityElement(
                         Integer.parseInt(fields[0]), Integer.parseInt(fields[1]),
@@ -118,7 +134,10 @@ public class CranposeActivity extends NativeActivity {
                                 Integer.parseInt(fields[4]), Integer.parseInt(fields[5])),
                         Float.parseFloat(fields[6]), Float.parseFloat(fields[7]),
                         "1".equals(fields[8]), unescapeAccessibility(fields[9]),
-                        unescapeAccessibility(fields[10])));
+                        unescapeAccessibility(fields[10]), unescapeAccessibility(fields[11]),
+                        unescapeAccessibility(fields[12]), Integer.parseInt(fields[13]),
+                        Integer.parseInt(fields[14]), "1".equals(fields[15]),
+                        parseAccessibilityActions(fields[16])));
             } catch (RuntimeException ignored) {
                 // A malformed record must not make the host Activity inaccessible.
             }
@@ -126,9 +145,22 @@ public class CranposeActivity extends NativeActivity {
         return result;
     }
 
+    private static String[] parseAccessibilityActions(String field) {
+        if (field.isEmpty()) return new String[0];
+        String[] parts = field.split(ACCESSIBILITY_ACTION_SEPARATOR, -1);
+        for (int i = 0; i < parts.length; i++) {
+            parts[i] = unescapeAccessibility(parts[i]);
+        }
+        return parts;
+    }
+
     private static String unescapeAccessibility(String value) {
+        // %25 is undone last: it is the escape for the escape character, so
+        // undoing it first would let an app-authored literal "%09" decode into
+        // a tab.
         return value.replace("%0D", "\r").replace("%0A", "\n")
-                .replace("%09", "\t").replace("%25", "%");
+                .replace("%09", "\t").replace("%1F", ACCESSIBILITY_ACTION_SEPARATOR)
+                .replace("%25", "%");
     }
 
     private static final class CranposeAccessibilityElement {
@@ -140,9 +172,18 @@ public class CranposeActivity extends NativeActivity {
         final boolean clickable;
         final String label;
         final String value;
+        final String stateDescription;
+        final String clickLabel;
+        /** -1 when the app said nothing, otherwise 0 or 1. */
+        final int selected;
+        final int toggled;
+        final boolean enabled;
+        final String[] customActions;
 
         CranposeAccessibilityElement(int id, int role, Rect bounds, float centerX,
-                float centerY, boolean clickable, String label, String value) {
+                float centerY, boolean clickable, String label, String value,
+                String stateDescription, String clickLabel, int selected, int toggled,
+                boolean enabled, String[] customActions) {
             this.id = id;
             this.role = role;
             this.bounds = bounds;
@@ -151,6 +192,35 @@ public class CranposeActivity extends NativeActivity {
             this.clickable = clickable;
             this.label = label;
             this.value = value;
+            this.stateDescription = stateDescription;
+            this.clickLabel = clickLabel;
+            this.selected = selected;
+            this.toggled = toggled;
+            this.enabled = enabled;
+            this.customActions = customActions;
+        }
+
+        /**
+         * The widget class TalkBack reads the trailing noun from ("radio
+         * button", "switch"). Cranpose's role codes are assigned in
+         * android_accessibility_wire.rs.
+         */
+        String className() {
+            switch (role) {
+                case 1: return "android.widget.Button";
+                case 3: return "android.widget.EditText";
+                case 4: return "android.widget.CheckBox";
+                case 5: return "android.widget.Switch";
+                case 6: return "android.widget.RadioButton";
+                case 7: return "android.widget.TabWidget";
+                case 8: return "android.widget.ImageView";
+                default: return "android.widget.TextView";
+            }
+        }
+
+        /** Roles that TalkBack announces an on/off state for. */
+        boolean isCheckable() {
+            return role == 4 || role == 5;
         }
     }
 
@@ -187,17 +257,28 @@ public class CranposeActivity extends NativeActivity {
             info.setSource(host, element.id);
             info.setParent(host);
             info.setPackageName(host.getContext().getPackageName());
-            info.setEnabled(true);
+            info.setEnabled(element.enabled);
             info.setVisibleToUser(true);
             info.setFocusable(true);
             info.setAccessibilityFocused(focusedId == element.id);
             info.setContentDescription(element.label);
-            if (element.role == 1) info.setClassName("android.widget.Button");
-            else if (element.role == 3) {
-                info.setClassName("android.widget.EditText");
+            info.setClassName(element.className());
+            if (element.role == 3) {
                 info.setEditable(true);
                 info.setText(element.value);
-            } else info.setClassName("android.widget.TextView");
+            }
+            if (element.role == 9 && Build.VERSION.SDK_INT >= 28) info.setHeading(true);
+            // Compose's stateDescription. TalkBack speaks it after the label
+            // and, unlike the label, re-speaks it on its own when only the
+            // state changed — which is what makes a settings toggle usable.
+            if (Build.VERSION.SDK_INT >= 30 && !element.stateDescription.isEmpty()) {
+                info.setStateDescription(element.stateDescription);
+            }
+            if (element.isCheckable()) {
+                info.setCheckable(true);
+                info.setChecked(element.toggled == 1);
+            }
+            if (element.selected >= 0) info.setSelected(element.selected == 1);
             info.setBoundsInParent(element.bounds);
             int[] location = new int[2];
             host.getLocationOnScreen(location);
@@ -205,7 +286,21 @@ public class CranposeActivity extends NativeActivity {
             screen.offset(location[0], location[1]);
             info.setBoundsInScreen(screen);
             info.setClickable(element.clickable);
-            if (element.clickable) info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+            if (element.clickable) {
+                // A labelled click is Compose's onClick(label = …): TalkBack
+                // reads "double tap to <label>" instead of the generic
+                // "double tap to activate".
+                if (element.clickLabel.isEmpty()) {
+                    info.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+                } else {
+                    info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                            AccessibilityNodeInfo.ACTION_CLICK, element.clickLabel));
+                }
+            }
+            for (int i = 0; i < element.customActions.length; i++) {
+                info.addAction(new AccessibilityNodeInfo.AccessibilityAction(
+                        ACCESSIBILITY_CUSTOM_ACTION_BASE + i, element.customActions[i]));
+            }
             info.addAction(focusedId == element.id
                     ? AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
                     : AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS);
@@ -219,6 +314,14 @@ public class CranposeActivity extends NativeActivity {
             if (action == AccessibilityNodeInfo.ACTION_CLICK && element.clickable) {
                 nativeOnAccessibilityActivate(element.centerX, element.centerY);
                 sendEvent(element.id, AccessibilityEvent.TYPE_VIEW_CLICKED);
+                return true;
+            }
+            int customIndex = action - ACCESSIBILITY_CUSTOM_ACTION_BASE;
+            if (customIndex >= 0 && customIndex < element.customActions.length) {
+                // Only the identity crosses back; the handler is resolved on
+                // the frame loop against the live semantics tree, so a stale
+                // published snapshot cannot run a stale closure.
+                nativeOnAccessibilityCustomAction(element.id, customIndex);
                 return true;
             }
             if (action == AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS) {

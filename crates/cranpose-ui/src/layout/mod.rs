@@ -26,8 +26,8 @@ use crate::modifier::{
 use crate::subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode};
 use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState};
 use cranpose_foundation::{
-    text::TextRange, InvalidationKind, ModifierNodeContext, NodeCapabilities,
-    SemanticsConfiguration,
+    text::TextRange, CanvasSemanticsNode, InvalidationKind, ModifierNodeContext, NodeCapabilities,
+    SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -387,48 +387,67 @@ pub enum SemanticsRole {
     Text { value: String },
     /// Spacer (non-interactive)
     Spacer,
-    /// Button (derived from is_button semantics flag)
+    /// Button (derived from the semantics `role`)
     Button,
     /// Unknown or unspecified role
     Unknown,
 }
 
 /// A single node within the semantics tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// Not `Eq`: a node now carries drawn-control bounds, which are floats. The
+/// tree is compared for "did anything a screen reader can see change", and
+/// that comparison is `PartialEq` everywhere else on the accessibility path
+/// (`AccessibilityRect`, `AccessibilityElement`) for the same reason.
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsNode {
     pub node_id: NodeId,
+    /// Where this node sits in the tree (layout, text, subcomposition …).
     pub role: SemanticsRole,
+    /// What kind of control this node is, as a screen reader announces it —
+    /// Compose's `Role`. Separate from [`SemanticsNode::role`] because a
+    /// clickable `Row` is structurally a layout node and semantically a button.
+    pub widget_role: Option<SemanticsWidgetRole>,
     pub actions: Vec<SemanticsAction>,
     pub children: Vec<SemanticsNode>,
     pub description: Option<String>,
+    pub state_description: Option<String>,
+    pub on_click_label: Option<String>,
+    pub selected: Option<bool>,
+    pub toggled: Option<bool>,
+    pub enabled: bool,
+    pub custom_actions: Vec<SemanticsCustomAction>,
+    /// Controls this node drew rather than laid out; their bounds are relative
+    /// to this node's own top-left. See [`CanvasSemanticsNode`].
+    pub canvas_children: Vec<CanvasSemanticsNode>,
     pub editable_text: bool,
     pub text_selection: Option<TextRange>,
 }
 
-impl SemanticsNode {
-    fn new(
-        node_id: NodeId,
-        role: SemanticsRole,
-        actions: Vec<SemanticsAction>,
-        children: Vec<SemanticsNode>,
-        description: Option<String>,
-        editable_text: bool,
-        text_selection: Option<TextRange>,
-    ) -> Self {
+impl Default for SemanticsNode {
+    fn default() -> Self {
         Self {
-            node_id,
-            role,
-            actions,
-            children,
-            description,
-            editable_text,
-            text_selection,
+            node_id: 0,
+            role: SemanticsRole::Unknown,
+            widget_role: None,
+            actions: Vec::new(),
+            children: Vec::new(),
+            description: None,
+            state_description: None,
+            on_click_label: None,
+            selected: None,
+            toggled: None,
+            enabled: true,
+            custom_actions: Vec::new(),
+            canvas_children: Vec::new(),
+            editable_text: false,
+            text_selection: None,
         }
     }
 }
 
 /// Rooted semantics tree extracted after layout.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SemanticsTree {
     root: SemanticsNode,
 }
@@ -3225,34 +3244,39 @@ fn semantics_node_from_parts(
     config: Option<SemanticsConfiguration>,
     children: Vec<SemanticsNode>,
 ) -> SemanticsNode {
-    let mut actions = Vec::new();
-    let mut description = None;
-    let mut editable_text = false;
-    let mut text_selection = None;
+    let mut node = SemanticsNode {
+        node_id,
+        children,
+        ..SemanticsNode::default()
+    };
 
     if let Some(config) = config {
-        if config.is_button {
+        if config.role == Some(SemanticsWidgetRole::Button) {
             role = SemanticsRole::Button;
         }
-        if config.is_clickable {
-            actions.push(SemanticsAction::Click {
+        // A named click label is how Compose declares `onClick`, so it carries
+        // the action with it; an app should not have to set `is_clickable` as
+        // well to be activatable.
+        if config.is_activatable() {
+            node.actions.push(SemanticsAction::Click {
                 handler: SemanticsCallback::new(node_id),
             });
         }
-        description = config.content_description;
-        editable_text = config.is_editable_text;
-        text_selection = config.text_selection;
+        node.widget_role = config.role;
+        node.description = config.content_description;
+        node.state_description = config.state_description;
+        node.on_click_label = config.on_click_label;
+        node.selected = config.selected;
+        node.toggled = config.toggled;
+        node.enabled = config.enabled;
+        node.custom_actions = config.custom_actions;
+        node.canvas_children = config.canvas_children;
+        node.editable_text = config.is_editable_text;
+        node.text_selection = config.text_selection;
     }
 
-    SemanticsNode::new(
-        node_id,
-        role,
-        actions,
-        children,
-        description,
-        editable_text,
-        text_selection,
-    )
+    node.role = role;
+    node
 }
 
 fn build_semantics_node_from_live_nodes(
