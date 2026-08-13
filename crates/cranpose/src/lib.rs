@@ -296,6 +296,9 @@ mod web_wheel;
 mod web_accessibility;
 
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_clipboard;
+
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_services;
 
 // Re-export the renderer-agnostic robot harness so applications and the

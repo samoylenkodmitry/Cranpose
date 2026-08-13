@@ -336,6 +336,11 @@ pub async fn run(
         move || request_frame()
     });
 
+    // Route the in-tree selection menu's Copy/Cut/Paste through the browser
+    // clipboard; without this they reach only an in-process one, so a copy on
+    // the page could not leave it.
+    crate::web_clipboard::install(&app, request_frame.clone());
+
     // Hidden editable element backing IME composition. Browsers only start
     // IME composition sessions (and mobile browsers only show their virtual
     // keyboard) when an editable element is focused, so text-field focus

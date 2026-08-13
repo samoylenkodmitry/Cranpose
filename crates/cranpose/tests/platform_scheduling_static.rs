@@ -1953,6 +1953,19 @@ fn the_browser_host_shares_the_wheel_policy() {
     );
 }
 
+/// The same unreachable-source problem for the clipboard: with no bridge
+/// installed the in-tree selection menu's Copy reaches an in-process clipboard
+/// that nothing outside the page can read, and every platform but the browser
+/// had one.
+#[test]
+fn the_browser_host_installs_a_platform_clipboard() {
+    assert!(
+        crate_source("src/web.rs").contains("crate::web_clipboard::install("),
+        "the browser host must install a platform clipboard, or the in-tree selection \
+         menu's Copy/Cut never leave the page"
+    );
+}
+
 fn is_crate_root_source(path: &Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
