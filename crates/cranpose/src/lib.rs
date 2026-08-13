@@ -17,6 +17,14 @@ pub use android_file_picker::open_content_uri;
 mod accessibility;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
+/// The Android accessibility wire format behind `CranposeActivity`'s
+/// `AccessibilityNodeProvider`. Built on the host as well so its encoding
+/// tests run everywhere.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod android_accessibility_wire;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_app_info;
 #[cfg(all(feature = "android", target_os = "android"))]

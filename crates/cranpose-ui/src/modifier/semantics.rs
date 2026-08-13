@@ -51,13 +51,10 @@ pub struct SemanticsElement {
 }
 
 impl SemanticsElement {
-    pub fn new<F>(recorder: F) -> Self
-    where
-        F: Fn(&mut SemanticsConfiguration) + 'static,
-    {
-        Self {
-            recorder: Rc::new(recorder),
-        }
+    /// Takes an already shared recorder so the caller can run the same closure
+    /// for the inspector preview without asking the app to record twice.
+    pub fn new(recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>) -> Self {
+        Self { recorder }
     }
 }
 

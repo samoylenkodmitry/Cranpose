@@ -16,7 +16,7 @@ use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
 use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
 };
-use cranpose_ui::{Modifier, PointerInputScope, Size};
+use cranpose_ui::{Modifier, PointerInputScope, SemanticsWidgetRole, Size};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 use std::rc::Rc;
@@ -225,7 +225,7 @@ pub fn LiquidSegmentedControl(
                     let cell = Modifier::empty()
                         .size(Size::new(segment_width, SEGMENT_HEIGHT))
                         .semantics(move |config| {
-                            config.is_button = true;
+                            config.role = Some(SemanticsWidgetRole::Button);
                             config.is_clickable = true;
                             config.content_description = Some(label_for_semantics.clone());
                         });

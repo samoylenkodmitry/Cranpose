@@ -1627,7 +1627,18 @@ fn semantics_modifier_populates_inspector_metadata() {
     let _app_context = crate::render_state::app_context_test_scope();
     let modifier = Modifier::empty().semantics(|config: &mut SemanticsConfiguration| {
         config.content_description = Some("Submit".into());
-        config.is_button = true;
+        config.state_description = Some("Ready".into());
+        config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
+        config.canvas_children = vec![cranpose_foundation::CanvasSemanticsNode::control(
+            1,
+            cranpose_ui_graphics::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            "Row",
+        )];
     });
 
     let records = modifier.collect_inspector_records();
@@ -1635,14 +1646,17 @@ fn semantics_modifier_populates_inspector_metadata() {
         .first()
         .expect("expected semantics inspector record");
     assert_eq!(semantics.name, "semantics");
-    assert!(semantics
-        .properties
-        .iter()
-        .any(|prop| prop.name == "contentDescription" && prop.value == "Submit"));
-    assert!(semantics
-        .properties
-        .iter()
-        .any(|prop| prop.name == "isButton" && prop.value == "true"));
+    let property = |name: &str| {
+        semantics
+            .properties
+            .iter()
+            .find(|prop| prop.name == name)
+            .map(|prop| prop.value.as_str())
+    };
+    assert_eq!(property("contentDescription"), Some("Submit"));
+    assert_eq!(property("stateDescription"), Some("Ready"));
+    assert_eq!(property("role"), Some("Button"));
+    assert_eq!(property("canvasSemanticsChildren"), Some("1"));
 }
 
 #[test]

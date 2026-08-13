@@ -14,7 +14,9 @@ use cranpose_ui::widgets::{
     Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row, RowSpec,
     Text,
 };
-use cranpose_ui::{Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, Size};
+use cranpose_ui::{
+    Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, SemanticsWidgetRole, Size,
+};
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -363,7 +365,7 @@ fn TabCells(
             let mut cell = Modifier::empty().size(Size::new(tab_width, BLOB_HEIGHT));
             if spec.interactive {
                 cell = cell.semantics(move |config| {
-                    config.is_button = true;
+                    config.role = Some(SemanticsWidgetRole::Button);
                     config.is_clickable = true;
                     config.content_description = Some(label_for_semantics.to_string());
                 });
