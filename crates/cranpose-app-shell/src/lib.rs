@@ -31,12 +31,12 @@ use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
     clear_transient_scroll_motion_contexts, format_layout_tree, format_render_scene,
     format_screen_summary, has_pending_focus_invalidations, has_pending_pointer_repasses,
-    peek_focus_invalidation, peek_layout_invalidation, peek_pointer_invalidation,
-    peek_render_invalidation, process_focus_invalidations, process_pointer_repasses,
-    request_render_invalidation, take_draw_repass_nodes, take_focus_invalidation,
-    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
-    HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
-    SubcomposeLayoutNode,
+    has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
+    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
+    process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
+    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
+    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
+    LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
 };
 use cranpose_ui_graphics::{Point, Rect, Size};
 use hit_path_tracker::{HitPathTracker, PointerId};
@@ -798,6 +798,13 @@ where
         // composition that wants to render.
         self.has_stale_pixels_in_context()
             || self.composition.runtime_handle().has_pending_ui()
+            // A semantics invalidation is work for the UI thread, not a reason
+            // to repaint: it is serviced by `run_dispatch_queues` and changes no
+            // pixel. It belongs here rather than in `has_stale_pixels_in_context`
+            // so that an app asleep on a still screen still wakes far enough to
+            // republish its tree for a screen reader, without that wake being
+            // counted as a frame the display owes.
+            || has_pending_semantics_invalidations()
             || self.composition.should_render()
     }
 

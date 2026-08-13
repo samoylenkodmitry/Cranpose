@@ -62,7 +62,10 @@ pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
-pub use semantics::{collect_semantics_from_chain, collect_semantics_from_modifier};
+pub use semantics::{
+    collect_semantics_from_chain, collect_semantics_from_modifier, SemanticsRequester,
+    SemanticsRequesterElement,
+};
 pub use slices::{
     collect_modifier_slices, collect_modifier_slices_into, collect_slices_from_modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats,
@@ -522,6 +525,19 @@ impl Modifier {
     /// this component from application code.
     pub fn focus_requester(self, requester: &FocusRequester) -> Self {
         let element = FocusRequesterElement::new(requester.token());
+        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
+        self.then(modifier)
+    }
+
+    /// Binds a [`SemanticsRequester`] to this node, so an app can mark the
+    /// node's semantics for re-collection without recomposing or laying out.
+    ///
+    /// Pair it with [`semantics`](Self::semantics) on the same node when the
+    /// recorder reads state the composition does not observe — app state behind
+    /// a `RefCell`, a game's own model — which is the case a recorder cannot
+    /// signal for itself.
+    pub fn semantics_requester(self, requester: &SemanticsRequester) -> Self {
+        let element = SemanticsRequesterElement::new(requester.clone());
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }

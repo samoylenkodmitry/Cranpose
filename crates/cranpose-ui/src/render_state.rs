@@ -42,6 +42,7 @@ pub struct AppContext {
     layout_node_registry: crate::widgets::nodes::layout_node::LayoutNodeRegistryState,
     pointer_dispatch: crate::pointer_dispatch::PointerDispatchState,
     focus_dispatch: crate::focus_dispatch::FocusInvalidationState,
+    semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState,
     cursor_animation: crate::cursor_animation::CursorAnimationState,
     text_field_focus: crate::text_field_focus::TextFieldFocusState,
     text_input_session: crate::text_input_session::PlatformTextInputState,
@@ -164,6 +165,7 @@ impl AppContext {
             ),
             pointer_dispatch: crate::pointer_dispatch::PointerDispatchState::new(),
             focus_dispatch: crate::focus_dispatch::FocusInvalidationState::new(),
+            semantics_dispatch: crate::semantics_dispatch::SemanticsInvalidationState::new(),
             cursor_animation: crate::cursor_animation::CursorAnimationState::new(),
             text_field_focus: crate::text_field_focus::TextFieldFocusState::new(),
             text_input_session: crate::text_input_session::PlatformTextInputState::new(),
@@ -456,6 +458,33 @@ pub(crate) fn with_focus_dispatch<R>(
 ) -> R {
     let context = require_current_app_context("focus dispatch access");
     f(&context.focus_dispatch)
+}
+
+pub(crate) fn with_semantics_dispatch<R>(
+    f: impl FnOnce(&crate::semantics_dispatch::SemanticsInvalidationState) -> R,
+) -> R {
+    let context = require_current_app_context("semantics dispatch access");
+    f(&context.semantics_dispatch)
+}
+
+/// Runs `f` against the semantics queue of the app context `id` names.
+///
+/// Addressed by id rather than by whatever context happens to be current,
+/// because the caller is an app's own frame loop or an event callback, which may
+/// well be outside any context — and because the answer must be the queue the
+/// node actually belongs to, never a neighbouring app's. A context that is gone
+/// drops the request instead of panicking: shutdown order is not something a
+/// requester holder can see.
+pub(crate) fn with_semantics_dispatch_by_app_context(
+    id: AppContextId,
+    f: impl FnOnce(&crate::semantics_dispatch::SemanticsInvalidationState),
+) {
+    with_app_context_by_id(id, |context| f(&context.semantics_dispatch));
+}
+
+/// The identity of the current app context, or `None` outside one.
+pub(crate) fn current_app_context_id_opt() -> Option<AppContextId> {
+    current_app_context().map(|context| context.id)
 }
 
 pub(crate) fn with_cursor_animation<R>(

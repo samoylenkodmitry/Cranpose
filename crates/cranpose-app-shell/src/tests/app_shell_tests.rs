@@ -8817,3 +8817,118 @@ fn a_pointer_inside_a_translated_layer_reports_the_translation() {
          {parent_local:?} / {parent_global:?}"
     );
 }
+
+// A screen that is one `Canvas`: its layout never changes, its frame loop draws
+// rather than recomposes, and its semantics recorder reads app state the
+// composition does not observe. Before `SemanticsRequester` this shape published
+// its tree once — at boot, before there was anything on screen — and then kept
+// republishing that same stale tree for the rest of the process.
+thread_local! {
+    static LIVE_RECORDER_LABEL: RefCell<String> = const { RefCell::new(String::new()) };
+    static LIVE_RECORDER_REQUESTER: RefCell<Option<cranpose_ui::SemanticsRequester>> =
+        const { RefCell::new(None) };
+}
+
+fn live_recorder_label() -> String {
+    LIVE_RECORDER_LABEL.with(|label| label.borrow().clone())
+}
+
+fn set_live_recorder_label(value: &str) {
+    LIVE_RECORDER_LABEL.with(|label| *label.borrow_mut() = value.to_string());
+}
+
+#[composable]
+fn live_recorder_content() {
+    let requester =
+        cranpose_core::remember(cranpose_ui::SemanticsRequester::new).with(Clone::clone);
+    LIVE_RECORDER_REQUESTER.with(|slot| *slot.borrow_mut() = Some(requester.clone()));
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 100.0,
+                height: 100.0,
+            })
+            .semantics_requester(&requester)
+            .semantics(|config| {
+                config.content_description = Some(live_recorder_label());
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+#[test]
+fn a_live_semantics_recorder_is_stale_until_its_requester_says_otherwise() {
+    let _guard = test_guard();
+    set_live_recorder_label("boot");
+    LIVE_RECORDER_REQUESTER.with(|slot| *slot.borrow_mut() = None);
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, live_recorder_content);
+    shell.set_semantics_enabled(true);
+    shell.process_frame();
+    assert_eq!(
+        shell.semantics_tree().map(semantics_tree_descriptions),
+        Some(vec!["boot".to_string()]),
+        "the first collection publishes what the recorder reported"
+    );
+
+    // The app's own state moved. Nothing recomposed and nothing relaid out, so
+    // without a request the framework has no way to know, and must not guess.
+    set_live_recorder_label("settings");
+    for _ in 0..3 {
+        shell.process_frame();
+    }
+    assert_eq!(
+        shell.semantics_tree().map(semantics_tree_descriptions),
+        Some(vec!["boot".to_string()]),
+        "an unrequested change must not cost a re-collection every frame"
+    );
+
+    // The app says so, and the very next frame republishes.
+    LIVE_RECORDER_REQUESTER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("the requester is bound during composition")
+            .invalidate()
+    });
+    shell.process_frame();
+    assert_eq!(
+        shell.semantics_tree().map(semantics_tree_descriptions),
+        Some(vec!["settings".to_string()]),
+        "invalidate() must republish without a recomposition or a layout pass"
+    );
+}
+
+#[test]
+fn a_pending_semantics_request_wakes_the_shell_without_dirtying_a_pixel() {
+    let _guard = test_guard();
+    set_live_recorder_label("boot");
+    LIVE_RECORDER_REQUESTER.with(|slot| *slot.borrow_mut() = None);
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(TestRenderer::default(), root_key, live_recorder_content);
+    shell.set_semantics_enabled(true);
+    shell.process_frame();
+    let _ = shell.semantics_tree();
+    while shell.needs_update() {
+        shell.update();
+    }
+    assert!(
+        !shell.needs_redraw(),
+        "the fixture must settle before the request is raised"
+    );
+
+    LIVE_RECORDER_REQUESTER.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .expect("the requester is bound during composition")
+            .invalidate()
+    });
+    assert!(
+        shell.needs_update(),
+        "a queued semantics request is work the UI thread owes"
+    );
+    assert!(
+        !shell.needs_redraw(),
+        "...but it changes no pixel, so it must not schedule a frame"
+    );
+}
