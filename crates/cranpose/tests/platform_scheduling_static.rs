@@ -564,6 +564,48 @@ fn android_play_billing_reaches_the_purchase_registry() {
     );
 }
 
+/// The writer's half of the owned row's order id.
+///
+/// Nothing in CI compiles or runs `CranposeBilling.java` -- no app in this
+/// workspace enables the `playbilling` feature -- so the decoder's tests are
+/// the only executable coverage the wire has, and they would keep passing with
+/// the Java side of the field deleted: `order_id()` would simply return `None`
+/// on every Android device, forever, which is also what a legitimately absent
+/// order id looks like.
+#[test]
+fn the_play_billing_bridge_sends_the_order_id_that_granted_each_entitlement() {
+    let java_source = workspace_source(
+        "crates/cranpose/android/java-billing/dev/cranpose/android/CranposeBilling.java",
+    );
+
+    assert!(
+        java_source.contains("purchase.getOrderId()"),
+        "the bridge must read Play's order id; the product id is what the app already knew"
+    );
+    assert!(
+        java_source.contains("escape(orderId)"),
+        "the order id must be escaped onto the owned row like every other field: the row is \
+         tab separated and nothing in Play's format forbids a tab"
+    );
+
+    // The two maps are one fact split in half. Refilling `owned` without
+    // refilling `orders` in the same breath leaves an order id outliving the
+    // purchase that produced it -- a paper trail pointing at the wrong sale.
+    let apply = java_source
+        .split("private int apply(")
+        .nth(1)
+        .expect("the snapshot bridge should apply purchase lists in one place");
+    let apply = apply
+        .split("\n    private")
+        .next()
+        .expect("a method body is delimited by the next member");
+    assert!(
+        apply.contains("owned.clear()") && apply.contains("orders.clear()"),
+        "ownership and its order ids must be replaced together, or an order id survives the \
+         purchase it belongs to"
+    );
+}
+
 #[test]
 fn android_native_input_is_drained_on_input_available_event() {
     let source = crate_source("src/android.rs");
