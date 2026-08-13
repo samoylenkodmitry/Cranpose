@@ -1632,20 +1632,56 @@ fn semantic_rect_for_node(
         })
 }
 
+/// Finds a drawn control on `sem_node` by its label.
+///
+/// The result carries the owning layout node's id with the *control's* own
+/// window rect, which is what a robot tap needs: activating a canvas control
+/// is a tap at its centre, exactly as it is for a screen reader.
+fn find_canvas_child(
+    owner: SemanticRect,
+    sem_node: &SemanticsNode,
+    query: &str,
+    match_kind: SemanticTextMatchKind,
+    require_clickable: bool,
+) -> Option<SemanticQueryResult> {
+    sem_node
+        .canvas_children
+        .iter()
+        .find(|child| {
+            (!require_clickable || child.clickable)
+                && semantics_text_matches(&child.label, query, match_kind)
+        })
+        .map(|child| SemanticQueryResult {
+            node_id: sem_node.node_id,
+            bounds: SemanticRect {
+                x: owner.x + child.bounds.x,
+                y: owner.y + child.bounds.y,
+                width: child.bounds.width,
+                height: child.bounds.height,
+            },
+            text: Some(child.label.clone()),
+        })
+}
+
 fn find_text_in_semantics_tree(
     bounds_by_node: &HashMap<cranpose_core::NodeId, SemanticRect>,
     sem_node: &SemanticsNode,
     query: &str,
     match_kind: SemanticTextMatchKind,
 ) -> Option<SemanticQueryResult> {
+    let owner = semantic_rect_for_node(bounds_by_node, sem_node.node_id);
     if let Some(text) = semantics_node_text(sem_node) {
         if semantics_text_matches(text, query, match_kind) {
             return Some(SemanticQueryResult {
                 node_id: sem_node.node_id,
-                bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
+                bounds: owner,
                 text: Some(text.to_string()),
             });
         }
+    }
+
+    if let Some(result) = find_canvas_child(owner, sem_node, query, match_kind, false) {
+        return Some(result);
     }
 
     for child in &sem_node.children {
@@ -1664,12 +1700,20 @@ fn find_button_in_semantics_tree(
     query: &str,
     match_kind: SemanticTextMatchKind,
 ) -> Option<SemanticQueryResult> {
+    let owner = semantic_rect_for_node(bounds_by_node, sem_node.node_id);
+    // A drawn control is checked before the node that drew it: the node itself
+    // is often one full-screen click target, and answering with that would
+    // tap the middle of the screen instead of the row that was asked for.
+    if let Some(result) = find_canvas_child(owner, sem_node, query, match_kind, true) {
+        return Some(result);
+    }
+
     if semantics_node_clickable(sem_node)
         && subtree_contains_matching_text(sem_node, query, match_kind)
     {
         return Some(SemanticQueryResult {
             node_id: sem_node.node_id,
-            bounds: semantic_rect_for_node(bounds_by_node, sem_node.node_id),
+            bounds: owner,
             text: semantics_node_text(sem_node).map(str::to_string),
         });
     }
@@ -1754,10 +1798,11 @@ pub(crate) fn subtree_contains_matching_text(
 #[cfg(test)]
 mod tests {
     use super::{
-        bounds_from_layout_box, panic_payload_message, robot_wait_for_idle_animation_loop_only,
+        bounds_from_layout_box, find_button_in_semantics_tree, find_text_in_semantics_tree,
+        panic_payload_message, robot_wait_for_idle_animation_loop_only,
         semantic_element_from_semantics_node, semantics_node_clickable, semantics_node_text,
-        semantics_text_matches, subtree_contains_matching_text, SemanticQueryResult, SemanticRect,
-        SemanticTextMatchKind,
+        semantics_text_matches, subtree_contains_matching_text, HashMap, SemanticQueryResult,
+        SemanticRect, SemanticTextMatchKind,
     };
     use cranpose_core::NodeId;
     use cranpose_ui::{
@@ -1861,6 +1906,86 @@ mod tests {
             description: description.map(str::to_string),
             ..SemanticsNode::default()
         }
+    }
+
+    /// A canvas screen is one full-screen click target with a list of drawn
+    /// controls inside it. A `find_button` that answered with the canvas node
+    /// would hand back the centre of the screen, so the drawn control has to
+    /// win — and its bounds have to be its own, or the tap lands elsewhere.
+    #[test]
+    fn queries_find_a_drawn_control_ahead_of_the_canvas_that_drew_it() {
+        use cranpose_ui::CanvasSemanticsNode;
+
+        let mut canvas = sample_semantics_node(
+            2,
+            SemanticsRole::Layout,
+            true,
+            Some("Settings screen"),
+            Vec::new(),
+        );
+        canvas.canvas_children = vec![
+            CanvasSemanticsNode::text(
+                1,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 200.0,
+                    height: 30.0,
+                },
+                "CROWN",
+            ),
+            CanvasSemanticsNode::control(
+                2,
+                Rect {
+                    x: 0.0,
+                    y: 40.0,
+                    width: 200.0,
+                    height: 52.0,
+                },
+                "Haptics",
+            ),
+        ];
+        let bounds_by_node = HashMap::from_iter([(
+            2usize,
+            SemanticRect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 400.0,
+            },
+        )]);
+
+        let found = find_text_in_semantics_tree(
+            &bounds_by_node,
+            &canvas,
+            "CROWN",
+            SemanticTextMatchKind::Exact,
+        )
+        .expect("a drawn label should be findable");
+        assert_eq!(found.text.as_deref(), Some("CROWN"));
+        assert_eq!((found.bounds.x, found.bounds.y), (10.0, 20.0));
+        assert_eq!(found.bounds.height, 30.0);
+
+        let button = find_button_in_semantics_tree(
+            &bounds_by_node,
+            &canvas,
+            "Haptics",
+            SemanticTextMatchKind::Exact,
+        )
+        .expect("a drawn control should be findable as a button");
+        assert_eq!(button.text.as_deref(), Some("Haptics"));
+        // The row's own rect, not the canvas's 200x400.
+        assert_eq!((button.bounds.y, button.bounds.height), (60.0, 52.0));
+
+        // The unclickable label is not a button, and the canvas node behind it
+        // must not be offered in its place.
+        assert!(find_button_in_semantics_tree(
+            &bounds_by_node,
+            &canvas,
+            "CROWN",
+            SemanticTextMatchKind::Exact,
+        )
+        .is_none());
     }
 
     /// A robot snapshot of an immediate-mode screen has to show the controls
