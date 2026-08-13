@@ -1888,6 +1888,50 @@ fn workspace_crate_roots(workspace_dir: &Path) -> Vec<PathBuf> {
     roots
 }
 
+/// Every store backend has to announce news, not only wake the loop.
+///
+/// `set_store_listener` exists because `take_event`/`store_state` are polling
+/// APIs and an idle app has no frame loop to poll from. A backend that only
+/// calls `wake_native_loop()` leaves the app to notice on some later frame it
+/// may never run: measured on a watch app, zero CPU jiffies over ten seconds on
+/// the screen showing a price, so a purchase approved while sitting there would
+/// never have been seen. iOS announced from the day the listener landed and
+/// Android did not, which is the asymmetry this pins down -- one backend
+/// growing a new decode path and forgetting to tell anyone is the same bug
+/// again.
+#[test]
+fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
+    let android = crate_source("src/android_purchases.rs");
+    let apple = workspace_source("crates/cranpose-storekit/src/apple.rs");
+
+    for (backend, source) in [("android", &android), ("apple", &apple)] {
+        assert!(
+            source.contains("note_store_news()"),
+            "the {backend} store backend must announce news through note_store_news()"
+        );
+    }
+
+    // Both JNI entry points, not just whichever one was noticed first: a
+    // snapshot and an event are separate ways for the store to have news.
+    for entry_point in [
+        "Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot",
+        "Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent",
+    ] {
+        let body = android
+            .split(entry_point)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{entry_point} should exist in android_purchases.rs"));
+        let body = body
+            .split("pub extern \"system\"")
+            .next()
+            .expect("an entry point body should be delimited by the next one");
+        assert!(
+            body.contains("note_store_news()"),
+            "{entry_point} decodes store news and must announce it, not only wake the loop"
+        );
+    }
+}
+
 fn is_crate_root_source(path: &Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
