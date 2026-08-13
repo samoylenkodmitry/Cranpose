@@ -1097,6 +1097,131 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
 }
 
 #[test]
+fn a_magnifying_layers_backdrop_stays_registered_with_the_world_behind_it() {
+    // A glass surface is a window, not a picture: scaling the layer it lives in
+    // must move the glass, never the world seen through it. That only holds if
+    // the underlay the nested backdrop samples is built at the scale that
+    // surface renders at -- and a magnifying layer's surface scale is quantized
+    // UP from the parent's (`magnifying_layer_scale`), so "the parent's scale"
+    // is a whole quarter-step wrong. Built at the parent's scale, the backdrop
+    // showed the world shrunk by parent/child about the surface origin: the
+    // bottom bar's 1.03x press lift pulled the content behind it 20% toward the
+    // bar's top-left corner, most visible as background lines sliding off the
+    // real ones the moment a finger went down.
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping magnifying backdrop registration assertions because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    let root_scale = 2.0;
+    let logical_width = FRAME_WIDTH as f32 / root_scale;
+    let logical_height = FRAME_HEIGHT as f32 / root_scale;
+    let boundary_x = 32.0;
+    // Big enough that the misregistration is unmistakable: the error grows with
+    // the distance from the surface origin, and the boundary sits 20 logical px
+    // into a 40px-wide surface.
+    let glass = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 24.0,
+    };
+    // The press lift's shape: a uniform scale about the layer's own center,
+    // built exactly the way the scene builder builds one, so the transform and
+    // the graphics layer agree the way they do in a real frame.
+    let lift = GraphicsLayer {
+        scale: 1.25,
+        ..GraphicsLayer::default()
+    };
+    let magnified = layer(
+        glass,
+        cranpose_render_common::layer_transform::layer_transform_to_parent(
+            glass,
+            Point { x: 12.0, y: 12.0 },
+            &lift,
+        ),
+        lift.clone(),
+        vec![RenderNode::Layer(Box::new(layer(
+            glass,
+            ProjectiveTransform::identity(),
+            GraphicsLayer {
+                // A plain, barely-there blur: this test is about *where* the
+                // backdrop lands, so the effect stays a near-pass-through and
+                // leaves the red/blue boundary sharp enough to locate.
+                backdrop_effect: Some(RenderEffect::blur(0.6)),
+                ..GraphicsLayer::default()
+            },
+            vec![],
+        )))],
+    );
+
+    renderer.scene_mut().graph = Some(RenderGraph::new(layer(
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: logical_width,
+            height: logical_height,
+        },
+        ProjectiveTransform::identity(),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: boundary_x,
+                    height: logical_height,
+                },
+                Color::RED,
+            ),
+            solid_rect(
+                Rect {
+                    x: boundary_x,
+                    y: 0.0,
+                    width: logical_width - boundary_x,
+                    height: logical_height,
+                },
+                Color::BLUE,
+            ),
+            RenderNode::Layer(Box::new(magnified)),
+        ],
+    )));
+
+    let frame = renderer
+        .capture_frame_with_scale(FRAME_WIDTH, FRAME_HEIGHT, root_scale)
+        .expect("magnifying backdrop capture should succeed");
+
+    // Where the red/blue boundary reads through the glass, scanned along the
+    // glass's middle row rather than asserted pixel by pixel, so the blur's
+    // softness does not decide the verdict.
+    let row = (logical_height * 0.5 * root_scale) as u32;
+    let scan_from = ((boundary_x - 14.0) * root_scale) as u32;
+    let scan_to = ((boundary_x + 14.0) * root_scale) as u32;
+    let seen_boundary = (scan_from..scan_to)
+        .find(|x| {
+            let pixel = rgba(&frame, *x, row);
+            pixel[2] > pixel[0]
+        })
+        .unwrap_or_else(|| panic!("no red/blue boundary visible through the glass along row {row}"))
+        as f32;
+    let true_boundary = boundary_x * root_scale;
+
+    // The bug displaced this by 10 device px (5 logical); the blur's own
+    // softness moves it by well under 2.
+    assert!(
+        (seen_boundary - true_boundary).abs() <= 4.0,
+        "the world seen through a magnifying layer's glass must stay where it is: \
+         boundary reads at device x {seen_boundary} but really sits at {true_boundary}"
+    );
+}
+
+#[test]
 fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
     // Regression: two sibling backdrop layers over a sharp red/blue boundary at
     // root_scale = 2. The lower-z backdrop (strong blur) sits to the right of the
