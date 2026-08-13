@@ -35,7 +35,7 @@
 //! express, like "the user cancelled" — for showing a message once.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 /// A product as the store describes it, in the user's locale and currency.
@@ -113,6 +113,20 @@ pub struct StoreState {
     /// Product ids the account currently owns. For non-consumables and
     /// subscriptions this is the entitlement; consumables never appear.
     pub owned: BTreeSet<String>,
+    /// The store's identifier for the purchase that granted each owned
+    /// product — Play's order id, StoreKit's transaction id.
+    ///
+    /// Separate from [`owned`](Self::owned) rather than replacing it, because
+    /// a backend can know that a product is owned without knowing what paid
+    /// for it: Play's `queryPurchases` omits the order id for a test purchase,
+    /// and a restore on a reinstalled app can report ownership before the
+    /// receipt is back. Ownership is the entitlement; this is only the paper
+    /// trail. Never gate access on it.
+    ///
+    /// An app that keeps a local record of the purchase wants it: with only
+    /// the product id there is nothing to quote to the store, or to the user,
+    /// if the entitlement is ever in dispute.
+    pub orders: BTreeMap<String, String>,
     /// Last error reported by the store, for diagnostics. A store being
     /// briefly unreachable is normal and not worth showing to the user.
     pub error: Option<String>,
@@ -125,6 +139,13 @@ impl StoreState {
     /// Whether `product_id` is currently owned.
     pub fn owns(&self, product_id: &str) -> bool {
         self.owned.contains(product_id)
+    }
+
+    /// The store's identifier for the purchase that granted `product_id`, if
+    /// the backend reported one. See [`orders`](Self::orders): absent is
+    /// normal and does not mean unowned.
+    pub fn order_id(&self, product_id: &str) -> Option<&str> {
+        self.orders.get(product_id).map(String::as_str)
     }
 
     /// The product with `product_id`, if the store answered for it.
@@ -345,6 +366,10 @@ mod tests {
                         description: "Everything unlocked".into(),
                     }],
                     owned: BTreeSet::from(["com.example.pro".to_string()]),
+                    orders: BTreeMap::from([(
+                        "com.example.pro".to_string(),
+                        "GPA.1234-5678".to_string(),
+                    )]),
                     error: None,
                     busy: false,
                 }
@@ -359,6 +384,10 @@ mod tests {
         let state = store_state();
         assert_eq!(state.phase, StorePhase::Ready);
         assert!(state.owns("com.example.pro"));
+        assert_eq!(state.order_id("com.example.pro"), Some("GPA.1234-5678"));
+        // Absent is normal: a backend can know a product is owned without
+        // knowing what paid for it, so this must never read as "not owned".
+        assert_eq!(state.order_id("com.example.free"), None);
         assert_eq!(state.display_price("com.example.pro"), Some("34,99 €"));
         assert_eq!(state.display_price("com.example.nope"), None);
         assert!(store_available());

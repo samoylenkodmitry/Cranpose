@@ -8,7 +8,7 @@
 use cranpose_services::purchases::{
     set_platform_purchases, Product, PurchaseEvent, Purchases, StorePhase, StoreState,
 };
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -65,6 +65,7 @@ struct Shared {
     staging: bool,
     staged_products: Vec<Product>,
     staged_owned: BTreeSet<String>,
+    staged_orders: BTreeMap<String, String>,
     live: StoreState,
     events: VecDeque<PurchaseEvent>,
 }
@@ -75,10 +76,12 @@ impl Shared {
             staging: false,
             staged_products: Vec::new(),
             staged_owned: BTreeSet::new(),
+            staged_orders: BTreeMap::new(),
             live: StoreState {
                 phase: StorePhase::Unavailable,
                 products: Vec::new(),
                 owned: BTreeSet::new(),
+                orders: BTreeMap::new(),
                 error: None,
                 busy: false,
             },
@@ -126,6 +129,7 @@ unsafe extern "C" fn on_message(
             state.staging = true;
             state.staged_products.clear();
             state.staged_owned.clear();
+            state.staged_orders.clear();
         }
         KIND_PRODUCT => {
             let (Some(id), Some(display_price)) = (take(a), take(b)) else {
@@ -140,6 +144,13 @@ unsafe extern "C" fn on_message(
         }
         KIND_OWNED => {
             if let Some(id) = take(a) {
+                // The order id is optional on this row and must stay that way:
+                // Android cannot always supply one, so an app reading it has to
+                // handle absence anyway, and a row without it is a normal owned
+                // product rather than a malformed one.
+                if let Some(order) = take(b) {
+                    state.staged_orders.insert(id.clone(), order);
+                }
                 state.staged_owned.insert(id);
             }
         }
@@ -150,6 +161,7 @@ unsafe extern "C" fn on_message(
             if state.staging {
                 state.live.products = std::mem::take(&mut state.staged_products);
                 state.live.owned = std::mem::take(&mut state.staged_owned);
+                state.live.orders = std::mem::take(&mut state.staged_orders);
                 state.staging = false;
             }
             state.live.phase = match arg0 {
