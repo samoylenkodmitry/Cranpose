@@ -1463,6 +1463,107 @@ impl<'a> From<&'a RenderString> for StyledTextRef<'a> {
     }
 }
 
+/// The x each line of an annotated block starts at, relative to the block's
+/// left edge, once `TextAlign` has had its say.
+///
+/// The block's own offset inside its parent is the scene builder's job; this
+/// is the other half, and Compose needs both — a `TextAlign` applies to every
+/// line of the paragraph, so a wrapped continuation line is centred in its own
+/// right and does not simply start where the first line started. See
+/// `scene_builder::text_align_fraction` for why the two telescope.
+///
+/// This walks the same span/newline segmentation the collectors below walk,
+/// and adds up advances with the same kern-plus-letter-spacing rule the glyph
+/// loops use, so the widths it aligns against are the widths that get drawn.
+/// `None` when there is nothing to do: start-aligned, or a single line.
+fn annotated_line_alignment_offsets(
+    text: &StyledTextRef<'_>,
+    style: &TextStyle,
+    font_size: f32,
+    scale: f32,
+    fonts: &SoftwareTextFontSet,
+) -> Option<Vec<f32>> {
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text.text);
+    if align_fraction == 0.0 || !text.text.contains('\n') {
+        return None;
+    }
+
+    let mut advances = vec![0.0f32];
+    for range in annotated_segment_boundaries(text).windows(2) {
+        let (start, end) = (range[0], range[1]);
+        if start == end {
+            continue;
+        }
+        let segment_style = effective_style_for_range(text.span_styles, style, start, end);
+        for part in text.text[start..end].split_inclusive('\n') {
+            let has_newline = part.ends_with('\n');
+            let content = if has_newline {
+                &part[..part.len().saturating_sub(1)]
+            } else {
+                part
+            };
+            if !content.is_empty() {
+                let segment_font_size = segment_style.resolve_font_size(font_size);
+                let font = fonts.resolve(&segment_style)?;
+                let font_px_size = font.ab_glyph_px_size(segment_font_size) * scale;
+                let letter_spacing =
+                    resolve_letter_spacing(&segment_style, segment_font_size) * scale;
+                if let Some(last) = advances.last_mut() {
+                    *last += segment_advance_px(&font.font, content, font_px_size, letter_spacing);
+                }
+            }
+            if has_newline {
+                advances.push(0.0);
+            }
+        }
+    }
+
+    let block = advances.iter().copied().fold(0.0f32, f32::max);
+    Some(
+        advances
+            .iter()
+            .map(|advance| ((block - advance) * align_fraction).max(0.0))
+            .collect(),
+    )
+}
+
+/// Where an annotated block changes style or breaks a line — every offset the
+/// collectors below cut a segment at.
+fn annotated_segment_boundaries(text: &StyledTextRef<'_>) -> Vec<usize> {
+    let mut boundaries = text.span_boundaries();
+    for (offset, ch) in text.text.char_indices() {
+        if ch == '\n' {
+            boundaries.push(offset);
+            boundaries.push(offset + ch.len_utf8());
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    boundaries.retain(|offset| *offset <= text.text.len() && text.text.is_char_boundary(*offset));
+    boundaries
+}
+
+/// One line's advance, walked exactly as the glyph loops walk it.
+fn segment_advance_px(
+    font: &impl Font,
+    content: &str,
+    font_px_size: f32,
+    letter_spacing: f32,
+) -> f32 {
+    let scaled_font = font.as_scaled(PxScale::from(font_px_size));
+    let mut caret = 0.0f32;
+    let mut previous = None;
+    for ch in content.chars() {
+        let glyph_id = scaled_font.glyph_id(ch);
+        if let Some(previous_id) = previous {
+            caret += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+        }
+        caret += scaled_font.h_advance(glyph_id);
+        previous = Some(glyph_id);
+    }
+    caret.max(0.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     text: impl Into<StyledTextRef<'a>>,
@@ -1527,7 +1628,11 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
     let mut canvas = vec![0_u8; (width as usize) * (height as usize) * 4];
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    let mut cursor_x = rect.x;
+    // Each line of the block is aligned in its own right; see
+    // `annotated_line_alignment_offsets`.
+    let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
+    let mut line_idx = 0usize;
+    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
     let mut cursor_y = rect.y;
 
     for (start, end, segment_style) in segment_plan {
@@ -1572,7 +1677,8 @@ pub fn rasterize_annotated_text_to_image_with_glyph_cache<'a>(
             }
 
             if has_newline {
-                cursor_x = rect.x;
+                line_idx += 1;
+                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
                 cursor_y += current_line_height * scale;
                 current_line_height = base_line_height;
             }
@@ -1607,7 +1713,17 @@ pub fn collect_solid_text_atlas_glyphs(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    let mut cursor_x = rect.x;
+    // Each line of the block is aligned in its own right; see
+    // `annotated_line_alignment_offsets`.
+    let line_offsets = annotated_line_alignment_offsets(
+        &StyledTextRef::from(text),
+        style,
+        font_size,
+        scale,
+        fonts,
+    );
+    let mut line_idx = 0usize;
+    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
     let mut cursor_y = rect.y;
     let initial_len = out.len();
 
@@ -1684,7 +1800,8 @@ pub fn collect_solid_text_atlas_glyphs(
             }
 
             if has_newline {
-                cursor_x = rect.x;
+                line_idx += 1;
+                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
                 cursor_y += current_line_height * scale;
                 current_line_height = base_line_height;
             }
@@ -1719,7 +1836,17 @@ pub fn collect_cached_solid_text_atlas_placements(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    let mut cursor_x = rect.x;
+    // Each line of the block is aligned in its own right; see
+    // `annotated_line_alignment_offsets`.
+    let line_offsets = annotated_line_alignment_offsets(
+        &StyledTextRef::from(text),
+        style,
+        font_size,
+        scale,
+        fonts,
+    );
+    let mut line_idx = 0usize;
+    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
     let mut cursor_y = rect.y;
     let initial_len = out.len();
 
@@ -1796,7 +1923,8 @@ pub fn collect_cached_solid_text_atlas_placements(
             }
 
             if has_newline {
-                cursor_x = rect.x;
+                line_idx += 1;
+                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
                 cursor_y += current_line_height * scale;
                 current_line_height = base_line_height;
             }
@@ -1832,7 +1960,11 @@ pub fn collect_solid_text_atlas_run<'a>(
 
     let base_line_height = line_height_for_render_style(style, font_size);
     let mut current_line_height = base_line_height;
-    let mut cursor_x = rect.x;
+    // Each line of the block is aligned in its own right; see
+    // `annotated_line_alignment_offsets`.
+    let line_offsets = annotated_line_alignment_offsets(&text, style, font_size, scale, fonts);
+    let mut line_idx = 0usize;
+    let mut cursor_x = rect.x + line_offset(&line_offsets, 0);
     let mut cursor_y = rect.y;
     let initial_len = out.len();
 
@@ -1909,7 +2041,8 @@ pub fn collect_solid_text_atlas_run<'a>(
             }
 
             if has_newline {
-                cursor_x = rect.x;
+                line_idx += 1;
+                cursor_x = rect.x + line_offset(&line_offsets, line_idx);
                 cursor_y += current_line_height * scale;
                 current_line_height = base_line_height;
             }
@@ -2322,6 +2455,7 @@ fn rasterize_text_to_image_impl(
     let font = font_ref.font;
     let font_px_size = font_size * scale * font_ref.ab_glyph_scale_factor;
     let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);
@@ -2350,6 +2484,7 @@ fn rasterize_text_to_image_impl(
                 origin_x,
                 origin_y,
                 letter_spacing,
+                align_fraction,
                 static_text_motion,
                 raster_style,
                 weight_synthesis,
@@ -2382,6 +2517,7 @@ fn rasterize_text_to_image_impl(
         origin_x,
         origin_y,
         letter_spacing,
+        align_fraction,
         static_text_motion,
         raster_style,
         weight_synthesis,
@@ -2502,6 +2638,7 @@ fn draw_text_segment_solid_to_rgba(
         == TextMotion::Static;
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
     let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2532,6 +2669,7 @@ fn draw_text_segment_solid_to_rgba(
         origin_x,
         0.0,
         letter_spacing,
+        align_fraction,
         text_motion_static,
         raster_style,
         weight_synthesis,
@@ -2578,6 +2716,7 @@ fn collect_text_segment_solid_atlas_glyphs(
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
     let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2604,6 +2743,7 @@ fn collect_text_segment_solid_atlas_glyphs(
         origin_x,
         0.0,
         letter_spacing,
+        align_fraction,
         true,
         GlyphRasterStyle::Fill,
         weight_synthesis,
@@ -2672,6 +2812,7 @@ fn collect_text_segment_cached_solid_atlas_placements(
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
     let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2698,6 +2839,7 @@ fn collect_text_segment_cached_solid_atlas_placements(
         origin_x,
         0.0,
         letter_spacing,
+        align_fraction,
         GlyphRasterStyle::Fill,
         weight_synthesis,
         style_synthesis,
@@ -2755,6 +2897,7 @@ fn collect_text_segment_solid_atlas_run(
 
     let font_px_size = font.ab_glyph_px_size(font_size) * scale;
     let letter_spacing = resolve_letter_spacing(style, font_size) * scale;
+    let align_fraction = crate::scene_builder::text_align_fraction(style, text);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
@@ -2781,6 +2924,7 @@ fn collect_text_segment_solid_atlas_run(
         origin_x,
         0.0,
         letter_spacing,
+        align_fraction,
         GlyphRasterStyle::Fill,
         weight_synthesis,
         style_synthesis,
@@ -3647,6 +3791,63 @@ fn cached_static_glyph_mask(
     .map(|(_, mask)| mask)
 }
 
+/// Where each line of a paragraph starts, relative to the block's own left
+/// edge, once `TextAlign` has had its say.
+///
+/// A `TextAlign` is a property of the paragraph and it applies to **every
+/// line**: Compose centres each line in the paragraph's width. Every glyph
+/// loop below used to start each line at `origin_x`, which centres a
+/// single-line paragraph correctly — the scene builder offsets the whole block
+/// — and leaves every wrapped continuation line jammed under the start of the
+/// first. On the Credits screen that is the difference between
+/// `"Designed and built for Wear" / "OS."` centred and `"OS."` hard against
+/// the left of the block.
+///
+/// The offsets are measured against the widest line rather than against the
+/// parent's width, because the block offset already covers the rest; see
+/// `scene_builder::text_align_fraction`. `None` for the start-aligned case, so
+/// the common path does not measure anything twice.
+fn line_alignment_offsets<F: Font, S: ScaleFont<F>>(
+    scaled_font: &S,
+    text: &str,
+    letter_spacing: f32,
+    align_fraction: f32,
+) -> Option<Vec<f32>> {
+    if align_fraction == 0.0 || !text.contains('\n') {
+        return None;
+    }
+    let advances: Vec<f32> = text
+        .split('\n')
+        .map(|line| {
+            let mut advance = 0.0f32;
+            let mut previous = None;
+            for ch in line.chars() {
+                let glyph_id = scaled_font.glyph_id(ch);
+                if let Some(previous_id) = previous {
+                    advance += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                }
+                advance += scaled_font.h_advance(glyph_id);
+                previous = Some(glyph_id);
+            }
+            advance.max(0.0)
+        })
+        .collect();
+    let block = advances.iter().copied().fold(0.0f32, f32::max);
+    Some(
+        advances
+            .iter()
+            .map(|advance| ((block - advance) * align_fraction).max(0.0))
+            .collect(),
+    )
+}
+
+fn line_offset(offsets: &Option<Vec<f32>>, line_idx: usize) -> f32 {
+    offsets
+        .as_ref()
+        .and_then(|offsets| offsets.get(line_idx).copied())
+        .unwrap_or(0.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn visit_text_glyph_masks(
     text: &str,
@@ -3658,6 +3859,7 @@ fn visit_text_glyph_masks(
     origin_x: f32,
     origin_y: f32,
     letter_spacing: f32,
+    align_fraction: f32,
     static_text_motion: bool,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
@@ -3667,10 +3869,11 @@ fn visit_text_glyph_masks(
 ) -> f32 {
     let scale = PxScale::from(font_px_size);
     let scaled_font = font.as_scaled(scale);
+    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x;
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -3725,6 +3928,7 @@ fn visit_text_glyph_masks_with_key(
     origin_x: f32,
     origin_y: f32,
     letter_spacing: f32,
+    align_fraction: f32,
     static_text_motion: bool,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
@@ -3738,10 +3942,11 @@ fn visit_text_glyph_masks_with_key(
 
     let scale = PxScale::from(font_px_size);
     let scaled_font = font.as_scaled(scale);
+    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x;
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -3786,6 +3991,7 @@ fn visit_cached_text_glyph_atlas_placements(
     origin_x: f32,
     origin_y: f32,
     letter_spacing: f32,
+    align_fraction: f32,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
     style_synthesis: TextStyleSynthesis,
@@ -3794,10 +4000,11 @@ fn visit_cached_text_glyph_atlas_placements(
 ) -> f32 {
     let scale = PxScale::from(font_px_size);
     let scaled_font = font.as_scaled(scale);
+    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x;
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -3848,6 +4055,7 @@ fn visit_text_glyph_atlas_run(
     origin_x: f32,
     origin_y: f32,
     letter_spacing: f32,
+    align_fraction: f32,
     raster_style: GlyphRasterStyle,
     weight_synthesis: TextWeightSynthesis,
     style_synthesis: TextStyleSynthesis,
@@ -3856,11 +4064,12 @@ fn visit_text_glyph_atlas_run(
 ) -> f32 {
     let scale = PxScale::from(font_px_size);
     let scaled_font = font.as_scaled(scale);
+    let line_offsets = line_alignment_offsets(&scaled_font, text, letter_spacing, align_fraction);
     let mut max_advance = 0.0f32;
     let mut run_metrics_cache: Vec<(GlyphMaskCacheKey, CachedAtlasGlyphMetrics)> = Vec::new();
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x;
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -6382,6 +6591,177 @@ mod tests {
         assert!(
             (animated_position.y - 13.37).abs() < 1e-3,
             "animated text should preserve fractional glyph position"
+        );
+    }
+}
+
+#[cfg(test)]
+mod line_alignment_tests {
+    use super::*;
+    use cranpose_ui::text::{ParagraphStyle, TextAlign};
+
+    /// The x range of every non-transparent pixel on the rows a line occupies.
+    fn ink_columns(image: &ImageBitmap, rows: std::ops::Range<u32>) -> Option<(u32, u32)> {
+        let width = image.width();
+        let pixels = image.pixels();
+        let mut min = u32::MAX;
+        let mut max = 0u32;
+        for y in rows {
+            for x in 0..width {
+                let index = ((y * width + x) * 4 + 3) as usize;
+                if pixels.get(index).copied().unwrap_or(0) > 0 {
+                    min = min.min(x);
+                    max = max.max(x);
+                }
+            }
+        }
+        (min != u32::MAX).then_some((min, max))
+    }
+
+    fn centred_style(align: TextAlign) -> TextStyle {
+        TextStyle {
+            paragraph_style: ParagraphStyle {
+                text_align: align,
+                ..ParagraphStyle::default()
+            },
+            ..TextStyle::default()
+        }
+    }
+
+    #[test]
+    fn a_wrapped_line_is_centred_under_the_one_above_it_not_left_under_it() {
+        // `TextAlign` is a paragraph property and Compose applies it to every
+        // line. The scene builder centres the block; without a per-line offset
+        // as well, the short second line sits hard against the left of the
+        // block -- which is exactly what the Credits screen's
+        // "Designed and built for Wear / OS." showed.
+        let font = default_software_text_font().expect("bundled default font");
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 80.0,
+        };
+        let text = "wwwwwwwwwwww\nww";
+        let image = rasterize_text_to_image(
+            text,
+            rect,
+            &centred_style(TextAlign::Center),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("centred image");
+        let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
+        let short =
+            ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");
+        let long_centre = (long.0 + long.1) as f32 * 0.5;
+        let short_centre = (short.0 + short.1) as f32 * 0.5;
+        assert!(
+            (long_centre - short_centre).abs() <= 2.0,
+            "the two lines should share a centre: {long:?} vs {short:?}"
+        );
+        assert!(
+            short.0 > long.0 + 4,
+            "the short line must not start where the long one does: {long:?} vs {short:?}"
+        );
+    }
+
+    #[test]
+    fn the_atlas_run_centres_each_line_of_a_wrapped_block() {
+        // The path an app on wgpu actually takes. It cuts the block into
+        // segments at span boundaries AND at newlines and drives its own
+        // cursor, so the per-line offset has to be applied there and not
+        // inside the glyph loop -- a segment handed to the glyph loop never
+        // contains a newline, so a rule written there never fires. This test
+        // is the difference between the two: it was green against the glyph
+        // loop and the watch still drew "OS." hard left.
+        let font = default_software_text_font().expect("bundled default font");
+        let fonts = SoftwareTextFontSet::from_font(font);
+        let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(256);
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 80.0,
+        };
+        let text = AnnotatedString::from("wwwwwwwwwwww\nww".to_string());
+
+        let mut centred = Vec::new();
+        collect_solid_text_atlas_run(
+            &text,
+            rect,
+            &centred_style(TextAlign::Center),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &fonts,
+            &mut cache,
+            &mut centred,
+        )
+        .expect("centred run");
+        let mut flush = Vec::new();
+        collect_solid_text_atlas_run(
+            &text,
+            rect,
+            &centred_style(TextAlign::Start),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &fonts,
+            &mut cache,
+            &mut flush,
+        )
+        .expect("start aligned run");
+
+        let second_line_start = |glyphs: &[SoftwareGlyphAtlasRunGlyph]| {
+            let placements: Vec<_> = glyphs.iter().map(|glyph| glyph.placement()).collect();
+            let baseline = placements.iter().map(|p| p.y).max().expect("glyphs");
+            placements
+                .iter()
+                .filter(|p| p.y == baseline)
+                .map(|p| p.x)
+                .min()
+                .expect("second line")
+        };
+        assert_eq!(
+            second_line_start(&flush),
+            0,
+            "a start-aligned second line begins at the block's left edge"
+        );
+        assert!(
+            second_line_start(&centred) > 40,
+            "a centred second line is indented by half the slack, was {}",
+            second_line_start(&centred)
+        );
+    }
+
+    #[test]
+    fn a_start_aligned_paragraph_still_stacks_its_lines_flush_left() {
+        let font = default_software_text_font().expect("bundled default font");
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 80.0,
+        };
+        let image = rasterize_text_to_image(
+            "wwwwwwwwwwww\nww",
+            rect,
+            &centred_style(TextAlign::Start),
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("start aligned image");
+        let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
+        let short =
+            ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");
+        assert!(
+            short.0.abs_diff(long.0) <= 1,
+            "start-aligned lines share a left edge: {long:?} vs {short:?}"
         );
     }
 }
