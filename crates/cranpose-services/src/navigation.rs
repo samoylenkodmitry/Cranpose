@@ -127,6 +127,20 @@ pub fn request_exit() {
     }
 }
 
+/// Whether an exit request is outstanding, without consuming it.
+///
+/// For a backend whose way of closing can fail. Consuming the flag and then
+/// discovering the platform call did not land loses the app's only record that
+/// it wanted to close: the app stays open, the gesture the user made did
+/// nothing, and nothing will ever ask again. Such a backend tests with this and
+/// calls [`take_exit_request`] once the request has actually been honoured.
+///
+/// This is also the cheap read for a loop that runs it every turn — see
+/// [`take_exit_request`].
+pub fn exit_requested() -> bool {
+    EXIT_REQUESTED.load(Ordering::SeqCst)
+}
+
 /// Take (and clear) a pending exit request. Drained by the platform backend.
 ///
 /// Read before written: this runs on every turn of the platform's loop, and a
@@ -134,7 +148,7 @@ pub fn request_exit() {
 /// The load is the common case by a very long way — an app asks to close once,
 /// ever.
 pub fn take_exit_request() -> bool {
-    EXIT_REQUESTED.load(Ordering::SeqCst) && EXIT_REQUESTED.swap(false, Ordering::SeqCst)
+    exit_requested() && EXIT_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 #[cfg(test)]
@@ -142,8 +156,20 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// Every global in this module is process-wide and the runner is threaded,
+    /// so the tests take turns. They share one lock rather than one each: the
+    /// back-request counter, the exit flag and the listener are entangled --
+    /// `request_exit` nudges the listener, so a test asserting on the listener
+    /// count is moved by a test that only meant to touch the exit flag. One
+    /// failure in twenty, which is the worst rate for anyone to debug.
+    fn navigation_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn requests_accumulate_and_drain() {
+        let _guard = navigation_lock();
         let _ = take_back_requests(); // clear any residue
         push_back_request();
         push_back_request();
@@ -157,6 +183,7 @@ mod tests {
     /// to observe the nudge is therefore checked here.
     #[test]
     fn a_registered_listener_hears_every_request() {
+        let _guard = navigation_lock();
         let heard = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&heard);
         set_back_request_listener(move || {
@@ -184,6 +211,7 @@ mod tests {
 
     #[test]
     fn an_exit_request_is_taken_once() {
+        let _guard = navigation_lock();
         let _ = take_exit_request(); // clear any residue
         assert!(!take_exit_request());
         request_exit();
@@ -198,7 +226,29 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_can_look_at_the_request_without_consuming_it() {
+        let _guard = navigation_lock();
+        // The Android backend's way of closing is a JNI call that can fail.
+        // Consuming the flag first and then discovering the call did not land
+        // loses the app's only record that it asked to close: it stays open,
+        // the gesture the user made did nothing, and nothing asks again.
+        let _ = take_exit_request();
+        assert!(!exit_requested());
+
+        request_exit();
+        assert!(exit_requested());
+        assert!(
+            exit_requested(),
+            "looking at the request consumed it, which is the bug"
+        );
+
+        assert!(take_exit_request());
+        assert!(!exit_requested());
+    }
+
+    #[test]
     fn interception_defaults_off_and_toggles() {
+        let _guard = navigation_lock();
         set_back_interception(false);
         assert!(!back_interception_enabled());
         set_back_interception(true);

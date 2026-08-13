@@ -6,6 +6,15 @@
 //! ask, and let the process end on its own. If the loop keeps turning, the
 //! driver says so and fails rather than hanging a CI run forever.
 //!
+//! What this does NOT prove: that a request reaches a loop which has gone to
+//! sleep. The robot harness pins the loop to Poll so a driver's commands are
+//! never waiting on an event that will not come, which means the drain runs
+//! every turn here whatever the app is doing. The idle case is the app's to
+//! handle -- `request_exit` nudges the back-request listener for exactly that
+//! reason, and an app that registers one is woken -- and it is not what is
+//! measured below. Read a pass as "the desktop backend drains and exits",
+//! nothing wider.
+//!
 //! Run headless with `CRANPOSE_HEADLESS=1`.
 
 use cranpose::AppLauncher;
