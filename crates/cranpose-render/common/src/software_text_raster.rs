@@ -896,11 +896,12 @@ impl TextMeasurer for SoftwareTextMeasurer {
         let font = self.fonts.resolve(style)?;
         let font_size = resolve_font_size(style);
         let metrics = crate::font_layout::vertical_metrics(&font.font, font_size);
-        let line_height = line_height_for_render_style(style, font_size);
-        // Glyph rows sit centered in the slot (see `baseline_y_for_line_box`);
-        // the tight box is the font's natural ascent+descent extent.
-        let height = metrics.natural_line_height.min(line_height).max(1.0);
-        Some((((line_height - height) * 0.5).max(0.0), height))
+        let asked = line_height_for_render_style(style, font_size);
+        let resolved = line_box_for(style, metrics, asked, measure_grid());
+        // Glyph rows sit in the slot the line box gives them; the tight box is
+        // the font's own ascent+descent extent, clamped to the slot.
+        let height = metrics.natural_line_height.min(resolved.height).max(1.0);
+        Some((((resolved.height - height) * 0.5).max(0.0), height))
     }
 
     fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
@@ -913,9 +914,13 @@ impl TextMeasurer for SoftwareTextMeasurer {
         // own, coarser box for selection chrome.)
         let metrics =
             crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
+        // A measurer works in layout points, so the line box rounds on the
+        // device grid the app is running at rather than on whole points.
         Some(baseline_y_for_line_box(
+            style,
             metrics,
             line_height_for_render_style(style, font_size),
+            measure_grid(),
         ))
     }
 
@@ -2320,8 +2325,16 @@ fn rasterize_text_to_image_impl(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font_ref.weight, font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font_ref.style, font_size, scale);
     let metrics = vertical_metrics(font, font_px_size);
-    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
-    let first_baseline_y = baseline_y_for_line_box(metrics, line_height);
+    // Everything here is already in raster device pixels, so the line
+    // box rounds on a grid of 1.
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    let line_height = line_box.height;
+    let first_baseline_y = line_box.baseline;
 
     if let Brush::Solid(color) = brush {
         if shadow.is_none() {
@@ -2492,8 +2505,16 @@ fn draw_text_segment_solid_to_rgba(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
-    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    // Everything here is already in raster device pixels, so the line
+    // box rounds on a grid of 1.
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    let line_height = line_box.height;
+    let first_baseline_y = local_rect.y + line_box.baseline;
     let origin_x = if text_motion_static {
         local_rect.x.round()
     } else {
@@ -2560,8 +2581,16 @@ fn collect_text_segment_solid_atlas_glyphs(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
-    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    // Everything here is already in raster device pixels, so the line
+    // box rounds on a grid of 1.
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    let line_height = line_box.height;
+    let first_baseline_y = local_rect.y + line_box.baseline;
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2646,8 +2675,16 @@ fn collect_text_segment_cached_solid_atlas_placements(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
-    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    // Everything here is already in raster device pixels, so the line
+    // box rounds on a grid of 1.
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    let line_height = line_box.height;
+    let first_baseline_y = local_rect.y + line_box.baseline;
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2721,8 +2758,16 @@ fn collect_text_segment_solid_atlas_run(
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, scale);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, scale);
     let metrics = vertical_metrics(&font.font, font_px_size);
-    let line_height = (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0);
-    let first_baseline_y = local_rect.y + baseline_y_for_line_box(metrics, line_height);
+    // Everything here is already in raster device pixels, so the line
+    // box rounds on a grid of 1.
+    let line_box = line_box_for(
+        style,
+        metrics,
+        (style.resolve_line_height(14.0, font_size * 1.4) * scale).max(1.0),
+        1.0,
+    );
+    let line_height = line_box.height;
+    let first_baseline_y = local_rect.y + line_box.baseline;
     let origin_x = local_rect.x.round();
     let initial_len = out.len();
 
@@ -2773,11 +2818,51 @@ fn resolve_font_size(style: &TextStyle) -> f32 {
     style.resolve_font_size(14.0)
 }
 
-fn baseline_y_for_line_box(
+/// The line box a style asks for, in the unit `metrics` and `line_height` are
+/// already in.
+///
+/// `grid` is how many device pixels one of those units is worth — `1.0` on the
+/// raster paths, where everything has already been multiplied by the render
+/// scale, and the density on the measure paths, which work in layout points.
+///
+/// A style that leaves `line_height_style` unset — every style in the framework
+/// but the Wear ones — comes back through the same arithmetic this function
+/// used before it took a style at all.
+fn line_box_for(
+    style: &TextStyle,
     metrics: crate::font_layout::FontVerticalMetrics,
     line_height: f32,
+    grid: f32,
+) -> cranpose_ui::text::LineBox {
+    cranpose_ui::text::line_box(
+        style,
+        cranpose_ui::text::FontExtent::new(metrics.ascent, -metrics.descent, metrics.line_gap),
+        line_height,
+        grid,
+    )
+}
+
+/// The device grid a measurement in layout points rounds on.
+///
+/// A measurer runs inside an app context in the running app, but the offline
+/// raster paths and this file's own tests call it without one, and asking for
+/// the ambient density there is a panic rather than a default. Those callers
+/// are all working at one pixel per point by definition.
+fn measure_grid() -> f32 {
+    if cranpose_ui::has_current_app_context() {
+        cranpose_ui::current_density()
+    } else {
+        1.0
+    }
+}
+
+fn baseline_y_for_line_box(
+    style: &TextStyle,
+    metrics: crate::font_layout::FontVerticalMetrics,
+    line_height: f32,
+    grid: f32,
 ) -> f32 {
-    metrics.ascent + (line_height - metrics.natural_line_height) * 0.5
+    line_box_for(style, metrics, line_height, grid).baseline
 }
 
 fn resolve_line_height(style: &TextStyle, font_size: f32) -> f32 {
@@ -3123,7 +3208,13 @@ fn measure_text_impl(
     resolved_style: FontStyle,
     resolved_weight: FontWeight,
 ) -> TextMetrics {
-    let line_height = resolve_line_height(style, font_size * 1.4);
+    let line_height = line_box_for(
+        style,
+        vertical_metrics(font, glyph_font_size),
+        resolve_line_height(style, font_size * 1.4),
+        measure_grid(),
+    )
+    .height;
     let letter_spacing = resolve_letter_spacing(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, resolved_weight, font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, resolved_style, font_size, 1.0);
@@ -3159,11 +3250,17 @@ fn measure_text_impl_cached(
     font: &SoftwareTextFont,
     cache: &mut SoftwareTextMetricsCache,
 ) -> TextMetrics {
-    let line_height = resolve_line_height(style, font_size * 1.4);
     let letter_spacing = resolve_letter_spacing(style, font_size);
     let weight_synthesis = TextWeightSynthesis::for_style(style, font.weight(), font_size, 1.0);
     let style_synthesis = TextStyleSynthesis::for_style(style, font.style(), font_size, 1.0);
     let glyph_font_size = font.ab_glyph_px_size(font_size);
+    let line_height = line_box_for(
+        style,
+        vertical_metrics(&font.font, glyph_font_size),
+        resolve_line_height(style, font_size * 1.4),
+        measure_grid(),
+    )
+    .height;
 
     let lines: Vec<&str> = text.split('\n').collect();
     let line_count = lines.len().max(1);
@@ -3200,7 +3297,7 @@ fn measure_annotated_text_with_resolver(
     let Some(base_font) = fonts.resolve(style) else {
         return fallback_text_metrics(text.text.as_str(), style, font_size);
     };
-    let base_line_height = line_height_for_style(style, font_size, &base_font.font);
+    let base_line_height = line_height_for_style(style, font_size, base_font);
     let mut boundaries = text.span_boundaries();
     for (offset, ch) in text.text.char_indices() {
         if ch == '\n' {
@@ -3335,7 +3432,7 @@ fn annotated_line_heights_with_resolver(
     let Some(base_font) = fonts.resolve(style) else {
         return fallback_line_heights(text.text.as_str(), style, font_size);
     };
-    let base_line_height = line_height_for_style(style, font_size, &base_font.font);
+    let base_line_height = line_height_for_style(style, font_size, base_font);
     let mut line_heights = vec![base_line_height];
     let mut boundaries = text.span_boundaries();
     for (offset, ch) in text.text.char_indices() {
@@ -3359,7 +3456,7 @@ fn annotated_line_heights_with_resolver(
         let segment_style = effective_style_for_range(&text.span_styles, style, start, end);
         let segment_font_size = resolve_font_size(&segment_style);
         let segment_line_height = if let Some(segment_font) = fonts.resolve(&segment_style) {
-            line_height_for_style(&segment_style, segment_font_size, &segment_font.font)
+            line_height_for_style(&segment_style, segment_font_size, segment_font)
         } else {
             fallback_line_height(&segment_style, segment_font_size)
         };
@@ -3385,7 +3482,7 @@ fn max_line_height_for_annotated_text_with_resolver(
 ) -> f32 {
     let base_line_height = fonts
         .resolve(style)
-        .map(|font| line_height_for_style(style, font_size, &font.font))
+        .map(|font| line_height_for_style(style, font_size, font))
         .unwrap_or_else(|| fallback_line_height(style, font_size));
     if text.span_styles.is_empty() {
         return base_line_height;
@@ -3402,7 +3499,7 @@ fn max_line_height_for_annotated_text_with_resolver(
         let segment_font_size = resolve_font_size(&segment_style);
         let segment_line_height = fonts
             .resolve(&segment_style)
-            .map(|font| line_height_for_style(&segment_style, segment_font_size, &font.font))
+            .map(|font| line_height_for_style(&segment_style, segment_font_size, font))
             .unwrap_or_else(|| fallback_line_height(&segment_style, segment_font_size));
         max_line_height = max_line_height.max(segment_line_height);
     }
@@ -3424,9 +3521,21 @@ fn effective_style_for_range(
     effective
 }
 
-fn line_height_for_style(style: &TextStyle, font_size: f32, font: &impl Font) -> f32 {
-    let _ = font;
-    resolve_line_height(style, font_size * 1.4)
+/// The line advance a style asks for on a given font, in layout points.
+///
+/// The font used to be discarded here, which is why the "natural" line height
+/// was a flat `font_size * 1.4` guess. A style that asks for a line-height
+/// policy needs the font's real ascent and descent, and reading them at the
+/// font's own pixel size is what makes them em-relative rather than a restated
+/// `font_size`.
+fn line_height_for_style(style: &TextStyle, font_size: f32, font: &SoftwareTextFont) -> f32 {
+    let asked = resolve_line_height(style, font_size * 1.4);
+    if style.paragraph_style.line_height_style.is_none() {
+        return asked;
+    }
+    let metrics =
+        crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
+    line_box_for(style, metrics, asked, measure_grid()).height
 }
 
 fn clamp_to_char_boundary(text: &str, mut offset: usize) -> usize {
@@ -5024,7 +5133,8 @@ mod tests {
         let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
 
         let metrics = vertical_metrics(font, font_size);
-        let baseline = baseline_y_for_line_box(metrics, font_size * 1.4);
+        let baseline =
+            baseline_y_for_line_box(&TextStyle::default(), metrics, font_size * 1.4, 1.0);
         for glyph in layout_line_glyphs(font, text, font_size, point(0.0, baseline)) {
             let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
                 continue;

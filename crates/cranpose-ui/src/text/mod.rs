@@ -3,6 +3,7 @@ pub mod decoration;
 pub mod draw_scope_text;
 pub mod font;
 pub mod layout_options;
+pub mod line_box;
 pub mod measure;
 pub mod paragraph;
 pub mod style;
@@ -21,6 +22,7 @@ pub use font::{
     LoadedTypefacePath,
 };
 pub use layout_options::{TextLayoutOptions, TextOptions, TextOverflow};
+pub use line_box::{line_box, FontExtent, LineBox};
 pub use measure::{
     first_baseline, get_cursor_x_for_offset, get_offset_for_position, glyph_line_box, layout_text,
     measure_text, measure_text_for_node, measure_text_with_options,

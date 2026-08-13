@@ -20,7 +20,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 mod animations;
-mod cranorbit_credits;
 mod hacker_news;
 mod images;
 mod interactive_anim;
@@ -33,6 +32,7 @@ pub mod rotary;
 mod shader_rect;
 mod shaders;
 mod text_showcase;
+pub mod wear;
 mod web_fetch;
 mod winamp;
 mod xkcd;
@@ -104,7 +104,7 @@ pub enum DemoTab {
     FilePicker,
     Rotary,
     /// A round-watch Credits list: the demo's heaviest text page.
-    CranorbitCredits,
+    Wear,
 }
 
 pub const DESKTOP_INITIAL_TAB: DemoTab = DemoTab::Liquid;
@@ -134,7 +134,7 @@ impl DemoTab {
             DemoTab::MarkdownViewer => "Markdown",
             DemoTab::FilePicker => "File Picker",
             DemoTab::Rotary => "Rotary Input",
-            DemoTab::CranorbitCredits => "Credits (watch)",
+            DemoTab::Wear => "Wear (watch)",
         }
     }
 
@@ -196,7 +196,7 @@ pub const DEMO_TABS: [DemoTab; 23] = [
     DemoTab::InteractiveAnim,
     DemoTab::FilePicker,
     DemoTab::Rotary,
-    DemoTab::CranorbitCredits,
+    DemoTab::Wear,
 ];
 
 pub fn demo_tab_labels() -> Vec<&'static str> {
@@ -575,7 +575,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::MarkdownViewer => markdown_viewer_tab(),
         DemoTab::FilePicker => file_picker_tab(),
         DemoTab::Rotary => rotary_tab(),
-        DemoTab::CranorbitCredits => cranorbit_credits::cranorbit_credits_tab(),
+        DemoTab::Wear => wear::wear_tab(),
         DemoTab::Liquid => LiquidUiTab(),
     }
 }
