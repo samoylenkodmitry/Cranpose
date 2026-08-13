@@ -17,6 +17,7 @@
 //! for exactly that reason.
 
 use crate::modifier::Color;
+use crate::text::paragraph::TextAlign;
 use crate::text::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle,
     PlatformParagraphStyle, SpanStyle, TextStyle,
@@ -98,12 +99,20 @@ pub fn wear_line_height_style() -> LineHeightStyle {
 /// `size` and `line_height` are in sp; `tracking` is letter spacing in sp.
 /// `weight` is both the `FontWeight` and the `wght` variation axis — the tokens
 /// set them to the same number.
+///
+/// `align` is not part of Wear's type scale — every token leaves it unset and a
+/// call site states it. It lives here anyway because the alternative is for
+/// every caller to reach into the resolved [`TextStyle`]'s paragraph style and
+/// overwrite one field, which is how a type scale stops being the thing that
+/// describes the text.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WearTextStyle {
     pub size_sp: f32,
     pub line_height_sp: f32,
     pub weight: u16,
     pub tracking_sp: f32,
+    /// `TextAlign::Unspecified` on every scale entry, as in the tokens.
+    pub align: TextAlign,
 }
 
 impl WearTextStyle {
@@ -113,6 +122,7 @@ impl WearTextStyle {
         line_height_sp: 18.0,
         weight: 550,
         tracking_sp: 0.4,
+        align: TextAlign::Unspecified,
     };
     /// `labelMedium` — a `Button` label and a `SwitchButton` label.
     pub const LABEL_MEDIUM: Self = Self {
@@ -120,6 +130,7 @@ impl WearTextStyle {
         line_height_sp: 18.0,
         weight: 500,
         tracking_sp: 0.4,
+        align: TextAlign::Unspecified,
     };
     /// `labelSmall` — a secondary label.
     pub const LABEL_SMALL: Self = Self {
@@ -127,6 +138,7 @@ impl WearTextStyle {
         line_height_sp: 16.0,
         weight: 500,
         tracking_sp: 0.4,
+        align: TextAlign::Unspecified,
     };
     /// `bodyLarge` — the theme default, which a bare `Text` inherits. Note that
     /// a bare `Text` that overrides only its `fontSize` keeps **this** line
@@ -137,6 +149,7 @@ impl WearTextStyle {
         line_height_sp: 18.0,
         weight: 450,
         tracking_sp: 0.4,
+        align: TextAlign::Unspecified,
     };
 
     /// The same style at another glyph size, keeping the line height.
@@ -155,6 +168,14 @@ impl WearTextStyle {
         }
     }
 
+    /// The same style aligned in its own width.
+    ///
+    /// Wear's own `Text(text, textAlign = TextAlign.Center)` — the shape every
+    /// credit line and every centred blurb on a watch screen takes.
+    pub const fn aligned(self, align: TextAlign) -> Self {
+        Self { align, ..self }
+    }
+
     /// The Cranpose [`TextStyle`] this entry resolves to.
     ///
     /// The sizes stay in `Sp`, so the framework applies the user's text-size
@@ -171,6 +192,7 @@ impl WearTextStyle {
             },
             paragraph_style: ParagraphStyle {
                 line_height: TextUnit::Sp(self.line_height_sp),
+                text_align: self.align,
                 line_height_style: Some(wear_line_height_style()),
                 platform_style: Some(PlatformParagraphStyle {
                     include_font_padding: Some(false),
@@ -221,6 +243,37 @@ mod tests {
         assert_eq!(small.line_height_sp, 18.0);
         let credit_line = small.with_line_height(16.0);
         assert_eq!(credit_line.line_height_sp, 16.0);
+    }
+
+    #[test]
+    fn the_scale_itself_states_no_alignment_and_a_call_site_can() {
+        // Wear's tokens set no `textAlign`; `Text(textAlign = Center)` at the
+        // call site is what centres a credit line.
+        for style in [
+            WearTextStyle::TITLE_MEDIUM,
+            WearTextStyle::LABEL_MEDIUM,
+            WearTextStyle::LABEL_SMALL,
+            WearTextStyle::BODY_LARGE,
+        ] {
+            assert_eq!(style.align, TextAlign::Unspecified);
+            assert_eq!(
+                style.resolve(Color::WHITE).paragraph_style.text_align,
+                TextAlign::Unspecified
+            );
+        }
+        let centred = WearTextStyle::BODY_LARGE
+            .at_size(12.0)
+            .with_line_height(16.0)
+            .aligned(TextAlign::Center);
+        assert_eq!(centred.align, TextAlign::Center);
+        assert_eq!(
+            centred.resolve(Color::WHITE).paragraph_style.text_align,
+            TextAlign::Center
+        );
+        // Aligning must not disturb the rest of the entry.
+        assert_eq!(centred.size_sp, 12.0);
+        assert_eq!(centred.line_height_sp, 16.0);
+        assert_eq!(centred.weight, WearTextStyle::BODY_LARGE.weight);
     }
 
     #[test]
