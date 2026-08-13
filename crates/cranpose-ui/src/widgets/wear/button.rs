@@ -24,6 +24,7 @@ use crate::modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguratio
 use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
+use crate::SemanticsWidgetRole;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
 use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
@@ -94,10 +95,8 @@ where
         })
         .clickable(move |_point| on_click())
         .semantics(move |config: &mut SemanticsConfiguration| {
-            // `Role.Button` on the `combinedClickable`. The framework's
-            // semantics vocabulary has a button flag and no role enum, so this
-            // is the whole of it.
-            config.is_button = true;
+            // `Role.Button` on the `combinedClickable`.
+            config.role = Some(SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some(description.clone());
         });
