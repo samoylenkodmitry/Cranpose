@@ -571,9 +571,64 @@ where
         event.is_consumed()
     }
 
+    /// Dispatches one mouse-wheel / trackpad sample through the whole wheel
+    /// policy, and returns `true` when something consumed it.
+    ///
+    /// This is the single entry point every host with a wheel calls, after
+    /// placing the cursor. A wheel sample is not just a scroll — it is whichever
+    /// of four things the modifiers and the tree make it, in this order:
+    ///
+    /// 1. **Zoom** when ctrl is held. That is the desktop convention and the
+    ///    way browsers deliver a trackpad pinch, so both arrive here as the
+    ///    same gesture.
+    /// 2. **Rotary**, offered to [`rotary_scrolled`](Self::rotary_scrolled)
+    ///    before anything else can take it, so the Wear OS crown stack is
+    ///    developable on a machine with a wheel. Nothing consumes rotary unless
+    ///    the app opts in via `Modifier::on_rotary_scroll_event` or
+    ///    [`set_on_rotary_scroll`](Self::set_on_rotary_scroll), so ordinary
+    ///    scrolling is unaffected.
+    /// 3. **Horizontal scroll** when alt is held on a wheel that only reports a
+    ///    vertical axis.
+    /// 4. **Scroll**, to the hovered scrollable.
+    ///
+    /// Hosts must not re-implement this order. Doing so is how the browser
+    /// ended up scrolling backwards and never delivering rotary at all: the
+    /// policy lived in the desktop event loop, and the second host that grew a
+    /// wheel reimplemented the parts of it that were obvious from the outside.
+    pub fn wheel_scrolled(&mut self, wheel: crate::WheelScroll) -> bool {
+        if wheel.is_zoom() {
+            let zoom_factor = wheel.zoom_factor();
+            log::trace!(
+                target: "cranpose::input",
+                "wheel zoom factor={zoom_factor:.4}"
+            );
+            return self.pointer_zoomed(zoom_factor);
+        }
+
+        let rotary =
+            RotaryScrollEvent::from_wheel_pixels(wheel.delta.y, wheel.delta.x, wheel.uptime_millis);
+        if self.rotary_scrolled(rotary) {
+            return true;
+        }
+
+        let delta = wheel.scroll_delta();
+        log::trace!(
+            target: "cranpose::input",
+            "wheel delta ({:.2},{:.2}) alt={}",
+            delta.x,
+            delta.y,
+            wheel.modifiers.alt
+        );
+        self.pointer_scrolled(delta.x, delta.y)
+    }
+
     /// Dispatches a mouse wheel / trackpad scroll event to hovered pointer handlers.
     ///
     /// Returns `true` if a handler consumed the event.
+    ///
+    /// This is the last step of the wheel policy, not its entry point: hosts
+    /// call [`wheel_scrolled`](Self::wheel_scrolled), which reaches here once
+    /// zoom and rotary have declined the sample.
     pub fn pointer_scrolled(&mut self, delta_x: f32, delta_y: f32) -> bool {
         let event_time = self.realtime_pointer_event_time(None);
         let _event_handler = enter_event_handler_scope();

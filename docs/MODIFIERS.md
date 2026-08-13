@@ -618,6 +618,70 @@ impl PointerInputNode for ClickableNode {
 }
 ```
 
+### Semantics Modifiers
+
+#### SemanticsModifierNode
+
+- **Capability**: `SEMANTICS`
+- **Behavior**: Runs a recorder closure that fills a `SemanticsConfiguration`;
+  the layout pass folds every SEMANTICS node in the chain into one config and
+  turns it into the node's `SemanticsNode`.
+- **Re-recording**: the element declares `always_update`, so a recorder that
+  captured new state re-runs and dirties the semantics snapshot. Nothing about
+  the modifier's *shape* changes when a toggle flips, so without that the
+  screen reader would keep reading the first frame's answer (regression test:
+  `re_recording_semantics_reopens_the_snapshot`).
+
+The vocabulary mirrors Jetpack Compose's `SemanticsProperties`:
+
+| `SemanticsConfiguration` | Compose |
+| --- | --- |
+| `content_description` | `contentDescription` |
+| `state_description` | `stateDescription` |
+| `on_click_label` | `onClick(label = …)` — implies the click action |
+| `role` | `Role` (`Button`, `Checkbox`, `Switch`, `RadioButton`, `Tab`, `Image`, `Header`) |
+| `selected` | `selected` |
+| `toggled` | `toggleableState` |
+| `enabled` | the inverse of `disabled()` |
+| `custom_actions` | `customActions = listOf(CustomAccessibilityAction(…))` |
+| `canvas_children` | *(no Compose equivalent — see below)* |
+
+#### Canvas semantics
+
+An immediate-mode surface — one `Canvas` painting a whole screen — has exactly
+one layout node, so the semantics tree built from layout has exactly one node
+to offer a screen reader. `canvas_children` is the escape hatch: the drawing
+code already knows where it put every control, so it publishes those rectangles
+as semantics directly.
+
+```rust
+Modifier::empty().fill_max_size().semantics(move |config| {
+    config.canvas_children = rows
+        .iter()
+        .map(|row| {
+            CanvasSemanticsNode::control(row.key, row.rect, &row.label)
+                .with_role(SemanticsWidgetRole::Switch)
+                .with_toggled(row.checked)
+                .with_state_description(if row.checked { "On" } else { "Off" })
+        })
+        .collect();
+});
+```
+
+- `bounds` are in the publishing node's own coordinates, because that is what a
+  draw scope works in; the accessibility projection translates them.
+- `key` must survive a redraw. A screen reader parks its cursor on a virtual
+  view id, and the id is derived from `(layout node, key)` — derive the key from
+  what the control *is*, never from where it currently sits.
+- Activation is a synthesised tap at the published rect's centre, so a control
+  the app already hit-tests by geometry needs no extra wiring. A custom action
+  has no position and is instead routed back by identity and run against the
+  live semantics tree.
+- Android's own answer for a canvas-drawn `View` has the same shape
+  (`ExploreByTouchHelper` feeding virtual view ids into an
+  `AccessibilityNodeProvider`), and Cranpose's Android bridge already *is* an
+  `AccessibilityNodeProvider`.
+
 ---
 
 ## Modifier Element System

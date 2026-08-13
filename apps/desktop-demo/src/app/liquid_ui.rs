@@ -15,7 +15,7 @@ use cranpose::{
     composable, mutableStateOf, remember, Brush, Color, CornerRadii, GraphicsLayer, Modifier,
     Point, PointerEventKind, PointerInputScope, Rect, ScrollState, Size,
 };
-use cranpose_foundation::SemanticsConfiguration;
+use cranpose_foundation::{SemanticsConfiguration, SemanticsWidgetRole};
 use cranpose_ui::{Alignment, HorizontalAlignment, VerticalAlignment};
 use std::cell::RefCell;
 
@@ -171,7 +171,7 @@ fn TogglePressReferenceStage(checked: bool, on_change: impl Fn(bool) + 'static) 
                 Modifier::empty()
                     .offset(layout.track_origin.x, layout.track_origin.y)
                     .semantics(|config| {
-                        config.is_button = true;
+                        config.role = Some(SemanticsWidgetRole::Button);
                         config.is_clickable = true;
                         config.content_description = Some("Wi-Fi switch".to_string());
                     }),
@@ -1022,7 +1022,7 @@ fn SortFilterStage(suggestion_offset: f32) {
                                         .offset(-16.0, 0.0)
                                         .report_window_rect(std::rc::Rc::clone(&anchor_sink))
                                         .semantics(|config| {
-                                            config.is_button = true;
+                                            config.role = Some(SemanticsWidgetRole::Button);
                                             config.is_clickable = true;
                                             config.content_description =
                                                 Some("Sort filter pill".to_string());
@@ -1316,7 +1316,7 @@ fn StoreHeadersBarExample(selected: usize, on_select: impl Fn(usize) + 'static) 
             .width(440.0)
             .height(112.0)
             .semantics(|config| {
-                config.is_button = true;
+                config.role = Some(SemanticsWidgetRole::Button);
                 config.is_clickable = true;
                 config.content_description = Some("Headers fold stage".to_string());
             }),
@@ -1576,7 +1576,7 @@ fn FeaturedVideosReferenceCard(
         Modifier::empty()
             .required_size(Size::new(330.0, 226.0))
             .semantics(|config| {
-                config.is_button = true;
+                config.role = Some(SemanticsWidgetRole::Button);
                 config.is_clickable = true;
                 config.content_description = Some("Featured videos".to_string());
             })
@@ -2190,7 +2190,8 @@ pub fn LiquidUiTab() {
                                                     let t = toggle_a2;
                                                     LiquidToggle(
                                                         Modifier::empty().semantics(|config| {
-                                                            config.is_button = true;
+                                                            config.role =
+                                                                Some(SemanticsWidgetRole::Button);
                                                             config.is_clickable = true;
                                                             config.content_description = Some(
                                                                 "Wi-Fi settings switch".to_string(),

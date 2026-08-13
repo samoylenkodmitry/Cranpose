@@ -87,12 +87,17 @@ impl WebAccessibilityBridge {
         let scale_x = canvas_rect.width() / viewport.0.max(1.0) as f64;
         let scale_y = canvas_rect.height() / viewport.1.max(1.0) as f64;
 
-        for element in elements {
+        // Identified by the shared accessibility element id rather than the
+        // layout node id: a node that publishes drawn controls owns several
+        // elements, and two DOM nodes claiming the same identity is exactly
+        // the bug a screen reader trips over.
+        let ids = accessibility::element_ids(&elements);
+        for (id, element) in ids.into_iter().zip(elements) {
             let node = document
                 .create_element(if element.clickable { "button" } else { "span" })?
                 .dyn_into::<HtmlElement>()?;
             node.set_attribute("aria-label", &element.label)?;
-            node.set_attribute("data-cranpose-node", &element.node_id.to_string())?;
+            node.set_attribute("data-cranpose-node", &id.to_string())?;
             match element.role {
                 AccessibilityRole::Button => node.set_attribute("role", "button")?,
                 AccessibilityRole::StaticText => {
@@ -105,6 +110,37 @@ impl WebAccessibilityBridge {
                         node.set_attribute("aria-valuetext", value)?;
                     }
                 }
+                AccessibilityRole::Checkbox => node.set_attribute("role", "checkbox")?,
+                AccessibilityRole::Switch => node.set_attribute("role", "switch")?,
+                AccessibilityRole::RadioButton => node.set_attribute("role", "radio")?,
+                AccessibilityRole::Tab => node.set_attribute("role", "tab")?,
+                AccessibilityRole::Image => node.set_attribute("role", "img")?,
+                AccessibilityRole::Header => {
+                    node.set_attribute("role", "heading")?;
+                    node.set_attribute("aria-level", "2")?;
+                    node.set_text_content(Some(&element.label));
+                }
+            }
+            // ARIA has no direct `stateDescription`; the state a control is in
+            // rides on the checked/selected attributes where the role has them,
+            // and `aria-description` carries the app's wording either way.
+            if let Some(state) = &element.state_description {
+                node.set_attribute("aria-description", state)?;
+            }
+            if let Some(toggled) = element.toggled {
+                node.set_attribute("aria-checked", if toggled { "true" } else { "false" })?;
+            }
+            if let Some(selected) = element.selected {
+                let selected = if selected { "true" } else { "false" };
+                match element.role {
+                    AccessibilityRole::RadioButton => {
+                        node.set_attribute("aria-checked", selected)?
+                    }
+                    _ => node.set_attribute("aria-selected", selected)?,
+                }
+            }
+            if !element.enabled {
+                node.set_attribute("aria-disabled", "true")?;
             }
             if element.clickable {
                 let (x, y) = element.bounds.center();

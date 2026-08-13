@@ -1477,6 +1477,7 @@ mod tests {
         SemanticElement {
             role: role.to_string(),
             text: text.map(ToString::to_string),
+            state_description: None,
             clickable,
             editable_text: false,
             text_selection: None,

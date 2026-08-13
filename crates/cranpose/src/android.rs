@@ -2161,6 +2161,26 @@ pub fn run(
                 shell.pointer_pressed();
                 shell.pointer_released_at_position(x, y);
             }
+            // A custom action has no position to synthesise a tap at — it is
+            // the screen reader's way to reach a command with no on-screen
+            // control — so it is dispatched by identity instead, against the
+            // semantics tree as it stands this frame.
+            for (virtual_id, action_index) in crate::android_accessibility::drain_custom_actions() {
+                let Some((node_id, canvas_key)) =
+                    crate::accessibility::resolve_element_id(&accessibility_elements, virtual_id)
+                else {
+                    continue;
+                };
+                let Some(tree) = shell.semantics_tree() else {
+                    continue;
+                };
+                crate::accessibility::perform_custom_action(
+                    tree.root(),
+                    node_id,
+                    canvas_key,
+                    action_index,
+                );
+            }
             for event in ime_event_queue.drain() {
                 dispatch_android_ime_event(shell, event);
             }

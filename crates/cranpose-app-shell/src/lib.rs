@@ -6,6 +6,7 @@ mod hit_path_tracker;
 mod shell_debug;
 mod shell_frame;
 mod shell_input;
+mod wheel;
 #[cfg(test)]
 use shell_frame::build_draw_refresh_scope;
 
@@ -50,6 +51,8 @@ pub use cranpose_foundation::PointerSource;
 pub use cranpose_foundation::{
     rotary_scroll_pixels_from_detents, RotaryScrollEvent, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
 };
+// The wheel sample every host normalizes into, and the convention it carries.
+pub use wheel::WheelScroll;
 
 /// Bridges the in-tree selection menu's clipboard actions to the desktop OS
 /// clipboard (`arboard`). Holds a persistent clipboard handle (Linux X11 loses

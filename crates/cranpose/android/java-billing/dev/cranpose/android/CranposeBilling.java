@@ -24,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 /**
@@ -83,6 +84,15 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
     private final List<String> productIds = new ArrayList<>();
     private final Map<String, ProductDetails> products = new LinkedHashMap<>();
     private final Set<String> owned = new TreeSet<>();
+    /**
+     * Product id to the order id of the purchase that granted it.
+     *
+     * <p>Kept beside {@link #owned} rather than replacing it: Play does not always have an
+     * order id to give. A test purchase has none, and a restore can report ownership before
+     * the receipt is back. Ownership is the entitlement; this is only the paper trail, and a
+     * caller must never gate access on it.
+     */
+    private final Map<String, String> orders = new TreeMap<>();
     private boolean productsKnown;
     private boolean ownedKnown;
     private boolean connected;
@@ -447,10 +457,17 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
      */
     private int apply(List<Purchase> purchases, boolean announce) {
         Set<String> found = new TreeSet<>();
+        Map<String, String> foundOrders = new TreeMap<>();
         boolean pending = false;
         for (Purchase purchase : purchases) {
             if (purchase.getPurchaseState() == Purchase.PurchaseState.PURCHASED) {
                 found.addAll(purchase.getProducts());
+                String orderId = purchase.getOrderId();
+                if (orderId != null && !orderId.isEmpty()) {
+                    for (String id : purchase.getProducts()) {
+                        foundOrders.put(id, orderId);
+                    }
+                }
                 acknowledge(purchase);
             } else if (purchase.getPurchaseState() == Purchase.PurchaseState.PENDING) {
                 pending = true;
@@ -459,6 +476,8 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
         synchronized (lock) {
             owned.clear();
             owned.addAll(found);
+            orders.clear();
+            orders.putAll(foundOrders);
             ownedKnown = true;
         }
         pushSnapshot();
@@ -631,6 +650,10 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
             }
             for (String id : owned) {
                 payload.append('\n').append("o\t").append(escape(id));
+                String orderId = orders.get(id);
+                if (orderId != null && !orderId.isEmpty()) {
+                    payload.append('\t').append(escape(orderId));
+                }
             }
         }
         nativeBillingSnapshot(payload.toString());

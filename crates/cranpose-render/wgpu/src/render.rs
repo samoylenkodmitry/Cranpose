@@ -4005,9 +4005,7 @@ fn layer_raster_cache_candidate(
         && surface_requirements
             .surface_requirements
             .has_isolating_requirement()
-        && !layer
-            .effect()
-            .is_some_and(RenderEffect::contains_runtime_shader);
+        && !surface_requirements.contains_runtime_shader;
     let cache_is_allowed = layer.cache_policy == CachePolicy::Auto
         || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
         || runtime_cache_is_safe;
@@ -4017,10 +4015,9 @@ fn layer_raster_cache_candidate(
     if layer_uses_external_backdrop_input(layer, has_backdrop_underlay) {
         return None;
     }
-    if layer
-        .effect()
-        .is_some_and(RenderEffect::contains_runtime_shader)
-    {
+    // Not just this layer's own effect: a shader anywhere below it makes the
+    // whole subtree change every frame with nothing in any hash to say so.
+    if surface_requirements.contains_runtime_shader {
         return None;
     }
 

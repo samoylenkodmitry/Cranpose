@@ -15,13 +15,43 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 /// A platform-provided OS clipboard. Installed by the platform runtime so that
 /// in-tree UI (the selection menu) can read/write the system clipboard.
 pub trait PlatformClipboard {
     /// Writes `text` to the OS clipboard.
     fn write_text(&self, text: &str);
     /// Reads the OS clipboard's text, or `None` when empty/unavailable.
+    ///
+    /// A platform whose clipboard cannot be read synchronously answers `None`
+    /// here and takes the paste through [`request_paste`](Self::request_paste)
+    /// instead.
     fn read_text(&self) -> Option<String>;
+
+    /// Whether this platform can complete a paste it cannot answer
+    /// synchronously, so a Paste action stays offered even though
+    /// [`read_text`](Self::read_text) has nothing to show.
+    fn can_request_paste(&self) -> bool {
+        false
+    }
+
+    /// Asks the platform to paste the clipboard into whatever holds focus, for
+    /// platforms that cannot answer [`read_text`](Self::read_text).
+    ///
+    /// Returns `true` when the platform has taken the request — the text lands
+    /// in the focused field through the platform's own paste path, possibly
+    /// after this returns. `false` means the caller should paste
+    /// [`read_text`](Self::read_text) itself, which is what every clipboard
+    /// with a synchronous read does.
+    ///
+    /// This exists because the browser's clipboard is a promise: reading it is
+    /// asynchronous and permissioned, so `Some(text)` is not something a web
+    /// bridge can produce on the call stack of the tap that asked for it.
+    fn request_paste(&self) -> bool {
+        false
+    }
 }
 
 /// Per-app-context clipboard state: an optionally-installed platform clipboard
@@ -65,6 +95,20 @@ impl ClipboardSessionState {
     fn has_platform(&self) -> bool {
         self.platform.borrow().is_some()
     }
+
+    fn can_request_paste(&self) -> bool {
+        self.platform
+            .borrow()
+            .as_ref()
+            .is_some_and(|platform| platform.can_request_paste())
+    }
+
+    fn request_paste(&self) -> bool {
+        self.platform
+            .borrow()
+            .clone()
+            .is_some_and(|platform| platform.request_paste())
+    }
 }
 
 /// Installs the platform OS clipboard for the current app context, replacing any
@@ -95,6 +139,33 @@ pub fn clipboard_read_text() -> Option<String> {
 /// with no clipboard backend registered).
 pub fn has_platform_clipboard() -> bool {
     crate::render_state::with_clipboard_session(|state| state.has_platform())
+}
+
+/// Whether a Paste action should be offered.
+///
+/// True when the clipboard has readable text, and also when the platform can
+/// only answer a paste asynchronously (the browser): a clipboard nobody can
+/// read on the spot is not the same as an empty one, and hiding Paste there
+/// would be wrong every time the user actually has something to paste.
+pub fn clipboard_can_paste() -> bool {
+    crate::render_state::with_clipboard_session(|state| {
+        state.read().is_some() || state.can_request_paste()
+    })
+}
+
+/// Pastes the clipboard into the focused text field — the in-tree Paste action.
+///
+/// Every native clipboard reads synchronously and the paste lands before this
+/// returns. The browser's does not: there the platform takes the request and
+/// completes it through its own paste path once the clipboard promise resolves,
+/// which is why this is a command rather than a read.
+pub fn clipboard_paste_into_focus() {
+    if crate::render_state::with_clipboard_session(|state| state.request_paste()) {
+        return;
+    }
+    if let Some(text) = clipboard_read_text() {
+        crate::text_field_focus::dispatch_paste(&text);
+    }
 }
 
 /// A Compose-style handle to the system clipboard — the framework analogue of
@@ -157,6 +228,12 @@ mod tests {
 
     struct UnavailableClipboard;
 
+    /// A clipboard shaped like the browser's: nothing to read on the call
+    /// stack, but able to complete a paste of its own accord.
+    struct AsyncOnlyClipboard {
+        requests: Cell<usize>,
+    }
+
     impl PlatformClipboard for RecordingClipboard {
         fn write_text(&self, text: &str) {
             *self.value.borrow_mut() = Some(text.to_string());
@@ -171,6 +248,23 @@ mod tests {
 
         fn read_text(&self) -> Option<String> {
             None
+        }
+    }
+
+    impl PlatformClipboard for AsyncOnlyClipboard {
+        fn write_text(&self, _text: &str) {}
+
+        fn read_text(&self) -> Option<String> {
+            None
+        }
+
+        fn can_request_paste(&self) -> bool {
+            true
+        }
+
+        fn request_paste(&self) -> bool {
+            self.requests.set(self.requests.get() + 1);
+            true
         }
     }
 
@@ -202,6 +296,36 @@ mod tests {
 
             clear_platform_clipboard();
             assert!(!clipboard.has_system_clipboard());
+        });
+    }
+
+    #[test]
+    fn a_paste_goes_to_the_platform_when_it_cannot_be_read_on_the_spot() {
+        let context = crate::render_state::AppContext::new();
+        context.enter(|| {
+            let clipboard = Rc::new(AsyncOnlyClipboard {
+                requests: Cell::new(0),
+            });
+            set_platform_clipboard(clipboard.clone());
+
+            // A clipboard nobody can read here and now still offers Paste --
+            // hiding it would hide every real paste the browser can serve.
+            assert!(clipboard_can_paste());
+            clipboard_paste_into_focus();
+            assert_eq!(clipboard.requests.get(), 1);
+        });
+    }
+
+    #[test]
+    fn a_readable_clipboard_pastes_without_asking_the_platform() {
+        let context = crate::render_state::AppContext::new();
+        context.enter(|| {
+            // No platform at all: the in-process fallback is readable, so the
+            // paste must take the synchronous path rather than vanish.
+            assert!(!clipboard_can_paste());
+            clipboard_write_text("pasted");
+            assert!(clipboard_can_paste());
+            clipboard_paste_into_focus();
         });
     }
 

@@ -1952,7 +1952,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
     // Create a button via semantics modifier (not ButtonNode)
     let button_node = LayoutNode::new(
         Modifier::empty().semantics(|config| {
-            config.is_button = true;
+            config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
             config.is_clickable = true;
             config.content_description = Some("My Button".into());
         }),
@@ -1967,7 +1967,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
         .expect("expected semantics tree");
     let root = semantics_tree.root();
 
-    // Verify the role was derived from is_button flag
+    // Verify the tree role was derived from the semantics role
     assert!(matches!(root.role, SemanticsRole::Button));
 
     // Verify click action was synthesized from is_clickable
@@ -1979,6 +1979,154 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 
     // Verify description
     assert_eq!(root.description.as_deref(), Some("My Button"));
+
+    Ok(())
+}
+
+/// A canvas app republishes its controls by recording them again, so the
+/// semantics snapshot has to notice a recorder whose captured state moved.
+/// Nothing about the modifier's *shape* changes when a settings row flips from
+/// "On" to "Off" — only the closure does — and a screen reader that keeps
+/// reading the first frame's answer is worse than one that reads nothing.
+#[test]
+fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use std::cell::Cell;
+    use std::rc::Rc as StdRc;
+
+    fn arena_modifier(state: StdRc<Cell<bool>>) -> Modifier {
+        Modifier::empty().semantics(move |config| {
+            config.state_description = Some(if state.get() { "On" } else { "Off" }.to_string());
+            config.content_description = Some("Haptics".into());
+        })
+    }
+
+    let state = StdRc::new(Cell::new(false));
+    let mut applier = MemoryApplier::new();
+    let node_id = applier.create(Box::new(LayoutNode::new(
+        arena_modifier(StdRc::clone(&state)),
+        Rc::new(MaxSizePolicy),
+    )));
+
+    let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    assert_eq!(
+        measurements
+            .semantics_tree()
+            .expect("expected semantics tree")
+            .root()
+            .state_description
+            .as_deref(),
+        Some("Off")
+    );
+    assert!(!crate::layout::tree_needs_semantics(&mut applier, node_id)?);
+
+    state.set(true);
+    applier.with_node::<LayoutNode, _>(node_id, |node| {
+        node.set_modifier(arena_modifier(StdRc::clone(&state)));
+    })?;
+
+    assert!(
+        crate::layout::tree_needs_semantics(&mut applier, node_id)?,
+        "re-recording semantics should dirty the snapshot"
+    );
+    let measurements = measure_layout(&mut applier, node_id, Size::new(100.0, 100.0))?;
+    assert_eq!(
+        measurements
+            .semantics_tree()
+            .expect("expected semantics tree")
+            .root()
+            .state_description
+            .as_deref(),
+        Some("On")
+    );
+
+    Ok(())
+}
+
+/// The whole point of canvas semantics: an app that draws its controls has one
+/// layout node, and everything a screen reader needs has to survive the trip
+/// from the recorder closure into the semantics tree on that one node.
+#[test]
+fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeError> {
+    let _app_context = crate::render_state::app_context_test_scope();
+    use cranpose_foundation::{CanvasSemanticsNode, SemanticsCustomAction, SemanticsWidgetRole};
+    use cranpose_ui_graphics::Rect;
+    use std::cell::Cell;
+    use std::rc::Rc as StdRc;
+
+    let paused = StdRc::new(Cell::new(false));
+    let toggled = StdRc::new(Cell::new(false));
+
+    let mut applier = MemoryApplier::new();
+    let arena = LayoutNode::new(
+        Modifier::empty().semantics({
+            let paused = StdRc::clone(&paused);
+            let toggled = StdRc::clone(&toggled);
+            move |config| {
+                config.content_description = Some("Level 4. Score 120.".into());
+                config.state_description = Some("Playing".into());
+                config.on_click_label = Some("Launch".into());
+                config.role = Some(SemanticsWidgetRole::RadioButton);
+                config.selected = Some(true);
+                config.custom_actions = vec![SemanticsCustomAction::new("Pause", {
+                    let paused = StdRc::clone(&paused);
+                    move || paused.set(true)
+                })];
+                config.canvas_children = vec![CanvasSemanticsNode::control(
+                    9,
+                    Rect {
+                        x: 4.0,
+                        y: 8.0,
+                        width: 100.0,
+                        height: 52.0,
+                    },
+                    "Haptics",
+                )
+                .with_role(SemanticsWidgetRole::Switch)
+                .with_toggled(false)
+                .with_state_description("Off")
+                .with_custom_action(SemanticsCustomAction::new("Toggle", {
+                    let toggled = StdRc::clone(&toggled);
+                    move || toggled.set(true)
+                }))];
+            }
+        }),
+        Rc::new(MaxSizePolicy),
+    );
+    let arena_id = applier.create(Box::new(arena));
+
+    let measurements = measure_layout(&mut applier, arena_id, Size::new(200.0, 200.0))?;
+    let root = measurements
+        .semantics_tree()
+        .expect("expected semantics tree")
+        .root();
+
+    assert_eq!(root.widget_role, Some(SemanticsWidgetRole::RadioButton));
+    assert_eq!(root.state_description.as_deref(), Some("Playing"));
+    assert_eq!(root.on_click_label.as_deref(), Some("Launch"));
+    assert_eq!(root.selected, Some(true));
+    assert!(root.enabled);
+    // A named click label declares the action on its own, exactly as Compose's
+    // `onClick(label = …)` does — the app should not also have to set
+    // `is_clickable`.
+    assert_eq!(root.actions.len(), 1);
+
+    assert_eq!(root.custom_actions.len(), 1);
+    assert_eq!(root.custom_actions[0].label, "Pause");
+    root.custom_actions[0].invoke();
+    assert!(paused.get(), "the published handler should be the live one");
+
+    assert_eq!(root.canvas_children.len(), 1);
+    let switch = &root.canvas_children[0];
+    assert_eq!(switch.key, 9);
+    assert_eq!(switch.label, "Haptics");
+    assert_eq!(switch.role, Some(SemanticsWidgetRole::Switch));
+    assert_eq!(switch.toggled, Some(false));
+    assert_eq!(switch.state_description.as_deref(), Some("Off"));
+    assert!(switch.clickable);
+    assert_eq!(switch.bounds.y, 8.0);
+    switch.custom_actions[0].invoke();
+    assert!(toggled.get());
 
     Ok(())
 }
@@ -2116,7 +2264,7 @@ fn semantics_tree_matches_with_and_without_layout_tree() -> Result<(), NodeError
         )));
         let button_id = applier.create(Box::new(LayoutNode::new(
             Modifier::empty().semantics(|config| {
-                config.is_button = true;
+                config.role = Some(cranpose_foundation::SemanticsWidgetRole::Button);
                 config.is_clickable = true;
                 config.content_description = Some("action".into());
             }),

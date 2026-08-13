@@ -92,6 +92,13 @@ pub use layout::{
     LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
     SemanticsNode, SemanticsRole, SemanticsTree,
 };
+// The accessibility vocabulary an app writes against. It is declared in
+// cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
+// against cranpose-ui and should not have to reach past it to describe a
+// button.
+pub use cranpose_foundation::{
+    CanvasSemanticsNode, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
+};
 pub use modifier::{
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,

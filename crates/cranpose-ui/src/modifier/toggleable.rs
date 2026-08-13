@@ -13,12 +13,11 @@ impl Modifier {
     /// checkbox or a switch, and only the control inside it knows which — and
     /// this does the same.
     ///
-    /// What it cannot publish yet is the **state**.
-    /// [`SemanticsConfiguration`] carries a description and four booleans; it
-    /// has no `toggled`, no `role` and no `state_description`, so a screen
-    /// reader landing on a switch row hears the label and that the row is
-    /// clickable, but not whether it is on. Passing a `description` is the only
-    /// way to say so today, and it is why the parameter is here.
+    /// The **state** it does publish: `toggled`, Compose's `toggleableState`,
+    /// so a screen reader landing on the row says whether it is on without the
+    /// caller spelling it into the description. `description` stays because a
+    /// row still needs a name, and a caller that wants the state spoken a
+    /// particular way ("Haptics, on") can still say it there.
     pub fn toggleable(
         self,
         value: bool,
@@ -36,6 +35,7 @@ impl Modifier {
             .then(
                 Modifier::empty().semantics(move |config: &mut SemanticsConfiguration| {
                     config.is_clickable = true;
+                    config.toggled = Some(toggled);
                     if let Some(description) = &description {
                         config.content_description = Some(description.clone());
                     }
@@ -93,8 +93,11 @@ mod tests {
             semantics.content_description.as_deref(),
             Some("Haptics, on")
         );
+        // The state is published, not left for the caller to spell into the
+        // description: a reader landing here can say the row is on.
+        assert_eq!(semantics.toggled, Some(true));
         // And no role: a toggleable row could be a checkbox or a switch, and
         // Compose leaves that to the control inside it.
-        assert!(!semantics.is_button);
+        assert_eq!(semantics.role, None);
     }
 }

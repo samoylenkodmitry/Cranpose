@@ -3872,49 +3872,15 @@ fn dispatch_mouse_wheel(
         false
     };
 
-    let mut logical_delta = platform.scroll_delta(delta);
-
-    // Ctrl+wheel is the desktop zoom gesture (mirroring browser pinch
-    // semantics): translate the vertical wheel delta into a multiplicative
-    // zoom step about the cursor instead of scrolling.
-    if current_modifiers.contains(winit::keyboard::ModifiersState::CONTROL) {
-        let zoom_factor = wheel_zoom_factor(logical_delta.y);
-        log::trace!(
-            target: "cranpose::input",
-            "desktop ctrl+wheel zoom factor={zoom_factor:.4}"
-        );
-        let zoom_dirty = app.pointer_zoomed(zoom_factor);
-        return cursor_dirty || zoom_dirty;
-    }
-
-    // Rotary (Wear OS crown / bezel) emulation: offer the wheel to rotary
-    // handlers first so the rotary stack is developable on the desktop. Nothing
-    // consumes rotary unless the app opts in via
-    // `Modifier::on_rotary_scroll_event` or `AppShell::set_on_rotary_scroll`,
-    // so ordinary scrolling is unaffected.
-    let rotary =
-        crate::winit_rotary::rotary_event_from_wheel_delta(logical_delta, wheel_uptime_millis());
-    if app.rotary_scrolled(rotary) {
-        return true;
-    }
-
-    let alt_pressed = current_modifiers.contains(winit::keyboard::ModifiersState::ALT);
-    if alt_pressed {
-        if logical_delta.x.abs() <= f32::EPSILON {
-            logical_delta.x = logical_delta.y;
-        }
-        logical_delta.y = 0.0;
-    }
-
-    log::trace!(
-        target: "cranpose::input",
-        "desktop wheel delta ({:.2},{:.2}) alt={}",
-        logical_delta.x,
-        logical_delta.y,
-        alt_pressed
+    // The whole wheel policy -- zoom, rotary, axis swap, scroll -- lives in the
+    // shell, shared with every other host that has a wheel. This side only
+    // normalizes winit's event into the shell's convention.
+    let wheel = crate::winit_wheel::wheel_scroll_from_winit(
+        platform.scroll_delta(delta),
+        current_modifiers,
+        wheel_uptime_millis(),
     );
-
-    let scroll_dirty = app.pointer_scrolled(logical_delta.x, logical_delta.y);
+    let scroll_dirty = app.wheel_scrolled(wheel);
     cursor_dirty || scroll_dirty
 }
 
@@ -3929,15 +3895,6 @@ fn wheel_uptime_millis() -> u64 {
         .get_or_init(web_time::Instant::now)
         .elapsed()
         .as_millis() as u64
-}
-
-/// Converts a vertical wheel delta (logical px, positive = scroll up) into
-/// a multiplicative zoom factor: one standard wheel notch (~40 logical px)
-/// zooms by ~1.2x, and opposite deltas invert exactly (`f(-d) == 1/f(d)`).
-fn wheel_zoom_factor(delta_y: f32) -> f32 {
-    const NOTCH_LOGICAL_PX: f32 = 40.0;
-    const ZOOM_PER_NOTCH: f32 = 1.2;
-    ZOOM_PER_NOTCH.powf(delta_y / NOTCH_LOGICAL_PX)
 }
 
 fn dispatch_middle_click_paste(
@@ -4384,6 +4341,7 @@ impl ApplicationHandler for App {
                 app.pointer_pressed();
                 app.pointer_released_at_position(x, y);
             }
+            accessibility.run_custom_actions(app);
         }
         let Some(platform) = &mut self.platform else {
             return;
@@ -4801,6 +4759,7 @@ impl ApplicationHandler for App {
                 app.pointer_released_at_position(x, y);
                 activated = true;
             }
+            activated |= accessibility.run_custom_actions(app);
             if activated {
                 request_redraw_once(&window, &mut self.primary_redraw_pending);
             }
