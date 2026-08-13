@@ -4553,17 +4553,19 @@ impl GpuRenderer {
         &'a self,
         instanced: &'a InstancedQuadPipelines,
     ) -> &'a wgpu::RenderPipeline {
-        instanced.pipeline_solid.get_or_init(self.adapter_backend, || {
-            create_instanced_shape_pipeline(
-                &self.device,
-                self.surface_format,
-                &self.uniform_bind_group_layout,
-                &self.shape_bind_group_layout,
-                BlendMode::SrcOver,
-                self.shape_batch_limits,
-                "fs_solid",
-            )
-        })
+        instanced
+            .pipeline_solid
+            .get_or_init(self.adapter_backend, || {
+                create_instanced_shape_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.uniform_bind_group_layout,
+                    &self.shape_bind_group_layout,
+                    BlendMode::SrcOver,
+                    self.shape_batch_limits,
+                    "fs_solid",
+                )
+            })
     }
 
     fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
@@ -9715,9 +9717,7 @@ impl GpuRenderer {
                 Some(instanced) => {
                     render_pass.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
                 }
-                None if !slot.has_gradient => {
-                    render_pass.set_pipeline(self.shape_pipeline_solid())
-                }
+                None if !slot.has_gradient => render_pass.set_pipeline(self.shape_pipeline_solid()),
                 None => render_pass.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
             },
         }
@@ -9842,9 +9842,7 @@ impl GpuRenderer {
                     Some(instanced) => {
                         encoder.set_pipeline(self.instanced_pipeline(instanced, BlendMode::SrcOver))
                     }
-                    None if !slot.has_gradient => {
-                        encoder.set_pipeline(self.shape_pipeline_solid())
-                    }
+                    None if !slot.has_gradient => encoder.set_pipeline(self.shape_pipeline_solid()),
                     None => encoder.set_pipeline(self.shape_pipeline(BlendMode::SrcOver)),
                 },
             }
