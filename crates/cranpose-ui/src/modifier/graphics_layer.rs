@@ -45,6 +45,34 @@ impl Modifier {
     ///
     /// Example:
     /// `Modifier::empty().graphics_layer(|| GraphicsLayer { alpha: 0.5, ..Default::default() })`
+    ///
+    /// # A drag that drives the translation must not be read inside it
+    ///
+    /// [`PointerEvent::position`](crate::modifier::PointerEvent::position) is
+    /// in the receiving node's own space, so a node this layer translates
+    /// reports a finger that has moved only as far as it OUTRAN the
+    /// translation. Feed that position back into `translation_x` and the
+    /// gesture measures itself:
+    ///
+    /// ```text
+    /// reported = finger - offset          offset = reported - start
+    ///         => offset = (finger - start) / 2
+    /// ```
+    ///
+    /// The offset converges on half the finger's travel and can never exceed
+    /// it, so a swipe-to-dismiss whose threshold is half the width never
+    /// crosses it however far the finger goes -- silently, with the content
+    /// sliding convincingly the whole time.
+    ///
+    /// Two ways out, and [`SwipeToDismiss`](crate::widgets::SwipeToDismiss)
+    /// uses both:
+    ///
+    /// - put `pointer_input` on a node OUTSIDE the translated one, which is
+    ///   also how Compose's own `SwipeToDismissBox` is built -- the drag is
+    ///   detected on the box, the content carries the layer;
+    /// - or read
+    ///   [`PointerEvent::global_position`](crate::modifier::PointerEvent::global_position),
+    ///   which no layer transform touches.
     pub fn graphics_layer(self, layer: impl Fn() -> GraphicsLayer + 'static) -> Self {
         let modifier = Self::with_element(LazyGraphicsLayerElement::new(Rc::new(layer)))
             .with_inspector_metadata(inspector_metadata("graphicsLayer", |info| {

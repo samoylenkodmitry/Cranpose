@@ -1594,6 +1594,12 @@ pub fn run(
         crate::android_frame_telemetry::AndroidFrameTelemetry::from_system_properties();
     crate::android_frame_telemetry::start_vsync_probe_if_enabled();
 
+    /// How many turns of the loop an unhonoured exit request is retried for.
+    /// Enough to ride out a transient JNI thread-attach failure, few enough
+    /// that a permanent one is not a call and a log line every frame.
+    const MAX_EXIT_ATTEMPTS: u32 = 3;
+    let mut exit_attempts = 0u32;
+
     // Main event loop
     loop {
         let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
@@ -2243,6 +2249,34 @@ pub fn run(
             &mut pending_host_window_confirmation,
             current_host_window_size,
         );
+
+        // The app asked to be closed -- `cranpose_services::request_exit`. Not
+        // a break: this loop leaving would drop the surface while the activity
+        // is still up. `Activity.finish()` asks the platform to tear the
+        // activity down, which arrives back here as `MainEvent::Destroy` and
+        // takes the ordinary exit below. So the app's request and the system's
+        // own back both end the same way.
+        //
+        // The flag is consumed only when the call lands. Taking it first and
+        // ignoring the result means a JNI failure -- a thread that could not
+        // attach, most plausibly -- swallows the app's one record that it
+        // wanted to close: it stays open, the user's gesture did nothing, and
+        // nothing will ever ask again. The retry is bounded so a permanent
+        // failure does not become a JNI call and a log line every frame for
+        // the rest of the process.
+        if cranpose_services::exit_requested() && exit_attempts < MAX_EXIT_ATTEMPTS {
+            exit_attempts += 1;
+            log::info!("App requested exit; finishing the activity");
+            if crate::android_finish::finish_activity(&app) {
+                let _ = cranpose_services::take_exit_request();
+            } else if exit_attempts == MAX_EXIT_ATTEMPTS {
+                log::error!(
+                    "giving up on the app's exit request after {MAX_EXIT_ATTEMPTS} attempts; \
+                     the activity is still up"
+                );
+                let _ = cranpose_services::take_exit_request();
+            }
+        }
 
         // Check if Destroy event requested exit
         if should_exit.load(Ordering::Relaxed) {
