@@ -1556,9 +1556,10 @@ fn segment_advance_px(
     for ch in content.chars() {
         let glyph_id = scaled_font.glyph_id(ch);
         if let Some(previous_id) = previous {
-            caret += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+            caret += scaled_font.kern(previous_id, glyph_id);
         }
-        caret += scaled_font.h_advance(glyph_id);
+        // One letter space PER CHARACTER, not per gap -- see `run_tracking`.
+        caret += letter_spacing + scaled_font.h_advance(glyph_id);
         previous = Some(glyph_id);
     }
     caret.max(0.0)
@@ -3022,6 +3023,41 @@ fn resolve_letter_spacing(style: &TextStyle, font_size: f32) -> f32 {
     style.resolve_letter_spacing(14.0)
 }
 
+/// How much width `char_count` characters of tracking add to a run.
+///
+/// **A run of `n` characters carries `n` letter spaces, not `n - 1`.** Android
+/// resolves `letterSpacing` in Minikin, which distributes it as HALF a letter
+/// space on each side of every cluster: `LayoutCore.cpp` adds
+/// `letterSpaceHalf` to the pen before the first glyph of a script run, a full
+/// `letterSpace` at each cluster boundary, and `letterSpaceHalf` again after
+/// the last glyph. Every character therefore ends up carrying exactly one
+/// letter space in `mAdvances[]`, which is what `StaticLayout` sums to get a
+/// line's width. (Compose reaches that code by putting the value on the paint:
+/// `LetterSpacingSpanPx` divides the px value by `textSize * textScaleX` and
+/// assigns `TextPaint.letterSpacing`, and `TextPaintExtensions.android.kt`
+/// does the same for a paragraph-level `Sp` tracking.)
+///
+/// The trailing half is real on the platform this is measured against — the
+/// `sdk_gwear` emulator runs Android 14, whose `Layout.cpp` has no letter
+/// spacing code at all. The edge-trimming that removes the two half spaces
+/// (`adjustAdvanceLetterSpacingEdge`) only arrives in Android 15, and is
+/// opt-in per run there.
+///
+/// An empty run carries none: the loop that adds them never runs.
+fn run_tracking(char_count: usize, letter_spacing: f32) -> f32 {
+    char_count as f32 * letter_spacing
+}
+
+/// The lead-in before a run's first glyph: half a letter space, or nothing at
+/// all for an empty run. See [`run_tracking`].
+fn run_lead_in(char_count: usize, letter_spacing: f32) -> f32 {
+    if char_count == 0 {
+        0.0
+    } else {
+        letter_spacing * 0.5
+    }
+}
+
 fn fallback_char_width(font_size: f32) -> f32 {
     font_size.max(1.0) * 0.55
 }
@@ -3045,7 +3081,7 @@ fn fallback_text_metrics(text: &str, style: &TextStyle, font_size: f32) -> TextM
     for line in text.split('\n') {
         line_count += 1;
         let char_count = line.chars().count();
-        let spacing = char_count.saturating_sub(1) as f32 * letter_spacing;
+        let spacing = run_tracking(char_count, letter_spacing);
         max_width = max_width.max(char_count as f32 * char_width + spacing);
     }
 
@@ -3063,7 +3099,9 @@ fn fallback_cursor_x_for_offset(text: &str, style: &TextStyle, offset: usize) ->
     let clamped = clamp_to_char_boundary(text, offset.min(text.len()));
     let line_start = text[..clamped].rfind('\n').map_or(0, |index| index + 1);
     let char_count = text[line_start..clamped].chars().count();
-    let spacing = char_count.saturating_sub(1) as f32 * resolve_letter_spacing(style, font_size);
+    // The caret after `k` characters sits at the sum of their advances, and
+    // every character's advance carries a whole letter space (`run_tracking`).
+    let spacing = run_tracking(char_count, resolve_letter_spacing(style, font_size));
     char_count as f32 * fallback_char_width(font_size) + spacing
 }
 
@@ -3298,6 +3336,11 @@ fn append_font_prefix_width_segment_cached(
 
     for (index, ch) in segment.chars().enumerate() {
         let metrics = cache.glyph_metrics.glyph_metrics(font, &scaled_font, ch);
+        // `separator_before` is the KERN alone. The letter space belongs to
+        // the character rather than to the gap before it (`run_tracking`), so
+        // it goes into `width` unconditionally -- and a line that starts
+        // mid-string, which drops `separator_before[start]`, still keeps one
+        // letter space for every character it contains.
         let separator = if index == 0 {
             0.0
         } else {
@@ -3311,10 +3354,11 @@ fn append_font_prefix_width_segment_cached(
                     )
                 })
                 .unwrap_or(0.0)
-                + letter_spacing
         };
         sink.separator_before.push(separator);
-        sink.width += separator + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
+        sink.width += separator
+            + letter_spacing
+            + weight_synthesis.apply_width(metrics.advance_unscaled * h_scale);
         sink.prefix_widths.push(sink.width.max(0.0));
         previous = Some(metrics.glyph_id);
     }
@@ -3328,10 +3372,11 @@ fn append_fallback_prefix_width_segment(
 ) {
     let char_width = fallback_char_width(font_size);
     let letter_spacing = resolve_letter_spacing(style, font_size);
-    for (index, _) in segment.chars().enumerate() {
-        let separator = if index == 0 { 0.0 } else { letter_spacing };
-        sink.separator_before.push(separator);
-        sink.width += separator + char_width;
+    for _ in segment.chars() {
+        // No kerning in the fallback, so nothing is dropped at a line's
+        // leading edge; the letter space rides the character (`run_tracking`).
+        sink.separator_before.push(0.0);
+        sink.width += letter_spacing + char_width;
         sink.prefix_widths.push(sink.width.max(0.0));
     }
 }
@@ -3369,7 +3414,7 @@ fn measure_text_impl(
     let mut max_width: f32 = 0.0;
     for line in &lines {
         let line_width = line_advance_width(font, line, glyph_font_size);
-        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let char_spacing = run_tracking(line.chars().count(), letter_spacing);
         let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
         let line_width = if line.is_empty() {
             line_width
@@ -3413,7 +3458,7 @@ fn measure_text_impl_cached(
     for line in &lines {
         let line_width =
             cached_line_advance_width(font, line, glyph_font_size, &mut cache.glyph_metrics);
-        let char_spacing = (line.chars().count().saturating_sub(1) as f32) * letter_spacing;
+        let char_spacing = run_tracking(line.chars().count(), letter_spacing);
         let line_width = (weight_synthesis.apply_width(line_width) + char_spacing).max(0.0);
         let line_width = if line.is_empty() {
             line_width
@@ -3824,9 +3869,13 @@ fn line_alignment_offsets<F: Font, S: ScaleFont<F>>(
             for ch in line.chars() {
                 let glyph_id = scaled_font.glyph_id(ch);
                 if let Some(previous_id) = previous {
-                    advance += scaled_font.kern(previous_id, glyph_id) + letter_spacing;
+                    advance += scaled_font.kern(previous_id, glyph_id);
                 }
-                advance += scaled_font.h_advance(glyph_id);
+                // One letter space PER CHARACTER -- see `run_tracking`. An
+                // empty line gets none, which is why a blank line between two
+                // tracked paragraphs no longer aligns as though it were a
+                // character wide.
+                advance += letter_spacing + scaled_font.h_advance(glyph_id);
                 previous = Some(glyph_id);
             }
             advance.max(0.0)
@@ -3873,7 +3922,10 @@ fn visit_text_glyph_masks(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
+        // Half a letter space of lead-in before the first glyph, and half
+        // again after the last -- see `run_tracking`.
+        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -3912,7 +3964,7 @@ fn visit_text_glyph_masks(
             };
             visit(&mask);
         }
-        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
     max_advance
 }
@@ -3946,7 +3998,10 @@ fn visit_text_glyph_masks_with_key(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
+        // Half a letter space of lead-in before the first glyph, and half
+        // again after the last -- see `run_tracking`.
+        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -3975,7 +4030,7 @@ fn visit_text_glyph_masks_with_key(
             };
             visit(atlas_key, &mask);
         }
-        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
     max_advance
 }
@@ -4004,7 +4059,10 @@ fn visit_cached_text_glyph_atlas_placements(
     let mut max_advance = 0.0f32;
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
+        // Half a letter space of lead-in before the first glyph, and half
+        // again after the last -- see `run_tracking`.
+        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -4039,7 +4097,7 @@ fn visit_cached_text_glyph_atlas_placements(
                 color: Color::WHITE,
             });
         }
-        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
     max_advance
 }
@@ -4069,7 +4127,10 @@ fn visit_text_glyph_atlas_run(
     let mut run_metrics_cache: Vec<(GlyphMaskCacheKey, CachedAtlasGlyphMetrics)> = Vec::new();
     for (line_idx, line) in text.split('\n').enumerate() {
         let baseline_y = first_baseline_y + line_idx as f32 * line_height + origin_y;
-        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx);
+        // Half a letter space of lead-in before the first glyph, and half
+        // again after the last -- see `run_tracking`.
+        let lead_in = run_lead_in(line.chars().count(), letter_spacing);
+        let mut caret_x = origin_x + line_offset(&line_offsets, line_idx) + lead_in;
         let mut previous = None;
         for ch in line.chars() {
             let glyph_id = scaled_font.glyph_id(ch);
@@ -4147,7 +4208,7 @@ fn visit_text_glyph_atlas_run(
                 color: Color::WHITE,
             }));
         }
-        max_advance = max_advance.max((caret_x - origin_x).max(0.0));
+        max_advance = max_advance.max((caret_x - origin_x + lead_in).max(0.0));
     }
     max_advance
 }

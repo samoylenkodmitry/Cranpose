@@ -685,6 +685,43 @@ fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
 }
 
 #[test]
+fn wear_tracking_widens_a_string_by_one_letter_space_per_character() {
+    // Every entry in the Wear type scale sets `letterSpacing = 0.4.sp`, and
+    // Android resolves that in Minikin, which puts HALF a letter space on each
+    // side of every cluster. A run of n characters is therefore n letter
+    // spaces wider than an untracked one -- not the n-1 a "spacing between
+    // letters" reading gives, which is what this framework used to do.
+    //
+    // "SETTINGS" is the header the widget spec measured: 8 characters at 0.4sp
+    // is 3.2 points, which on the density-2 watch it was captured on is 6.4
+    // device pixels. The old rule made it 5.6, and `ListHeader` wraps its
+    // content width, so that shortfall moved the header's box as well as its
+    // glyphs.
+    const HEADER: &str = "SETTINGS";
+    let width = |tracking_sp: f32| {
+        let mut style = WearTextStyle::TITLE_MEDIUM;
+        style.tracking_sp = tracking_sp;
+        let mut composition = compose_widget(move || {
+            Text(
+                HEADER.to_string(),
+                Modifier::empty(),
+                style.resolve(measured_colors().on_background),
+            );
+        });
+        root_size(&mut composition).width
+    };
+
+    let chars = HEADER.chars().count() as f32;
+    let grew = width(0.4) - width(0.0);
+    assert!(
+        (grew - chars * 0.4).abs() < 0.01,
+        "{HEADER} grew by {grew} points of tracking where {chars} characters at \
+         0.4sp should have widened it by {}",
+        chars * 0.4
+    );
+}
+
+#[test]
 fn the_switch_slots_resolve_to_the_colours_the_framebuffer_shows() {
     let colors = measured_colors();
     let checked = SwitchColors::of(colors, true);

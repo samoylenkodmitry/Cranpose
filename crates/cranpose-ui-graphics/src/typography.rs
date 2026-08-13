@@ -279,8 +279,11 @@ pub fn estimate_text_measurement(text: &str, style: &TextStyle) -> TextMeasureme
     for line in text.split('\n') {
         line_count += 1;
         let chars = line.chars().count();
-        let advance = chars as f32 * font_size * CHAR_WIDTH_RATIO
-            + chars.saturating_sub(1) as f32 * letter_spacing;
+        // One letter space per character, not per gap: Android's Minikin puts
+        // half a letter space on each side of every cluster, so a run of `n`
+        // characters carries `n` of them. See `run_tracking` in
+        // `cranpose-render-common`'s `software_text_raster`.
+        let advance = chars as f32 * (font_size * CHAR_WIDTH_RATIO + letter_spacing);
         width = width.max(advance);
     }
 
