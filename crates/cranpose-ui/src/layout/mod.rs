@@ -1984,13 +1984,40 @@ impl LayoutBuilderState {
         let mut measured_children = Vec::with_capacity(records.len());
         for (child_id, record) in records.iter() {
             if let Some(measured) = record.state.take_measured() {
-                let base_position = placements
+                let placed = placements
                     .iter()
                     .find(|placement| placement.node_id == *child_id)
                     .map(|placement| Point {
                         x: placement.x,
                         y: placement.y,
-                    })
+                    });
+                // A measure policy says where a child goes ONCE, by pushing a
+                // `Placement`. Apply that here to the child's retained state,
+                // so the two consumers of a layout pass are filled from the one
+                // statement: the measured tree `build_layout_tree` walks, and
+                // the applier state the per-frame scene build walks (which
+                // culls anything with `is_placed == false`).
+                //
+                // Calling the placeable's own `place` is the redundant second
+                // half of the same statement, and every built-in policy does
+                // both. A policy that did only one of the two used to lay out
+                // correctly in every `LayoutTree` test and draw NOTHING in the
+                // app — the whole Wear widget set was in exactly that state.
+                // The subcompose path already applied its placements this way
+                // for the same reason (issue #305); this is the other half.
+                //
+                // `measured.offset` is the child's own modifier-chain offset,
+                // which `place` folds in — the value written here is the same
+                // one `place` writes, so a policy doing both is idempotent. The
+                // PARENT's `content_offset` is deliberately excluded: retained
+                // consumers apply it themselves, from the parent node.
+                if let Some(raw) = placed {
+                    record.state.place_retained(Point {
+                        x: raw.x + measured.offset.x,
+                        y: raw.y + measured.offset.y,
+                    });
+                }
+                let base_position = placed
                     .or_else(|| record.state.last_position())
                     .unwrap_or(Point { x: 0.0, y: 0.0 });
                 // Apply content_offset (from scroll/transforms) to child positioning
@@ -2739,6 +2766,42 @@ impl LayoutChildMeasureState {
         self.last_position.set(Some(position));
     }
 
+    /// Writes this child's placement into its retained node state: the position
+    /// relative to the parent's content box, and the `is_placed` flag that the
+    /// applier-driven passes — scene build, hit test, semantics — cull on.
+    ///
+    /// The single place that fact is recorded. `Placeable::place` routes here,
+    /// and so does the engine's own application of a policy's `Placement`s, so
+    /// a policy that does both writes the same value twice rather than two
+    /// different ones. A child can itself be a `SubcomposeLayout` (a
+    /// `BoxWithConstraints` inside a list item), so both node kinds are tried.
+    fn place_retained(&self, position: Point) {
+        self.set_last_position(position);
+        if let Some(layout_state) = self.layout_state() {
+            let mut layout_state = layout_state.borrow_mut();
+            layout_state.position = position;
+            layout_state.is_placed = true;
+            return;
+        }
+        let Some(applier) = self.applier() else {
+            return;
+        };
+        let Ok(mut applier) = applier.try_borrow_typed() else {
+            return;
+        };
+        let node_id = self.node_id();
+        if applier
+            .with_node::<LayoutNode, _>(node_id, |node| {
+                node.set_position(position);
+            })
+            .is_err()
+        {
+            let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
+                node.set_position(position);
+            });
+        }
+    }
+
     fn set_measured(&self, measured: Option<Rc<MeasuredNode>>) {
         *self.measured.borrow_mut() = measured;
     }
@@ -2892,9 +2955,7 @@ impl Measurable for LayoutChildMeasurable {
         }
 
         let state = Rc::clone(&self.state);
-        let applier = state.applier();
         let node_id = state.node_id();
-        let layout_state = state.layout_state();
 
         let place_fn = Rc::new(move |x: f32, y: f32| {
             let internal_offset = state
@@ -2904,31 +2965,10 @@ impl Measurable for LayoutChildMeasurable {
                 .map(|m| m.offset)
                 .unwrap_or_default();
 
-            let position = Point {
+            state.place_retained(Point {
                 x: x + internal_offset.x,
                 y: y + internal_offset.y,
-            };
-            state.set_last_position(position);
-
-            if let Some(layout_state) = &layout_state {
-                let mut layout_state = layout_state.borrow_mut();
-                layout_state.position = position;
-                layout_state.is_placed = true;
-            } else if let Some(applier) = &applier {
-                let Ok(mut applier) = applier.try_borrow_typed() else {
-                    return;
-                };
-                if applier
-                    .with_node::<LayoutNode, _>(node_id, |node| {
-                        node.set_position(position);
-                    })
-                    .is_err()
-                {
-                    let _ = applier.with_node::<SubcomposeLayoutNode, _>(node_id, |node| {
-                        node.set_position(position);
-                    });
-                }
-            }
+            });
         });
 
         Placeable::with_place_fn(measured_size.width, measured_size.height, node_id, place_fn)

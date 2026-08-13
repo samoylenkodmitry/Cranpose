@@ -709,6 +709,63 @@ fn cache_epoch_is_isolated_by_app_context() -> Result<(), NodeError> {
 }
 
 #[test]
+fn a_policy_that_only_pushes_placements_still_places_its_children() -> Result<(), NodeError> {
+    // `VerticalStackPolicy` states where its children go the way the contract
+    // asks: it pushes a `Placement` per child. It never calls the placeable's
+    // own `place`, which is the redundant second half of the same statement.
+    //
+    // Both halves must reach the RETAINED node state, because that — not the
+    // measured tree — is what the per-frame scene build walks in the app, and
+    // it culls every node whose `is_placed` is false. A whole widget set once
+    // shipped in exactly this shape: correct in every `LayoutTree` assertion,
+    // and an empty screen on the device.
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut applier = MemoryApplier::new();
+
+    let child_a = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 20.0,
+        })),
+    )));
+    let child_b = applier.create(Box::new(LayoutNode::new(
+        Modifier::empty(),
+        Rc::new(LeafMeasurePolicy::new(Size {
+            width: 10.0,
+            height: 30.0,
+        })),
+    )));
+
+    let mut root = LayoutNode::new(Modifier::empty(), Rc::new(VerticalStackPolicy));
+    root.children.push(child_a);
+    root.children.push(child_b);
+    let root_id = applier.create(Box::new(root));
+
+    measure_layout(
+        &mut applier,
+        root_id,
+        Size {
+            width: 100.0,
+            height: 100.0,
+        },
+    )?;
+
+    for (child, expected_top) in [(child_a, 0.0), (child_b, 20.0)] {
+        let (is_placed, position) = applier
+            .with_node::<LayoutNode, _>(child, |node| (node.is_placed(), node.position()))?;
+        assert!(
+            is_placed,
+            "child {child:?} was given a Placement and must be marked placed in the retained \
+             state the scene build reads"
+        );
+        assert_eq!(position.y, expected_top, "child {child:?} retained top");
+        assert_eq!(position.x, 0.0, "child {child:?} retained left");
+    }
+    Ok(())
+}
+
+#[test]
 fn selective_measure_with_tree_hierarchy() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
