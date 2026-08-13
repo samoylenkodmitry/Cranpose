@@ -1974,6 +1974,40 @@ fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
     }
 }
 
+/// `web.rs` compiles only for `wasm32`, so nothing in `cargo test` links it —
+/// reading the source is the only guard available on the host, and the
+/// alternative is finding out in a browser. This contract regressed silently
+/// once already: the wheel listener grew its own copy of the desktop's policy,
+/// inverted, and never offered the wheel to rotary at all.
+#[test]
+fn the_browser_host_shares_the_wheel_policy() {
+    let web = crate_source("src/web.rs");
+
+    assert!(
+        web.contains("app_mut.wheel_scrolled(wheel)"),
+        "the browser wheel listener must go through the shell's shared wheel policy, \
+         so zoom, rotary and scroll mean the same thing they do on every other host"
+    );
+    assert!(
+        !web.contains("app_mut.pointer_scrolled("),
+        "the browser host must not reach past wheel_scrolled to the scroll step: that \
+         skips rotary and re-opens the sign question the shared policy settles"
+    );
+}
+
+/// The same unreachable-source problem for the clipboard: with no bridge
+/// installed the in-tree selection menu's Copy reaches an in-process clipboard
+/// that nothing outside the page can read, and every platform but the browser
+/// had one.
+#[test]
+fn the_browser_host_installs_a_platform_clipboard() {
+    assert!(
+        crate_source("src/web.rs").contains("crate::web_clipboard::install("),
+        "the browser host must install a platform clipboard, or the in-tree selection \
+         menu's Copy/Cut never leave the page"
+    );
+}
+
 fn is_crate_root_source(path: &Path) -> bool {
     let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;

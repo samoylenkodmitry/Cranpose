@@ -117,6 +117,30 @@ impl RotaryScrollEvent {
         }
     }
 
+    /// Builds a rotary event from a mouse-wheel / trackpad sample already in
+    /// logical pixels.
+    ///
+    /// The final target for rotary input is a Wear OS crown, but the machines
+    /// it is developed on have wheels, so every desktop-class host offers its
+    /// wheel to the rotary handlers first. `vertical` and `horizontal` are in
+    /// the shell's wheel convention — positive when the content should move
+    /// down and right, the direction a wheel turned *up* produces — which is
+    /// the same physical direction as a positive Android detent. Both are
+    /// therefore negated exactly once, like [`from_detents`](Self::from_detents),
+    /// so a wheel turned up and a crown turned up land on the same negative
+    /// [`vertical_scroll_pixels`](Self::vertical_scroll_pixels).
+    ///
+    /// Unlike the detent path, a wheel really does have two axes, so each one
+    /// is carried through on its own rather than fanned out from a single
+    /// value.
+    pub fn from_wheel_pixels(vertical: f32, horizontal: f32, uptime_millis: u64) -> Self {
+        Self {
+            vertical_scroll_pixels: -vertical,
+            horizontal_scroll_pixels: -horizontal,
+            uptime_millis,
+        }
+    }
+
     /// Returns true when neither axis carries a usable scroll amount.
     ///
     /// Non-finite values (NaN/inf from a misbehaving driver) count as empty so
@@ -179,6 +203,32 @@ mod tests {
         assert_eq!(up.vertical_scroll_pixels, -down.vertical_scroll_pixels);
         assert!(up.vertical_scroll_pixels < 0.0);
         assert!(down.vertical_scroll_pixels > 0.0);
+    }
+
+    #[test]
+    fn a_wheel_turned_up_lands_where_a_crown_turned_up_does() {
+        // The two ingresses must agree on direction or the same gesture
+        // scrolls opposite ways on a watch and on the machine it is built on.
+        let wheel = RotaryScrollEvent::from_wheel_pixels(64.0, 0.0, 0);
+        let crown = RotaryScrollEvent::from_detents(1.0, 64.0, 64.0, 0);
+
+        assert_eq!(
+            wheel.vertical_scroll_pixels, crown.vertical_scroll_pixels,
+            "a positive wheel delta and a positive detent are the same physical turn"
+        );
+        assert!(wheel.vertical_scroll_pixels < 0.0);
+    }
+
+    #[test]
+    fn a_wheel_carries_each_axis_on_its_own() {
+        // A crown has one degree of freedom and fans it across both fields; a
+        // wheel has two, and a horizontal nudge must not become a vertical one.
+        let event = RotaryScrollEvent::from_wheel_pixels(12.0, -5.0, 77);
+
+        assert_eq!(event.vertical_scroll_pixels, -12.0);
+        assert_eq!(event.horizontal_scroll_pixels, 5.0);
+        assert_eq!(event.uptime_millis, 77);
+        assert!(RotaryScrollEvent::from_wheel_pixels(0.0, 0.0, 1).is_empty());
     }
 
     #[test]
