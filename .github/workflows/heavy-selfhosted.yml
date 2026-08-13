@@ -54,14 +54,12 @@ jobs:
           sccache --zero-stats || true
 
       - name: Run the robot suite on the GPU
-        # CRANPOSE_ROBOT_SOFTWARE_RENDERER only relaxes the
-        # environment-sensitive assertions; the Vulkan ICD still selects
-        # the real GPU. The three external-framebuffer capture tests run
-        # in robot-capture-software below: a GPU swapchain under Xvfb
-        # never lands pixels in the X server's buffer, so they can only
-        # read their screenshots on software present.
-        env:
-          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
+        # The suite relaxes the environment-sensitive frame-rate assertions
+        # itself; the Vulkan ICD here still selects the real GPU. The three
+        # external-framebuffer capture tests run in robot-capture-software
+        # below: a GPU swapchain under Xvfb never lands pixels in the X
+        # server's buffer, so they can only read their screenshots on
+        # software present.
         run: >
           xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh
           --sequential
@@ -108,7 +106,6 @@ jobs:
         env:
           WGPU_BACKEND: gl
           LIBGL_ALWAYS_SOFTWARE: "1"
-          CRANPOSE_ROBOT_SOFTWARE_RENDERER: "1"
         run: >
           xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh
           --sequential

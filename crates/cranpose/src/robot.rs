@@ -11,6 +11,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::Renderer;
@@ -211,6 +212,7 @@ pub(crate) enum RobotCommand {
     #[cfg(feature = "renderer-wgpu")]
     GetRenderStats,
     GetFpsStats,
+    GetPacingControlCenter(cranpose_app_shell::FramePacingMode),
     ResetFpsStats,
     GetLastFlingVelocity,
     ResetLastFlingVelocity,
@@ -242,6 +244,7 @@ pub(crate) enum RobotResponse {
     #[cfg(feature = "renderer-wgpu")]
     RenderStats(Box<Option<RenderStatsSnapshot>>),
     FpsStats(cranpose_app_shell::FpsStats),
+    PacingControlCenter(Option<(f32, f32)>),
     F32(f32),
     #[cfg(feature = "renderer-wgpu")]
     RenderCpuAllocationStats(Box<DebugCpuAllocationStats>),
@@ -260,7 +263,7 @@ pub(crate) struct RobotChannel {
 }
 
 impl RobotChannel {
-    pub(crate) fn new() -> (Self, Robot) {
+    pub(crate) fn new(wake_event_loop: impl Fn() + Send + Sync + 'static) -> (Self, Robot) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         let (resp_tx, resp_rx) = mpsc::channel();
 
@@ -270,7 +273,10 @@ impl RobotChannel {
         };
 
         let robot = Robot {
-            tx: cmd_tx,
+            tx: RobotCommandSender {
+                tx: cmd_tx,
+                wake_event_loop: Arc::new(wake_event_loop),
+            },
             rx: resp_rx,
         };
 
@@ -278,9 +284,32 @@ impl RobotChannel {
     }
 }
 
+/// The driver's end of the command channel, which wakes the event loop for
+/// every command it sends.
+///
+/// Commands are drained by the shell on its way into a wait, so a command sent
+/// while the loop is parked would sit in the channel until something else
+/// happened to wake it. The alternative -- keeping the loop spinning for as
+/// long as a robot is attached -- makes a driven run free-run regardless of the
+/// app's pacing mode, and any frame rate a robot test reads is then the
+/// harness's, not the app's.
+#[derive(Clone)]
+pub(crate) struct RobotCommandSender {
+    tx: mpsc::Sender<RobotCommand>,
+    wake_event_loop: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl RobotCommandSender {
+    pub(crate) fn send(&self, command: RobotCommand) -> Result<(), mpsc::SendError<RobotCommand>> {
+        self.tx.send(command)?;
+        (self.wake_event_loop)();
+        Ok(())
+    }
+}
+
 /// Robot handle for test drivers
 pub struct Robot {
-    tx: mpsc::Sender<RobotCommand>,
+    tx: RobotCommandSender,
     rx: mpsc::Receiver<RobotResponse>,
 }
 
@@ -1015,6 +1044,25 @@ impl Robot {
         }
     }
 
+    /// Where the dev overlay draws a frame-pacing control, in logical pixels.
+    ///
+    /// The overlay is renderer-drawn and carries no semantics, so this is how a
+    /// test presses one without hard-coding a coordinate that quietly rots.
+    pub fn pacing_control_center(
+        &self,
+        mode: cranpose_app_shell::FramePacingMode,
+    ) -> Result<Option<(f32, f32)>, String> {
+        self.tx
+            .send(RobotCommand::GetPacingControlCenter(mode))
+            .map_err(|e| format!("Failed to send pacing control command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::PacingControlCenter(center)) => Ok(center),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
     /// Reset the owning app shell's FPS monitor.
     pub fn reset_fps_stats(&self) -> Result<(), String> {
         self.tx
@@ -1256,7 +1304,7 @@ impl Robot {
 
     /// Clone of the command channel. Shells use this to surface a panicking
     /// test driver back into the event loop as a `DriverPanicked` command.
-    pub(crate) fn command_sender(&self) -> mpsc::Sender<RobotCommand> {
+    pub(crate) fn command_sender(&self) -> RobotCommandSender {
         self.tx.clone()
     }
 
