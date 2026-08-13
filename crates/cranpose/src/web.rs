@@ -27,7 +27,28 @@ fn web_pointer_source(event: &PointerEvent) -> PointerSource {
     }
 }
 
-const WEB_WHEEL_LINE_DELTA_PIXELS: f32 = 40.0;
+/// The keyboard modifiers held during a mouse-class DOM event.
+///
+/// `WheelEvent` and `PointerEvent` both deref to `MouseEvent`, so one reader
+/// serves every pointer ingress.
+fn web_modifiers(event: &web_sys::MouseEvent) -> cranpose_app_shell::Modifiers {
+    cranpose_app_shell::Modifiers {
+        shift: event.shift_key(),
+        ctrl: event.ctrl_key(),
+        alt: event.alt_key(),
+        meta: event.meta_key(),
+    }
+}
+
+/// Monotonic milliseconds for synthesized rotary events, matching the desktop
+/// host's clock contract: the zero point is the process start and only
+/// differences between samples are meaningful.
+fn wheel_uptime_millis() -> u64 {
+    thread_local! {
+        static EPOCH: web_time::Instant = web_time::Instant::now();
+    }
+    EPOCH.with(|epoch| epoch.elapsed().as_millis() as u64)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WebBackendPreference {
@@ -367,49 +388,24 @@ pub async fn run(
             let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
 
-            let mut delta_x = event.delta_x() as f32;
-            let mut delta_y = event.delta_y() as f32;
-            match event.delta_mode() {
-                WheelEvent::DOM_DELTA_PIXEL => {}
-                WheelEvent::DOM_DELTA_LINE => {
-                    delta_x *= WEB_WHEEL_LINE_DELTA_PIXELS;
-                    delta_y *= WEB_WHEEL_LINE_DELTA_PIXELS;
-                }
-                WheelEvent::DOM_DELTA_PAGE => {
-                    let page_width = wheel_canvas.client_width().max(1) as f32;
-                    let page_height = wheel_canvas.client_height().max(1) as f32;
-                    delta_x *= page_width;
-                    delta_y *= page_height;
-                }
-                _ => {}
-            }
-
-            // Ctrl+wheel is the browser zoom gesture; trackpad pinches also
-            // arrive as ctrl+wheel events. Translate the vertical delta into
-            // a multiplicative zoom step about the cursor.
-            if event.ctrl_key() {
-                // Browsers report wheel-down/pinch-in as positive delta_y.
-                let zoom_factor = 1.2f32.powf(-delta_y / 40.0);
-                if let Ok(mut app_mut) = app.try_borrow_mut() {
-                    app_mut.set_cursor(logical.x, logical.y);
-                    if app_mut.pointer_zoomed(zoom_factor) {
-                        event.prevent_default();
-                    }
-                    request_frame();
-                }
-                return;
-            }
-
-            if event.alt_key() {
-                if delta_x.abs() <= f32::EPSILON {
-                    delta_x = delta_y;
-                }
-                delta_y = 0.0;
-            }
+            // What the sample means -- zoom, rotary, axis-swapped scroll, or
+            // plain scroll -- is the shell's shared policy; this side only
+            // converts the DOM's units and sign.
+            let wheel = crate::web_wheel::wheel_scroll_from_dom(
+                event.delta_x() as f32,
+                event.delta_y() as f32,
+                event.delta_mode(),
+                crate::web_wheel::WebWheelPage {
+                    width: wheel_canvas.client_width() as f32,
+                    height: wheel_canvas.client_height() as f32,
+                },
+                web_modifiers(&event),
+                wheel_uptime_millis(),
+            );
 
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_cursor(logical.x, logical.y);
-                if app_mut.pointer_scrolled(delta_x, delta_y) {
+                if app_mut.wheel_scrolled(wheel) {
                     event.prevent_default();
                 }
                 request_frame();
