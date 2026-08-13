@@ -289,3 +289,137 @@ fn text_glyph_atlas_reuses_identical_content_across_node_ids() {
         "first repeated text node should populate atlas glyphs: {stats:?}"
     );
 }
+
+/// A shader whose only job is to paint uniform 0 into the red channel, so a
+/// frame that failed to re-run it is visible as a pixel that did not move.
+const ANIMATED_SHADER_WGSL: &str = r#"
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+}
+
+@vertex
+fn fullscreen_vs(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var output: VertexOutput;
+    let x = f32(i32(vertex_index & 1u) * 2 - 1);
+    let y = f32(i32(vertex_index >> 1u) * 2 - 1);
+    output.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    output.position = vec4<f32>(x, y, 0.0, 1.0);
+    return output;
+}
+
+@group(0) @binding(0) var input_texture: texture_2d<f32>;
+@group(0) @binding(1) var input_sampler: sampler;
+@group(1) @binding(0) var<uniform> u: array<vec4<f32>, 64>;
+
+@fragment
+fn effect_fs(input: VertexOutput) -> @location(0) vec4<f32> {
+    return vec4<f32>(u[0][0], 0.0, 0.0, 1.0);
+}
+"#;
+
+/// A clipped, cacheable container -- the shape a `vertical_scroll` produces --
+/// wrapping a layer whose render effect is an animated runtime shader.
+fn shader_inside_cached_container_graph(time: f32) -> RenderGraph {
+    let shaded_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 64.0,
+        height: 48.0,
+    };
+    let mut shader = cranpose_ui_graphics::RuntimeShader::new(ANIMATED_SHADER_WGSL);
+    shader.set_float(0, time);
+    let mut shaded = test_layer(
+        Some(30_001),
+        CachePolicy::Auto,
+        shaded_bounds,
+        ProjectiveTransform::translation(8.0, 8.0),
+        vec![RenderNode::Primitive(PrimitiveEntry {
+            phase: PrimitivePhase::BeforeChildren,
+            node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                    rect: shaded_bounds,
+                    brush: Brush::solid(Color(0.0, 0.0, 0.0, 1.0)),
+                    stroke: None,
+                },
+                clip: None,
+            }),
+        })],
+    );
+    shaded.graphics_layer.render_effect =
+        Some(cranpose_ui_graphics::RenderEffect::runtime_shader(shader));
+
+    // The container clips, which is what makes it isolated and therefore
+    // raster-cacheable -- exactly how a scroll container ends up cached.
+    let mut container = test_layer(
+        Some(30_000),
+        CachePolicy::Auto,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 96.0,
+            height: 80.0,
+        },
+        ProjectiveTransform::translation(4.0, 4.0),
+        vec![RenderNode::Layer(Box::new(shaded))],
+    );
+    container.clip_to_bounds = true;
+    container.isolation.shape_clip = true;
+
+    RenderGraph::new(test_layer(
+        Some(30_002),
+        CachePolicy::None,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 128.0,
+            height: 96.0,
+        },
+        ProjectiveTransform::identity(),
+        vec![RenderNode::Layer(Box::new(container))],
+    ))
+}
+
+#[test]
+fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
+    // A runtime shader's own layer is never raster-cached -- its uniforms
+    // change every frame, so the cache would only fill with stale textures.
+    // That skip stops at the shader's own layer, and an ancestor that caches
+    // (any clipped container: every scroll is one) hashes its content from
+    // each child's `effect_hash`, which deliberately excludes the uniforms.
+    // The ancestor is then a cache hit forever and replays a texture with the
+    // shader baked in at t=0: the effect is frozen, at zero changed pixels,
+    // while an identical one outside the container animates.
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping animated-shader cache assertion because headless WGPU init failed: {}",
+                err
+            );
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(shader_inside_cached_container_graph(0.0));
+    let first = renderer
+        .capture_frame(128, 96)
+        .expect("first shader capture should succeed");
+
+    renderer.scene_mut().graph = Some(shader_inside_cached_container_graph(1.0));
+    let second = renderer
+        .capture_frame(128, 96)
+        .expect("second shader capture should succeed");
+
+    let changed = first
+        .pixels
+        .chunks_exact(4)
+        .zip(second.pixels.chunks_exact(4))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        changed > 0,
+        "an animated shader inside a cacheable container must still animate: \
+         the container cannot cache a subtree whose output changes every frame"
+    );
+}

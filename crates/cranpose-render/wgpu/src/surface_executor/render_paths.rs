@@ -2195,7 +2195,7 @@ fn child_layer_raster_cache_candidate(
         && surface_requirements
             .surface_requirements
             .has_isolating_requirement()
-        && !child.effect_contains_runtime_shader;
+        && !surface_requirements.contains_runtime_shader;
     let cache_is_allowed = child.cache_policy == CachePolicy::Auto
         || (allow_runtime_cache && surface_requirements.has_renderer_forced_surface())
         || runtime_cache_is_safe;
@@ -2205,11 +2205,13 @@ fn child_layer_raster_cache_candidate(
     if has_backdrop_underlay && child.contains_descendant_backdrop {
         return None;
     }
-    // RuntimeShader effects produce different output every frame (animated
-    // uniforms like time). Caching their layer surfaces is
-    // counterproductive: every frame generates a new unique cache key that
-    // fills the LRU with stale textures.
-    if child.effect_contains_runtime_shader {
+    // A RuntimeShader produces different output every frame from uniforms no
+    // content hash carries, so nothing can invalidate a texture it was
+    // rastered into. Caching the shader's own layer would only fill the LRU
+    // with stale entries; caching an ANCESTOR of one freezes the effect
+    // outright, because the ancestor stays a hit forever and replays whatever
+    // frame it first rastered. The whole subtree is therefore uncacheable.
+    if surface_requirements.contains_runtime_shader {
         return None;
     }
 

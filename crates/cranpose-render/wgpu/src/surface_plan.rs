@@ -7,7 +7,7 @@ use cranpose_render_common::graph::{
 };
 use cranpose_render_common::layer_composition::layer_requires_isolation;
 use cranpose_render_common::layer_transform::layer_uniform_scale;
-use cranpose_ui_graphics::{BlendMode, Brush, CompositingStrategy, Point, Rect};
+use cranpose_ui_graphics::{BlendMode, Brush, CompositingStrategy, Point, Rect, RenderEffect};
 
 const SURFACE_PLAN_AFFINE_TOLERANCE: f32 = 1e-4;
 
@@ -18,6 +18,16 @@ pub(crate) struct LayerSurfaceRequirements {
     pub(crate) contains_translated_content: bool,
     pub(crate) translated_content_axes: TranslatedContentAxes,
     pub(crate) contains_backdrop_content: bool,
+    /// Whether this layer or anything under it draws through a runtime shader.
+    ///
+    /// A runtime shader's output changes every frame from uniforms that are
+    /// deliberately excluded from every content hash — including them would
+    /// mint a new cache key per frame and fill the LRU with stale textures. So
+    /// no hash can tell an ancestor that the subtree changed, and an ancestor
+    /// that raster-caches replays the shader frozen at whatever frame it first
+    /// rastered. Every cache admission therefore consults the whole subtree,
+    /// not just the layer's own effect.
+    pub(crate) contains_runtime_shader: bool,
 }
 
 impl LayerSurfaceRequirements {
@@ -432,6 +442,14 @@ pub(crate) fn layer_surface_requirements_cached(
     let mut contains_translated_content = layer.translated_content_context;
     let mut translated_content_axes = translated_content_axes_for_layer(layer);
     let mut contains_backdrop_content = layer.backdrop().is_some();
+    // Render effects only, which is the skip this widens: a backdrop shader
+    // reads the scene behind it, and that path has its own admission rules
+    // (`layer_uses_external_backdrop_input`, the underlay checks) written
+    // against a hash that does see the scene. Folding backdrops in here would
+    // make every ancestor of every glass surface uncacheable on a guess.
+    let mut contains_runtime_shader = layer
+        .effect()
+        .is_some_and(RenderEffect::contains_runtime_shader);
     let mut has_direct_safe_primitive = false;
     let mut has_isolating_child_layer = false;
     let mut has_pixel_sensitive_content = false;
@@ -476,6 +494,7 @@ pub(crate) fn layer_surface_requirements_cached(
                 translated_content_axes =
                     translated_content_axes.union(child_requirements.translated_content_axes);
                 contains_backdrop_content |= child_requirements.contains_backdrop_content;
+                contains_runtime_shader |= child_requirements.contains_runtime_shader;
                 if child_requirements
                     .surface_requirements
                     .contains(SurfaceRequirement::PixelStableComposite)
@@ -518,6 +537,7 @@ pub(crate) fn layer_surface_requirements_cached(
         contains_translated_content,
         translated_content_axes,
         contains_backdrop_content,
+        contains_runtime_shader,
     };
     layer_surface_requirements_cache.insert(cache_key, requirements);
     requirements
