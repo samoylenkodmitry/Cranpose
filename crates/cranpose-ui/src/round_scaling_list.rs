@@ -350,18 +350,37 @@ pub fn shift(slots: &mut [Slot], offset: f32) {
 /// `viewport` and the slot geometry are in device pixels here, not points —
 /// that is the space Wear does this arithmetic in.
 pub fn auto_centring_spacers(slots: &[Slot], viewport_px: f32, anchor: CentreAnchor) -> (f32, f32) {
-    let centre_line = (viewport_px * 0.5).floor();
     let leading = slots
         .get(anchor.index)
         .or_else(|| slots.last())
-        .map(|slot| (centre_line - anchor.offset - slot.centre()).max(0.0))
+        .map(|slot| leading_auto_centring_spacer(viewport_px, slot.centre(), anchor.offset))
         .unwrap_or(0.0);
-    // `unadjustedSizeBelowOffsetPoint` under `ItemCenter` is half the item.
     let trailing = slots
         .last()
-        .map(|slot| (viewport_px - centre_line - slot.height * 0.5).max(0.0))
+        .map(|slot| trailing_auto_centring_spacer(viewport_px, slot.height))
         .unwrap_or(0.0);
     (leading, trailing)
+}
+
+/// The leading `autoCentering` spacer, for a caller holding the anchored row
+/// rather than the stack it came from.
+///
+/// `anchor_centre_px` is that row's centre measured from the top of the
+/// content, which is where [`stack_into`] puts it. See
+/// [`auto_centring_spacers`] for what the two spacers are and why the clamp
+/// and the floored centre line matter.
+pub fn leading_auto_centring_spacer(
+    viewport_px: f32,
+    anchor_centre_px: f32,
+    anchor_offset: f32,
+) -> f32 {
+    ((viewport_px * 0.5).floor() - anchor_offset - anchor_centre_px).max(0.0)
+}
+
+/// The trailing `autoCentering` spacer, which depends only on the last row's
+/// height: `unadjustedSizeBelowOffsetPoint` under `ItemCenter` is half of it.
+pub fn trailing_auto_centring_spacer(viewport_px: f32, last_height_px: f32) -> f32 {
+    (viewport_px - (viewport_px * 0.5).floor() - last_height_px * 0.5).max(0.0)
 }
 
 /// Half a pixel when a pixel height is odd, nothing when it is even — what

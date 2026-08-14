@@ -158,6 +158,12 @@ pub struct IndicatorGeometry {
 ///
 /// `content` and `viewport` are lengths in any one unit; `scrolled` is how far
 /// the content has travelled, in the same unit.
+///
+/// This is the generic, flat-list model: the thumb is the share of the content
+/// on screen and it moves with the pixels. A `ScalingLazyColumn` does **not**
+/// work this way — see [`scaling_list_geometry`], which is the rule Wear's own
+/// indicator uses for one. Reach for this one when a caller genuinely scrolls
+/// pixels, and for that one when it is a Wear list.
 pub fn indicator_geometry(content: f32, viewport: f32, scrolled: f32) -> Option<IndicatorGeometry> {
     if !(content.is_finite() && viewport.is_finite() && scrolled.is_finite()) {
         return None;
@@ -172,6 +178,269 @@ pub fn indicator_geometry(content: f32, viewport: f32, scrolled: f32) -> Option<
         thumb,
         offset: progress * (1.0 - thumb),
     })
+}
+
+/// One row of a `ScalingLazyColumn`, as `ScalingLazyListItemInfo` reports it.
+///
+/// **Device pixels.** Wear's adapter reads a layout that has already been
+/// resolved onto the pixel grid — item heights are whole pixels, the viewport's
+/// centre line is an integer halving — and it divides by those integers. Doing
+/// the same arithmetic in points quietly loses the halves, and the halves are
+/// what decide which item index the thumb's ends land on.
+///
+/// [`scaling_list_items`] builds these from a laid-out list; a caller that
+/// already holds a real `ScalingLazyListLayoutInfo` can fill them in directly.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndicatorItem {
+    /// The row's index in the whole list.
+    pub index: usize,
+    /// `ScalingLazyListItemInfo.startOffset(ItemCenter)`: the row's top edge
+    /// measured from the viewport's centre line, after scaling.
+    pub start_offset: f32,
+    /// `ScalingLazyListItemInfo.size`: the row's height after scaling, rounded
+    /// to a whole pixel. Not the height the row is *drawn* at — the graphics
+    /// layer scales by the unrounded scale — but this rounded one is what the
+    /// layout info reports and therefore what the indicator divides by.
+    pub size: f32,
+}
+
+/// A scaling list as `ScalingLazyColumnStateAdapter` sees it. Device pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScalingList<'a> {
+    /// The rows on screen, in order. Only the first and last are read, but the
+    /// whole window is taken because that is what the adapter is handed and
+    /// because a caller that trims it to two has to get the window right
+    /// itself.
+    pub visible: &'a [IndicatorItem],
+    /// `totalItemsCount` — every row, on screen or not. This is the
+    /// denominator the thumb's length is a share of.
+    pub total: usize,
+    /// `viewportSize.height`.
+    pub viewport: f32,
+    /// `beforeContentPadding + beforeAutoCenteringPadding`, the blank the list
+    /// keeps above its first row. It counts only while the first row is on
+    /// screen, which is the adapter's own rule and not an optimisation.
+    pub before_padding: f32,
+    /// `afterContentPadding + afterAutoCenteringPadding`, likewise below the
+    /// last row.
+    pub after_padding: f32,
+}
+
+/// Where the first visible row sits, as a fractional item index.
+///
+/// `androidx.wear.compose.material3.ScalingLazyColumnStateAdapter`. The whole
+/// part is the row's index and the fraction is how much of it has gone off the
+/// top, so a list that has scrolled half of item 3 away reads 3.5 — **an
+/// item-space position, not a pixel one**.
+pub fn decimal_first_item_index(list: ScalingList<'_>) -> f32 {
+    let Some(first) = list.visible.first() else {
+        return 0.0;
+    };
+    let offset_from_start = if first.index == 0 {
+        list.before_padding
+    } else {
+        0.0
+    };
+    let start = first.start_offset - offset_from_start;
+    let top = -(list.viewport / 2.0);
+    let fraction = ((top - start) / (first.size + offset_from_start).max(1.0)).max(0.0);
+    finite(first.index as f32 + fraction)
+}
+
+/// Where the last visible row sits, as a fractional item index.
+///
+/// The mirror of [`decimal_first_item_index`]: the fraction is how much of the
+/// row is on screen, so a list showing the top third of item 6 reads 6.33.
+pub fn decimal_last_item_index(list: ScalingList<'_>) -> f32 {
+    let Some(last) = list.visible.last() else {
+        return 0.0;
+    };
+    let span = last.size
+        + if last.index + 1 == list.total {
+            list.after_padding
+        } else {
+            0.0
+        };
+    let end = last.start_offset + span;
+    let bottom = list.viewport / 2.0;
+    let fraction = (1.0 - (end - bottom) / span.max(1.0)).min(1.0);
+    finite(last.index as f32 + fraction)
+}
+
+/// How far down the track the thumb's leading edge sits, before the thumb's own
+/// length is taken out of the travel. `0.0` at the top, `1.0` at the bottom.
+///
+/// The denominator is the number of items that are *not* on screen — how far
+/// the list can still travel, counted in items — which is why this is not the
+/// same number as a pixel scroll's progress on a list whose rows differ in
+/// height.
+pub fn position_fraction(list: ScalingList<'_>) -> f32 {
+    if list.visible.is_empty() {
+        return 0.0;
+    }
+    let first = decimal_first_item_index(list);
+    let remaining = list.total as f32 - decimal_last_item_index(list);
+    if first + remaining == 0.0 {
+        0.0
+    } else {
+        finite(first / (first + remaining))
+    }
+}
+
+/// The thumb's length, and the fact that Wear only measures it once.
+///
+/// `ScalingLazyColumnStateAdapter` holds `currentSizeFraction` and recomputes
+/// it **only when `totalItemsCount` changes**, guarded by `previousItemsCount`.
+/// That is not a cache in the sense of an optimisation, it is the behaviour:
+/// the thumb keeps the length it was given by the list's first layout and does
+/// not breathe as rows of different heights scroll past. Recomputing it every
+/// frame gives a thumb that grows and shrinks while you turn the crown, which
+/// the shipping build does not do.
+///
+/// One of these belongs to one list. Give a screen its own, and drop it (or
+/// call [`ThumbLength::forget`]) when the screen goes away, the way Wear drops
+/// the adapter with the `ScreenScaffold` that made it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ThumbLength {
+    fraction: f32,
+    items: usize,
+}
+
+impl ThumbLength {
+    /// `getSizeFraction`: the share of the track the thumb covers.
+    pub fn of(&mut self, list: ScalingList<'_>) -> f32 {
+        if list.visible.is_empty() {
+            return 0.0;
+        }
+        if self.items != list.total {
+            self.items = list.total;
+            let span = decimal_last_item_index(list) - decimal_first_item_index(list);
+            let share = span / list.total.max(1) as f32;
+            self.fraction = if share.is_finite() {
+                share.clamp(INDICATOR_MIN_THUMB, INDICATOR_MAX_THUMB)
+            } else {
+                INDICATOR_MIN_THUMB
+            };
+        }
+        self.fraction
+    }
+
+    /// Forget the measured length, so the next list measures itself again.
+    pub fn forget(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// The thumb for a `ScalingLazyColumn`, in the item-index space Wear uses.
+///
+/// This is the second of the two models in this module and the one a Wear list
+/// wants. [`indicator_geometry`] answers "what share of the content is on
+/// screen, and how far have the pixels travelled"; Wear asks "what share of the
+/// *items* is on screen, and how many items are left". The two agree only when
+/// every row is the same height and the list is as tall as its content — which
+/// is why a port built on the pixel model can look right on one display size
+/// and put the thumb in the wrong place on another.
+///
+/// Returns `None` when there is nothing on screen to describe. It does not
+/// decide whether the list is scrollable at all: Wear leaves that to
+/// `ScreenScaffold`, and so does this.
+pub fn scaling_list_geometry(
+    thumb: &mut ThumbLength,
+    list: ScalingList<'_>,
+) -> Option<IndicatorGeometry> {
+    if list.visible.is_empty() || list.total == 0 || !list.viewport.is_finite() {
+        return None;
+    }
+    let size = thumb.of(list);
+    let position = position_fraction(list).clamp(0.0, 1.0);
+    Some(IndicatorGeometry {
+        thumb: size,
+        offset: position * (1.0 - size),
+    })
+}
+
+/// The rows of a laid-out scaling list that are on screen, as the adapter reads
+/// them.
+///
+/// `rows` are `(top, height)` pairs in the list's own unshrunk stack, already
+/// moved to where the list sits on screen — the same geometry
+/// [`crate::round_scaling_list::place_row`] takes — and in whatever unit
+/// `viewport` is given in. `density` converts that unit to device pixels;
+/// [`IndicatorItem`] is always in pixels, because that is the space Wear does
+/// this arithmetic in.
+///
+/// The window is the contiguous run of rows whose scaled rectangle still meets
+/// the viewport, which is what Wear's own walk out from the centre item
+/// produces: it stops the first time the running edge leaves the display.
+///
+/// `out` is cleared first, so one buffer can be reused frame to frame.
+pub fn scaling_list_items<I>(viewport: f32, density: f32, rows: I, out: &mut Vec<IndicatorItem>)
+where
+    I: IntoIterator<Item = (f32, f32)>,
+{
+    out.clear();
+    if !viewport.is_finite() || !density.is_finite() {
+        return;
+    }
+    // A caller working in continuous coordinates gets the same rule with the
+    // integer steps taken out, which is what `place_row` does with the same
+    // argument.
+    let pixels = density > 0.0;
+    let to_px = |value: f32| if pixels { value * density } else { value };
+    let round_px = |value: f32| if pixels { value.round() } else { value };
+    let viewport_px = round_px(to_px(viewport));
+    // `viewportCenterLinePx()`: half the viewport rounded DOWN, so an odd
+    // viewport gives its spare pixel to the half below the line.
+    let centre_line = if pixels {
+        (viewport_px * 0.5).floor()
+    } else {
+        viewport_px * 0.5
+    };
+    for (index, (top, height)) in rows.into_iter().enumerate() {
+        let Some(placed) = crate::round_scaling_list::place_row(viewport, top, height, density)
+        else {
+            continue;
+        };
+        let height_px = round_px(to_px(height));
+        let size = round_px(height_px * placed.scale);
+        // `place_row` answers where the row is DRAWN, and Compose's drawn
+        // position carries half a pixel that the reported offset does not: the
+        // graphics layer's `translationY` is
+        // `startOffset - unadjustedStartOffset`, and each of those halves an
+        // integer height twice — once with integer division inside
+        // `convertToCenterOffset`, once in floating point inside `startOffset`
+        // — so the unadjusted row's half survives into the drawing and cancels
+        // out of the report. Undoing it here is what keeps the two coordinate
+        // systems from sitting half a pixel apart per row.
+        let drawn_top = to_px(placed.top);
+        let carried = if pixels { odd_pixel(height_px) } else { 0.0 };
+        let stacked_top = drawn_top - carried + if pixels { odd_pixel(size) } else { 0.0 };
+        if stacked_top > viewport_px || stacked_top + size < 0.0 {
+            if out.is_empty() {
+                continue;
+            }
+            break;
+        }
+        out.push(IndicatorItem {
+            index,
+            start_offset: drawn_top - carried - centre_line,
+            size,
+        });
+    }
+}
+
+/// Half a pixel when a pixel height is odd, nothing when it is even.
+fn odd_pixel(pixels: f32) -> f32 {
+    let half = pixels * 0.5;
+    half - half.floor()
+}
+
+fn finite(value: f32) -> f32 {
+    if value.is_finite() {
+        value
+    } else {
+        0.0
+    }
 }
 
 /// One piece of the indicator, ready to draw.
@@ -464,6 +733,244 @@ mod tests {
         for (_, segment) in parts {
             assert!(matches!(segment, IndicatorSegment::Arc { sweep: 0.0, .. }));
         }
+    }
+
+    /// A synthetic list to hang the adapter's arithmetic on: a 400px viewport,
+    /// so the centre line is 200 and `startOffset` is a row's top edge measured
+    /// from there, and ten rows of 100px.
+    const VIEWPORT: f32 = 400.0;
+
+    fn list<'a>(visible: &'a [IndicatorItem]) -> ScalingList<'a> {
+        ScalingList {
+            visible,
+            total: 10,
+            viewport: VIEWPORT,
+            before_padding: 0.0,
+            after_padding: 0.0,
+        }
+    }
+
+    fn row(index: usize, start_offset: f32) -> IndicatorItem {
+        IndicatorItem {
+            index,
+            start_offset,
+            size: 100.0,
+        }
+    }
+
+    #[test]
+    fn a_row_flush_with_the_top_of_the_screen_is_a_whole_index() {
+        // Its top edge is 200px above the centre line, which is the top of the
+        // display, so none of it has scrolled away.
+        let rows = [row(3, -200.0), row(6, 100.0)];
+        assert_eq!(decimal_first_item_index(list(&rows)), 3.0);
+    }
+
+    #[test]
+    fn a_row_half_off_the_top_reads_half_an_index() {
+        // 250 above the centre line is 50 above the display, half of a 100px
+        // row -- and the answer is in ITEM units, which is the whole point of
+        // this model: 3.5 means "three and a half items have gone past".
+        let rows = [row(3, -250.0), row(6, 100.0)];
+        assert_eq!(decimal_first_item_index(list(&rows)), 3.5);
+    }
+
+    #[test]
+    fn the_last_index_counts_how_much_of_the_row_is_on_screen() {
+        // Bottom half of the display is 0..200 below the centre line; a row
+        // starting at 150 has 50 of its 100 showing.
+        let rows = [row(3, -200.0), row(6, 150.0)];
+        assert_eq!(decimal_last_item_index(list(&rows)), 6.5);
+    }
+
+    #[test]
+    fn the_padding_outside_the_list_counts_only_at_the_end_it_belongs_to() {
+        let rows = [row(0, -250.0), row(9, 150.0)];
+        let padded = ScalingList {
+            before_padding: 80.0,
+            after_padding: 60.0,
+            ..list(&rows)
+        };
+        // The first row's own span grows by the blank above it, and so does the
+        // distance it has travelled: (200 - 250 + 80) / (100 + 80).
+        assert!((decimal_first_item_index(padded) - 130.0 / 180.0).abs() < 1e-6);
+        // The last row's span grows by the blank below it: 1 - (310 - 200)/160.
+        assert!((decimal_last_item_index(padded) - (9.0 + 0.3125)).abs() < 1e-6);
+
+        // The same geometry in the middle of the list ignores both.
+        let inner = [row(3, -250.0), row(6, 150.0)];
+        let inner = ScalingList {
+            before_padding: 80.0,
+            after_padding: 60.0,
+            ..list(&inner)
+        };
+        assert_eq!(decimal_first_item_index(inner), 3.5);
+        assert_eq!(decimal_last_item_index(inner), 6.5);
+    }
+
+    #[test]
+    fn the_thumb_is_the_share_of_the_items_on_screen_not_of_the_pixels() {
+        // Five of ten items on screen is half the track, whatever those items
+        // are worth in pixels.
+        let rows = [row(3, -250.0), row(8, 150.0)];
+        let mut thumb = ThumbLength::default();
+        assert!((thumb.of(list(&rows)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_thumb_is_clamped_at_both_ends_however_long_the_list_is() {
+        let rows = [row(3, -250.0), row(4, 150.0)];
+        let mut short = ThumbLength::default();
+        assert_eq!(short.of(list(&rows)), INDICATOR_MIN_THUMB);
+
+        let rows = [row(0, -250.0), row(9, 150.0)];
+        let mut long = ThumbLength::default();
+        assert_eq!(long.of(list(&rows)), INDICATOR_MAX_THUMB);
+    }
+
+    #[test]
+    fn the_thumb_is_measured_once_and_then_only_when_the_list_changes_length() {
+        // `previousItemsCount` in the adapter. Not an optimisation: a thumb
+        // remeasured every frame breathes as rows of different heights scroll
+        // past, and the shipping build's does not move at all.
+        let mut thumb = ThumbLength::default();
+        let five = [row(3, -250.0), row(8, 150.0)];
+        assert!((thumb.of(list(&five)) - 0.5).abs() < 1e-6);
+
+        let three = [row(3, -250.0), row(6, 150.0)];
+        assert!(
+            (thumb.of(list(&three)) - 0.5).abs() < 1e-6,
+            "the window shrank but the list did not, so the thumb holds"
+        );
+
+        let longer = ScalingList {
+            total: 20,
+            ..list(&three)
+        };
+        assert_eq!(thumb.of(longer), INDICATOR_MIN_THUMB);
+
+        thumb.forget();
+        assert!((thumb.of(list(&five)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_position_is_how_many_items_are_left_not_how_far_the_pixels_went() {
+        // Three and a half items above the window, three and a half below it.
+        let rows = [row(3, -250.0), row(6, 150.0)];
+        assert!((position_fraction(list(&rows)) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_list_at_the_top_puts_the_thumb_at_the_top_and_one_at_the_end_at_the_end() {
+        let mut thumb = ThumbLength::default();
+        let top = [row(0, -200.0), row(3, 150.0)];
+        let geometry = scaling_list_geometry(&mut thumb, list(&top)).unwrap();
+        assert_eq!(geometry.offset, 0.0);
+
+        // The last row measured fully in leaves nothing after it, so the thumb
+        // is flush with the end of the track.
+        let mut thumb = ThumbLength::default();
+        let end = [row(6, -250.0), row(9, 100.0)];
+        let geometry = scaling_list_geometry(&mut thumb, list(&end)).unwrap();
+        assert_eq!(decimal_last_item_index(list(&end)), 10.0);
+        assert!((geometry.offset + geometry.thumb - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_list_with_nothing_on_screen_has_no_indicator() {
+        let mut thumb = ThumbLength::default();
+        assert_eq!(scaling_list_geometry(&mut thumb, list(&[])), None);
+        let rows = [row(3, -250.0)];
+        let empty = ScalingList {
+            total: 0,
+            ..list(&rows)
+        };
+        assert_eq!(scaling_list_geometry(&mut thumb, empty), None);
+    }
+
+    #[test]
+    fn the_two_models_disagree_the_moment_the_rows_are_not_all_the_same_height() {
+        // This is the whole reason the second entry point exists. One tall row
+        // and nine short ones: the pixel model says the thumb is the share of
+        // the CONTENT on screen, the adapter says it is the share of the ITEMS,
+        // and the tall row counts for one item and for six rows' worth of
+        // pixels. A caller that reaches for the flat model on a Wear list gets
+        // an answer that happens to look right on a list of uniform rows.
+        let heights: Vec<f32> = std::iter::once(600.0).chain([100.0; 9]).collect();
+        let content: f32 = heights.iter().sum();
+        let pixel = indicator_geometry(content, VIEWPORT, 0.0).unwrap();
+
+        let rows = [row(0, -200.0), row(3, 100.0)];
+        let mut thumb = ThumbLength::default();
+        let wear = scaling_list_geometry(&mut thumb, list(&rows)).unwrap();
+
+        assert!((pixel.thumb - INDICATOR_MIN_THUMB).abs() < 1e-6);
+        assert!((wear.thumb - 0.4).abs() < 1e-6, "{wear:?}");
+    }
+
+    #[test]
+    fn a_reported_row_is_not_the_row_as_it_is_drawn() {
+        // `place_row` answers where a row is DRAWN and the adapter reads what
+        // the layout REPORTS, and Compose's two halvings of an odd pixel height
+        // put half a pixel between them. 103px is odd; 104px is not.
+        let mut out = Vec::new();
+        let density = 2.0;
+        let viewport = 227.0;
+        for (height, carried) in [(51.5, 0.5), (52.0, 0.0)] {
+            scaling_list_items(viewport, density, [(20.0, height)], &mut out);
+            let drawn = crate::round_scaling_list::place_row(viewport, 20.0, height, density)
+                .expect("placed");
+            let item = out.first().expect("on screen");
+            assert!(
+                (item.start_offset - (drawn.top * density - carried - 227.0)).abs() < 1e-4,
+                "{height}dp: reported {} against drawn {}",
+                item.start_offset,
+                drawn.top * density
+            );
+            // And the size it reports is the drawn height rounded to a pixel,
+            // which is not the height the graphics layer scales to.
+            assert_eq!(item.size, (drawn.height * density).round());
+        }
+    }
+
+    #[test]
+    fn the_window_is_the_rows_that_still_meet_the_display() {
+        // Ten 40dp rows down a 227dp screen, the list scrolled so row 0 starts
+        // 100dp above the top. Wear walks out from the centre item and stops at
+        // the first row whose edge has left the viewport, which is the same
+        // contiguous run.
+        let mut out = Vec::new();
+        let rows: Vec<(f32, f32)> = (0..10).map(|index| (index as f32 * 40.0 - 100.0, 40.0)).collect();
+        scaling_list_items(227.0, 2.0, rows.iter().copied(), &mut out);
+        let indices: Vec<usize> = out.iter().map(|item| item.index).collect();
+        assert_eq!(indices, vec![2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn invalid_scaling_list_input_never_produces_a_non_finite_thumb() {
+        let mut out = Vec::new();
+        scaling_list_items(f32::NAN, 2.0, [(0.0, 40.0)], &mut out);
+        assert!(out.is_empty());
+        scaling_list_items(227.0, f32::NAN, [(0.0, 40.0)], &mut out);
+        assert!(out.is_empty());
+
+        let rows = [
+            IndicatorItem {
+                index: 0,
+                start_offset: f32::NAN,
+                size: 0.0,
+            },
+            IndicatorItem {
+                index: 3,
+                start_offset: f32::INFINITY,
+                size: -1.0,
+            },
+        ];
+        let mut thumb = ThumbLength::default();
+        let geometry = scaling_list_geometry(&mut thumb, list(&rows)).expect("a geometry");
+        assert!(geometry.thumb.is_finite() && geometry.offset.is_finite(), "{geometry:?}");
+        assert!(geometry.thumb >= INDICATOR_MIN_THUMB && geometry.thumb <= INDICATOR_MAX_THUMB);
+        assert!(geometry.offset >= 0.0 && geometry.offset <= 1.0);
     }
 
     #[test]
