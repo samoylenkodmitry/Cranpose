@@ -695,15 +695,20 @@ pub struct CommandReplayState {
     /// Frames the pooled fast path fully committed — diagnostics for
     /// judging how often verification actually parallelizes.
     optimistic_commits: u64,
+    /// Frames where the pooled pass committed a non-empty strict prefix of
+    /// the segments and the serial walk ran only from the first failure —
+    /// diagnostics for the churn frames (a brick hit) that used to redo the
+    /// whole tape serially.
+    prefix_commits: u64,
     /// Reusable per-job result slots for the pooled fast path — one slot
     /// per segment, grown once, recolor capacity retained across frames.
     /// The Mutex is uncontended (each job writes only its own slot once);
     /// what this kills is the per-frame allocation of the results vector,
-    /// its mutexes, and every job's recolors vector. When the pass commits,
-    /// each emitted span `mem::take`s its slot's recolors — the buffer
-    /// walks into the graph and the slot re-grows next frame (accepted:
-    /// emitting spans do real work); on a bail the buffers stay warm in
-    /// their slots.
+    /// its mutexes, and every job's recolors vector. Each committed span —
+    /// the whole frame, or the prefix before the first failure —
+    /// `mem::take`s its slot's recolors: the buffer walks into the graph
+    /// and the slot re-grows next frame (accepted: emitting spans do real
+    /// work). Uncommitted slots keep their buffers warm.
     verify_results: Vec<std::sync::Mutex<SpanResultSlot>>,
     /// The serial walk's recolor buffer, refilled by every `match_span`
     /// commit attempt. An emitted span `mem::take`s the contents and the
@@ -732,6 +737,7 @@ impl Default for CommandReplayState {
             capture_coverage: 0.0,
             frames_since_capture: 0,
             optimistic_commits: 0,
+            prefix_commits: 0,
             verify_results: Vec::new(),
             recolor_scratch: Vec::new(),
             best_recolor_scratch: Vec::new(),
@@ -757,6 +763,13 @@ impl CommandReplayState {
         self.optimistic_commits
     }
 
+    /// Frames where the pooled pass committed a non-empty strict prefix of
+    /// the segments before handing the serial walk the failure point
+    /// (0 without an executor).
+    pub fn prefix_commits(&self) -> u64 {
+        self.prefix_commits
+    }
+
     /// The similarity pivot all span transforms rotate and scale about.
     pub fn center(&self) -> Point {
         self.center
@@ -774,10 +787,14 @@ impl CommandReplayState {
     }
 
     /// [`Self::advance`] with an optional executor that verification fans
-    /// its per-segment span matching across. The pooled path is exercised
-    /// only on frames where every segment commits cleanly at its first
-    /// probe-passing anchor — any other frame falls back to the serial
-    /// walk, so the outcome is identical with and without an executor.
+    /// its per-segment span matching across. Anchors are located in a
+    /// serial phase that uses the exact candidate order of the serial walk;
+    /// only the span bodies fan out. A frame where every body matches whole
+    /// commits without touching the serial walk; any other frame commits
+    /// the segments strictly before the first failure — equal by
+    /// construction to what the serial walk produces for them — and runs
+    /// the serial split/death/re-snapshot machinery from the failure point
+    /// on. The outcome is identical with and without an executor.
     pub fn advance_pooled(
         &mut self,
         current: &CommandRecording,
@@ -958,25 +975,45 @@ impl CommandReplayState {
         current: &CommandRecording,
         pool: Option<&dyn VerifyExecutor>,
     ) -> ReplayOutcome {
-        if let Some(pool) = pool {
-            if self.segments.len() >= 2 {
-                if let Some((spans, retained_records)) = self.verify_optimistic(current, pool) {
-                    self.optimistic_commits += 1;
-                    return self.finish_verify(current, spans, retained_records);
-                }
-            }
-        }
         let mut spans: Vec<ReplaySpan> = Vec::new();
         let mut retained_records = 0usize;
         // Current-tape position covered so far.
         let mut cursor = 0usize;
+        // Leading segments the pooled pass already committed; the serial
+        // walk below runs only from this point on.
+        let mut committed = 0usize;
+        if let Some(pool) = pool {
+            if self.segments.len() >= 2 {
+                let commit = self.verify_optimistic(current, pool);
+                if commit.committed == self.segments.len() {
+                    self.optimistic_commits += 1;
+                    return self.finish_verify(current, commit.spans, commit.retained_records);
+                }
+                // Prefix-commit: the pooled spans for every segment before
+                // the first failure are equal by construction to what the
+                // serial walk would produce for them (see
+                // [`Self::verify_optimistic`]), so they are kept and the
+                // serial machinery below is seeded from the failure point
+                // instead of redoing the whole tape.
+                if commit.committed > 0 {
+                    self.prefix_commits += 1;
+                }
+                spans = commit.spans;
+                retained_records = commit.retained_records;
+                cursor = commit.cursor;
+                committed = commit.committed;
+            }
+        }
         // Segments awaiting location this frame, tape order. A split pushes
         // the suffix back onto the front so it is located before the next
         // original segment. Both queues are persistent fields refilled per
         // frame, so their buffers keep their high-water capacity.
         self.verify_pending.clear();
-        self.verify_pending.extend(self.segments.drain(..));
+        self.verify_pending.extend(self.segments.drain(committed..));
         self.verify_survivors.clear();
+        // A committed segment matched whole, so it survives unchanged — in
+        // emission order, ahead of whatever the serial walk keeps.
+        self.verify_survivors.append(&mut self.segments);
         while let Some(segment) = self.verify_pending.pop_front() {
             let len = segment.tape_end - segment.tape_start;
             let search_end = (cursor + RESYNC_WINDOW)
@@ -1171,21 +1208,33 @@ impl CommandReplayState {
         ReplayOutcome::Spans(spans)
     }
 
-    /// The clean-frame fast path: locates every segment serially with cheap
-    /// probes only (identical candidate order to the serial walk), then fans
-    /// the expensive full-span matching across `pool`. Returns `None` — and
-    /// changes nothing but its private result scratch — the moment any
-    /// segment lacks a probe-passing candidate
-    /// or any span fails to match whole, leaving the serial walk
-    /// to redo the frame with its split/death/attempt machinery. When it
-    /// does return spans, they are exactly what the serial walk would have
-    /// produced: a fully matching first probe-passing candidate is the
-    /// leftmost committing candidate.
+    /// The pooled fast path: locates segments serially with cheap probes
+    /// only (identical candidate order to the serial walk — leftmost from
+    /// the cursor), then fans the expensive full-span matching across
+    /// `pool` and commits the longest prefix of segments whose bodies
+    /// matched whole.
+    ///
+    /// Each committed span is EQUAL BY CONSTRUCTION to the serial walk's:
+    /// the serial walk commits a segment at the first candidate that both
+    /// passes [`probe_anchor`] and matches its whole body under
+    /// [`match_span`]; for a committed segment here, the first
+    /// probe-passing candidate matched whole, no earlier candidate even
+    /// probe-passes, and both functions are deterministic over the same
+    /// inputs — so anchor, transform, tape range, recolors and bounds all
+    /// coincide, as does the cursor both walks carry forward
+    /// (`start + len`, by induction from a shared start of zero). The
+    /// commit therefore ends at the first failure — a segment with no
+    /// probe-passing candidate in its window, or a body that matched short
+    /// (a genuine change, or a mislocated anchor on a self-similar ring):
+    /// from that segment on, only the serial walk's candidate-scan budget
+    /// and split/death machinery can decide the frame, starting from the
+    /// identical cursor. Uncommitted result slots are left untouched so
+    /// their recolor buffers stay warm.
     fn verify_optimistic(
         &mut self,
         current: &CommandRecording,
         pool: &dyn VerifyExecutor,
-    ) -> Option<(Vec<ReplaySpan>, usize)> {
+    ) -> PooledCommit {
         struct SpanJob {
             start: usize,
             seg_start: usize,
@@ -1213,7 +1262,13 @@ impl CommandReplayState {
                     break;
                 }
             }
-            let (start, t) = found?;
+            // No probe-passing candidate: the serial walk would scan these
+            // same candidates, find none, and kill the segment — machinery
+            // this pass does not carry. Job collection stops here; the
+            // jobs already collected are still worth their pooled bodies.
+            let Some((start, t)) = found else {
+                break;
+            };
             jobs.push(SpanJob {
                 start,
                 seg_start: segment.tape_start,
@@ -1221,6 +1276,14 @@ impl CommandReplayState {
                 t,
             });
             cursor = start + len;
+        }
+        if jobs.is_empty() {
+            return PooledCommit {
+                spans: Vec::new(),
+                retained_records: 0,
+                committed: 0,
+                cursor: 0,
+            };
         }
         // One reusable result slot per job, grown once and kept across
         // frames; every job writes only its own slot, filling the slot's
@@ -1251,20 +1314,24 @@ impl CommandReplayState {
                 );
             });
         }
-        // Bail before taking anything: a single short match leaves every
-        // slot's recolor buffer warm for the serial rerun and later frames.
-        for (job, result) in jobs.iter().zip(&self.verify_results) {
+        // The commit ends at the first body that matched short. Slots from
+        // that job on are not taken, so their recolor buffers stay warm
+        // for the serial rerun and later frames.
+        let mut committed = jobs.len();
+        for (i, (job, result)) in jobs.iter().zip(&self.verify_results).enumerate() {
             if result.lock().expect("verify span job lock").matched < job.len {
-                return None;
+                committed = i;
+                break;
             }
         }
-        let mut spans: Vec<ReplaySpan> = Vec::with_capacity(jobs.len() * 2 + 1);
+        let mut spans: Vec<ReplaySpan> = Vec::with_capacity(committed * 2 + 1);
         let mut retained_records = 0usize;
         let mut cursor = 0usize;
         for (segment, (job, result)) in self
             .segments
             .iter()
             .zip(jobs.iter().zip(&self.verify_results))
+            .take(committed)
         {
             // Committing: each emitted span takes its slot's buffer — the
             // capacity walks into the graph and the slot re-grows next
@@ -1290,14 +1357,36 @@ impl CommandReplayState {
             });
             cursor = job.start + job.len;
         }
-        if cursor < current.tape.len() {
+        // The trailing dynamic span belongs to whichever path covers the
+        // tape's tail: this one only when every segment committed.
+        if committed == self.segments.len() && cursor < current.tape.len() {
             spans.push(ReplaySpan::Dynamic {
                 tape_start: cursor,
                 tape_end: current.tape.len(),
             });
         }
-        Some((spans, retained_records))
+        PooledCommit {
+            spans,
+            retained_records,
+            committed,
+            cursor,
+        }
     }
+}
+
+/// What one pooled pass committed: the emitted spans and survivor count of
+/// the leading segments whose bodies matched whole, plus the current-tape
+/// cursor after the last committed span — exactly the state the serial
+/// walk needs to take over from the first failure. `committed` equal to
+/// the segment count is a fully pooled frame; zero means the pass salvaged
+/// nothing and the serial walk redoes the frame from the top.
+struct PooledCommit {
+    spans: Vec<ReplaySpan>,
+    retained_records: usize,
+    /// Leading segments committed exactly as the serial walk would have.
+    committed: usize,
+    /// Current-tape position after the last committed span.
+    cursor: usize,
 }
 
 /// The cheap anchor test shared by the serial walk and the pooled fast
@@ -1882,10 +1971,13 @@ mod tests {
     #[test]
     fn pooled_verification_matches_serial_exactly() {
         let exec = ThreadedExec { lanes: 3 };
-        // Every verification path in one churning sequence: multi-ring
-        // retention under rotation, tail churn, twinkle recolors, and a
-        // mid-run sweep change that forces the optimistic pass to bail and
-        // the serial rerun to split.
+        // Every verification path in one long churning sequence: multi-ring
+        // retention under rotation, tail churn, twinkle recolors, brick-hit
+        // single-record changes (the pooled pass commits the segments
+        // before the failure and hands the serial machinery the failure
+        // point), a multi-segment change, whole-ring deaths behind a
+        // committed prefix, and coverage collapses that force re-snapshots
+        // and fresh partitions mid-sequence.
         let frame = |f: usize| -> CommandRecording {
             let tail = [10usize, 13, 5, 8, 11, 6, 9, 12][f % 8];
             let mut recording = ring_frame(3, 300, f, tail);
@@ -1898,16 +1990,53 @@ mod tests {
                     };
                 }
             }
-            if f == 5 {
-                // Geometry change inside the middle ring: a genuine
-                // mismatch mid-segment.
-                recording.arcs[450].sweep_angle = 0.15;
+            match f {
+                5 => {
+                    // A brick hit: one record inside the middle ring. The
+                    // pooled pass fails there, commits the ring before it,
+                    // and the serial machinery splits from the failure.
+                    recording.arcs[450].sweep_angle = 0.15;
+                }
+                8 => {
+                    // Changes in the first and last rings at once: the
+                    // first segment fails, so the pooled prefix is empty
+                    // and the serial walk decides the whole frame.
+                    recording.arcs[100].sweep_angle = 0.15;
+                    recording.arcs[750].sweep_angle = 0.15;
+                }
+                12 => {
+                    // A hit inside a segment created by the frame-5 split.
+                    recording.arcs[500].sweep_angle = 0.15;
+                }
+                16..=39 => {
+                    // The last ring changes shape wholesale and stays
+                    // changed: its segment dies (no candidate even
+                    // probes) behind the still-committing leading rings,
+                    // and whatever coverage bookkeeping decides — death or
+                    // collapse into a re-snapshot — both paths must agree.
+                    for arc in &mut recording.arcs[600..900] {
+                        arc.sweep_angle = 0.06;
+                    }
+                }
+                40..=45 => {
+                    // Nearly everything changes: coverage collapses below
+                    // the floor, the state re-snapshots and re-partitions
+                    // mid-sequence, then retains the changed shape.
+                    for arc in &mut recording.arcs[150..900] {
+                        arc.sweep_angle = 0.08;
+                    }
+                }
+                52 => {
+                    // A brick hit against the post-collapse capture.
+                    recording.arcs[450].sweep_angle = 0.15;
+                }
+                _ => {}
             }
             recording
         };
         let mut serial = CommandReplayState::default();
         let mut pooled = CommandReplayState::default();
-        for f in 0..10 {
+        for f in 0..60 {
             let recording = frame(f);
             let serial_outcome = serial.advance(&recording);
             let pooled_outcome = pooled.advance_pooled(&recording, Some(&exec));
@@ -1928,16 +2057,22 @@ mod tests {
         }
         let (deaths, splits) = serial.stats();
         assert!(
-            !serial.segments().is_empty() && deaths + splits > 0,
-            "sequence must exercise both retention and the mismatch path, \
+            !serial.segments().is_empty() && deaths > 0 && splits > 0,
+            "sequence must exercise retention, deaths, and splits, \
              got {deaths} deaths {splits} splits {} segments",
             serial.segments().len()
         );
         assert_eq!(serial.optimistic_commits(), 0);
+        assert_eq!(serial.prefix_commits(), 0);
         assert!(
-            pooled.optimistic_commits() >= 3,
+            pooled.optimistic_commits() >= 10,
             "the pooled fast path must actually commit steady frames, got {}",
             pooled.optimistic_commits()
+        );
+        assert!(
+            pooled.prefix_commits() >= 3,
+            "churn frames must commit their pooled prefix, got {}",
+            pooled.prefix_commits()
         );
     }
 
