@@ -166,6 +166,26 @@ fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Ve
     passes.pop().unwrap()
 }
 
+/// How far the two entry points may disagree.
+///
+/// Not zero, and it cannot be. `fs_solid` and `fs_main` are two shader
+/// *programs*, and no driver promises they contract floats identically — the
+/// same expression may become an fma in one and a multiply-add in the other
+/// depending on register pressure, which differs precisely because one of them
+/// carries the gradient code. Measured on Linux/Vulkan: **3 bytes apart, worst
+/// 2 levels**, from a 128x128 frame, and unchanged when the coverage math was
+/// factored into a single shared function called by both — the duplication was
+/// not the cause. macOS/Metal, which is where CI runs the workspace tests, sees
+/// zero, which is why this shipped looking exact.
+///
+/// The bound stays three orders of magnitude below what it has to catch: the
+/// negative control for this test — dimming `fs_solid`'s return — moves ~13000
+/// bytes. Anything approaching that is a shading difference, not arithmetic
+/// noise. A divergence visible to anyone would be far larger still.
+const MAX_DIVERGING_BYTES: usize = 16;
+/// Per-byte ceiling: a level or two of rounding, never a visible step.
+const MAX_DIVERGING_LEVEL: u8 = 2;
+
 #[test]
 fn solid_fragment_entry_matches_fs_main() {
     let mut renderer = match support::headless_renderer() {
@@ -194,9 +214,11 @@ fn solid_fragment_entry_matches_fs_main() {
         }
     }
     eprintln!("solid-vs-mixed: differing {differing} (beyond ±1: {beyond_one}) worst {worst}");
-    assert_eq!(
-        differing, 0,
-        "{differing} bytes diverged ({beyond_one} beyond ±1, worst {worst}) — \
-         fs_solid must render solid shapes byte-identically to fs_main"
+    assert!(
+        differing <= MAX_DIVERGING_BYTES && worst <= MAX_DIVERGING_LEVEL,
+        "{differing} bytes diverged ({beyond_one} beyond ±1, worst {worst}), over a bound of \
+         {MAX_DIVERGING_BYTES} bytes and {MAX_DIVERGING_LEVEL} levels — fs_solid must render \
+         solid shapes as fs_main does, and a divergence this size is a shading difference \
+         rather than the compiler contracting floats differently between two programs"
     );
 }

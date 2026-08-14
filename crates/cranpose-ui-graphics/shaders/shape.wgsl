@@ -506,8 +506,16 @@ fn sample_gradient(gradient_start: u32, count: u32, t: f32) -> vec4<f32> {
     return gradient_stops[gradient_start + count - 1u].color;
 }
 
-@fragment
-fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+/// The coverage half of a shape fragment: the clip test, the shape-kind
+/// ladder down to an alpha, and the two discards that end a fragment before
+/// anything is shaded.
+///
+/// Both fragment entry points call this so the arithmetic exists once. It was
+/// duplicated line for line into `fs_solid` on the argument that identical
+/// source in the same order makes the compiler emit identical instructions;
+/// on Vulkan it did not, and `solid_fs_parity` measured three pixels apart by
+/// up to 2/255 (the macOS CI runner, on Metal, saw none of it).
+fn shape_coverage_alpha(input: VertexOutput) -> f32 {
     let world_pos = input.world_pos;
     // Local layer-space pixel coordinate derived from uv, independent of
     // world-space quad deformation (rotation/perspective).
@@ -587,6 +595,19 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
+    return alpha;
+}
+
+@fragment
+fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let alpha = shape_coverage_alpha(input);
+
+    // Re-derived rather than threaded out of the coverage pass: both are pure
+    // functions of `input`, so the compiler folds them back together.
+    let world_pos = input.world_pos;
+    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
+
+
     var color = input.color;
     var is_gradient = false;
 
@@ -651,80 +672,18 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(color.rgb, color.a * alpha);
 }
 
-// `fs_main` for a draw that is known to contain only solid brushes: the
-// coverage math is copied line for line (same expressions, same order, so
-// the compiler emits the same instructions for the alpha it shares with
-// `fs_main`), and everything downstream of coverage — gradient projection,
-// stop interpolation, tile remapping, dither — is gone. A solid fragment
-// through `fs_main` already takes none of those branches at runtime; what
-// this entry removes is their cost of existing: the register footprint and
-// the gradient-stop indexing the shader core must budget for on every
-// fragment of an arc-heavy scene. The batch chooses this entry only when
-// its gradient stop count is zero, so `brush_type` could only ever be 0
-// here.
+/// `fs_main` for a draw known to contain only solid brushes.
+///
+/// Coverage is the shared function above, so this entry differs from `fs_main`
+/// by exactly what it leaves out: gradient projection, stop interpolation, tile
+/// remapping and dither. A solid fragment through `fs_main` takes none of those
+/// branches at runtime anyway; what this removes is their cost of existing —
+/// the register footprint and gradient-stop indexing the shader core budgets
+/// for on every fragment of an arc-heavy scene. A batch selects this entry only
+/// when its gradient stop count is zero, so `brush_type` could only ever be 0.
 @fragment
 fn fs_solid(input: VertexOutput) -> @location(0) vec4<f32> {
-    let world_pos = input.world_pos;
-    let rect_pos = input.rect.xy + input.uv * input.rect.zw;
-
-    let clip_w = input.clip_rect.z;
-    let clip_h = input.clip_rect.w;
-    if (clip_w > 0.0 && clip_h > 0.0) {
-        let clip_left = input.clip_rect.x;
-        let clip_top = input.clip_rect.y;
-        let clip_right = clip_left + clip_w;
-        let clip_bottom = clip_top + clip_h;
-
-        if (world_pos.x < clip_left || world_pos.x > clip_right ||
-            world_pos.y < clip_top || world_pos.y > clip_bottom) {
-            discard;
-        }
-    }
-
-    let rect_center = input.rect.xy + input.rect.zw * 0.5;
-    let half_size = input.rect.zw * 0.5;
-    let local_pos = rect_pos - rect_center;
-
-    let flags = u32(max(input.stroke_params.y, 0.0));
-    let shape_kind = flags & 3u;
-    let stroke_cap = (flags >> 2u) & 3u;
-    let stroke_join = (flags >> 4u) & 3u;
-
-    let has_radii = (input.radii[0] > 0.0 || input.radii[1] > 0.0 ||
-                     input.radii[2] > 0.0 || input.radii[3] > 0.0);
-    var alpha: f32;
-    if (shape_kind == SHAPE_KIND_ARC) {
-        let dist = sdf_arc_band(
-            rect_pos,
-            input.arc_params.xy,
-            input.stroke_params.w,
-            input.stroke_params.z,
-            input.radii.xy,
-            input.radii.zw,
-            stroke_cap,
-        );
-        alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
-    } else if (shape_kind == SHAPE_KIND_STROKE) {
-        let dist = sdf_stroked_rounded_rect(
-            local_pos,
-            half_size,
-            input.radii,
-            input.stroke_params.x * 0.5,
-            stroke_join,
-        );
-        alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
-    } else if (has_radii) {
-        let dist = sdf_rounded_rect(local_pos, half_size, input.radii);
-        alpha = 1.0 - smoothstep(-0.5, 0.5, dist);
-    } else {
-        let cov_x = clamp(half_size.x + 0.5 - abs(local_pos.x), 0.0, 1.0);
-        let cov_y = clamp(half_size.y + 0.5 - abs(local_pos.y), 0.0, 1.0);
-        alpha = cov_x * cov_y;
-    }
-
-    if (alpha < 0.001) {
-        discard;
-    }
-
-    return vec4<f32>(input.color.rgb, input.color.a * alpha);
+    let alpha = shape_coverage_alpha(input);
+    let color = input.color;
+    return vec4<f32>(color.rgb, color.a * alpha);
 }
