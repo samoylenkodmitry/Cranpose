@@ -4441,15 +4441,16 @@ fn instanced_quads_enabled() -> bool {
 /// While the region is `Full` the variable is never consulted: the cull
 /// is structurally off.
 ///
-/// OPT-IN (=1) for now, not default-on: on the Pixel Watch 3 (Adreno 702,
-/// armv7) the first on-device engagement aborted deterministically within a
-/// second of heavy retained content appearing — SIGABRT through
-/// `std::process::abort` with no panic line captured. The menu and light
-/// scenes run the cull fine, so the fault sits in an interaction between the
-/// depth-occluder pass and the heavy-scene paths (retained bundles /
-/// static-span blit are the suspects). Until that is root-caused on-device,
-/// a default-on cull would ship an abort to every round-display user; the
-/// A/B twins opt in explicitly with the same variable.
+/// OPT-IN (=1), not default-on, by measurement: with the span-capture
+/// depth-leak fixed, the on-watch A/B (Pixel Watch 3, Adreno 702, mega
+/// scene, alternating pairs) read cull ON 47.0/46.9 fps vs OFF 48.6/46.9 —
+/// a small loss to a tie, never a win, despite the cull masking 35723 px
+/// (21% of the buffer). The shape fragment shaders discard, which defeats
+/// LRZ/early-Z on this GPU: corner fragments still execute, so the depth
+/// attachment and occluder are pure overhead. The capability stays for
+/// displays and drivers where early rejection survives discard — a device
+/// A/B is one env flip, no rebuild — but earning default-on takes a
+/// measured win on some device class, not an assumption.
 #[cfg(not(target_arch = "wasm32"))]
 fn display_clip_cull_enabled() -> bool {
     std::env::var("CRANPOSE_ROUND_CULL").as_deref() == Ok("1")
