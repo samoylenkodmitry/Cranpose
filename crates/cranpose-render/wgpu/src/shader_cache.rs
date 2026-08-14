@@ -25,7 +25,7 @@ impl RuntimeShaderPipelineMode {
 /// Caches compiled render pipelines for custom WGSL shader effects.
 pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
-    cache: HashMap<(u64, RuntimeShaderPipelineMode), wgpu::RenderPipeline>,
+    cache: HashMap<(u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
 }
 
@@ -43,6 +43,14 @@ impl ShaderPipelineCache {
     /// The pipeline is cached by the source hash, so repeated calls with
     /// the same shader source (but potentially different uniforms) reuse
     /// the compiled pipeline.
+    ///
+    /// `depth` is true exactly when the pipeline will draw inside the
+    /// display-clip culled fused pass: the variant adds the depth test
+    /// against the visible-region occluder and nothing else. The user's
+    /// WGSL is NOT rewritten — the conventional fullscreen z of 0.0
+    /// already fails `Less` against the occluder's 0.0, so occluded
+    /// pixels cull correctly.
+    #[allow(clippy::too_many_arguments)]
     pub fn get_or_create(
         &mut self,
         device: &wgpu::Device,
@@ -51,9 +59,10 @@ impl ShaderPipelineCache {
         texture_bind_group_layout: &wgpu::BindGroupLayout,
         uniform_bind_group_layout: &wgpu::BindGroupLayout,
         mode: RuntimeShaderPipelineMode,
+        depth: bool,
     ) -> Option<&wgpu::RenderPipeline> {
         let source_hash = shader.source_hash();
-        let cache_key = (source_hash, mode);
+        let cache_key = (source_hash, mode, depth);
         if self.disabled.contains(&source_hash) {
             return None;
         }
@@ -103,7 +112,7 @@ impl ShaderPipelineCache {
                     cull_mode: None,
                     ..Default::default()
                 },
-                depth_stencil: None,
+                depth_stencil: crate::display_clip::content_depth_state(depth),
                 multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,

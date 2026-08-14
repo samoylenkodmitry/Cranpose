@@ -768,6 +768,31 @@ fn update_android_shell_geometry(
     }
 }
 
+/// Hands the renderer the platform's truth about the display panel's
+/// visible region. The round display is the first provider of that
+/// region: when `AConfiguration` reports a round screen AND this activity
+/// owns the whole display (a multi-window activity's surface is not the
+/// panel, so its inscribed circle would mean nothing), the visible region
+/// is the surface's inscribed circle; otherwise the full surface. The
+/// renderer then culls the pixels the panel physically never shows — a
+/// framework capability for any app and any layout; app content never
+/// participates in this decision.
+fn apply_display_visible_region(
+    app: &android_activity::AndroidApp,
+    app_shell: &mut Option<AppShell<WgpuRenderer>>,
+) {
+    let Some(shell) = app_shell else {
+        return;
+    };
+    let round = crate::android_display::display_is_round(app)
+        && !android_activity_in_multi_window_mode(app);
+    shell.renderer().set_display_visible_region(if round {
+        cranpose_render_wgpu::DisplayVisibleRegion::InscribedCircle
+    } else {
+        cranpose_render_wgpu::DisplayVisibleRegion::Full
+    });
+}
+
 /// Renders a single frame. Returns true if out of memory (should exit).
 fn render_once(
     resources: &mut GpuResources,
@@ -1840,6 +1865,7 @@ pub fn run(
                                         }
 
                                         gpu_resources = Some(resources);
+                                        apply_display_visible_region(&app, &mut app_shell);
                                         log::info!("Rendering initialized successfully");
                                     }
                                     Err(error) => {
@@ -2000,6 +2026,11 @@ pub fn run(
                                 );
                             }
                         }
+                        // Multi-window transitions arrive as configuration
+                        // changes too, and they gate the renderer's
+                        // round-display corner cull: re-read the platform
+                        // truth.
+                        apply_display_visible_region(&app, &mut app_shell);
                     }
                     _ => {}
                 },
@@ -2044,6 +2075,7 @@ pub fn run(
                                         current_host_window_size = actual_size;
                                     }
                                     gpu_resources = Some(resources);
+                                    apply_display_visible_region(&app, &mut app_shell);
                                 }
                                 Err(error) => {
                                     log::error!(
@@ -2087,6 +2119,7 @@ pub fn run(
                                     current_host_window_size = actual_size;
                                 }
                                 gpu_resources = Some(resources);
+                                apply_display_visible_region(&app, &mut app_shell);
                                 log::info!(
                                     "Android overlay surface ready at {}x{} px ({:.2}x density)",
                                     width,

@@ -39,6 +39,51 @@ impl<T> LazyGpuResource<T> {
     }
 }
 
+/// A render pipeline in its two pass flavors: `flat` for passes without a
+/// depth attachment (every pass except the display-clip culled fused pass)
+/// and `depth` for that one pass (content tests depth against the
+/// visible-region occluder, write off). The depth slot stays uninitialized
+/// — truly zero cost — until a cullable visible region actually engages
+/// the cull, and the flat slot is created from the identical inputs it
+/// always was, so full-region targets render bitwise identically.
+pub(crate) struct PassPipeline {
+    flat: LazyGpuResource<wgpu::RenderPipeline>,
+    depth: LazyGpuResource<wgpu::RenderPipeline>,
+}
+
+impl PassPipeline {
+    pub(crate) const fn new(flat_label: &'static str, depth_label: &'static str) -> Self {
+        Self {
+            flat: LazyGpuResource::new(flat_label),
+            depth: LazyGpuResource::new(depth_label),
+        }
+    }
+
+    /// Returns the variant for `depth`, creating it on first use. The
+    /// closure receives the variant it must build, so one call site serves
+    /// both flavors.
+    pub(crate) fn get_or_init(
+        &self,
+        backend: wgpu::Backend,
+        depth: bool,
+        create: impl FnOnce(bool) -> wgpu::RenderPipeline,
+    ) -> &wgpu::RenderPipeline {
+        if depth {
+            self.depth.get_or_init(backend, || create(true))
+        } else {
+            self.flat.get_or_init(backend, || create(false))
+        }
+    }
+
+    pub(crate) fn get(&self, depth: bool) -> Option<&wgpu::RenderPipeline> {
+        if depth {
+            self.depth.get()
+        } else {
+            self.flat.get()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

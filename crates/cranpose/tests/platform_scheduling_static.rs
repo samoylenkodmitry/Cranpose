@@ -1247,6 +1247,11 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let source_dir = crate_dir.join("src");
     let allowed = [
+        // The display-shape read behind the renderer's visible-region cull:
+        // one `dlsym`-resolved `AConfiguration_getScreenRound` call (the
+        // symbol is API 30+, so it must not be linked) and the call through
+        // it.
+        "android_display.rs",
         // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
         // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
         // them, mirroring how HWUI votes the panel's frame rate.
@@ -1440,6 +1445,11 @@ fn workspace_ffi_boundaries_are_explicit() {
         .expect("cranpose crate should live under workspace crates directory");
     let source_roots = ["crates", "apps", "xtask"];
     let allowed = [
+        // The display-shape read behind the renderer's visible-region cull:
+        // one `dlsym`-resolved `AConfiguration_getScreenRound` call (the
+        // symbol is API 30+, so it must not be linked) and the call through
+        // it.
+        "crates/cranpose/src/android_display.rs",
         // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
         // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
         // them, mirroring how HWUI votes the panel's frame rate.

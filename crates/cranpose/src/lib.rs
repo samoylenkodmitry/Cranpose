@@ -27,6 +27,8 @@ mod android_accessibility;
 mod android_accessibility_wire;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_app_info;
+#[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
+mod android_display;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_finish;
 #[cfg(all(feature = "android", target_os = "android"))]

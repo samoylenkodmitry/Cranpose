@@ -1,5 +1,6 @@
 //! GPU rendering implementation using WGPU
 
+use crate::display_clip::{self, DisplayVisibleRegion};
 use crate::effect_renderer::{
     projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
     EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
@@ -15,7 +16,9 @@ use crate::layer_events::{
     collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
 };
 use crate::layer_surface_cache::LayerSurfaceCache;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::lazy_resource::LazyGpuResource;
+use crate::lazy_resource::PassPipeline;
 #[cfg(test)]
 use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
@@ -1345,6 +1348,7 @@ fn shape_shader_source(_batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
     Cow::Borrowed(shaders::SHADER)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_shape_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -1353,10 +1357,14 @@ fn create_shape_pipeline(
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
     fragment_entry: &'static str,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+        source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+            shape_shader_source(batch_limits),
+            depth,
+        )),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1395,7 +1403,7 @@ fn create_shape_pipeline(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -1415,10 +1423,14 @@ fn create_mesh_shape_pipeline(
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
     batch_limits: ShapeBatchLimits,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Mesh Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+        source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+            shape_shader_source(batch_limits),
+            depth,
+        )),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1455,7 +1467,7 @@ fn create_mesh_shape_pipeline(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -1470,6 +1482,7 @@ fn create_mesh_shape_pipeline(
 /// same blend per mode — so a draw-time fallback to `vs_main` (the
 /// `CRANPOSE_INSTANCED_QUADS=0` kill switch) changes nothing else.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 fn create_instanced_shape_pipeline(
     device: &wgpu::Device,
     surface_format: wgpu::TextureFormat,
@@ -1478,10 +1491,14 @@ fn create_instanced_shape_pipeline(
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
     fragment_entry: &'static str,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Instanced Shader"),
-        source: wgpu::ShaderSource::Wgsl(shape_shader_source(batch_limits)),
+        source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+            shape_shader_source(batch_limits),
+            depth,
+        )),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1521,7 +1538,7 @@ fn create_instanced_shape_pipeline(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -1534,10 +1551,14 @@ fn create_image_pipeline(
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Image Shader"),
-        source: wgpu::ShaderSource::Wgsl(shaders::IMAGE_SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+            shaders::IMAGE_SHADER.into(),
+            depth,
+        )),
     });
 
     let image_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1574,7 +1595,7 @@ fn create_image_pipeline(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -1586,10 +1607,14 @@ fn create_glyph_atlas_pipeline(
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Glyph Atlas Shader"),
-        source: wgpu::ShaderSource::Wgsl(shaders::GLYPH_ATLAS_SHADER.into()),
+        source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+            shaders::GLYPH_ATLAS_SHADER.into(),
+            depth,
+        )),
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1626,7 +1651,77 @@ fn create_glyph_atlas_pipeline(
             polygon_mode: wgpu::PolygonMode::Fill,
             conservative: false,
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Pipeline for the display-clip occluder — the tessellated complement
+/// of the visible region — the first draw of a culled
+/// fused pass: depth write ON at the near plane, color writes fully masked
+/// off, trivial fragment stage with no discard — exactly the shape early-Z
+/// and LRZ hardware accepts as an occluder. The color target must still be
+/// declared (the pass has a color attachment), which is what the empty
+/// write mask is for.
+#[cfg(not(target_arch = "wasm32"))]
+fn create_display_clip_occluder_pipeline(
+    device: &wgpu::Device,
+    surface_format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Display Clip Occluder Shader"),
+        source: wgpu::ShaderSource::Wgsl(display_clip::OCCLUDER_SHADER.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Display Clip Occluder Pipeline Layout"),
+        bind_group_layouts: &[],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Display Clip Occluder Pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("mask_vs"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: (std::mem::size_of::<[f32; 2]>()) as wgpu::BufferAddress,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x2,
+                }],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("mask_fs"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: surface_format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::empty(),
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            unclipped_depth: false,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -4232,6 +4327,19 @@ fn instanced_quads_enabled() -> bool {
     std::env::var("CRANPOSE_INSTANCED_QUADS").as_deref() != Ok("0")
 }
 
+/// Kill switch for the display clip region cull: default ON wherever the
+/// platform reports a cullable visible region
+/// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL=0` (or the
+/// `debug.cranpose.round_cull` property on Android) forces it off — the
+/// switch keeps the name of the capability's first provider, the round
+/// display. Read per frame — the parity harness flips it between passes.
+/// While the region is `Full` the variable is never consulted: the cull
+/// is structurally off.
+#[cfg(not(target_arch = "wasm32"))]
+fn display_clip_cull_enabled() -> bool {
+    std::env::var("CRANPOSE_ROUND_CULL").as_deref() != Ok("0")
+}
+
 /// The index pattern of one instanced quad: the exact triangle pair
 /// `vs_main`'s six-slot corner mapping produces — (0, 1, 2)(2, 1, 3), same
 /// diagonal, same winding — shared by every instance.
@@ -4245,12 +4353,12 @@ const INSTANCED_QUAD_INDICES: [u16; 6] = [0, 1, 2, 2, 1, 3];
 /// uniform-mode path) still has its six-vertex draws.
 #[cfg(not(target_arch = "wasm32"))]
 struct InstancedQuadPipelines {
-    pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline: PassPipeline,
+    pipeline_dst_out: PassPipeline,
     /// `fs_solid` twin of `pipeline` (SrcOver only): chosen for draws whose
     /// shapes carry no gradient stops, which is nearly every draw of an
     /// arc-heavy scene.
-    pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_solid: PassPipeline,
     /// Static `[0, 1, 2, 2, 1, 3]` u16 index buffer, created once and shared
     /// by every instanced draw.
     index_buffer: wgpu::Buffer,
@@ -4284,6 +4392,11 @@ struct RetainedBundleOpKey {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct RetainedBundleKey {
+    /// Whether the stretch was encoded for the display-clip culled pass:
+    /// such a bundle declares the depth attachment and records
+    /// depth-variant pipelines, so it must never replay into a flat pass
+    /// (or vice versa) — the flag keys the cache apart.
+    depth: bool,
     ops: Vec<RetainedBundleOpKey>,
 }
 
@@ -5128,15 +5241,15 @@ pub struct GpuRenderer {
     surface_format: wgpu::TextureFormat,
     adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
-    pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline: PassPipeline,
+    pipeline_dst_out: PassPipeline,
     /// `fs_solid` twin of `pipeline` (SrcOver only), for gradient-free draws.
-    pipeline_solid: LazyGpuResource<wgpu::RenderPipeline>,
+    pipeline_solid: PassPipeline,
     /// `Some` exactly in storage mode: the retained-mesh pipeline (`vs_mesh`
     /// over a vertex buffer) that replay slots with a captured arc mesh draw
     /// through. Uniform-mode devices never host retained slots.
     #[cfg(not(target_arch = "wasm32"))]
-    mesh_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    mesh_pipeline: PassPipeline,
     /// `Some` exactly when this renderer latched the instanced-quad path at
     /// construction (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0). Read
     /// ONCE per renderer lifetime — cached retained bundles encode the
@@ -5154,11 +5267,11 @@ pub struct GpuRenderer {
     identity_similarity_buffer: wgpu::Buffer,
     #[cfg(not(target_arch = "wasm32"))]
     replay_slots: ReplaySlotStore,
-    image_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    image_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
-    glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    image_pipeline: PassPipeline,
+    image_pipeline_dst_out: PassPipeline,
+    glyph_atlas_pipeline: PassPipeline,
     #[cfg(not(target_arch = "wasm32"))]
-    retained_glyph_atlas_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+    retained_glyph_atlas_pipeline: PassPipeline,
     image_bind_group_layout: wgpu::BindGroupLayout,
     #[cfg(not(target_arch = "wasm32"))]
     retained_glyph_uniform_bind_group_layout: wgpu::BindGroupLayout,
@@ -5303,6 +5416,70 @@ pub struct GpuRenderer {
     /// full-target blit.
     #[cfg(not(target_arch = "wasm32"))]
     static_span: StaticSpanCache,
+    /// Display clip region cull (see [`crate::display_clip`]): the
+    /// platform-provided visible region plus the per-size occluder/depth
+    /// resources. Inert — nothing beyond the enum is ever populated —
+    /// while the region is [`DisplayVisibleRegion::Full`].
+    #[cfg(not(target_arch = "wasm32"))]
+    display_clip: DisplayClipState,
+}
+
+/// Cache key of the display-clip resources: the surface size and the
+/// region whose complement the occluder was tessellated for.
+#[cfg(not(target_arch = "wasm32"))]
+type DisplayClipResourceKey = ((u32, u32), DisplayVisibleRegion);
+
+/// State of the display clip region cull, all renderer-side.
+#[cfg(not(target_arch = "wasm32"))]
+struct DisplayClipState {
+    /// The visible region from
+    /// [`GpuRenderer::set_display_visible_region`] — platform (or host)
+    /// truth about the panel, never derived from app content. `Full` for
+    /// every rectangular display; `InscribedCircle` is the round-display
+    /// provider's value.
+    visible_region: DisplayVisibleRegion,
+    /// The view the current frame's packet renders to, set for the duration
+    /// of [`GpuRenderer::render`]. The fused pass culls only when its
+    /// target IS this view — full-frame-sized offscreen layer surfaces
+    /// must render whole (their content can be transformed into view
+    /// later), so size alone is not the test.
+    frame_root_view: Option<wgpu::TextureView>,
+    /// True exactly while a fused pass that carries the depth attachment is
+    /// being encoded: every pipeline getter consults it to hand out the
+    /// depth-tested variant, which keeps the dozens of draw sites (and the
+    /// retained-bundle builder) untouched.
+    pass_depth: Cell<bool>,
+    /// Depth attachment + occluder geometry for the current (size, region)
+    /// pair, or an inner `None` when the region's complement tessellation
+    /// failed its conservative verification for this size (cull stays
+    /// off; never retried until size or region changes).
+    resources: Option<(DisplayClipResourceKey, Option<DisplayClipResources>)>,
+    occluder_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl DisplayClipState {
+    fn new() -> Self {
+        Self {
+            visible_region: DisplayVisibleRegion::Full,
+            frame_root_view: None,
+            pass_depth: Cell::new(false),
+            resources: None,
+            occluder_pipeline: LazyGpuResource::new("display-clip/occluder"),
+        }
+    }
+}
+
+/// Per-(surface-size, region) GPU resources of the display clip cull.
+#[cfg(not(target_arch = "wasm32"))]
+struct DisplayClipResources {
+    /// `Depth16Unorm`, cleared each culled pass, stored never
+    /// (`StoreOp::Discard`) — transient GMEM residency on tilers.
+    depth_view: wgpu::TextureView,
+    /// The region complement's conservative tessellation, NDC positions,
+    /// triangle list.
+    occluder_vertex_buffer: wgpu::Buffer,
+    occluder_vertex_count: u32,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -5580,11 +5757,12 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let replay_slot_store = ReplaySlotStore::new(&device);
 
-        let pipeline = LazyGpuResource::new("shape/src-over");
-        let pipeline_dst_out = LazyGpuResource::new("shape/dst-out");
-        let pipeline_solid = LazyGpuResource::new("shape/solid-src-over");
+        let pipeline = PassPipeline::new("shape/src-over", "shape/src-over-depth");
+        let pipeline_dst_out = PassPipeline::new("shape/dst-out", "shape/dst-out-depth");
+        let pipeline_solid =
+            PassPipeline::new("shape/solid-src-over", "shape/solid-src-over-depth");
         #[cfg(not(target_arch = "wasm32"))]
-        let mesh_pipeline = LazyGpuResource::new("shape/mesh");
+        let mesh_pipeline = PassPipeline::new("shape/mesh", "shape/mesh-depth");
         // The instanced-quad selection is LATCHED here, once per renderer:
         // cached retained bundles encode whichever pipelines this resolves
         // to, so a per-draw env read could let a bundle replay a selection
@@ -5605,9 +5783,18 @@ impl GpuRenderer {
                     .copy_from_slice(bytemuck::cast_slice(&INSTANCED_QUAD_INDICES));
                 index_buffer.unmap();
                 InstancedQuadPipelines {
-                    pipeline: LazyGpuResource::new("shape/instanced-src-over"),
-                    pipeline_dst_out: LazyGpuResource::new("shape/instanced-dst-out"),
-                    pipeline_solid: LazyGpuResource::new("shape/instanced-solid"),
+                    pipeline: PassPipeline::new(
+                        "shape/instanced-src-over",
+                        "shape/instanced-src-over-depth",
+                    ),
+                    pipeline_dst_out: PassPipeline::new(
+                        "shape/instanced-dst-out",
+                        "shape/instanced-dst-out-depth",
+                    ),
+                    pipeline_solid: PassPipeline::new(
+                        "shape/instanced-solid",
+                        "shape/instanced-solid-depth",
+                    ),
                     index_buffer,
                 }
             });
@@ -5635,11 +5822,12 @@ impl GpuRenderer {
                 ],
             });
 
-        let image_pipeline = LazyGpuResource::new("image/src-over");
-        let image_pipeline_dst_out = LazyGpuResource::new("image/dst-out");
-        let glyph_atlas_pipeline = LazyGpuResource::new("glyph/shared");
+        let image_pipeline = PassPipeline::new("image/src-over", "image/src-over-depth");
+        let image_pipeline_dst_out = PassPipeline::new("image/dst-out", "image/dst-out-depth");
+        let glyph_atlas_pipeline = PassPipeline::new("glyph/shared", "glyph/shared-depth");
         #[cfg(not(target_arch = "wasm32"))]
-        let retained_glyph_atlas_pipeline = LazyGpuResource::new("glyph/retained");
+        let retained_glyph_atlas_pipeline =
+            PassPipeline::new("glyph/retained", "glyph/retained-depth");
 
         #[cfg(not(target_arch = "wasm32"))]
         let upload_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -5882,6 +6070,8 @@ impl GpuRenderer {
             fill_area_diag: FillAreaDiag::default(),
             #[cfg(not(target_arch = "wasm32"))]
             static_span: StaticSpanCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            display_clip: DisplayClipState::new(),
         };
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms); \
@@ -5893,12 +6083,158 @@ impl GpuRenderer {
         renderer
     }
 
+    /// The display's visible region (see [`crate::display_clip`]): the
+    /// part of the full-screen surface the panel physically shows. Only
+    /// the platform layer (or a host standing in for it) sets this —
+    /// never app content. `Full` — the default — keeps the cull machinery
+    /// structurally inert.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_display_visible_region(&mut self, region: DisplayVisibleRegion) {
+        self.display_clip.visible_region = region;
+    }
+
+    /// Whether the pass currently being encoded carries the display-clip
+    /// depth attachment; pipeline getters consult this to hand out the
+    /// depth-tested variant.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pass_depth(&self) -> bool {
+        self.display_clip.pass_depth.get()
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn pass_depth(&self) -> bool {
+        false
+    }
+
+    /// Decides whether the fused pass about to be encoded is the culled
+    /// one and returns its depth view: the visible region must leave
+    /// something to cull, the kill switch must be open, and `target_view`
+    /// must be THIS frame's root target with the pass viewport covering
+    /// it whole. Offscreen layer passes — even full-frame-sized ones —
+    /// never qualify: a layer's content can be transformed into view
+    /// later.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn display_clip_pass_depth_view(
+        &mut self,
+        target_view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::TextureView> {
+        if !self.display_clip.visible_region.cullable() {
+            return None;
+        }
+        if self.display_clip.frame_root_view.as_ref() != Some(target_view) {
+            return None;
+        }
+        if !display_clip_cull_enabled() {
+            return None;
+        }
+        self.ensure_display_clip_resources(width, height)
+    }
+
+    /// Returns the depth view for the current (size, region) pair,
+    /// tessellating the region's complement and building its vertex
+    /// buffer and the depth attachment on first use. A tessellation that
+    /// fails its conservative verification pins `None` for the pair: the
+    /// cull stays off rather than ever touching a visible pixel.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn ensure_display_clip_resources(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::TextureView> {
+        let region = self.display_clip.visible_region;
+        let key = ((width, height), region);
+        if let Some((cached_key, resources)) = &self.display_clip.resources {
+            if *cached_key == key {
+                return resources
+                    .as_ref()
+                    .map(|resources| resources.depth_view.clone());
+            }
+        }
+        let built = display_clip::tessellate_complement(region, width, height).map(|mesh| {
+            let occluder_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Display Clip Occluder Vertices"),
+                size: std::mem::size_of_val(mesh.vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX,
+                mapped_at_creation: true,
+            });
+            occluder_vertex_buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .copy_from_slice(bytemuck::cast_slice(&mesh.vertices));
+            occluder_vertex_buffer.unmap();
+            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("Display Clip Depth"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            // Once per (size, region), which is as rate-limited as it
+            // gets. The round display — the capability's first provider —
+            // keeps its own line.
+            match region {
+                DisplayVisibleRegion::InscribedCircle => log::info!(
+                    "[display-clip] round display: corner cull active ({} px masked) at {width}x{height}",
+                    mesh.masked_px,
+                ),
+                _ => log::info!(
+                    "[display-clip] visible-region cull active for {region:?} ({} px masked) at {width}x{height}",
+                    mesh.masked_px,
+                ),
+            }
+            DisplayClipResources {
+                depth_view: depth_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                occluder_vertex_buffer,
+                occluder_vertex_count: mesh.vertices.len() as u32,
+            }
+        });
+        let view = built.as_ref().map(|resources| resources.depth_view.clone());
+        self.display_clip.resources = Some((key, built));
+        view
+    }
+
+    /// Encodes the region complement's occluder, the first draw of a
+    /// culled fused pass: depth write at the near plane over the
+    /// tessellation, color writes off.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn draw_display_clip_occluder(
+        &self,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        width: u32,
+        height: u32,
+    ) {
+        let Some((((size_w, size_h), _), Some(resources))) = &self.display_clip.resources else {
+            return;
+        };
+        debug_assert_eq!((*size_w, *size_h), (width, height));
+        let pipeline = self
+            .display_clip
+            .occluder_pipeline
+            .get_or_init(self.adapter_backend, || {
+                create_display_clip_occluder_pipeline(&self.device, self.surface_format)
+            });
+        render_pass.set_scissor_rect(0, 0, width, height);
+        render_pass.set_pipeline(pipeline);
+        render_pass.set_vertex_buffer(0, resources.occluder_vertex_buffer.slice(..));
+        render_pass.draw(0..resources.occluder_vertex_count, 0..1);
+        self.frame_stats.add_draw_calls(1);
+    }
+
     fn shape_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
             BlendMode::DstOut => &self.pipeline_dst_out,
             _ => &self.pipeline,
         };
-        resource.get_or_init(self.adapter_backend, || {
+        resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_shape_pipeline(
                 &self.device,
                 self.surface_format,
@@ -5907,6 +6243,7 @@ impl GpuRenderer {
                 blend_mode,
                 self.shape_batch_limits,
                 "fs_main",
+                depth,
             )
         })
     }
@@ -5916,30 +6253,34 @@ impl GpuRenderer {
     /// coverage math is byte-identical, the gradient machinery is compiled
     /// out of the fragment stage.
     fn shape_pipeline_solid(&self) -> &wgpu::RenderPipeline {
-        self.pipeline_solid.get_or_init(self.adapter_backend, || {
-            create_shape_pipeline(
-                &self.device,
-                self.surface_format,
-                &self.uniform_bind_group_layout,
-                &self.shape_bind_group_layout,
-                BlendMode::SrcOver,
-                self.shape_batch_limits,
-                "fs_solid",
-            )
-        })
+        self.pipeline_solid
+            .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
+                create_shape_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.uniform_bind_group_layout,
+                    &self.shape_bind_group_layout,
+                    BlendMode::SrcOver,
+                    self.shape_batch_limits,
+                    "fs_solid",
+                    depth,
+                )
+            })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn mesh_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.mesh_pipeline.get_or_init(self.adapter_backend, || {
-            create_mesh_shape_pipeline(
-                &self.device,
-                self.surface_format,
-                &self.uniform_bind_group_layout,
-                &self.shape_bind_group_layout,
-                self.shape_batch_limits,
-            )
-        })
+        self.mesh_pipeline
+            .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
+                create_mesh_shape_pipeline(
+                    &self.device,
+                    self.surface_format,
+                    &self.uniform_bind_group_layout,
+                    &self.shape_bind_group_layout,
+                    self.shape_batch_limits,
+                    depth,
+                )
+            })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -5952,7 +6293,7 @@ impl GpuRenderer {
             BlendMode::DstOut => &instanced.pipeline_dst_out,
             _ => &instanced.pipeline,
         };
-        resource.get_or_init(self.adapter_backend, || {
+        resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_instanced_shape_pipeline(
                 &self.device,
                 self.surface_format,
@@ -5961,6 +6302,7 @@ impl GpuRenderer {
                 blend_mode,
                 self.shape_batch_limits,
                 "fs_main",
+                depth,
             )
         })
     }
@@ -5973,7 +6315,7 @@ impl GpuRenderer {
     ) -> &'a wgpu::RenderPipeline {
         instanced
             .pipeline_solid
-            .get_or_init(self.adapter_backend, || {
+            .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
                 create_instanced_shape_pipeline(
                     &self.device,
                     self.surface_format,
@@ -5982,6 +6324,7 @@ impl GpuRenderer {
                     BlendMode::SrcOver,
                     self.shape_batch_limits,
                     "fs_solid",
+                    depth,
                 )
             })
     }
@@ -5991,40 +6334,46 @@ impl GpuRenderer {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
             _ => &self.image_pipeline,
         };
-        resource.get_or_init(self.adapter_backend, || {
+        resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_image_pipeline(
                 &self.device,
                 self.surface_format,
                 &self.uniform_bind_group_layout,
                 &self.image_bind_group_layout,
                 blend_mode,
+                depth,
             )
         })
     }
 
     fn glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
         self.glyph_atlas_pipeline
-            .get_or_init(self.adapter_backend, || {
+            .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
                 create_glyph_atlas_pipeline(
                     &self.device,
                     self.surface_format,
                     &self.uniform_bind_group_layout,
                     &self.image_bind_group_layout,
+                    depth,
                 )
             })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn retained_glyph_atlas_pipeline(&self) -> &wgpu::RenderPipeline {
-        self.retained_glyph_atlas_pipeline
-            .get_or_init(self.adapter_backend, || {
+        self.retained_glyph_atlas_pipeline.get_or_init(
+            self.adapter_backend,
+            self.pass_depth(),
+            |depth| {
                 create_glyph_atlas_pipeline(
                     &self.device,
                     self.surface_format,
                     &self.retained_glyph_uniform_bind_group_layout,
                     &self.image_bind_group_layout,
+                    depth,
                 )
-            })
+            },
+        )
     }
 
     fn ensure_image_cached(&mut self, image: &ImageBitmap) -> Result<(), String> {
@@ -7734,6 +8083,10 @@ impl GpuRenderer {
             // One engagement per frame: the first fused partition carrying
             // the frame's opaque clear consumes this.
             self.static_span.armed = true;
+            // The frame's root target, held for the graph walk only: the
+            // display clip cull compares fused-pass targets against it so
+            // nothing but the real surface pass is ever culled.
+            self.display_clip.frame_root_view = Some(view.clone());
         }
 
         // Producer-side text layout cache size, carried by the packet — the
@@ -7741,6 +8094,10 @@ impl GpuRenderer {
         // between packet build and the stats block below.
         let text_cache_len = packet.text_cache_len;
         let result = self.render_graph(view, packet, returns);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.display_clip.frame_root_view = None;
+        }
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
         #[cfg(not(target_arch = "wasm32"))]
@@ -8959,6 +9316,18 @@ impl GpuRenderer {
                 );
             }
 
+            // Display clip region cull: engages exactly when this fused
+            // pass draws the frame's root surface whole and the platform
+            // reported a cullable visible region (the round display being
+            // the first provider). The pass then carries a transient depth
+            // attachment, the region complement's occluder is drawn first,
+            // and every pipeline below is fetched in its depth-tested
+            // variant (the getters read `pass_depth`). Offscreen/layer
+            // passes never reach this branch with a `Some` here.
+            let display_clip_depth_view =
+                self.display_clip_pass_depth_view(target_view, width, height);
+            let pass_depth = display_clip_depth_view.is_some();
+
             let device = self.device.clone();
             let composite_items: Vec<_> = chunk
                 .iter()
@@ -8982,6 +9351,7 @@ impl GpuRenderer {
                 &device,
                 load_op,
                 &composite_items,
+                pass_depth,
             );
             let shader_items: Vec<_> = chunk
                 .iter()
@@ -9002,7 +9372,7 @@ impl GpuRenderer {
                 .collect();
             let prepared_shaders = self
                 .effect_renderer
-                .prepare_shader_batch_draws(frame_encoder, &device, &shader_items)
+                .prepare_shader_batch_draws(frame_encoder, &device, &shader_items, pass_depth)
                 .ok_or_else(|| "shader composite batch preparation failed".to_string())?;
             if !shader_items.is_empty() {
                 self.effect_renderer.record_composite_pass();
@@ -9037,6 +9407,7 @@ impl GpuRenderer {
                     &device,
                     load_op,
                     std::slice::from_ref(item),
+                    pass_depth,
                 ),
                 None => Vec::new(),
             };
@@ -9080,7 +9451,21 @@ impl GpuRenderer {
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
-                            depth_stencil_attachment: None,
+                            // Clear + Discard: the display-clip depth
+                            // buffer is born and dies inside this pass — on
+                            // tiled GPUs it never leaves GMEM.
+                            depth_stencil_attachment: display_clip_depth_view.as_ref().map(
+                                |view| wgpu::RenderPassDepthStencilAttachment {
+                                    view,
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(
+                                            crate::display_clip::DISPLAY_CLIP_DEPTH_CLEAR,
+                                        ),
+                                        store: wgpu::StoreOp::Discard,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
                             timestamp_writes: None,
                             occlusion_query_set: None,
                             multiview_mask: None,
@@ -9094,8 +9479,16 @@ impl GpuRenderer {
                         &mut render_pass,
                         (width, height),
                         draw,
+                        pass_depth,
                     );
                 }
+                if pass_depth {
+                    // The occluder must be the pass's first draw: everything
+                    // after it depth-tests against the region it wrote.
+                    self.draw_display_clip_occluder(&mut render_pass, width, height);
+                    self.display_clip.pass_depth.set(true);
+                }
+
                 for batch in &fused_batches {
                     match batch {
                         FusedSegmentBatch::Shape { batch, blend_mode } => {
@@ -9151,6 +9544,7 @@ impl GpuRenderer {
                                     &mut render_pass,
                                     (width, height),
                                     draw,
+                                    pass_depth,
                                 );
                             }
                         }
@@ -9164,6 +9558,7 @@ impl GpuRenderer {
                                     &mut render_pass,
                                     (width, height),
                                     draw,
+                                    pass_depth,
                                 );
                             }
                         }
@@ -9305,6 +9700,10 @@ impl GpuRenderer {
             })
         })();
 
+        // The depth flag lives exactly as long as the culled pass's encode;
+        // resetting here (not inside the closure) covers the error paths
+        // too, so no later pass can inherit a depth-variant pipeline.
+        self.display_clip.pass_depth.set(false);
         self.scratch_image_vertices = image_vertices;
         self.scratch_image_indices = image_indices;
         self.scratch_image_cmds = image_cmds;
@@ -11596,7 +11995,10 @@ impl GpuRenderer {
                     && self.shape_batch_limits.storage,
             });
         }
-        RetainedBundleKey { ops }
+        RetainedBundleKey {
+            depth: self.pass_depth(),
+            ops,
+        }
     }
 
     /// Encodes `key`'s stretch into a render bundle: the IDENTICAL command
@@ -11615,7 +12017,15 @@ impl GpuRenderer {
                     // textures, pooled layer surfaces — is created with the
                     // renderer's one surface format.
                     color_formats: &[Some(self.surface_format)],
-                    depth_stencil: None,
+                    // A display-clip culled pass carries the depth
+                    // attachment; the bundle only reads it (content
+                    // pipelines test `Less`, write off), hence read-only on
+                    // both aspects.
+                    depth_stencil: key.depth.then_some(wgpu::RenderBundleDepthStencil {
+                        format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
+                        depth_read_only: true,
+                        stencil_read_only: true,
+                    }),
                     sample_count: 1,
                     multiview: None,
                 });
@@ -22120,7 +22530,10 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn bundle_key(ops: &[RetainedBundleOpKey]) -> RetainedBundleKey {
-        RetainedBundleKey { ops: ops.to_vec() }
+        RetainedBundleKey {
+            depth: false,
+            ops: ops.to_vec(),
+        }
     }
 
     /// The same stretch on consecutive frames reuses its bundle: one
@@ -22169,11 +22582,34 @@ mod tests {
             cache.end_frame();
             assert!(
                 !cache.hit(&RetainedBundleKey {
+                    depth: false,
                     ops: changed.clone()
                 }),
                 "changed key {changed:?} must not reuse the stale bundle"
             );
         }
+    }
+
+    /// A stretch encoded for the display-clip culled pass (depth
+    /// attachment, depth-variant pipelines) must never satisfy the flat
+    /// pass's lookup — and vice versa.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_bundle_cache_keys_depth_variants_apart() {
+        let mut cache: RetainedBundleCacheImpl<u32> = RetainedBundleCacheImpl::new();
+        let ops = vec![bundle_op(3, Some(7), 0, 40)];
+        cache.insert(
+            RetainedBundleKey {
+                depth: false,
+                ops: ops.clone(),
+            },
+            111,
+        );
+        cache.end_frame();
+        assert!(
+            !cache.hit(&RetainedBundleKey { depth: true, ops }),
+            "a flat bundle must not replay into the display-clip culled pass"
+        );
     }
 
     /// Entries a frame does not use are evicted at its end — bundles pin

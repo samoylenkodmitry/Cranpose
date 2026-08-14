@@ -14,8 +14,9 @@ use cranpose_ui_graphics::{
     BlendMode, RenderEffect, RuntimeShader, TileMode, ROUNDED_ALPHA_MASK_WGSL,
 };
 
+use crate::display_clip;
 use crate::gpu_stats::FrameStats;
-use crate::lazy_resource::LazyGpuResource;
+use crate::lazy_resource::{LazyGpuResource, PassPipeline};
 use std::cell::Cell;
 
 pub(crate) struct EffectRenderer {
@@ -35,9 +36,13 @@ pub(crate) struct EffectRenderer {
     offset_uniform_bind_group_layout: wgpu::BindGroupLayout,
 
     blit_shader: wgpu::ShaderModule,
+    /// Kept for the display-clip blit variants, whose module is compiled
+    /// lazily from this text with the content z rewritten (see
+    /// [`crate::display_clip::with_content_z`]).
+    blit_shader_source: String,
     blit_pipeline_layout: wgpu::PipelineLayout,
-    blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    blit_pipeline: PassPipeline,
+    blit_pipeline_dst_out: PassPipeline,
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
@@ -421,6 +426,7 @@ fn dst_out_blend_state() -> wgpu::BlendState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_fullscreen_pipeline(
     device: &wgpu::Device,
     label: &'static str,
@@ -429,6 +435,7 @@ fn create_fullscreen_pipeline(
     fragment_entry: &'static str,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -456,7 +463,7 @@ fn create_fullscreen_pipeline(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -612,9 +619,10 @@ impl EffectRenderer {
         let offset_pipeline = LazyGpuResource::new("effect/offset");
 
         // Compile blit pipeline
+        let blit_shader_source = shaders::blit_shader();
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit Shader"),
-            source: wgpu::ShaderSource::Wgsl(shaders::blit_shader().into()),
+            source: wgpu::ShaderSource::Wgsl(blit_shader_source.clone().into()),
         });
 
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -626,8 +634,9 @@ impl EffectRenderer {
             immediate_size: 0,
         });
 
-        let blit_pipeline = LazyGpuResource::new("effect/blit-src-over");
-        let blit_pipeline_dst_out = LazyGpuResource::new("effect/blit-dst-out");
+        let blit_pipeline = PassPipeline::new("effect/blit-src-over", "effect/blit-src-over-depth");
+        let blit_pipeline_dst_out =
+            PassPipeline::new("effect/blit-dst-out", "effect/blit-dst-out-depth");
 
         let projective_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Projective Blit Shader"),
@@ -667,6 +676,7 @@ impl EffectRenderer {
             offset_pipeline,
             offset_uniform_bind_group_layout,
             blit_shader,
+            blit_shader_source,
             blit_pipeline_layout,
             blit_pipeline,
             blit_pipeline_dst_out,
@@ -755,6 +765,7 @@ impl EffectRenderer {
                 "blur_fs",
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
+                false,
             )
         })
     }
@@ -770,6 +781,7 @@ impl EffectRenderer {
                     "blur_rounded_mask_fs",
                     self.surface_format,
                     wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
+                    false,
                 )
             })
     }
@@ -784,11 +796,21 @@ impl EffectRenderer {
                 "offset_fs",
                 self.surface_format,
                 wgpu::BlendState::REPLACE,
+                false,
             )
         })
     }
 
-    fn blit_pipeline(&self, device: &wgpu::Device, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+    /// The composite blit in its two pass flavors: `depth` is true exactly
+    /// when the caller is encoding the display-clip culled fused pass,
+    /// whose variant compiles the blit source with the content z rewritten
+    /// and depth-tests against the visible-region occluder.
+    fn blit_pipeline(
+        &self,
+        device: &wgpu::Device,
+        blend_mode: BlendMode,
+        depth: bool,
+    ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
             BlendMode::DstOut => (
                 &self.blit_pipeline_dst_out,
@@ -801,26 +823,40 @@ impl EffectRenderer {
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
         };
-        resource.get_or_init(self.adapter_backend, || {
+        resource.get_or_init(self.adapter_backend, depth, |depth| {
+            let depth_shader = depth.then(|| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Blit Shader (display clip)"),
+                    source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+                        self.blit_shader_source.clone().into(),
+                        true,
+                    )),
+                })
+            });
             create_fullscreen_pipeline(
                 device,
                 label,
                 &self.blit_pipeline_layout,
-                &self.blit_shader,
+                depth_shader.as_ref().unwrap_or(&self.blit_shader),
                 "blit_fs",
                 self.surface_format,
                 blend,
+                depth,
             )
         })
     }
 
-    fn initialized_blit_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
+    fn initialized_blit_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        depth: bool,
+    ) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
             BlendMode::DstOut => &self.blit_pipeline_dst_out,
             _ => &self.blit_pipeline,
         };
         resource
-            .get()
+            .get(depth)
             .expect("prepared composite must initialize its blit pipeline")
     }
 
@@ -1323,7 +1359,7 @@ impl EffectRenderer {
         if items.is_empty() {
             return true;
         }
-        let Some(prepared) = self.prepare_shader_batch_draws(recorder, device, items) else {
+        let Some(prepared) = self.prepare_shader_batch_draws(recorder, device, items, false) else {
             return false;
         };
 
@@ -1345,17 +1381,21 @@ impl EffectRenderer {
             });
 
         for draw in &prepared {
-            self.draw_prepared_shader_src_over(device, &mut pass, viewport, draw);
+            self.draw_prepared_shader_src_over(device, &mut pass, viewport, draw, false);
         }
 
         true
     }
 
+    /// `pass_depth` names the pass the prepared draws will execute in: true
+    /// exactly for the display-clip culled fused pass, whose shader
+    /// pipelines carry the depth state (see [`ShaderPipelineCache`]).
     pub(crate) fn prepare_shader_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         items: &'a [ShaderCompositeBatchItem<'a>],
+        pass_depth: bool,
     ) -> Option<Vec<PreparedShaderDraw<'a>>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
@@ -1366,6 +1406,7 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                pass_depth,
             )?;
             let mut padded = item.shader.uniforms_padded();
             let slot = RuntimeShader::RESERVED_UNIFORM_START;
@@ -1411,6 +1452,7 @@ impl EffectRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedShaderDraw<'_>,
+        pass_depth: bool,
     ) {
         let pipeline = self
             .shader_cache
@@ -1421,6 +1463,7 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 RuntimeShaderPipelineMode::PremultipliedSrcOver,
+                pass_depth,
             )
             .expect("shader batch pipeline was prevalidated");
         pass.set_pipeline(pipeline);
@@ -1481,6 +1524,7 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_uniform_bind_group_layout,
                 options.pipeline_mode,
+                false,
             )
             .is_none()
         {
@@ -1507,6 +1551,7 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_uniform_bind_group_layout,
             options.pipeline_mode,
+            false,
         ) else {
             return false;
         };
@@ -1762,7 +1807,7 @@ impl EffectRenderer {
                 ..Default::default()
             });
 
-        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode));
+        pass.set_pipeline(self.blit_pipeline(device, options.blend_mode, false));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = options.scissor {
@@ -1784,7 +1829,7 @@ impl EffectRenderer {
             return;
         }
 
-        let prepared = self.prepare_composite_batch_draws(recorder, device, load_op, items);
+        let prepared = self.prepare_composite_batch_draws(recorder, device, load_op, items, false);
 
         let mut pass = recorder
             .encoder()
@@ -1804,20 +1849,25 @@ impl EffectRenderer {
             });
 
         for draw in &prepared {
-            self.draw_prepared_composite(&mut pass, viewport, draw);
+            self.draw_prepared_composite(&mut pass, viewport, draw, false);
         }
     }
 
+    /// `pass_depth` names the pass the prepared draws will execute in: true
+    /// exactly for the display-clip culled fused pass, so the right blit
+    /// variant is initialized here (the draw arm fetches it without a
+    /// device).
     pub(crate) fn prepare_composite_batch_draws<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
         device: &wgpu::Device,
         load_op: wgpu::LoadOp<wgpu::Color>,
         items: &[CompositeBatchItem<'a>],
+        pass_depth: bool,
     ) -> Vec<PreparedCompositeDraw<'a>> {
         let mut prepared = Vec::with_capacity(items.len());
         for item in items {
-            self.blit_pipeline(device, item.blend_mode);
+            self.blit_pipeline(device, item.blend_mode, pass_depth);
             let options = CompositePassOptions {
                 alpha: item.alpha,
                 load_op,
@@ -1865,8 +1915,9 @@ impl EffectRenderer {
         pass: &mut wgpu::RenderPass<'_>,
         viewport: (u32, u32),
         draw: &PreparedCompositeDraw<'_>,
+        pass_depth: bool,
     ) {
-        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode));
+        pass.set_pipeline(self.initialized_blit_pipeline(draw.blend_mode, pass_depth));
         pass.set_bind_group(0, draw.texture_bind_group, &[]);
         pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
         if let Some((x, y, w, h)) = draw.scissor {

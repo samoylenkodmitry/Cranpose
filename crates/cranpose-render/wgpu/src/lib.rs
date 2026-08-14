@@ -7,6 +7,7 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod cost_tuner;
+mod display_clip;
 mod effect_renderer;
 mod frame_graph;
 mod frame_packet;
@@ -33,6 +34,10 @@ mod surface_requirements;
 #[cfg(test)]
 mod test_support;
 
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use display_clip::pixel_is_visible as display_clip_pixel_is_visible;
+pub use display_clip::DisplayVisibleRegion;
 #[doc(hidden)]
 pub use frame_packet::{CancelReason, PresentOutcome};
 pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
@@ -221,6 +226,14 @@ pub struct WgpuRenderer {
     /// and stamped into each packet, so a packet that straddles a surface
     /// reconfigure is cancelled by the present stage instead of drawn.
     surface_epoch: u64,
+    /// The display's visible region from
+    /// [`set_display_visible_region`][Self::set_display_visible_region]:
+    /// the part of the surface the panel physically shows. Held here so a
+    /// `GpuRenderer` replaced by `init_gpu` inherits it. Never derived
+    /// from app content — only the platform layer (or a host standing in
+    /// for it) may set it.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    display_visible_region: DisplayVisibleRegion,
 }
 
 impl WgpuRenderer {
@@ -251,6 +264,7 @@ impl WgpuRenderer {
             gpu_renderer: None,
             renderer_epoch: 0,
             surface_epoch: 0,
+            display_visible_region: DisplayVisibleRegion::Full,
         }
     }
 
@@ -295,6 +309,29 @@ impl WgpuRenderer {
             self.renderer_epoch,
             store_feed_generation,
         ));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(gpu_renderer) = self.gpu_renderer.as_mut() {
+            gpu_renderer.set_display_visible_region(self.display_visible_region);
+        }
+    }
+
+    /// The display's visible region — the part of this renderer's
+    /// full-screen surface the panel physically shows. Set by the
+    /// platform layer (never by app content); the renderer then culls
+    /// everything outside the region on the full-frame pass, for any app
+    /// and any layout. The round display is the first provider: Android's
+    /// `AConfiguration` screenRound maps to
+    /// [`DisplayVisibleRegion::InscribedCircle`] for a non-multi-window
+    /// activity. Future providers (display cutouts/insets, host-declared
+    /// clips) plug in as new region variants without touching the cull
+    /// machinery. Default [`DisplayVisibleRegion::Full`]: rendering is
+    /// bitwise identical to a renderer without this capability.
+    pub fn set_display_visible_region(&mut self, region: DisplayVisibleRegion) {
+        self.display_visible_region = region;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(gpu_renderer) = self.gpu_renderer.as_mut() {
+            gpu_renderer.set_display_visible_region(region);
+        }
     }
 
     /// Record that the surface was reconfigured (resize, format change,
