@@ -2296,11 +2296,12 @@ struct ReplaySlot {
     /// for the life of the capture, so bundle keys need nothing beyond the
     /// capture epoch they already carry.
     has_gradient: bool,
-    /// Prefix sums of per-shape capture-space drawn area for the
-    /// `CRANPOSE_FILL_DIAG` instrument (`shape_count + 1` entries): mesh
-    /// triangle areas when this slot replays its arc mesh, bounding-quad
-    /// areas otherwise. Empty when the diagnostic is off.
-    area_prefix: Vec<f64>,
+    /// Per-shape capture-space fill records for the `CRANPOSE_FILL_DIAG`
+    /// instrument (`shape_count` entries): submitted area (mesh triangles
+    /// when this slot replays its arc mesh, bounding quads otherwise),
+    /// analytic lit area, opacity class and quad AABB. Empty when the
+    /// diagnostic is off.
+    fill_diag_shapes: Vec<FillDiagShapeRecord>,
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
@@ -2962,7 +2963,7 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
 /// Off by default; any set value except "0" enables. Read once per process,
 /// so a disabled hot path pays one static load and a branch.
 #[cfg(not(target_arch = "wasm32"))]
-fn fill_area_diag_enabled() -> bool {
+pub(crate) fn fill_area_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(
         || matches!(std::env::var("CRANPOSE_FILL_DIAG").as_deref(), Ok(value) if value != "0"),
@@ -2974,7 +2975,334 @@ fn fill_area_diag_enabled() -> bool {
 const FILL_DIAG_WINDOW_FRAMES: u32 = 120;
 
 #[cfg(not(target_arch = "wasm32"))]
-const FILL_DIAG_BUCKETS: usize = 7;
+const FILL_DIAG_BUCKETS: usize = 9;
+
+/// Opacity class of a shape's fill for the `[fill-truth]` histogram, decided
+/// from the CONVERTED record: a solid brush with vertex alpha exactly 1.0 is
+/// opaque, any other solid is translucent, and every gradient counts as
+/// non-solid (its stops can each carry their own alpha). Retained shapes are
+/// classified from their capture-time colors — a later recolor patch through
+/// the slot's paint buffer is not re-classified.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FillOpacityClass {
+    Opaque = 0,
+    Translucent = 1,
+    NonSolid = 2,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_opacity_class(shape: &ShapeData) -> FillOpacityClass {
+    if shape.brush_type != 0 {
+        FillOpacityClass::NonSolid
+    } else if shape.color[3] == 1.0 {
+        FillOpacityClass::Opaque
+    } else {
+        FillOpacityClass::Translucent
+    }
+}
+
+/// The fill-diag bucket of a batched shape quad, decoded from the packed
+/// flags the way the fragment shader decodes them (`u32(max(x, 0.0)) & 3`).
+/// Fills keep real corner radii in `radii` (arcs reuse the field for trig,
+/// but they take the arc arm first).
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_bucket(shape: &ShapeData) -> usize {
+    match shape.stroke_params[1].max(0.0) as u32 & 3 {
+        SHAPE_KIND_ARC => FillAreaDiag::ARC,
+        SHAPE_KIND_STROKE => FillAreaDiag::RRECT_STROKE,
+        _ if shape.radii.iter().any(|radius| *radius > 0.0) => FillAreaDiag::RRECT_FILL,
+        _ => FillAreaDiag::RECT,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_bucket_name(bucket: usize) -> &'static str {
+    match bucket {
+        FillAreaDiag::ARC => "arc",
+        FillAreaDiag::RRECT_STROKE => "rrect-stroke",
+        FillAreaDiag::RRECT_FILL => "rrect-fill",
+        FillAreaDiag::RECT => "rect",
+        FillAreaDiag::MESH => "mesh",
+        FillAreaDiag::RETAINED => "retained",
+        FillAreaDiag::IMAGE_GLYPH => "img+glyph",
+        FillAreaDiag::EFFECT_COMPOSITE => "effect-comp",
+        FillAreaDiag::OFFSCREEN_SOURCE => "offscr-src",
+        _ => "?",
+    }
+}
+
+/// Analytic covered area of a shape in device px² — the pixels the SDF will
+/// actually keep, as opposed to the bounding quad it is rasterized with —
+/// decoded from the same converted `ShapeData` fields the classifier and the
+/// band-mesh builders read. Deliberately closed-form per class:
+///
+/// * arc / annular sector: `sweep · r_mid · thickness` plus the endcap area
+///   (two half-discs for round caps; square caps rasterize the same pixel
+///   measure — `sdf_arc_band` cuts the endpoint disc at `plane − rb`, which
+///   removes nothing but the tangent point; butt caps add nothing; a closed
+///   ring has no caps).
+/// * stroked round-rect: centerline perimeter × stroke width — exact while
+///   every corner radius ≥ half the stroke width (the offset-band identity);
+///   miter corner spurs at sharp corners are not modeled.
+/// * round-rect / circle fill: `w·h − (1 − π/4)·Σ rᵢ²`, radii clamped to the
+///   half-extent (a circle degenerates to exactly `π r²`).
+/// * plain rect: the submitted quad IS the covered set — priced at the quad
+///   area by the caller, this function returns `w·h` (equal under any
+///   similarity).
+///
+/// Clips and viewport scissors are not modeled, same as the quad accounting.
+#[cfg(not(target_arch = "wasm32"))]
+fn analytic_covered_area(shape: &ShapeData) -> f64 {
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    match flags & 3 {
+        SHAPE_KIND_ARC => {
+            let outer = f64::from(shape.stroke_params[2]).max(0.0);
+            let inner = f64::from(shape.stroke_params[3]).clamp(0.0, outer);
+            let tau = f64::from(cranpose_ui_graphics::TAU);
+            let sweep = f64::from(shape.arc_params[3]).clamp(0.0, tau);
+            let thickness = outer - inner;
+            let band = sweep * 0.5 * (outer + inner) * thickness;
+            let caps = if sweep >= tau {
+                0.0
+            } else {
+                match (flags >> 2) & 3 {
+                    // Round and square: two half-discs of radius t/2 — the
+                    // shader's square cap keeps the endpoint disc's measure
+                    // (see the doc comment).
+                    1 | 2 => std::f64::consts::PI * (thickness * 0.5) * (thickness * 0.5),
+                    _ => 0.0,
+                }
+            };
+            band + caps
+        }
+        SHAPE_KIND_STROKE => {
+            let stroke_width = f64::from(shape.stroke_params[0]).max(0.0);
+            // `rect` for a stroked shape is the stroke-inflated box.
+            let geom_w = (f64::from(shape.rect[2]) - stroke_width).max(0.0);
+            let geom_h = (f64::from(shape.rect[3]) - stroke_width).max(0.0);
+            let max_radius = geom_w.min(geom_h) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            let perimeter =
+                2.0 * (geom_w + geom_h) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum;
+            perimeter.max(0.0) * stroke_width
+        }
+        _ => {
+            let width = f64::from(shape.rect[2]).max(0.0);
+            let height = f64::from(shape.rect[3]).max(0.0);
+            let max_radius = width.min(height) * 0.5;
+            let radii_sq: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| {
+                    let radius = f64::from(*radius).clamp(0.0, max_radius);
+                    radius * radius
+                })
+                .sum();
+            width * height - (1.0 - std::f64::consts::FRAC_PI_4) * radii_sq
+        }
+    }
+}
+
+/// Antialiasing allowance added on top of [`analytic_covered_area`]: the SDF
+/// feathers over roughly one pixel of boundary, so ~1 px × the covered set's
+/// perimeter approximates the partially-lit fringe. Plain rects get none
+/// (their quad is exact); a stroked shape has two boundary curves, whose
+/// perimeters sum to twice the centerline perimeter for a convex outline.
+#[cfg(not(target_arch = "wasm32"))]
+fn aa_perimeter_allowance(shape: &ShapeData) -> f64 {
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    match flags & 3 {
+        SHAPE_KIND_ARC => {
+            let outer = f64::from(shape.stroke_params[2]).max(0.0);
+            let inner = f64::from(shape.stroke_params[3]).clamp(0.0, outer);
+            let tau = f64::from(cranpose_ui_graphics::TAU);
+            let sweep = f64::from(shape.arc_params[3]).clamp(0.0, tau);
+            let ends = if sweep >= tau {
+                0.0
+            } else {
+                2.0 * (outer - inner)
+            };
+            sweep * (outer + inner) + ends
+        }
+        SHAPE_KIND_STROKE => {
+            let stroke_width = f64::from(shape.stroke_params[0]).max(0.0);
+            let geom_w = (f64::from(shape.rect[2]) - stroke_width).max(0.0);
+            let geom_h = (f64::from(shape.rect[3]) - stroke_width).max(0.0);
+            let max_radius = geom_w.min(geom_h) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            let perimeter =
+                2.0 * (geom_w + geom_h) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum;
+            2.0 * perimeter.max(0.0)
+        }
+        _ if shape.radii.iter().any(|radius| *radius > 0.0) => {
+            let width = f64::from(shape.rect[2]).max(0.0);
+            let height = f64::from(shape.rect[3]).max(0.0);
+            let max_radius = width.min(height) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            (2.0 * (width + height) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum).max(0.0)
+        }
+        _ => 0.0,
+    }
+}
+
+/// Analytic lit area: covered pixels plus the AA fringe allowance. Callers
+/// clamp it to the shape's submitted area — the shader cannot light pixels
+/// its quad never rasterizes.
+#[cfg(not(target_arch = "wasm32"))]
+fn analytic_lit_area(shape: &ShapeData) -> f64 {
+    analytic_covered_area(shape) + aa_perimeter_allowance(shape)
+}
+
+/// Device-space AABB of a shape's submitted quad: min x, min y, max x, max y.
+#[cfg(not(target_arch = "wasm32"))]
+fn quad_aabb(shape: &ShapeData) -> [f64; 4] {
+    let xs = [
+        f64::from(shape.quad01[0]),
+        f64::from(shape.quad01[2]),
+        f64::from(shape.quad23[0]),
+        f64::from(shape.quad23[2]),
+    ];
+    let ys = [
+        f64::from(shape.quad01[1]),
+        f64::from(shape.quad01[3]),
+        f64::from(shape.quad23[1]),
+        f64::from(shape.quad23[3]),
+    ];
+    let fold = |values: [f64; 4], pick: fn(f64, f64) -> f64| {
+        values.into_iter().reduce(pick).unwrap_or(0.0)
+    };
+    [
+        fold(xs, f64::min),
+        fold(ys, f64::min),
+        fold(xs, f64::max),
+        fold(ys, f64::max),
+    ]
+}
+
+/// Vertical strips of the midpoint rule used by
+/// [`area_outside_inscribed_circle`]. 32 strips keep the chord error under
+/// ~0.5% for a full-viewport quad — plenty for a corner-waste ratio.
+#[cfg(not(target_arch = "wasm32"))]
+const CORNER_FILL_STRIPS: usize = 32;
+
+/// Area of an axis-aligned box lying inside the viewport but OUTSIDE the
+/// inscribed circle (diameter `min(w, h)`, centered) — the pixels a round
+/// watch display physically cannot show. Approximations, deliberate: the
+/// submitted quad is replaced by its AABB (exact for the axis-aligned quads
+/// that dominate full-frame scenes), and the circle chord is integrated with
+/// [`CORNER_FILL_STRIPS`] midpoint strips instead of closed-form segments.
+/// On a non-square viewport the side bands beyond the circle count as
+/// outside too, which is the honest answer for a round display.
+#[cfg(not(target_arch = "wasm32"))]
+fn area_outside_inscribed_circle(aabb: [f64; 4], viewport: (u32, u32)) -> f64 {
+    let viewport_w = f64::from(viewport.0);
+    let viewport_h = f64::from(viewport.1);
+    if viewport_w <= 0.0 || viewport_h <= 0.0 {
+        return 0.0;
+    }
+    let x0 = aabb[0].max(0.0);
+    let y0 = aabb[1].max(0.0);
+    let x1 = aabb[2].min(viewport_w);
+    let y1 = aabb[3].min(viewport_h);
+    if x1 <= x0 || y1 <= y0 {
+        return 0.0;
+    }
+    let center_x = viewport_w * 0.5;
+    let center_y = viewport_h * 0.5;
+    let radius = viewport_w.min(viewport_h) * 0.5;
+    let strip = (x1 - x0) / CORNER_FILL_STRIPS as f64;
+    let mut outside = 0.0;
+    for index in 0..CORNER_FILL_STRIPS {
+        let x = x0 + (index as f64 + 0.5) * strip;
+        let dx = x - center_x;
+        let chord_sq = radius * radius - dx * dx;
+        let inside = if chord_sq > 0.0 {
+            let half_chord = chord_sq.sqrt();
+            (y1.min(center_y + half_chord) - y0.max(center_y - half_chord)).max(0.0)
+        } else {
+            0.0
+        };
+        outside += ((y1 - y0) - inside) * strip;
+    }
+    outside
+}
+
+/// Per-shape fill-diag record a replay slot retains at capture, so retained
+/// draws can be priced per range without re-deriving anything per frame.
+/// Only built while `CRANPOSE_FILL_DIAG` is on.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct FillDiagShapeRecord {
+    /// Capture-space area actually submitted for this shape: mesh triangle
+    /// area when the slot replays its arc mesh, bounding-quad area otherwise.
+    drawn_px2: f64,
+    /// Analytic lit area ([`analytic_lit_area`]), clamped to `drawn_px2`.
+    lit_px2: f64,
+    /// SDF-class bucket ([`fill_diag_bucket`]), for the top-slack dump.
+    bucket: usize,
+    opacity: FillOpacityClass,
+    /// Capture-space AABB of the submitted quad, for the corner counter.
+    aabb: [f64; 4],
+}
+
+/// Builds a capture's fill-diag records. `mesh` carries the kept arc mesh's
+/// `(vertices, indices, index_prefix)` when the slot will replay it, so each
+/// shape is priced by its true triangle area.
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_capture_records(
+    shape_data: &[ShapeData],
+    mesh: Option<(&[MeshVertex], &[u32], &[u32])>,
+) -> Vec<FillDiagShapeRecord> {
+    shape_data
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| {
+            let drawn_px2 = match mesh {
+                Some((vertices, indices, index_prefix)) => {
+                    let start = index_prefix[index] as usize;
+                    let end = index_prefix[index + 1] as usize;
+                    triangles_shoelace_area(vertices, &indices[start..end])
+                }
+                None => quad_shoelace_area(shape),
+            };
+            FillDiagShapeRecord {
+                drawn_px2,
+                lit_px2: analytic_lit_area(shape).clamp(0.0, drawn_px2),
+                bucket: fill_diag_bucket(shape),
+                opacity: fill_opacity_class(shape),
+                aabb: quad_aabb(shape),
+            }
+        })
+        .collect()
+}
+
+/// One entry of the once-per-process top-slack dump: a retained shape whose
+/// submitted area most exceeds its lit area.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct FillDiagSlackEntry {
+    slot: u32,
+    shape: u32,
+    bucket: usize,
+    drawn_px2: f64,
+    lit_px2: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_SLACK_TOP: usize = 10;
 
 /// Submitted-fill-area accounting behind [`fill_area_diag_enabled`]. The
 /// watch's GPU counters are sepolicy-blocked, but the renderer knows every
@@ -2996,9 +3324,30 @@ const FILL_DIAG_BUCKETS: usize = 7;
 /// * `img+glyph` — image quads exactly; glyph atlas quads as width x height.
 ///   A retained glyph run counts every quad of its cached buffer (the
 ///   shared path's per-quad viewport cull is not re-run for it).
+/// * `effect-comp` — effect-renderer draws into a caller-supplied view:
+///   composites/blits (incl. batched, projective and masked variants) and
+///   src-over runtime shader passes. Priced per pass at the dest viewport
+///   area, clamped by the scissor when one is set (min of the two areas
+///   stands in for their exact intersection).
+/// * `offscr-src` — passes rendering INTO offscreen chain textures: blur
+///   ping-pong axis passes, offset passes, replace-mode shader passes, and
+///   the shadow-source target passes of `encode_shadow_shape_source_passes`
+///   (the whole bounds-sized target per pass — its load/store round trip —
+///   on top of the shape quads it draws, which the SDF-class buckets price
+///   as usual).
 ///
-/// Not counted: effect-renderer composites (layer/blur blends) and clears —
-/// this instrument prices the scene's own submitted quads.
+/// The `[fill-truth]` line splits every bucket into analytic lit vs slack
+/// (`lit` per [`analytic_lit_area`], `slack = submitted − lit`, clamped
+/// non-negative; effect passes are all-lit by definition), histograms lit
+/// pixels by [`FillOpacityClass`] (shape buckets only — image/glyph and
+/// effect fill has no CPU-known alpha and is excluded), and prices the
+/// full-frame corner waste per [`area_outside_inscribed_circle`]. The corner
+/// counter covers full-frame shape batches and identity-transform retained
+/// draws; meshed rims stay priced by their bounding AABB there (documented
+/// overcount), and image/glyph quads are excluded.
+///
+/// Not counted: frame-graph layer clears/attachments outside the effect
+/// renderer's own draw sites.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct FillAreaDiag {
@@ -3006,9 +3355,25 @@ struct FillAreaDiag {
     /// because draw encoding accumulates through `&self`, the same pattern
     /// as [`gpu_stats::FrameStats`].
     frame: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
+    /// Current frame's per-bucket analytic lit area, ≤ the submitted area.
+    frame_lit: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
+    /// Current frame's lit area by [`FillOpacityClass`], shape buckets only.
+    frame_opacity: [std::cell::Cell<f64>; 3],
+    /// Current frame's full-frame fill outside the inscribed circle.
+    frame_corner: std::cell::Cell<f64>,
+    /// The frame's surface size, latched by [`Self::reset_frame`] — the
+    /// full-frame-pass gate and the inscribed circle both derive from it.
+    viewport: std::cell::Cell<(u32, u32)>,
     /// Window totals, folded once per frame by [`Self::finish_frame`].
     window: [f64; FILL_DIAG_BUCKETS],
+    window_lit: [f64; FILL_DIAG_BUCKETS],
+    window_opacity: [f64; 3],
+    window_corner: f64,
     window_frames: u32,
+    /// Worst retained shapes by slack, collected at slot capture and dumped
+    /// once with the first report window that has any (then dropped).
+    slack_top: Vec<FillDiagSlackEntry>,
+    slack_dumped: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3020,88 +3385,234 @@ impl FillAreaDiag {
     const MESH: usize = 4;
     const RETAINED: usize = 5;
     const IMAGE_GLYPH: usize = 6;
+    const EFFECT_COMPOSITE: usize = 7;
+    const OFFSCREEN_SOURCE: usize = 8;
 
     fn add(&self, bucket: usize, area_px2: f64) {
         let cell = &self.frame[bucket];
         cell.set(cell.get() + area_px2);
     }
 
-    /// Splits a freshly converted batch's quads by the SDF class the
-    /// fragment shader will run, decoded from the packed flags the way the
-    /// shader decodes them (`u32(max(x, 0.0)) & 3`).
-    fn add_shape_quads(&self, shapes: &[ShapeData]) {
+    fn add_lit(&self, bucket: usize, lit_px2: f64) {
+        let cell = &self.frame_lit[bucket];
+        cell.set(cell.get() + lit_px2);
+    }
+
+    fn add_corner(&self, px2: f64) {
+        self.frame_corner.set(self.frame_corner.get() + px2);
+    }
+
+    /// Whether a batch's viewport IS this frame's surface — the gate for the
+    /// corner counter (offscreen shadow/layer passes carry their own bounds
+    /// viewport and never qualify).
+    fn is_full_frame(&self, viewport: ViewportUniformParams) -> bool {
+        let (width, height) = self.viewport.get();
+        width > 0
+            && height > 0
+            && viewport.width == width
+            && viewport.height == height
+            && viewport.offset == [0.0, 0.0]
+    }
+
+    /// Splits a freshly converted batch's quads by SDF class
+    /// ([`fill_diag_bucket`]), alongside each bucket's analytic lit area,
+    /// the opacity histogram and — for full-frame passes — the corner
+    /// counter.
+    fn add_shape_quads(&self, shapes: &[ShapeData], viewport: ViewportUniformParams) {
+        let full_frame = self.is_full_frame(viewport);
+        let frame_viewport = self.viewport.get();
         let mut buckets = [0.0_f64; FILL_DIAG_BUCKETS];
+        let mut lit_buckets = [0.0_f64; FILL_DIAG_BUCKETS];
+        let mut opacity = [0.0_f64; 3];
+        let mut corner = 0.0_f64;
         for shape in shapes {
-            let bucket = match shape.stroke_params[1].max(0.0) as u32 & 3 {
-                SHAPE_KIND_ARC => Self::ARC,
-                SHAPE_KIND_STROKE => Self::RRECT_STROKE,
-                // Fills keep real corner radii in `radii` (arcs reuse the
-                // field for trig, but they took the arm above).
-                _ if shape.radii.iter().any(|radius| *radius > 0.0) => Self::RRECT_FILL,
-                _ => Self::RECT,
-            };
-            buckets[bucket] += quad_shoelace_area(shape);
+            let bucket = fill_diag_bucket(shape);
+            let quad = quad_shoelace_area(shape);
+            let lit = analytic_lit_area(shape).clamp(0.0, quad);
+            buckets[bucket] += quad;
+            lit_buckets[bucket] += lit;
+            opacity[fill_opacity_class(shape) as usize] += lit;
+            if full_frame {
+                corner += area_outside_inscribed_circle(quad_aabb(shape), frame_viewport);
+            }
         }
         for (bucket, area) in buckets.into_iter().enumerate() {
             if area > 0.0 {
                 self.add(bucket, area);
             }
         }
+        for (bucket, lit) in lit_buckets.into_iter().enumerate() {
+            if lit > 0.0 {
+                self.add_lit(bucket, lit);
+            }
+        }
+        for (class, lit) in self.frame_opacity.iter().zip(opacity) {
+            class.set(class.get() + lit);
+        }
+        if corner > 0.0 {
+            self.add_corner(corner);
+        }
     }
 
     /// A transient rim replaced its bounding quad with a band mesh: move the
-    /// quad's area (already counted at batch prepare) out of the stroke
-    /// bucket and count the mesh triangles instead.
-    fn note_rim_mesh(&self, quad_px2: f64, mesh_px2: f64) {
-        self.add(Self::RRECT_STROKE, -quad_px2);
+    /// quad's area and lit (already counted at batch prepare) out of the
+    /// stroke bucket and count the mesh triangles instead. The opacity
+    /// histogram and corner counter stay as priced at batch prepare — the
+    /// same pixels light up either way, and the corner counter deliberately
+    /// keeps the quad AABB (documented overcount for meshed rims).
+    fn note_rim_mesh(&self, shape: &ShapeData, mesh_px2: f64) {
+        let quad = quad_shoelace_area(shape);
+        let lit = analytic_lit_area(shape).clamp(0.0, quad);
+        self.add(Self::RRECT_STROKE, -quad);
+        self.add_lit(Self::RRECT_STROKE, -lit);
         self.add(Self::MESH, mesh_px2);
+        self.add_lit(Self::MESH, lit.min(mesh_px2));
     }
 
     /// One retained replay draw over `first..last` of a slot's capture:
-    /// capture-space area from the slot's prefix table, times the draw's
-    /// similarity scale squared.
-    fn add_retained_range(&self, slot: &ReplaySlot, first: u32, last: u32, scale: f32) {
-        let (Some(start), Some(end)) = (
-            slot.area_prefix.get(first as usize),
-            slot.area_prefix.get(last as usize),
-        ) else {
+    /// capture-space records times the draw's similarity scale squared. The
+    /// corner counter only accumulates for identity-transform draws (rot 0,
+    /// scale 1 — the static background/rings case it exists for), because a
+    /// moved batch's capture-space AABBs no longer say where it lands.
+    fn add_retained_range(
+        &self,
+        records: &[FillDiagShapeRecord],
+        first: u32,
+        last: u32,
+        transform: &SimilarityTransform,
+    ) {
+        let Some(range) = records.get(first as usize..last as usize) else {
             return;
         };
-        let scale = f64::from(scale);
-        self.add(Self::RETAINED, (end - start) * scale * scale);
+        let scale = f64::from(transform.scale);
+        let factor = scale * scale;
+        let identity = transform.rot == [1.0, 0.0] && transform.scale == 1.0;
+        let frame_viewport = self.viewport.get();
+        let mut drawn = 0.0_f64;
+        let mut lit = 0.0_f64;
+        let mut opacity = [0.0_f64; 3];
+        let mut corner = 0.0_f64;
+        for record in range {
+            drawn += record.drawn_px2;
+            lit += record.lit_px2;
+            opacity[record.opacity as usize] += record.lit_px2;
+            if identity {
+                corner += area_outside_inscribed_circle(record.aabb, frame_viewport);
+            }
+        }
+        self.add(Self::RETAINED, drawn * factor);
+        self.add_lit(Self::RETAINED, lit * factor);
+        for (class, value) in self.frame_opacity.iter().zip(opacity) {
+            class.set(class.get() + value * factor);
+        }
+        if corner > 0.0 {
+            self.add_corner(corner);
+        }
+    }
+
+    /// Collects top-slack candidates from a fresh capture, keeping the
+    /// [`FILL_DIAG_SLACK_TOP`] worst across all captures until the first
+    /// report window dumps them.
+    fn note_retained_capture(&mut self, slot: u32, records: &[FillDiagShapeRecord]) {
+        if self.slack_dumped {
+            return;
+        }
+        for (index, record) in records.iter().enumerate() {
+            if record.drawn_px2 - record.lit_px2 <= 0.0 {
+                continue;
+            }
+            self.slack_top.push(FillDiagSlackEntry {
+                slot,
+                shape: index as u32,
+                bucket: record.bucket,
+                drawn_px2: record.drawn_px2,
+                lit_px2: record.lit_px2,
+            });
+        }
+        self.slack_top
+            .sort_by(|a, b| (b.drawn_px2 - b.lit_px2).total_cmp(&(a.drawn_px2 - a.lit_px2)));
+        self.slack_top.truncate(FILL_DIAG_SLACK_TOP);
     }
 
     /// Area of an image or text-image quad from its four device-space
     /// corners (TL, TR, BL, BR — the shared `(0, 1, 2)(2, 1, 3)` pattern).
+    /// Textures light every pixel of their quad, so lit == submitted.
     fn add_image_quad(&self, quad: &[[f32; 2]; 4]) {
         let corner = |index: usize| [f64::from(quad[index][0]), f64::from(quad[index][1])];
         let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
             ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
         };
         let [a, b, c, d] = [corner(0), corner(1), corner(2), corner(3)];
-        self.add(Self::IMAGE_GLYPH, tri(a, b, c) + tri(c, b, d));
+        let area = tri(a, b, c) + tri(c, b, d);
+        self.add(Self::IMAGE_GLYPH, area);
+        self.add_lit(Self::IMAGE_GLYPH, area);
     }
 
     /// One glyph atlas quad, axis-aligned by construction.
     fn add_glyph_quad(&self, quad: &CachedTextGlyphQuad) {
-        self.add(Self::IMAGE_GLYPH, quad.width as f64 * quad.height as f64);
+        let area = quad.width as f64 * quad.height as f64;
+        self.add(Self::IMAGE_GLYPH, area);
+        self.add_lit(Self::IMAGE_GLYPH, area);
     }
 
-    /// Restarts the frame counters — called from the same per-frame reset
-    /// point as the transient rim mesh scratch.
-    fn reset_frame(&self) {
-        for cell in &self.frame {
-            cell.set(0.0);
+    /// Effect-renderer pass fill drained once per frame from the effect
+    /// renderer's own counters. Full-target draws: every counted pixel is
+    /// shaded, so lit == submitted and slack is zero by construction.
+    fn add_effect_fill(&self, composite_px2: f64, offscreen_px2: f64) {
+        if composite_px2 > 0.0 {
+            self.add(Self::EFFECT_COMPOSITE, composite_px2);
+            self.add_lit(Self::EFFECT_COMPOSITE, composite_px2);
+        }
+        if offscreen_px2 > 0.0 {
+            self.add(Self::OFFSCREEN_SOURCE, offscreen_px2);
+            self.add_lit(Self::OFFSCREEN_SOURCE, offscreen_px2);
         }
     }
 
+    /// One render pass targeting an offscreen source texture (shadow source
+    /// passes): the whole target area counts — its clear/load/store round
+    /// trip — on top of the shape quads the pass draws, which
+    /// [`Self::add_shape_quads`] prices separately under the pass's own
+    /// bounds viewport.
+    fn add_offscreen_target_fill(&self, px2: f64) {
+        if px2 > 0.0 {
+            self.add(Self::OFFSCREEN_SOURCE, px2);
+            self.add_lit(Self::OFFSCREEN_SOURCE, px2);
+        }
+    }
+
+    /// Restarts the frame counters and latches the surface size — called
+    /// from the same per-frame reset point as the transient rim mesh
+    /// scratch.
+    fn reset_frame(&self, width: u32, height: u32) {
+        for cell in &self.frame {
+            cell.set(0.0);
+        }
+        for cell in &self.frame_lit {
+            cell.set(0.0);
+        }
+        for cell in &self.frame_opacity {
+            cell.set(0.0);
+        }
+        self.frame_corner.set(0.0);
+        self.viewport.set((width, height));
+    }
+
     /// Folds the frame into the window and, every
-    /// [`FILL_DIAG_WINDOW_FRAMES`] rendered frames, emits one warn-level
-    /// line of per-bucket window averages (Mpx/frame, one decimal).
+    /// [`FILL_DIAG_WINDOW_FRAMES`] rendered frames, emits the `[fill-diag]`
+    /// bucket line, the `[fill-truth]` lit/slack + opacity + corner line,
+    /// and — once per process — the retained top-slack dump.
     fn finish_frame(&mut self, width: u32, height: u32) {
         for (total, cell) in self.window.iter_mut().zip(&self.frame) {
             *total += cell.get();
         }
+        for (total, cell) in self.window_lit.iter_mut().zip(&self.frame_lit) {
+            *total += cell.get();
+        }
+        for (total, cell) in self.window_opacity.iter_mut().zip(&self.frame_opacity) {
+            *total += cell.get();
+        }
+        self.window_corner += self.frame_corner.get();
         self.window_frames += 1;
         if self.window_frames < FILL_DIAG_WINDOW_FRAMES {
             return;
@@ -3117,7 +3628,8 @@ impl FillAreaDiag {
         };
         log::warn!(
             "[fill-diag] Mpx/frame: arc {:.1}, rrect-stroke {:.1}, rrect-fill {:.1}, \
-             rect {:.1}, mesh {:.1}, retained {:.1}, img+glyph {:.1}, total {:.1} \
+             rect {:.1}, mesh {:.1}, retained {:.1}, img+glyph {:.1}, \
+             effect-comp {:.1}, offscr-src {:.1}, total {:.1} \
              ({:.1}x overdraw of {:.3} Mpx)",
             mega(Self::ARC),
             mega(Self::RRECT_STROKE),
@@ -3126,11 +3638,59 @@ impl FillAreaDiag {
             mega(Self::MESH),
             mega(Self::RETAINED),
             mega(Self::IMAGE_GLYPH),
+            mega(Self::EFFECT_COMPOSITE),
+            mega(Self::OFFSCREEN_SOURCE),
             total_mega,
             overdraw,
             screen_mega,
         );
+        // Lit vs slack per bucket: lit per [`analytic_lit_area`], slack the
+        // remainder of the submitted area (clamped — negatives are rim-mesh
+        // rounding, not information).
+        let lit = |bucket: usize| self.window_lit[bucket] / frames / 1e6;
+        let slack = |bucket: usize| (mega(bucket) - lit(bucket)).max(0.0);
+        let truth = |bucket: usize| format!("{:.2}|{:.2}", lit(bucket), slack(bucket));
+        log::warn!(
+            "[fill-truth] Mpx/frame lit|slack: arc {}, rrect-stroke {}, rrect-fill {}, \
+             rect {}, mesh {}, retained {}, img+glyph {}, effect-comp {}, offscr-src {}; \
+             lit alpha Mpx: opaque {:.2}, translucent {:.2}, nonsolid {:.2}; \
+             corner-outside {:.2}",
+            truth(Self::ARC),
+            truth(Self::RRECT_STROKE),
+            truth(Self::RRECT_FILL),
+            truth(Self::RECT),
+            truth(Self::MESH),
+            truth(Self::RETAINED),
+            truth(Self::IMAGE_GLYPH),
+            truth(Self::EFFECT_COMPOSITE),
+            truth(Self::OFFSCREEN_SOURCE),
+            self.window_opacity[FillOpacityClass::Opaque as usize] / frames / 1e6,
+            self.window_opacity[FillOpacityClass::Translucent as usize] / frames / 1e6,
+            self.window_opacity[FillOpacityClass::NonSolid as usize] / frames / 1e6,
+            self.window_corner / frames / 1e6,
+        );
+        if !self.slack_dumped && !self.slack_top.is_empty() {
+            log::warn!("[fill-truth] top retained slack (once per process, capture-space px):");
+            for (rank, entry) in self.slack_top.iter().enumerate() {
+                log::warn!(
+                    "[fill-truth]   #{} slot {} shape {} {}: quad {:.0}, lit {:.0}, \
+                     slack {:.0}",
+                    rank + 1,
+                    entry.slot,
+                    entry.shape,
+                    fill_diag_bucket_name(entry.bucket),
+                    entry.drawn_px2,
+                    entry.lit_px2,
+                    entry.drawn_px2 - entry.lit_px2,
+                );
+            }
+            self.slack_dumped = true;
+            self.slack_top = Vec::new();
+        }
         self.window = [0.0; FILL_DIAG_BUCKETS];
+        self.window_lit = [0.0; FILL_DIAG_BUCKETS];
+        self.window_opacity = [0.0; 3];
+        self.window_corner = 0.0;
         self.window_frames = 0;
     }
 }
@@ -6727,7 +7287,7 @@ impl GpuRenderer {
             self.rim_mesh_uploaded_vertices = 0;
             self.rim_mesh_uploaded_indices = 0;
             if fill_area_diag_enabled() {
-                self.fill_area_diag.reset_frame();
+                self.fill_area_diag.reset_frame(width, height);
             }
         }
 
@@ -6741,6 +7301,12 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             if fill_area_diag_enabled() {
+                // Effect/composite fill accumulated during the graph walk
+                // lives in the effect renderer's own cells; fold it into
+                // this frame before the window closes over it.
+                let (composite_px2, offscreen_px2) = self.effect_renderer.take_fill_diag_fill_px2();
+                self.fill_area_diag
+                    .add_effect_fill(composite_px2, offscreen_px2);
                 self.fill_area_diag.finish_frame(width, height);
             }
         }
@@ -7723,7 +8289,7 @@ impl GpuRenderer {
                                     });
                                     if fill_area_diag_enabled() {
                                         self.fill_area_diag.note_rim_mesh(
-                                            quad_shoelace_area(converted),
+                                            converted,
                                             triangles_shoelace_area(
                                                 &self.rim_mesh_vertices,
                                                 &self.rim_mesh_indices[index_mark..],
@@ -9291,6 +9857,19 @@ impl GpuRenderer {
                 );
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if fill_area_diag_enabled() {
+                    // Each shadow-source pass round-trips the whole
+                    // bounds-sized offscreen target (clear on the first
+                    // pass, load/store after); the shape quads inside were
+                    // already priced by `prepare_shapes_batch` under this
+                    // pass's bounds viewport.
+                    self.fill_area_diag
+                        .add_offscreen_target_fill(f64::from(width) * f64::from(height));
+                }
+            }
+
             pass_count = pass_count.saturating_add(1);
             rendered_any = true;
             *next_load_op = wgpu::LoadOp::Load;
@@ -9532,7 +10111,7 @@ impl GpuRenderer {
         {
             if fill_area_diag_enabled() {
                 self.fill_area_diag
-                    .add_shape_quads(&self.scratch_shape_data);
+                    .add_shape_quads(&self.scratch_shape_data, viewport);
             }
         }
 
@@ -9661,7 +10240,7 @@ impl GpuRenderer {
         );
         if fill_area_diag_enabled() {
             self.fill_area_diag
-                .add_shape_quads(&self.scratch_shape_data);
+                .add_shape_quads(&self.scratch_shape_data, viewport);
         }
 
         // Region layout inside the frame upload buffer. Every element type is
@@ -10070,9 +10649,9 @@ impl GpuRenderer {
         gradient_buffer.unmap();
 
         // Filled by the mesh arm when the capture keeps its arc mesh, so
-        // the fill-diag prefix can price those shapes by their true
+        // the fill-diag records can price those shapes by their true
         // triangle area.
-        let mut mesh_area_prefix: Option<Vec<f64>> = None;
+        let mut mesh_fill_records: Option<Vec<FillDiagShapeRecord>> = None;
         let mesh = if arc_mesh_enabled() {
             match build_arc_mesh_vertices(&shape_data) {
                 Some(build) => {
@@ -10101,17 +10680,10 @@ impl GpuRenderer {
                         cut,
                     );
                     if build.meshed_arcs > 0 && fill_area_diag_enabled() {
-                        let mut prefix = Vec::with_capacity(build.index_prefix.len());
-                        let mut total = 0.0_f64;
-                        prefix.push(0.0);
-                        for span in build.index_prefix.windows(2) {
-                            total += triangles_shoelace_area(
-                                &build.vertices,
-                                &build.indices[span[0] as usize..span[1] as usize],
-                            );
-                            prefix.push(total);
-                        }
-                        mesh_area_prefix = Some(prefix);
+                        mesh_fill_records = Some(fill_diag_capture_records(
+                            &shape_data,
+                            Some((&build.vertices, &build.indices, &build.index_prefix)),
+                        ));
                     }
                     // A slot that meshed nothing gains nothing over the
                     // indexless quad path — skip the buffers.
@@ -10157,17 +10729,13 @@ impl GpuRenderer {
             None
         };
 
-        let area_prefix = if fill_area_diag_enabled() {
-            mesh_area_prefix.unwrap_or_else(|| {
-                let mut prefix = Vec::with_capacity(shape_count + 1);
-                let mut total = 0.0_f64;
-                prefix.push(0.0);
-                for shape in &shape_data {
-                    total += quad_shoelace_area(shape);
-                    prefix.push(total);
-                }
-                prefix
-            })
+        let fill_diag_shapes = if fill_area_diag_enabled() {
+            let records =
+                mesh_fill_records.unwrap_or_else(|| fill_diag_capture_records(&shape_data, None));
+            // Feed the once-per-process top-slack dump before the records
+            // move into the slot.
+            self.fill_area_diag.note_retained_capture(id, &records);
+            records
         } else {
             Vec::new()
         };
@@ -10234,7 +10802,7 @@ impl GpuRenderer {
                 mesh,
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
-                area_prefix,
+                fill_diag_shapes,
             },
         );
         Some(id)
@@ -10303,8 +10871,12 @@ impl GpuRenderer {
             return;
         }
         if fill_area_diag_enabled() {
-            self.fill_area_diag
-                .add_retained_range(slot, first, last, retained.transform.scale);
+            self.fill_area_diag.add_retained_range(
+                &slot.fill_diag_shapes,
+                first,
+                last,
+                &retained.transform,
+            );
         }
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
@@ -10530,10 +11102,10 @@ impl GpuRenderer {
                     let retained = retained_draws.get(op.retained_index as usize);
                     if let (Some(slot), Some(retained)) = (slot, retained) {
                         self.fill_area_diag.add_retained_range(
-                            slot,
+                            &slot.fill_diag_shapes,
                             op.first,
                             op.last,
-                            retained.transform.scale,
+                            &retained.transform,
                         );
                     }
                 }
@@ -19226,6 +19798,17 @@ mod tests {
         shape
     }
 
+    /// A viewport that never matches the diag's latched surface, so bucket
+    /// tests exercise no corner accounting.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offscreen_test_viewport() -> ViewportUniformParams {
+        ViewportUniformParams {
+            width: 64,
+            height: 64,
+            offset: [7.0, 7.0],
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn fill_diag_buckets_shape_quads_by_decoded_sdf_class() {
@@ -19248,21 +19831,35 @@ mod tests {
             pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
         plain.quad01 = [0.0, 0.0, 2.0, 0.0];
         plain.quad23 = [0.0, 3.0, 2.0, 3.0];
-        diag.add_shape_quads(&[rim_test_shape_data(), arc, rounded, plain]);
+        diag.add_shape_quads(
+            &[rim_test_shape_data(), arc, rounded, plain],
+            offscreen_test_viewport(),
+        );
         assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 300.0 * 300.0);
         assert_eq!(diag.frame[FillAreaDiag::ARC].get(), 100.0);
         assert_eq!(diag.frame[FillAreaDiag::RRECT_FILL].get(), 20.0);
         assert_eq!(diag.frame[FillAreaDiag::RECT].get(), 6.0);
+        // Off-frame passes never touch the corner counter.
+        assert_eq!(diag.frame_corner.get(), 0.0);
+        // Lit never exceeds the submitted area, bucket by bucket.
+        for (lit, quad) in diag.frame_lit.iter().zip(&diag.frame) {
+            assert!(lit.get() <= quad.get() + 1e-9);
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn fill_diag_rim_mesh_moves_quad_area_to_the_mesh_bucket() {
         let diag = FillAreaDiag::default();
-        diag.add_shape_quads(&[rim_test_shape_data()]);
-        diag.note_rim_mesh(300.0 * 300.0, 1234.5);
+        diag.add_shape_quads(&[rim_test_shape_data()], offscreen_test_viewport());
+        diag.note_rim_mesh(&rim_test_shape_data(), 1234.5);
         assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 0.0);
         assert_eq!(diag.frame[FillAreaDiag::MESH].get(), 1234.5);
+        // The lit accounting moves with the quad: nothing left in the
+        // stroke bucket, and the mesh bucket's lit stays within the mesh.
+        assert_eq!(diag.frame_lit[FillAreaDiag::RRECT_STROKE].get(), 0.0);
+        assert!(diag.frame_lit[FillAreaDiag::MESH].get() <= 1234.5);
+        assert!(diag.frame_lit[FillAreaDiag::MESH].get() > 0.0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -19284,6 +19881,283 @@ mod tests {
         };
         diag.add_glyph_quad(&quad);
         assert_eq!(diag.frame[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
+        // Textures light their whole quad: lit tracks the submitted area.
+        assert_eq!(diag.frame_lit[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
+    }
+
+    /// Midpoint-rule area of `inside` over `bounds` (min x, min y, max x,
+    /// max y), the reference the analytic-lit formulas are tested against.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn numeric_area(bounds: [f64; 4], steps: usize, inside: impl Fn(f64, f64) -> bool) -> f64 {
+        let dx = (bounds[2] - bounds[0]) / steps as f64;
+        let dy = (bounds[3] - bounds[1]) / steps as f64;
+        let mut area = 0.0;
+        for column in 0..steps {
+            let x = bounds[0] + (column as f64 + 0.5) * dx;
+            for row in 0..steps {
+                let y = bounds[1] + (row as f64 + 0.5) * dy;
+                if inside(x, y) {
+                    area += dx * dy;
+                }
+            }
+        }
+        area
+    }
+
+    /// f64 rounded-rect SDF (uniform radius), the reference for the
+    /// round-rect fill and stroke lit formulas.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sdf_rounded_rect_reference(
+        p: [f64; 2],
+        center: [f64; 2],
+        half: [f64; 2],
+        radius: f64,
+    ) -> f64 {
+        let qx = (p[0] - center[0]).abs() - (half[0] - radius);
+        let qy = (p[1] - center[1]).abs() - (half[1] - radius);
+        qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_arc_lit_matches_the_sdf_covered_area() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        let center = Point::new(250.0, 250.0);
+        // (inner, outer, start, sweep, cap): partial arcs with every cap,
+        // a closed ring, and a full disc.
+        let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
+            (90.0, 100.0, 0.7, 2.5, StrokeCap::Butt),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Square),
+            (80.0, 100.0, 0.0, tau, StrokeCap::Round),
+            (0.0, 40.0, 0.0, tau, StrokeCap::Round),
+        ];
+        for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
+            let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
+            let converted = converted_arc_shape(arc, 1.0);
+            let cap_code = (converted.stroke_params[1].max(0.0) as u32 >> 2) & 3;
+            let arc_center = [converted.arc_params[0], converted.arc_params[1]];
+            let mid = [converted.radii[0], converted.radii[1]];
+            let half = [converted.radii[2], converted.radii[3]];
+            let aabb = quad_aabb(&converted);
+            // Pad past the fast-trig AABB slop so the whole kept set is
+            // integrated.
+            let bounds = [aabb[0] - 2.0, aabb[1] - 2.0, aabb[2] + 2.0, aabb[3] + 2.0];
+            let numeric = numeric_area(bounds, 1000, |x, y| {
+                sdf_arc_band_reference(
+                    [x as f32, y as f32],
+                    arc_center,
+                    converted.stroke_params[3],
+                    converted.stroke_params[2],
+                    mid,
+                    half,
+                    cap_code,
+                ) < 0.0
+            });
+            let analytic = analytic_covered_area(&converted);
+            let error = (analytic - numeric).abs() / numeric.max(1.0);
+            assert!(
+                error < 0.02,
+                "case {case}: analytic {analytic:.1} vs sdf {numeric:.1} \
+                 ({:.2}% off)",
+                error * 100.0
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_circle_and_rrect_fill_lit_match_references() {
+        // A filled circle degenerates to exactly pi r^2.
+        let mut circle = ShapeData::zeroed();
+        circle.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        circle.rect = [10.0, 10.0, 200.0, 200.0];
+        circle.radii = [100.0; 4];
+        let analytic = analytic_covered_area(&circle);
+        let exact = std::f64::consts::PI * 100.0 * 100.0;
+        assert!(
+            (analytic - exact).abs() / exact < 1e-9,
+            "circle: {analytic} vs {exact}"
+        );
+
+        // A rounded rect against the SDF reference.
+        let mut rounded = ShapeData::zeroed();
+        rounded.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        rounded.rect = [50.0, 80.0, 200.0, 120.0];
+        rounded.radii = [40.0; 4];
+        let numeric = numeric_area([48.0, 78.0, 252.0, 202.0], 1000, |x, y| {
+            sdf_rounded_rect_reference([x, y], [150.0, 140.0], [100.0, 60.0], 40.0) < 0.0
+        });
+        let analytic = analytic_covered_area(&rounded);
+        let error = (analytic - numeric).abs() / numeric;
+        assert!(
+            error < 0.02,
+            "rrect fill: analytic {analytic:.1} vs sdf {numeric:.1}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_stroked_rrect_lit_matches_the_band_area() {
+        // The circle rim: perimeter x stroke width equals the exact annulus
+        // pi (outer^2 - inner^2) = 2 pi geom_half sw.
+        let rim = rim_test_shape_data();
+        let analytic = analytic_covered_area(&rim);
+        let exact = std::f64::consts::PI * (150.0 * 150.0 - 142.0 * 142.0);
+        assert!(
+            (analytic - exact).abs() / exact < 1e-9,
+            "circle rim: {analytic} vs {exact}"
+        );
+
+        // A rounded-SQUARE ring (radius well below the half-extent) against
+        // the SDF band |sdf| < sw/2.
+        let mut square_ring = rim_test_shape_data();
+        square_ring.radii = [60.0; 4];
+        let numeric = numeric_area([38.0, 38.0, 342.0, 342.0], 1000, |x, y| {
+            sdf_rounded_rect_reference([x, y], [190.0, 190.0], [146.0, 146.0], 60.0).abs() < 4.0
+        });
+        let analytic = analytic_covered_area(&square_ring);
+        let error = (analytic - numeric).abs() / numeric;
+        assert!(
+            error < 0.02,
+            "square ring: analytic {analytic:.1} vs sdf {numeric:.1}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_corner_counter_prices_the_area_outside_the_inscribed_circle() {
+        // A full-viewport quad on a square (watch) surface wastes exactly
+        // the four corner lunes: (1 - pi/4) of the screen.
+        let full = area_outside_inscribed_circle([0.0, 0.0, 454.0, 454.0], (454, 454));
+        let exact = (1.0 - std::f64::consts::FRAC_PI_4) * 454.0 * 454.0;
+        assert!(
+            (full - exact).abs() / exact < 0.01,
+            "full quad: {full} vs {exact}"
+        );
+        // A centered box inside the circle wastes nothing, exactly.
+        assert_eq!(
+            area_outside_inscribed_circle([127.0, 127.0, 327.0, 327.0], (454, 454)),
+            0.0
+        );
+        // A box entirely inside a corner is all waste.
+        let corner = area_outside_inscribed_circle([0.0, 0.0, 40.0, 40.0], (454, 454));
+        assert!((corner - 1600.0).abs() < 1e-6, "corner box: {corner}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_opacity_histogram_classifies_solid_alpha_exactly() {
+        let diag = FillAreaDiag::default();
+        diag.reset_frame(454, 454);
+        let full_frame = ViewportUniformParams {
+            width: 454,
+            height: 454,
+            offset: [0.0, 0.0],
+        };
+        let mut opaque = ShapeData::zeroed();
+        opaque.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        opaque.rect = [0.0, 0.0, 100.0, 50.0];
+        opaque.quad01 = [0.0, 0.0, 100.0, 0.0];
+        opaque.quad23 = [0.0, 50.0, 100.0, 50.0];
+        opaque.color = [1.0, 1.0, 1.0, 1.0];
+        let mut faded = opaque;
+        faded.color[3] = 0.82;
+        let mut gradient = opaque;
+        gradient.brush_type = 1;
+        diag.add_shape_quads(&[opaque, faded, gradient], full_frame);
+        // Plain rects are all-lit: 5000 px each, one per class.
+        let lit = |class: FillOpacityClass| diag.frame_opacity[class as usize].get();
+        assert_eq!(lit(FillOpacityClass::Opaque), 5000.0);
+        assert_eq!(lit(FillOpacityClass::Translucent), 5000.0);
+        assert_eq!(lit(FillOpacityClass::NonSolid), 5000.0);
+        // The corner-hugging quads waste real area on a round display.
+        assert!(diag.frame_corner.get() > 0.0);
+
+        // The same batch under an offset (offscreen) viewport must leave the
+        // corner counter alone.
+        let offscreen = FillAreaDiag::default();
+        offscreen.reset_frame(454, 454);
+        offscreen.add_shape_quads(&[opaque], offscreen_test_viewport());
+        assert_eq!(offscreen.frame_corner.get(), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_retained_records_price_ranges_and_identity_corners() {
+        let mut plain = ShapeData::zeroed();
+        plain.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        plain.rect = [200.0, 200.0, 20.0, 10.0];
+        plain.quad01 = [200.0, 200.0, 220.0, 200.0];
+        plain.quad23 = [200.0, 210.0, 220.0, 210.0];
+        plain.color = [1.0, 1.0, 1.0, 1.0];
+        let shapes = vec![rim_test_shape_data(), plain];
+        let records = fill_diag_capture_records(&shapes, None);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].bucket, FillAreaDiag::RRECT_STROKE);
+        assert_eq!(records[0].drawn_px2, 300.0 * 300.0);
+        assert!(records[0].lit_px2 < records[0].drawn_px2, "a rim has slack");
+        // A plain rect is exact: no slack at all.
+        assert_eq!(records[1].bucket, FillAreaDiag::RECT);
+        assert_eq!(records[1].lit_px2, records[1].drawn_px2);
+
+        let diag = FillAreaDiag::default();
+        diag.reset_frame(454, 454);
+        // Scaled replay: areas scale with the similarity squared, and the
+        // capture-space AABBs no longer say where pixels land — no corner.
+        let scaled = SimilarityTransform::new([0.0, 0.0], 0.0, 2.0);
+        diag.add_retained_range(&records, 0, 2, &scaled);
+        let drawn: f64 = records.iter().map(|record| record.drawn_px2).sum();
+        assert!((diag.frame[FillAreaDiag::RETAINED].get() - drawn * 4.0).abs() < 1e-6);
+        assert_eq!(diag.frame_corner.get(), 0.0);
+
+        // Identity replay: the rim's 300 px box on a 454 px round screen
+        // pokes into the corner lunes.
+        let identity_diag = FillAreaDiag::default();
+        identity_diag.reset_frame(454, 454);
+        identity_diag.add_retained_range(&records, 0, 2, &SimilarityTransform::IDENTITY);
+        assert!(identity_diag.frame_corner.get() > 0.0);
+        // And the range is respected: shape 1 alone has no rim slack.
+        let tail = FillAreaDiag::default();
+        tail.reset_frame(454, 454);
+        tail.add_retained_range(&records, 1, 2, &SimilarityTransform::IDENTITY);
+        assert_eq!(
+            tail.frame[FillAreaDiag::RETAINED].get(),
+            records[1].drawn_px2
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_top_slack_dump_keeps_the_worst_ten() {
+        let mut diag = FillAreaDiag::default();
+        let records: Vec<FillDiagShapeRecord> = (0..12)
+            .map(|index| FillDiagShapeRecord {
+                drawn_px2: 1000.0 * (index + 1) as f64,
+                lit_px2: 100.0,
+                bucket: FillAreaDiag::ARC,
+                opacity: FillOpacityClass::Opaque,
+                aabb: [0.0, 0.0, 10.0, 10.0],
+            })
+            .collect();
+        diag.note_retained_capture(3, &records);
+        assert_eq!(diag.slack_top.len(), FILL_DIAG_SLACK_TOP);
+        // Sorted by slack, worst first, and the two smallest fell off.
+        assert_eq!(diag.slack_top[0].drawn_px2, 12000.0);
+        assert_eq!(diag.slack_top[0].slot, 3);
+        assert_eq!(diag.slack_top[0].shape, 11);
+        for pair in diag.slack_top.windows(2) {
+            assert!(pair[0].drawn_px2 - pair[0].lit_px2 >= pair[1].drawn_px2 - pair[1].lit_px2);
+        }
+        assert!(diag
+            .slack_top
+            .iter()
+            .all(|entry| entry.drawn_px2 - entry.lit_px2 > 2000.0 - 100.0));
     }
 
     #[cfg(not(target_arch = "wasm32"))]

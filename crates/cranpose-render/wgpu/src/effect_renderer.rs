@@ -60,6 +60,33 @@ pub(crate) struct EffectRenderer {
     pub(crate) debug_composites: Cell<u32>,
     pub(crate) debug_effects: Cell<u32>,
     pub(crate) debug_upload_bytes: Cell<u64>,
+    /// `CRANPOSE_FILL_DIAG` target-area fill of effect passes, device px²,
+    /// drained once per frame by the renderer into `FillAreaDiag`'s
+    /// effect-composite / offscreen-source buckets. Always zero while the
+    /// diagnostic is off.
+    #[cfg(not(target_arch = "wasm32"))]
+    debug_fill_composite_px2: Cell<f64>,
+    #[cfg(not(target_arch = "wasm32"))]
+    debug_fill_offscreen_px2: Cell<f64>,
+}
+
+/// Approximate fill of one full-target effect pass, in px²: the dest
+/// viewport's area when one is set, else the fallback target size, clamped
+/// by the scissor when one is set. (The fullscreen triangle shades exactly
+/// scissor ∩ viewport; the min of the two areas stands in for the exact
+/// intersection — a deliberate `CRANPOSE_FILL_DIAG` approximation.)
+#[cfg(not(target_arch = "wasm32"))]
+fn effect_pass_fill_px2(
+    scissor: Option<(u32, u32, u32, u32)>,
+    dest_viewport: Option<(f32, f32, f32, f32)>,
+    fallback: (u32, u32),
+) -> f64 {
+    let scissor_px2 = scissor.map(|(_, _, w, h)| f64::from(w) * f64::from(h));
+    let viewport_px2 = dest_viewport
+        .filter(|(_, _, w, h)| *w > 0.0 && *h > 0.0)
+        .map(|(_, _, w, h)| f64::from(w) * f64::from(h));
+    let base = viewport_px2.unwrap_or(f64::from(fallback.0) * f64::from(fallback.1));
+    scissor_px2.map_or(base, |scissor_px2| scissor_px2.min(base))
 }
 
 #[derive(Clone, Copy)]
@@ -658,7 +685,64 @@ impl EffectRenderer {
             debug_composites: Cell::new(0),
             debug_effects: Cell::new(0),
             debug_upload_bytes: Cell::new(0),
+            #[cfg(not(target_arch = "wasm32"))]
+            debug_fill_composite_px2: Cell::new(0.0),
+            #[cfg(not(target_arch = "wasm32"))]
+            debug_fill_offscreen_px2: Cell::new(0.0),
         }
+    }
+
+    /// One draw into a caller-supplied view (composite/blit/src-over shader):
+    /// counts its target-area fill for `CRANPOSE_FILL_DIAG`. No-op while the
+    /// diagnostic is off.
+    fn note_composite_fill(
+        &self,
+        scissor: Option<(u32, u32, u32, u32)>,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        fallback: (u32, u32),
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if crate::render::fill_area_diag_enabled() {
+                let area = effect_pass_fill_px2(scissor, dest_viewport, fallback);
+                self.debug_fill_composite_px2
+                    .set(self.debug_fill_composite_px2.get() + area);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (scissor, dest_viewport, fallback);
+    }
+
+    /// One pass into an offscreen chain texture (blur axis, offset,
+    /// replace-mode shader): counts its target-area fill for
+    /// `CRANPOSE_FILL_DIAG`. No-op while the diagnostic is off.
+    fn note_offscreen_fill(
+        &self,
+        scissor: Option<(u32, u32, u32, u32)>,
+        dest_viewport: Option<(f32, f32, f32, f32)>,
+        fallback: (u32, u32),
+    ) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if crate::render::fill_area_diag_enabled() {
+                let area = effect_pass_fill_px2(scissor, dest_viewport, fallback);
+                self.debug_fill_offscreen_px2
+                    .set(self.debug_fill_offscreen_px2.get() + area);
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (scissor, dest_viewport, fallback);
+    }
+
+    /// Drains the frame's accumulated effect fill: (composite px²,
+    /// offscreen px²). Called once per frame by the renderer while
+    /// `CRANPOSE_FILL_DIAG` is on.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_fill_diag_fill_px2(&self) -> (f64, f64) {
+        (
+            self.debug_fill_composite_px2.take(),
+            self.debug_fill_offscreen_px2.take(),
+        )
     }
 
     fn blur_pipeline(&self, device: &wgpu::Device) -> &wgpu::RenderPipeline {
@@ -881,6 +965,9 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
+        // Blur axis passes ping-pong through chain textures sized like the
+        // source (asserted by the ping-pong caller).
+        self.note_offscreen_fill(scissor, None, (source.width, source.height));
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1084,6 +1171,7 @@ impl EffectRenderer {
             bytemuck::bytes_of(&mask_uniforms),
             &self.debug_upload_bytes,
         );
+        self.note_composite_fill(scissor, Some(dest_viewport), (source.width, source.height));
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1140,6 +1228,7 @@ impl EffectRenderer {
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
         );
+        self.note_offscreen_fill(None, None, (source.width, source.height));
 
         let mut pass = recorder
             .encoder()
@@ -1298,6 +1387,13 @@ impl EffectRenderer {
                 &self.effect_texture_bind_group_layout,
                 &self.effect_linear_sampler,
             );
+            // Prepared draws execute exactly once each (fused batch arms);
+            // counting here covers every batched shader composite.
+            self.note_composite_fill(
+                item.scissor,
+                Some(item.dest_viewport),
+                (item.source.width, item.source.height),
+            );
             prepared.push(PreparedShaderDraw {
                 shader: item.shader,
                 texture_bind_group,
@@ -1372,6 +1468,38 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
 
+        // Validate the pipeline first, then account, then fetch it for the
+        // draw — the fetch below is a cache hit, and a shader that fails to
+        // compile must not count fill (the caller composites instead, which
+        // counts its own pass).
+        if self
+            .shader_cache
+            .get_or_create(
+                device,
+                shader,
+                self.surface_format,
+                &self.effect_texture_bind_group_layout,
+                &self.effect_uniform_bind_group_layout,
+                options.pipeline_mode,
+            )
+            .is_none()
+        {
+            return false;
+        }
+        // Replace-mode shader passes write chain textures; src-over ones
+        // composite into the caller's view.
+        match options.pipeline_mode {
+            RuntimeShaderPipelineMode::Replace => self.note_offscreen_fill(
+                options.scissor,
+                options.dest_viewport,
+                (source.width, source.height),
+            ),
+            RuntimeShaderPipelineMode::PremultipliedSrcOver => self.note_composite_fill(
+                options.scissor,
+                options.dest_viewport,
+                (source.width, source.height),
+            ),
+        }
         let Some(pipeline) = self.shader_cache.get_or_create(
             device,
             shader,
@@ -1611,6 +1739,11 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
+        self.note_composite_fill(
+            options.scissor,
+            options.dest_viewport,
+            (source.width, source.height),
+        );
 
         let mut pass = recorder
             .encoder()
@@ -1710,6 +1843,13 @@ impl EffectRenderer {
                 bytemuck::bytes_of(&uniforms),
                 &self.debug_upload_bytes,
             );
+            // Prepared draws execute exactly once each (fused batch arms);
+            // counting here covers every batched composite.
+            self.note_composite_fill(
+                item.scissor,
+                item.dest_viewport,
+                (item.source.width, item.source.height),
+            );
             prepared.push(PreparedCompositeDraw {
                 texture_bind_group,
                 uniform_bind_group,
@@ -1793,6 +1933,12 @@ impl EffectRenderer {
         let Some((min_x, min_y, max_x, max_y)) = projective_dest_bounds_rect(dest_bounds) else {
             return false;
         };
+        // The projective blit rasterizes the dest bounds' AABB quad.
+        self.note_composite_fill(
+            scissor,
+            Some((min_x, min_y, max_x - min_x, max_y - min_y)),
+            viewport,
+        );
 
         let vertices = [
             ProjectiveBlitVertex {
@@ -1939,6 +2085,38 @@ mod tests {
         assert_eq!(
             std::mem::offset_of!(BlurUniforms, texture_size_and_tile_mode),
             16
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn effect_pass_fill_prefers_the_viewport_and_clamps_by_the_scissor() {
+        use super::effect_pass_fill_px2;
+        // No scissor, no viewport: the whole fallback target.
+        assert_eq!(effect_pass_fill_px2(None, None, (100, 50)), 5000.0);
+        // A dest viewport bounds the rasterized region.
+        assert_eq!(
+            effect_pass_fill_px2(None, Some((5.0, 5.0, 40.0, 10.0)), (100, 50)),
+            400.0
+        );
+        // A scissor clamps the fallback.
+        assert_eq!(
+            effect_pass_fill_px2(Some((0, 0, 30, 30)), None, (100, 50)),
+            900.0
+        );
+        // A scissor larger than the viewport never inflates the pass.
+        assert_eq!(
+            effect_pass_fill_px2(
+                Some((0, 0, 100, 100)),
+                Some((0.0, 0.0, 20.0, 20.0)),
+                (100, 50)
+            ),
+            400.0
+        );
+        // A degenerate viewport falls back to the target size.
+        assert_eq!(
+            effect_pass_fill_px2(None, Some((0.0, 0.0, 0.0, 0.0)), (10, 10)),
+            100.0
         );
     }
 
