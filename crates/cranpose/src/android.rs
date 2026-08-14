@@ -18,7 +18,7 @@ use cranpose_app_shell::{
     default_root_key, AppShell, KeyEvent, PlatformFrameDriver, PointerSource,
 };
 use cranpose_platform_android::AndroidPlatform;
-use cranpose_render_wgpu::WgpuRenderer;
+use cranpose_render_wgpu::{PresentOutcome, PublishOutcome, WgpuRenderer};
 use cranpose_ui::{Point, Size};
 use ndk::native_window::NativeWindow;
 use std::time::{Duration, Instant};
@@ -34,9 +34,24 @@ use std::{
 };
 
 /// GPU resources for the current Android surface and its reusable WGPU device.
+///
+/// In threaded present mode (`CRANPOSE_PRESENT_THREAD`, step 7b) the
+/// `wgpu::Surface` itself is NOT held here: it is created on this thread
+/// and immediately moved to the present runtime (`ReplaceSurface`), which
+/// exclusively owns acquisition, encoding and `present()`. The producer
+/// keeps the device/queue for window recreation, its own copy of the
+/// surface configuration (it stamps resizes into the `Reconfigure` control
+/// messages), and the present bookkeeping. In the default synchronous mode
+/// the surface lives in `surface`, exactly as before.
 struct GpuResources {
-    surface: wgpu::Surface<'static>,
-    native_window_ptr: NonNull<c_void>,
+    /// The synchronous path's surface. `None` in threaded present mode
+    /// (the present runtime owns it) — the modes never mix within one run.
+    surface: Option<wgpu::Surface<'static>>,
+    /// The window the current surface belongs to; `None` after
+    /// `TerminateWindow`/`SurfaceDestroyed` in threaded mode, when the
+    /// runtime dropped the surface but the device lives on for the next
+    /// window (the sync path drops the whole resources struct instead).
+    native_window_ptr: Option<NonNull<c_void>>,
     adapter: Arc<wgpu::Adapter>,
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
@@ -44,10 +59,20 @@ struct GpuResources {
     backend: wgpu::Backend,
     config: wgpu::SurfaceConfiguration,
     _native_window: Option<NativeWindow>,
-    /// Set when the surface is (re)created and cleared after a successful
-    /// present, forcing the first frame to reach the screen even when `update()`
-    /// reports no visual work (mirrors the desktop/web `surface_dirty` flag).
+    /// Set when the surface is (re)created or reconfigured (every control
+    /// send) and cleared after a successful present, forcing the first
+    /// frame to reach the screen even when `update()` reports no visual
+    /// work (mirrors the desktop/web `surface_dirty` flag).
     surface_dirty: bool,
+}
+
+impl GpuResources {
+    /// Whether a window's surface currently exists — locally (sync mode)
+    /// or on the present runtime (threaded mode). Both modes key this off
+    /// the window pointer, which is `Some` exactly while a surface lives.
+    fn has_surface(&self) -> bool {
+        self.native_window_ptr.is_some()
+    }
 }
 
 /// Pending input event to be processed outside poll_events callback.
@@ -793,14 +818,21 @@ fn apply_display_visible_region(
     });
 }
 
-/// Renders a single frame. Returns true if out of memory (should exit).
+/// Renders a single frame (synchronous mode). Returns true if out of
+/// memory (should exit).
 fn render_once(
     resources: &mut GpuResources,
     shell: &mut AppShell<WgpuRenderer>,
     telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
     timings: &mut crate::android_frame_telemetry::FrameTimings,
 ) -> bool {
-    match current_surface_texture(&resources.surface, "android") {
+    let Some(surface) = resources.surface.as_ref() else {
+        // Sync mode always holds its surface while resources exist; this
+        // arm is unreachable there and threaded mode never calls here.
+        telemetry.note_idle_iteration();
+        return false;
+    };
+    match current_surface_texture(surface, "android") {
         SurfaceFrame::Ready(frame) => {
             timings.after_acquire_ns = telemetry.now();
             let view = frame
@@ -824,9 +856,7 @@ fn render_once(
             let (width, height) = shell.buffer_size();
             resources.config.width = width;
             resources.config.height = height;
-            resources
-                .surface
-                .configure(&resources.device, &resources.config);
+            surface.configure(&resources.device, &resources.config);
             // The reconfigured surface has not presented yet. Unlike web/desktop,
             // the android render block is gated behind `shell.needs_update()`, so
             // marking the shell dirty is what both wakes the looper and re-enters
@@ -844,8 +874,87 @@ fn render_once(
     }
 }
 
+/// Folds one drained batch of present-runtime returns into the loop's
+/// bookkeeping: presented frames complete their telemetry record and clear
+/// `surface_dirty`; refused frames (cancelled/errored) re-dirty the
+/// surface and re-mark the shell so the next iteration republishes —
+/// the depth-one replacement for `render_once`'s Reconfigure/Skip arms.
+/// Returns the instant the latest drained frame presented at (present
+/// thread's timestamp, mapped into this thread's `Instant` domain), for
+/// the catch-up pacing bookkeeping the sync path feeds directly.
+fn drain_present_returns_into_loop(
+    shell: &mut AppShell<WgpuRenderer>,
+    gpu_resources: &mut Option<GpuResources>,
+    telemetry: &mut crate::android_frame_telemetry::AndroidFrameTelemetry,
+    pending_present_timings: &mut Vec<(u64, crate::android_frame_telemetry::FrameTimings)>,
+) -> Option<web_time::Instant> {
+    let mut presented = false;
+    let mut refused = false;
+    let mut presented_at_ns = 0i64;
+    shell
+        .renderer()
+        .drain_present_returns_with(&mut |frame_id, outcome, timings| {
+            // Depth-one publishing keeps up to TWO frames in flight (one
+            // rendering, one waiting), so the producer timestamps are a
+            // small id-keyed list, not a single slot — a slot would be
+            // overwritten by frame N+1's publish before frame N's returns
+            // drain, and every record would be lost in steady overlap.
+            let producer_timings = pending_present_timings
+                .iter()
+                .position(|(id, _)| *id == frame_id)
+                .map(|index| pending_present_timings.remove(index).1);
+            match outcome {
+                PresentOutcome::Presented => {
+                    presented = true;
+                    presented_at_ns = timings.after_present_ns;
+                    if let Some(mut frame_timings) = producer_timings {
+                        frame_timings.after_acquire_ns = timings.after_acquire_ns;
+                        frame_timings.after_render_ns = timings.after_render_ns;
+                        frame_timings.after_present_ns = timings.after_present_ns;
+                        telemetry.record_frame(&frame_timings);
+                    }
+                }
+                // A cancelled or errored frame never reached the screen;
+                // its buffers already recycled through `apply_returns`.
+                PresentOutcome::Cancelled(_) | PresentOutcome::NotRun => {
+                    refused = true;
+                    telemetry.note_idle_iteration();
+                }
+            }
+        });
+    if presented {
+        if let Some(resources) = gpu_resources.as_mut() {
+            resources.surface_dirty = false;
+        }
+    }
+    if refused {
+        if let Some(resources) = gpu_resources.as_mut() {
+            resources.surface_dirty = true;
+        }
+        shell.mark_dirty();
+    }
+    presented.then(|| {
+        // The present happened on the present thread up to a few ms before
+        // this drain; back-date the pacing timestamp by its age so the
+        // catch-up detector measures present-to-present cadence, not
+        // drain-to-drain jitter. Both timestamps share `monotonic_nanos`.
+        let now = web_time::Instant::now();
+        let age_ns = telemetry.now().saturating_sub(presented_at_ns);
+        if presented_at_ns > 0 && age_ns > 0 {
+            now.checked_sub(Duration::from_nanos(age_ns as u64))
+                .unwrap_or(now)
+        } else {
+            now
+        }
+    })
+}
+
 struct AndroidGpuSetup {
     resources: GpuResources,
+    /// A freshly created surface for the present runtime (`ReplaceSurface`
+    /// carries it); `None` when the runtime already holds this window's
+    /// surface and only needs a `Reconfigure`.
+    surface: Option<wgpu::Surface<'static>>,
     renderer_needs_init: bool,
 }
 
@@ -944,6 +1053,54 @@ impl AndroidWgpuContext {
     }
 }
 
+/// Starts (or restarts) the threaded present runtime for the Android
+/// renderer: device/queue/format/backend cross to the present thread —
+/// which constructs its own `GpuRenderer` — the frame driver's waker wakes
+/// the looper after every present, and the telemetry clock keeps
+/// present-side timings in the producer's monotonic clock domain.
+fn init_gpu_threaded_for_android(
+    renderer: &mut WgpuRenderer,
+    resources: &GpuResources,
+    frame_driver: &AndroidFrameDriver,
+) -> Result<(), AndroidSurfaceError> {
+    renderer
+        .init_gpu_threaded(
+            resources.device.clone(),
+            resources.queue.clone(),
+            resources.surface_format,
+            resources.backend,
+            Arc::new(frame_driver.frame_waker()),
+            Some(Arc::new(crate::android_frame_telemetry::monotonic_nanos)),
+        )
+        .map_err(|error| AndroidSurfaceError::PresentRuntime(format!("{error:?}")))
+}
+
+/// `TerminateWindow`/`SurfaceDestroyed`: the surface dies but the device,
+/// queue and present runtime (with its warmed caches) survive for the next
+/// window — the same-device recreation path. The epoch bump comes first so
+/// any in-flight packet cancels, and `DropSurface` is acked only after a
+/// waiting packet's returns were sent. Without a shell there is no runtime
+/// holding a surface, so the resources just drop (as before 7b).
+fn drop_present_surface(
+    gpu_resources: &mut Option<GpuResources>,
+    app_shell: &mut Option<AppShell<WgpuRenderer>>,
+) {
+    match (gpu_resources.as_mut(), app_shell.as_mut()) {
+        (Some(resources), Some(shell)) => {
+            let renderer = shell.renderer();
+            renderer.note_surface_reconfigured();
+            renderer.present_drop_surface();
+            resources.native_window_ptr = None;
+            resources._native_window = None;
+            resources.surface_dirty = true;
+        }
+        _ => {
+            *gpu_resources = None;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn initialize_android_rendering<F>(
     instance: &wgpu::Instance,
     existing_resources: Option<GpuResources>,
@@ -957,11 +1114,12 @@ fn initialize_android_rendering<F>(
     width: u32,
     height: u32,
     density: f32,
+    present_thread: bool,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
 {
-    let setup = create_android_gpu_resources(
+    let mut setup = create_android_gpu_resources(
         instance,
         existing_resources,
         native_window_ptr,
@@ -973,12 +1131,16 @@ where
     if app_shell.is_none() {
         let fonts = settings.resolve_font_set();
         let mut renderer = WgpuRenderer::with_font_set(fonts);
-        renderer.init_gpu(
-            setup.resources.device.clone(),
-            setup.resources.queue.clone(),
-            setup.resources.surface_format,
-            setup.resources.backend,
-        );
+        if present_thread {
+            init_gpu_threaded_for_android(&mut renderer, &setup.resources, frame_driver)?;
+        } else {
+            renderer.init_gpu(
+                setup.resources.device.clone(),
+                setup.resources.queue.clone(),
+                setup.resources.surface_format,
+                setup.resources.backend,
+            );
+        }
 
         let content_clone = content.clone();
         let density = density.max(f32::EPSILON);
@@ -1007,16 +1169,62 @@ where
         log::info!("App shell created");
     } else if setup.renderer_needs_init {
         if let Some(shell) = app_shell {
-            shell.renderer().init_gpu(
-                setup.resources.device.clone(),
-                setup.resources.queue.clone(),
-                setup.resources.surface_format,
-                setup.resources.backend,
-            );
+            if present_thread {
+                init_gpu_threaded_for_android(shell.renderer(), &setup.resources, frame_driver)?;
+            } else {
+                shell.renderer().init_gpu(
+                    setup.resources.device.clone(),
+                    setup.resources.queue.clone(),
+                    setup.resources.surface_format,
+                    setup.resources.backend,
+                );
+            }
             log::info!("Renderer reinitialized with new Android GPU pipeline resources");
         }
     } else {
         log::debug!("Reused Android WGPU device and renderer resources for surface update");
+    }
+
+    if present_thread {
+        // Hand the surface to the present runtime. Every message that
+        // changes the surface's identity or configuration bumps the surface
+        // epoch FIRST so any packet still in flight cancels instead of
+        // drawing, and the send waits for the runtime's ack: nothing
+        // publishes under the new epoch until the runtime holds the new
+        // state (tofable §4).
+        if let Some(shell) = app_shell.as_mut() {
+            let renderer = shell.renderer();
+            renderer.note_surface_reconfigured();
+            match setup.surface.take() {
+                Some(surface) => {
+                    renderer.present_replace_surface(surface, setup.resources.config.clone());
+                }
+                // Same-window reuse: the runtime already holds the surface;
+                // only the configuration travels.
+                None => {
+                    renderer.present_reconfigure(setup.resources.config.clone());
+                }
+            }
+            setup.resources.surface_dirty = true;
+        }
+    } else {
+        // Synchronous mode: the surface stays on this thread, configured
+        // here exactly as it was before the present runtime existed (the
+        // configure moved a few lines later than its historical spot in
+        // `create_android_gpu_resources`; nothing reads the surface in
+        // between).
+        match setup.surface.take() {
+            Some(surface) => {
+                surface.configure(&setup.resources.device, &setup.resources.config);
+                setup.resources.surface = Some(surface);
+            }
+            // Same-window reuse: reconfigure the surface already held.
+            None => {
+                if let Some(surface) = setup.resources.surface.as_ref() {
+                    surface.configure(&setup.resources.device, &setup.resources.config);
+                }
+            }
+        }
     }
 
     if let Some(shell) = app_shell {
@@ -1047,6 +1255,7 @@ fn initialize_android_rendering_with_backend_fallback<F>(
     width: u32,
     height: u32,
     density: f32,
+    present_thread: bool,
 ) -> Result<(GpuResources, Option<Size>), AndroidSurfaceError>
 where
     F: FnMut() + 'static,
@@ -1065,6 +1274,7 @@ where
             width,
             height,
             density,
+            present_thread,
         );
     }
 
@@ -1081,6 +1291,7 @@ where
         width,
         height,
         density,
+        present_thread,
     ) {
         Err(AndroidSurfaceError::RequestAdapter(error)) => {
             // Keep the two backends in separate instances. On Android emulators
@@ -1104,6 +1315,7 @@ where
                 width,
                 height,
                 density,
+                present_thread,
             )
         }
         result => result,
@@ -1119,17 +1331,19 @@ fn create_android_gpu_resources(
     height: u32,
 ) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
     if let Some(mut resources) = existing_resources {
-        if resources.native_window_ptr == native_window_ptr {
+        if resources.native_window_ptr == Some(native_window_ptr) {
+            // Same window: the surface already exists (held locally in sync
+            // mode, on the present runtime in threaded mode); only the
+            // configuration is updated here and (re)applied by the caller —
+            // locally or through a `Reconfigure` control message.
             resources.config.width = width;
             resources.config.height = height;
-            resources
-                .surface
-                .configure(&resources.device, &resources.config);
             if let Some(native_window_owner) = native_window_owner {
                 resources._native_window = Some(native_window_owner);
             }
             return Ok(AndroidGpuSetup {
                 resources,
+                surface: None,
                 renderer_needs_init: false,
             });
         }
@@ -1167,13 +1381,16 @@ fn create_android_gpu_resources(
 
     let device = Arc::new(device);
     let queue = Arc::new(queue);
+    // The runtime configures the surface when `ReplaceSurface` delivers it
+    // together with this config.
     let config = create_android_surface_config(&surface, &adapter, width, height)?;
-    surface.configure(&device, &config);
 
     Ok(AndroidGpuSetup {
         resources: GpuResources {
-            surface,
-            native_window_ptr,
+            // Sync mode adopts the surface in `initialize_android_rendering`;
+            // threaded mode ships it to the present runtime instead.
+            surface: None,
+            native_window_ptr: Some(native_window_ptr),
             adapter,
             device,
             queue,
@@ -1183,6 +1400,7 @@ fn create_android_gpu_resources(
             _native_window: native_window_owner,
             surface_dirty: true,
         },
+        surface: Some(surface),
         renderer_needs_init: true,
     })
 }
@@ -1197,13 +1415,14 @@ fn create_android_gpu_resources_for_existing_device(
 ) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
     let surface = create_android_wgpu_surface(instance, native_window_ptr)?;
     let config = create_android_surface_config(&surface, &existing.adapter, width, height)?;
-    surface.configure(&existing.device, &config);
     let renderer_needs_init = config.format != existing.surface_format;
 
     Ok(AndroidGpuSetup {
         resources: GpuResources {
-            surface,
-            native_window_ptr,
+            // Sync mode adopts the surface in `initialize_android_rendering`;
+            // threaded mode ships it to the present runtime instead.
+            surface: None,
+            native_window_ptr: Some(native_window_ptr),
             adapter: existing.adapter.clone(),
             device: existing.device.clone(),
             queue: existing.queue.clone(),
@@ -1213,6 +1432,7 @@ fn create_android_gpu_resources_for_existing_device(
             _native_window: native_window_owner,
             surface_dirty: true,
         },
+        surface: Some(surface),
         renderer_needs_init,
     })
 }
@@ -1498,6 +1718,20 @@ pub fn run(
     // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
 
+    // Threaded present runtime (pipeline step 7b), default OFF: the frame
+    // is split at the packet boundary and acquire/encode/submit/present
+    // move to a dedicated present thread, overlapping with the producer's
+    // update/lowering of the next frame. Kill switch CRANPOSE_PRESENT_THREAD
+    // (`adb shell setprop debug.cranpose.present_thread 1`); read once —
+    // the mode must not change while a renderer is live.
+    let present_thread = matches!(
+        std::env::var("CRANPOSE_PRESENT_THREAD").as_deref(),
+        Ok("1") | Ok("true") | Ok("on")
+    );
+    if present_thread {
+        log::info!("[present-runtime] threaded present enabled (CRANPOSE_PRESENT_THREAD)");
+    }
+
     // Register the SAF document picker as the platform file picker. Requires the
     // app's activity to be `dev.cranpose.android.CranposeActivity`.
     crate::android_file_picker::register(app.clone());
@@ -1644,12 +1878,37 @@ pub fn run(
     let mut behind_deadline = false;
     let mut catchup_coasts = 0u32;
 
+    // The producer-side timestamps of the frames currently in flight on
+    // the present thread (depth-one publishing: one rendering plus one
+    // waiting), completed with the runtime's acquire/render/present
+    // timestamps when each frame's returns drain. Threaded present mode
+    // only; the sync path records its telemetry in `render_once` as
+    // always.
+    let mut pending_present_timings =
+        Vec::<(u64, crate::android_frame_telemetry::FrameTimings)>::with_capacity(2);
+
     // Main event loop
     loop {
         let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
             iteration_start_ns: frame_telemetry.now(),
             ..Default::default()
         };
+
+        // Drain present-runtime returns FIRST — before the frame schedule
+        // reads `needs_redraw` (fresh warmup state) and before the credit
+        // gate below, so a completed frame frees its publish credit for
+        // this very iteration. No-op (and `None`) in sync mode, which has
+        // no present runtime to drain.
+        let drained_present_at = match app_shell.as_mut() {
+            Some(shell) => drain_present_returns_into_loop(
+                shell,
+                &mut gpu_resources,
+                &mut frame_telemetry,
+                &mut pending_present_timings,
+            ),
+            None => None,
+        };
+
         let pending_confirmation_timeout = pending_host_window_confirmation.map(|pending| {
             android_host_window::HOST_WINDOW_CONFIRMATION_TIMEOUT
                 .checked_sub(pending.requested_at.elapsed())
@@ -1659,7 +1918,12 @@ pub fn run(
         // A frame deadline with no surface asks for a frame nothing will draw,
         // and an app with a running animation asks for one every turn of the
         // loop, which is a spun core for as long as the app is off screen.
-        let no_surface = gpu_resources.is_none();
+        // In sync mode a surfaceless window drops the whole resources
+        // struct; in threaded mode the device survives `TerminateWindow`
+        // with `native_window_ptr` cleared — both count as "no surface".
+        let no_surface = gpu_resources
+            .as_ref()
+            .is_none_or(|resources| !resources.has_surface());
         match app_shell.as_ref() {
             Some(shell) if !no_surface => {
                 shell.schedule_platform_frame(&android_frame_driver);
@@ -1804,6 +2068,7 @@ pub fn run(
                                     width,
                                     height,
                                     density,
+                                    present_thread,
                                 ) {
                                     Ok((resources, actual_size)) => {
                                         if let Some(actual_size) = actual_size {
@@ -1878,7 +2143,11 @@ pub fn run(
                     MainEvent::TerminateWindow { .. } => {
                         log::info!("Window terminated");
                         if overlay_window_options.is_none() {
-                            gpu_resources = None;
+                            if present_thread {
+                                drop_present_surface(&mut gpu_resources, &mut app_shell);
+                            } else {
+                                gpu_resources = None;
+                            }
                         }
                     }
                     MainEvent::WindowResized { .. } => {
@@ -1906,9 +2175,19 @@ pub fn run(
                                     if width > 0 && height > 0 {
                                         resources.config.width = width;
                                         resources.config.height = height;
-                                        resources
-                                            .surface
-                                            .configure(&resources.device, &resources.config);
+                                        if present_thread {
+                                            // Epoch bump first (in-flight packets
+                                            // cancel), then the runtime applies the
+                                            // new configuration and acks before
+                                            // anything publishes under the new
+                                            // epoch.
+                                            let renderer = shell.renderer();
+                                            renderer.note_surface_reconfigured();
+                                            renderer.present_reconfigure(resources.config.clone());
+                                            resources.surface_dirty = true;
+                                        } else if let Some(surface) = resources.surface.as_ref() {
+                                            surface.configure(&resources.device, &resources.config);
+                                        }
 
                                         // Set buffer_size to physical pixels
                                         shell.set_buffer_size(width, height);
@@ -2069,6 +2348,7 @@ pub fn run(
                                 width,
                                 height,
                                 density,
+                                present_thread,
                             ) {
                                 Ok((resources, actual_size)) => {
                                     if let Some(actual_size) = actual_size {
@@ -2113,6 +2393,7 @@ pub fn run(
                             width,
                             height,
                             density,
+                            present_thread,
                         ) {
                             Ok((resources, actual_size)) => {
                                 if let Some(actual_size) = actual_size {
@@ -2137,7 +2418,11 @@ pub fn run(
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::SurfaceDestroyed => {
                     if overlay_window_options.is_some() {
-                        gpu_resources = None;
+                        if present_thread {
+                            drop_present_surface(&mut gpu_resources, &mut app_shell);
+                        } else {
+                            gpu_resources = None;
+                        }
                     }
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::Pointer { action, x, y } => {
@@ -2391,9 +2676,18 @@ pub fn run(
             };
         }
 
-        // Render outside event callback if needed
+        // Render outside event callback if needed. In threaded present mode
+        // the depth-one credit gate wraps the WHOLE update block: without
+        // credit (a frame is still in flight on the present thread) the
+        // producer skips even `shell.update()` — backpressure lands before
+        // the expensive update/lowering work, and the present thread's
+        // completion wakes the looper through the frame waker. In sync mode
+        // `has_frame_credit` is constant `true` and this is today's block.
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
-            if shell.needs_update() {
+            if resources.has_surface()
+                && shell.needs_update()
+                && shell.renderer().has_frame_credit()
+            {
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
                     || shell.update(),
@@ -2422,7 +2716,28 @@ pub fn run(
                     update_result.visual_changed,
                     shell.needs_redraw(),
                 ) {
-                    if render_once(resources, shell, &mut frame_telemetry, &mut frame_timings) {
+                    if present_thread {
+                        let (width, height) = shell.buffer_size();
+                        match shell.renderer().publish_frame(width, height) {
+                            PublishOutcome::Published => {
+                                // The runtime finishes acquire/render/present;
+                                // this frame's producer timestamps wait for its
+                                // returns to complete the telemetry record.
+                                pending_present_timings.push((
+                                    shell.renderer().last_published_frame_id(),
+                                    frame_timings,
+                                ));
+                            }
+                            PublishOutcome::NoGraph | PublishOutcome::NoCredit => {
+                                frame_telemetry.note_idle_iteration();
+                            }
+                        }
+                    } else if render_once(
+                        resources,
+                        shell,
+                        &mut frame_telemetry,
+                        &mut frame_timings,
+                    ) {
                         break; // Out of memory, exit
                     }
                 } else {
@@ -2438,9 +2753,17 @@ pub fn run(
         // Catch-up pacing bookkeeping (see the note above the loop):
         // `after_present_ns` is stamped only by a successful present, and
         // `FrameTimings` is fresh per iteration, so a nonzero value is the
-        // exact "this iteration presented" signal.
-        if frame_timings.after_present_ns != 0 {
-            let now = web_time::Instant::now();
+        // exact "this iteration presented" signal (sync mode). In threaded
+        // mode presents complete on the present thread and are observed
+        // when their returns drain at the head of the iteration, carrying
+        // the back-dated present instant; the two signals are exclusive
+        // (one mode per run).
+        let presented_at = if frame_timings.after_present_ns != 0 {
+            Some(web_time::Instant::now())
+        } else {
+            drained_present_at
+        };
+        if let Some(now) = presented_at {
             behind_deadline = catchup_pacing
                 && last_present_at.is_some_and(|previous| {
                     // Display-reported period first (vsync-probe builds),
@@ -2474,5 +2797,12 @@ pub fn run(
                 behind_deadline = false;
             }
         }
+    }
+
+    // Loop exited (`Destroy`): stop the present thread. Outstanding
+    // returns drain into the frontend and the thread joins; the surface
+    // and the GpuRenderer die on the present thread, as they lived.
+    if let Some(shell) = app_shell.as_mut() {
+        shell.renderer().shutdown_present_runtime();
     }
 }

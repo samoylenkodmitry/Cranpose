@@ -367,7 +367,15 @@ impl ShapeReplayState {
                 ack.generation,
             );
         }
-        self.awaiting_confirmation.clear();
+        // Purge only THIS batch's leftovers — requests the store did not
+        // confirm can never be confirmed later. A batch published while
+        // this one rendered carries the next frame ordinal and its
+        // requests must outlive this ack, so the purge keys on the frame
+        // the ack echoes (unique among in-flight batches) rather than
+        // clearing the map: the drop path deliberately acks under the
+        // store's generation, so generation alone cannot identify a batch.
+        self.awaiting_confirmation
+            .retain(|_, requested| requested.frame != ack.frame);
         self.recycled_ops = recycled;
         ack.confirmations
     }
@@ -573,6 +581,7 @@ mod tests {
 
         let ack = ReplayAck {
             generation,
+            frame: ops.frame,
             confirmations: vec![(key, 9)],
         };
         let returned = state.apply_ack(ack, ReplayFrameOps::default());
@@ -630,6 +639,7 @@ mod tests {
         cranpose_render_common::scene_builder::set_retained_feed_epoch(Some(generation));
         let ack = ReplayAck {
             generation,
+            frame: ops.frame,
             confirmations: vec![(key, 11)],
         };
         state.apply_ack(ack, ReplayFrameOps::default());
