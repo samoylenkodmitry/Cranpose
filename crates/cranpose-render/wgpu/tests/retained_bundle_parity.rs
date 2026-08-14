@@ -58,9 +58,11 @@ const FRAMES: usize = 16;
 const JOLT_FRAME: usize = 8;
 
 /// One frame of the synthetic boss through the RECORDING path: rings
-/// rotating at distinct speeds under a breathing scale, churning sparks,
-/// recoloring twinkles, movers whose count changes every frame — plus a
-/// non-similar band jolt at `JOLT_FRAME` to force mid-sequence recaptures.
+/// rotating at distinct speeds under a breathing scale (each backed by a
+/// full annulus big enough for the retained mesh size gate), churning
+/// sparks, recoloring twinkles, movers whose count changes every frame —
+/// plus a non-similar band jolt at `JOLT_FRAME` to force mid-sequence
+/// recaptures.
 fn record_frame(frame: usize) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -94,6 +96,19 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
         // Thickening the band while the radius breathes is NOT a similarity
         // of the captured geometry: the span must recapture.
         let band = band * breathing * if frame >= JOLT_FRAME { 1.35 } else { 1.0 };
+        // A full backing annulus under each sector ring: its ~32k-90k px²
+        // quad clears the retained size gate, so pre-jolt captures still
+        // land WITH meshes now that the tiny sectors pass through — and it
+        // thickens with the same jolt, so its span recaptures mid-sequence
+        // (meshless, ARC_MESH is off from the jolt) like the rest.
+        scope.draw_annular_sector(
+            Brush::solid(Color(0.08, 0.12, 0.22, 1.0)),
+            Point::new(CENTER, CENTER),
+            radius - band,
+            radius,
+            speed * frame as f32,
+            std::f32::consts::TAU,
+        );
         let count = 420usize;
         let sweep = std::f32::consts::TAU / count as f32 * 0.8;
         for i in 0..count {

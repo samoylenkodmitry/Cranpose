@@ -2377,9 +2377,9 @@ struct ReplaySlot {
     /// bytes ever could.
     paint_mirror: Vec<[f32; 4]>,
     /// Conservative capture-space arc/ring mesh, built once at capture.
-    /// `None` when the kill switch is off, the slot meshed no arcs, or the
-    /// vertex budget overflowed — those slots replay through the quad-expansion
-    /// six-vertices-per-shape path.
+    /// `None` when the kill switch is off, the slot meshed no shapes (none
+    /// over the size gate), or the vertex budget overflowed — those slots
+    /// replay through the quad-expansion six-vertices-per-shape path.
     mesh: Option<ReplaySlotMesh>,
     /// Which capture created this slot's buffers, from the store's global
     /// monotone counter. Retained bundle keys carry it so a slot id that is
@@ -2400,9 +2400,10 @@ struct ReplaySlot {
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
-/// bands get trapezoid strips covering only their antialiasing footprint,
-/// every other shape gets a passthrough pair of triangles identical to the
-/// quad expansion. See [`build_arc_mesh_vertices`].
+/// and stroked-circle rim bands over the size gate get trapezoid strips
+/// covering only their antialiasing footprint, every other shape gets a
+/// passthrough pair of triangles identical to the quad expansion. See
+/// [`build_arc_mesh_vertices`].
 #[cfg(not(target_arch = "wasm32"))]
 struct ReplaySlotMesh {
     vertex_buffer: wgpu::Buffer,
@@ -2417,6 +2418,13 @@ struct ReplaySlotMesh {
     /// draws `index_prefix[first]..index_prefix[first + count]` — one
     /// `draw_indexed` per op, identical shape order, z untouched.
     index_prefix: Vec<u32>,
+    /// Capture engagement counts for the test/diagnostic view
+    /// ([`GpuRenderer::replay_slot_mesh_engagement`]): shapes meshed as arc
+    /// bands, shapes meshed as stroked-circle rim bands, and shapes that
+    /// took the passthrough quad (gate-rejected or non-band).
+    meshed_arcs: usize,
+    meshed_rims: usize,
+    passthrough: usize,
 }
 
 /// Vertex of a retained slot's conservative arc mesh: capture-device-space
@@ -2451,14 +2459,22 @@ impl MeshVertex {
 /// A/B needs no rebuild. Read per capture — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_enabled() -> bool {
-    // Opt-in (CRANPOSE_ARC_MESH=1 / debug.cranpose.arc_mesh): the Gate 0
-    // off-charger watch A/B measured the non-indexed mesh 5-7 fps SLOWER
-    // than plain quads on the Adreno 702 — the 4-6x vertex amplification
-    // outweighs the fragment savings on a small binning GPU (big desktop
-    // GPUs and the at-vsync-ceiling Huawei masked it). Default returns to
-    // quad expansion until indexed band-boundary geometry removes the
-    // amplification; then the A/B is repeated.
-    matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok(v) if v != "0")
+    // Default ON because of the SIZE GATE ([`retained_mesh_min_px2`]), not
+    // because indexed geometry alone fixed anything: the off-charger watch
+    // A/Bs measured the retained mesh 4-11 fps SLOWER than plain quads on
+    // the Adreno 702 when it meshed ALL ~14k retained arcs — indexed
+    // band-boundary geometry included. Thousands of tiny meshes amplify
+    // vertex and binning work past whatever fragment slack they recover on
+    // a small binning GPU (big desktop GPUs and the at-vsync-ceiling Huawei
+    // masked it). The fill-truth instrument says where the recoverable
+    // slack actually lives: 0.45 Mpx/frame of retained slack out of 1.7
+    // total, dominated by a handful of huge shapes (a 210k-px² ring quad
+    // carrying 180k px² slack — 86% — and ~19k-px² stroked-circle rims at
+    // 94%), while the thousands of small brick arcs measure ~100-800 px²
+    // each. Gated to big shapes only — the regime the shipping
+    // [`rim_mesh_band`] path already proved WINS on this same GPU — the
+    // mesh recovers the slack without the amplification, so ON is safe.
+    !matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok("0"))
 }
 
 /// Dilation applied to the band's half-thickness before meshing, in capture
@@ -2498,6 +2514,60 @@ const ARC_MESH_BUDGET_FLOOR_BYTES: usize = 4096 * std::mem::size_of::<MeshVertex
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_bytes(vertices: usize, indices: usize) -> usize {
     vertices * std::mem::size_of::<MeshVertex>() + indices * std::mem::size_of::<u32>()
+}
+
+/// Default size gate for the retained capture mesh, in capture-space px² of
+/// a shape's bounding quad: shapes below it take the passthrough quad even
+/// when they qualify geometrically.
+///
+/// The default follows from the trade's own economics, not from any one
+/// scene. A band mesh costs a roughly shape-size-independent overhead — up
+/// to [`ARC_MESH_MAX_SEGMENTS`] trapezoids of vertex work plus the extra
+/// primitives' setup and bin-list traffic on a tiling GPU — while what it
+/// can recover scales with the shape's quad area times its discard-slack
+/// fraction (an arc or ring band fills only O(perimeter x thickness) of
+/// its box, so the slack fraction RISES with size: big bands are almost
+/// all slack, tiny ones barely any). Fixed cost against area-proportional
+/// benefit crosses zero at some quad size; 16384 px² (a 128 px square)
+/// puts the gate an order of magnitude above the measured loss regime and
+/// an order below the measured win regime, so it is margin, not tuning:
+/// on the Adreno 702 meshing ~14k retained ~100-800 px² shapes lost
+/// 4-11 fps, while the same mesher over only large shapes wins on the same
+/// GPU (the shipping [`rim_mesh_band`] path, gated at 65536 px²), and
+/// fill-truth's top retained slack sits at ~19k px² and up (86-94% slack).
+/// Any app whose retained content mixes the two populations lands on the
+/// same split; a device where the crossover measurably differs A/Bs the
+/// threshold through the override below without a rebuild.
+#[cfg(not(target_arch = "wasm32"))]
+const RETAINED_MESH_MIN_PX2_DEFAULT: usize = 16384;
+/// Clamp for the `CRANPOSE_RETAINED_MESH_PX2` override: below ~1k px² the
+/// tiny-mesh amplification regime demonstrably returns, and above 256k px²
+/// the gate exceeds a whole 512x512 quad — both ends are "you no longer
+/// mean the size gate", not useful A/B settings.
+#[cfg(not(target_arch = "wasm32"))]
+const RETAINED_MESH_MIN_PX2_RANGE: std::ops::RangeInclusive<usize> = 1024..=262144;
+
+/// The retained capture mesh's size gate in px², default
+/// [`RETAINED_MESH_MIN_PX2_DEFAULT`], overridable for device A/Bs via
+/// `CRANPOSE_RETAINED_MESH_PX2` (the `debug.cranpose.retained_mesh_px2`
+/// property on Android), clamped to [`RETAINED_MESH_MIN_PX2_RANGE`]. Read
+/// per capture like [`arc_mesh_enabled`] — captures are rare.
+#[cfg(not(target_arch = "wasm32"))]
+fn retained_mesh_min_px2() -> f64 {
+    parse_retained_mesh_min_px2(std::env::var("CRANPOSE_RETAINED_MESH_PX2").ok().as_deref())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_retained_mesh_min_px2(value: Option<&str>) -> f64 {
+    value
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|px2| {
+            px2.clamp(
+                *RETAINED_MESH_MIN_PX2_RANGE.start(),
+                *RETAINED_MESH_MIN_PX2_RANGE.end(),
+            )
+        })
+        .unwrap_or(RETAINED_MESH_MIN_PX2_DEFAULT) as f64
 }
 
 /// Band parameters of a captured arc that qualifies for a conservative mesh:
@@ -2582,9 +2652,9 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
 /// [`arc_mesh_enabled`]'s property bridge: `CRANPOSE_RIM_MESH=0` (or the
 /// `debug.cranpose.rim_mesh` property on Android) makes the fused shape
 /// prepare skip rim detection entirely, so a device A/B needs no rebuild.
-/// Default ON — unlike the retained arc mesh, the rim path is indexed
-/// band-boundary geometry from the start, so the vertex-amplification
-/// regression that demoted `CRANPOSE_ARC_MESH` to opt-in does not apply.
+/// Default ON — the rim path only ever meshed a handful of huge shapes per
+/// frame, which is the regime that WINS on the watch GPU (and the proof the
+/// retained mesh's size gate is built on; see [`arc_mesh_enabled`]).
 /// Read once per fused-chunk prepare (cheap), not per shape.
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_mesh_enabled() -> bool {
@@ -2635,9 +2705,13 @@ fn rim_mesh_capacity_warn() {
     }
 }
 
-/// Band parameters of a DYNAMIC stroked round-rect whose outline is
-/// geometrically a circle — an arena "rim". Everything else returns `None`
-/// and rasterizes through the ordinary quad expansion.
+/// Band parameters of a stroked round-rect whose outline is geometrically a
+/// circle — an arena "rim". Everything else returns `None` and rasterizes
+/// through the ordinary quad expansion. Two callers, each behind its own
+/// size gate: the DYNAMIC fused path via [`rim_mesh_band`], and the
+/// retained capture builder ([`build_arc_mesh_vertices`]) via
+/// [`retained_mesh_min_px2`] — retained slots hold big static ring circles
+/// the dynamic path never sees.
 ///
 /// Derivation: `ShapeData::rect` for a stroked shape is the stroke-inflated
 /// box (geometry plus half the stroke width on each side), so the geometry
@@ -2660,7 +2734,7 @@ fn rim_mesh_capacity_warn() {
 /// radius must match `geom_half` to within 0.01 px (a deviation that small
 /// stays inside the mesh margin's 0.5 px float-slop budget).
 #[cfg(not(target_arch = "wasm32"))]
-fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
+fn rim_band_geometry(shape: &ShapeData) -> Option<ArcMeshBand> {
     // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
     let flags = shape.stroke_params[1].max(0.0) as u32;
     if flags & 3 != SHAPE_KIND_STROKE {
@@ -2694,11 +2768,6 @@ fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
         && left < right
         && top < bottom;
     if !axis_aligned {
-        return None;
-    }
-    // Big shapes only: the win is proportional to the discarded quad area,
-    // and small quads are cheaper than the extra pipeline switches.
-    if w * h < 65536.0 {
         return None;
     }
     // A circle's box is square, bitwise.
@@ -2740,6 +2809,18 @@ fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
         start: 0.0,
         sweep: cranpose_ui_graphics::TAU,
     })
+}
+
+/// [`rim_band_geometry`] behind the DYNAMIC path's size gate. Big shapes
+/// only: the win is proportional to the discarded quad area, and small
+/// quads are cheaper than the extra pipeline switches.
+#[cfg(not(target_arch = "wasm32"))]
+fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
+    let [_, _, w, h] = shape.rect;
+    if w * h < 65536.0 {
+        return None;
+    }
+    rim_band_geometry(shape)
 }
 
 /// Kill switch for the opaque static leading-span cache, mirroring
@@ -4216,20 +4297,22 @@ struct ArcMeshBuild {
     /// `indices[index_prefix[i]..index_prefix[i + 1]]`.
     index_prefix: Vec<u32>,
     meshed_arcs: usize,
+    meshed_rims: usize,
     meshed_segments: usize,
     passthrough: usize,
     quad_area: f64,
     mesh_area: f64,
 }
 
-/// Builds a slot's conservative indexed mesh: arc bands become
-/// vertex-sharing trapezoid strips, every other shape a passthrough quad
-/// (four vertices, six indices), in the exact capture shape order. Returns
-/// `None` when the byte budget overflows — the caller warns and the whole
-/// slot replays through the quad-expansion path (silent truncation would
-/// break the containment invariant).
+/// Builds a slot's conservative indexed mesh: arc bands and stroked-circle
+/// rims whose bounding quad reaches `min_mesh_px2` become vertex-sharing
+/// trapezoid strips; every other shape — including gate-rejected small arcs
+/// — a passthrough quad (four vertices, six indices), in the exact capture
+/// shape order. Returns `None` when the byte budget overflows — the caller
+/// warns and the whole slot replays through the quad-expansion path (silent
+/// truncation would break the containment invariant).
 #[cfg(not(target_arch = "wasm32"))]
-fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
+fn build_arc_mesh_vertices(shape_data: &[ShapeData], min_mesh_px2: f64) -> Option<ArcMeshBuild> {
     let budget_bytes =
         (shape_data.len() * ARC_MESH_BUDGET_BYTES_PER_SHAPE).max(ARC_MESH_BUDGET_FLOOR_BYTES);
     let mut build = ArcMeshBuild {
@@ -4237,6 +4320,7 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
         indices: Vec::new(),
         index_prefix: Vec::with_capacity(shape_data.len() + 1),
         meshed_arcs: 0,
+        meshed_rims: 0,
         meshed_segments: 0,
         passthrough: 0,
         quad_area: 0.0,
@@ -4245,7 +4329,23 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
     build.index_prefix.push(0);
     for (index, shape) in shape_data.iter().enumerate() {
         let start = build.indices.len();
-        let meshed = arc_mesh_band(shape).and_then(|band| {
+        let quad_px2 = quad_shoelace_area(shape);
+        // THE SIZE GATE (see [`arc_mesh_enabled`] for the measured history):
+        // only shapes whose submitted quad is big enough to carry real
+        // fill-truth slack are worth a mesh; below the gate the trapezoid
+        // strip's vertex and binning amplification costs the watch GPU more
+        // than the discarded fragments ever did. The two band shapes are
+        // mutually exclusive by kind bits (`SHAPE_KIND_ARC` vs
+        // `SHAPE_KIND_STROKE`), so the `or_else` never shadows one with the
+        // other.
+        let band = if quad_px2 >= min_mesh_px2 {
+            arc_mesh_band(shape)
+                .map(|band| (band, false))
+                .or_else(|| rim_band_geometry(shape).map(|band| (band, true)))
+        } else {
+            None
+        };
+        let meshed = band.and_then(|(band, is_rim)| {
             emit_arc_band_mesh(
                 shape,
                 index as u32,
@@ -4253,10 +4353,15 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
                 &mut build.vertices,
                 &mut build.indices,
             )
+            .map(|segments| (segments, is_rim))
         });
         match meshed {
-            Some(segments) => {
-                build.meshed_arcs += 1;
+            Some((segments, is_rim)) => {
+                if is_rim {
+                    build.meshed_rims += 1;
+                } else {
+                    build.meshed_arcs += 1;
+                }
                 build.meshed_segments += segments;
             }
             None => {
@@ -4268,7 +4373,7 @@ fn build_arc_mesh_vertices(shape_data: &[ShapeData]) -> Option<ArcMeshBuild> {
             return None;
         }
         build.index_prefix.push(build.indices.len() as u32);
-        build.quad_area += quad_shoelace_area(shape);
+        build.quad_area += quad_px2;
         build.mesh_area += triangles_shoelace_area(&build.vertices, &build.indices[start..]);
     }
     Some(build)
@@ -11671,8 +11776,9 @@ impl GpuRenderer {
         // triangle area.
         let mut mesh_fill_records: Option<Vec<FillDiagShapeRecord>> = None;
         let mesh = if arc_mesh_enabled() {
-            match build_arc_mesh_vertices(&shape_data) {
+            match build_arc_mesh_vertices(&shape_data, retained_mesh_min_px2()) {
                 Some(build) => {
+                    let meshed_shapes = build.meshed_arcs + build.meshed_rims;
                     let cut = if build.quad_area > 0.0 {
                         (1.0 - build.mesh_area / build.quad_area) * 100.0
                     } else {
@@ -11682,12 +11788,14 @@ impl GpuRenderer {
                     // console, and captures are rare — one line per slot
                     // lifetime. The unique-vert/index counts against the
                     // six-per-shape quad baseline are the vertex-amplification
-                    // instrument P1b exists for.
+                    // instrument P1b exists for; the meshed/passthrough split
+                    // is the size gate's own engagement instrument.
                     log::warn!(
-                        "[arc-mesh] slot {id}: {} arcs meshed ({} segs), {} passthrough; \
-                         {} unique verts / {} indices (quad path: {} verts); \
-                         quad_px {:.0} -> mesh_px {:.0} (-{:.1}%)",
+                        "[arc-mesh] slot {id}: {} arcs + {} rims meshed ({} segs), \
+                         {} passthrough; {} unique verts / {} indices \
+                         (quad path: {} verts); quad_px {:.0} -> mesh_px {:.0} (-{:.1}%)",
                         build.meshed_arcs,
+                        build.meshed_rims,
                         build.meshed_segments,
                         build.passthrough,
                         build.vertices.len(),
@@ -11697,7 +11805,7 @@ impl GpuRenderer {
                         build.mesh_area,
                         cut,
                     );
-                    if build.meshed_arcs > 0 && fill_area_diag_enabled() {
+                    if meshed_shapes > 0 && fill_area_diag_enabled() {
                         mesh_fill_records = Some(fill_diag_capture_records(
                             &shape_data,
                             Some((&build.vertices, &build.indices, &build.index_prefix)),
@@ -11705,7 +11813,7 @@ impl GpuRenderer {
                     }
                     // A slot that meshed nothing gains nothing over the
                     // indexless quad path — skip the buffers.
-                    (build.meshed_arcs > 0).then(|| {
+                    (meshed_shapes > 0).then(|| {
                         let vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                             label: Some("Replay Mesh Vertex Buffer"),
                             size: (std::mem::size_of::<MeshVertex>() * build.vertices.len()) as u64,
@@ -11732,6 +11840,9 @@ impl GpuRenderer {
                             vertex_buffer,
                             index_buffer,
                             index_prefix: build.index_prefix,
+                            meshed_arcs: build.meshed_arcs,
+                            meshed_rims: build.meshed_rims,
+                            passthrough: build.passthrough,
                         }
                     })
                 }
@@ -11860,6 +11971,25 @@ impl GpuRenderer {
             .filter(|slot| slot.mesh.is_some())
             .count();
         (meshed, self.replay_slots.slots.len())
+    }
+
+    /// Test/diagnostic view of the capture size gate, summed over live slots
+    /// that hold a mesh: (shapes meshed as arc bands, shapes meshed as
+    /// stroked-circle rim bands, shapes on the passthrough quad).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_slot_mesh_engagement(&self) -> (usize, usize, usize) {
+        self.replay_slots
+            .slots
+            .values()
+            .filter_map(|slot| slot.mesh.as_ref())
+            .fold((0, 0, 0), |(arcs, rims, passthrough), mesh| {
+                (
+                    arcs + mesh.meshed_arcs,
+                    rims + mesh.meshed_rims,
+                    passthrough + mesh.passthrough,
+                )
+            })
     }
 
     /// Draws one retained replay batch — `retained`'s shape range of its
@@ -20632,9 +20762,13 @@ mod tests {
         let shape = test_shape(0, BlendMode::SrcOver);
         let mut converted = ShapeData::zeroed();
         convert_shape_into_slots(&shape, &[], 1.0, 0, &mut converted, &mut []);
-        let build =
-            build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
+        let build = build_arc_mesh_vertices(
+            std::slice::from_ref(&converted),
+            RETAINED_MESH_MIN_PX2_DEFAULT as f64,
+        )
+        .expect("within budget");
         assert_eq!(build.meshed_arcs, 0);
+        assert_eq!(build.meshed_rims, 0);
         assert_eq!(build.passthrough, 1);
         // Four shared corner vertices, six indices — amplification-free.
         assert_eq!(build.vertices.len(), 4);
@@ -20810,7 +20944,149 @@ mod tests {
         );
         let converted = converted_arc_shape(arc, 1.0);
         let shapes = vec![converted; 100];
-        assert!(build_arc_mesh_vertices(&shapes).is_none());
+        assert!(build_arc_mesh_vertices(&shapes, RETAINED_MESH_MIN_PX2_DEFAULT as f64).is_none());
+    }
+
+    /// The size gate, boundary-exact: a shape meshes when its quad area is
+    /// AT LEAST the threshold and passes through below it — with the
+    /// engagement counters saying which happened — and the arc and rim
+    /// acceptances both sit behind the same gate.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_mesh_size_gate_engages_exactly_per_threshold() {
+        use cranpose_ui_graphics::ArcGeometry;
+        // A big ring (quad ~322 px square ≈ 104k px²), a small brick arc
+        // (quad well under 1024 px²), and a big stroked-circle rim
+        // (90k-px² quad) in one capture.
+        let big_ring = converted_arc_shape(
+            ArcGeometry::new(
+                Point::new(204.0, 204.0),
+                140.0,
+                160.0,
+                0.0,
+                cranpose_ui_graphics::TAU,
+                StrokeCap::Butt,
+            ),
+            1.0,
+        );
+        let small_arc = converted_arc_shape(
+            ArcGeometry::new(
+                Point::new(204.0, 204.0),
+                12.0,
+                18.0,
+                0.3,
+                0.5,
+                StrokeCap::Butt,
+            ),
+            1.0,
+        );
+        let rim = rim_test_shape_data();
+        let shapes = [big_ring, small_arc, rim];
+        let big_px2 = quad_shoelace_area(&shapes[0]);
+        let small_px2 = quad_shoelace_area(&shapes[1]);
+        let rim_px2 = quad_shoelace_area(&shapes[2]);
+        assert!(small_px2 < 1024.0 && big_px2 > rim_px2 && rim_px2 > 16384.0);
+
+        // Default gate: both big shapes mesh, the brick arc passes through.
+        let build = build_arc_mesh_vertices(&shapes, RETAINED_MESH_MIN_PX2_DEFAULT as f64)
+            .expect("within budget");
+        assert_eq!(
+            (build.meshed_arcs, build.meshed_rims, build.passthrough),
+            (1, 1, 1)
+        );
+
+        // ≥, not >: a threshold bitwise AT a shape's quad area still meshes
+        // it...
+        let build = build_arc_mesh_vertices(&shapes, big_px2).expect("within budget");
+        assert_eq!(
+            (build.meshed_arcs, build.meshed_rims, build.passthrough),
+            (1, 0, 2)
+        );
+        // ...and one ulp above it does not.
+        let build =
+            build_arc_mesh_vertices(&shapes, big_px2 + big_px2 * f64::EPSILON).expect("budget");
+        assert_eq!(
+            (build.meshed_arcs, build.meshed_rims, build.passthrough),
+            (0, 0, 3)
+        );
+
+        // A threshold between the rim and the ring gates them apart.
+        let build = build_arc_mesh_vertices(&shapes, (rim_px2 + big_px2) * 0.5).expect("budget");
+        assert_eq!(
+            (build.meshed_arcs, build.meshed_rims, build.passthrough),
+            (1, 0, 2)
+        );
+
+        // A gate-rejected shape is a passthrough quad — four vertices, six
+        // indices, positions bitwise the captured quad corners.
+        let everything_gated =
+            build_arc_mesh_vertices(&shapes, big_px2 * 2.0).expect("within budget");
+        assert_eq!(everything_gated.passthrough, 3);
+        assert_eq!(everything_gated.vertices.len(), 12);
+        assert_eq!(everything_gated.index_prefix, vec![0, 6, 12, 18]);
+    }
+
+    /// The env override's parse-and-clamp: unset and garbage read the
+    /// default, in-range values pass through, and both clamp ends hold.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_mesh_px2_override_parses_and_clamps() {
+        assert_eq!(
+            parse_retained_mesh_min_px2(None),
+            RETAINED_MESH_MIN_PX2_DEFAULT as f64
+        );
+        assert_eq!(
+            parse_retained_mesh_min_px2(Some("not a number")),
+            RETAINED_MESH_MIN_PX2_DEFAULT as f64
+        );
+        assert_eq!(
+            parse_retained_mesh_min_px2(Some("-5")),
+            RETAINED_MESH_MIN_PX2_DEFAULT as f64
+        );
+        assert_eq!(parse_retained_mesh_min_px2(Some(" 40000 ")), 40000.0);
+        assert_eq!(
+            parse_retained_mesh_min_px2(Some("0")),
+            *RETAINED_MESH_MIN_PX2_RANGE.start() as f64
+        );
+        assert_eq!(
+            parse_retained_mesh_min_px2(Some("99999999")),
+            *RETAINED_MESH_MIN_PX2_RANGE.end() as f64
+        );
+    }
+
+    /// The retained builder accepts stroked-circle rims through
+    /// [`rim_band_geometry`]: the emitted mesh is the closed annulus band
+    /// (every vertex inside the dilated ring, none inside the hole), counted
+    /// as a rim, while the same shape under the gate stays a quad.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn retained_capture_meshes_big_stroked_circle_rims_as_annuli() {
+        let rim = rim_test_shape_data();
+        let build = build_arc_mesh_vertices(
+            std::slice::from_ref(&rim),
+            RETAINED_MESH_MIN_PX2_DEFAULT as f64,
+        )
+        .expect("within budget");
+        assert_eq!(
+            (build.meshed_arcs, build.meshed_rims, build.passthrough),
+            (0, 1, 0)
+        );
+        assert!(build.meshed_segments >= ARC_MESH_MIN_SEGMENTS);
+        // The annulus, not the quad: the mesh area is far below the 90k-px²
+        // bounding quad and every vertex sits in the dilated band's radial
+        // range (clip-plane vertices included — the quad box touches the
+        // outer circle only near the axes, inside the band).
+        assert!(build.mesh_area < 0.2 * build.quad_area);
+        let band = rim_band_geometry(&rim).expect("rim must qualify");
+        for vertex in &build.vertices {
+            let dx = vertex.position[0] - band.center[0];
+            let dy = vertex.position[1] - band.center[1];
+            let radius = (dx * dx + dy * dy).sqrt();
+            assert!(
+                radius >= band.inner - ARC_MESH_MARGIN - 1e-3,
+                "vertex at radius {radius} fell inside the annulus hole"
+            );
+        }
     }
 
     /// A converted circle rim, hand-built in `ShapeData` terms: `rect` is the

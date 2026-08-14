@@ -67,14 +67,22 @@ fn property_flag(name: &str) -> bool {
 /// allowlist of properties into the environment closes that gap without giving
 /// either side a new configuration format to learn.
 ///
-/// Property names are capped at 32 bytes by `PROP_NAME_MAX`, which is why they
-/// are abbreviations rather than the full variable name.
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 22] = [
+/// Property names are capped at 32 bytes by `PROP_NAME_MAX` on pre-O Android,
+/// which is why they are abbreviations rather than the full variable name.
+/// (Since Android O the cap is gone — `__system_property_get` takes names of
+/// any length — so a name may run right up to or past that pre-O limit, as
+/// `debug.cranpose.retained_mesh_px2` does; every deployment target is far
+/// past O.)
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 23] = [
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
     ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
     ("debug.cranpose.arc_mesh", "CRANPOSE_ARC_MESH"),
     ("debug.cranpose.rim_mesh", "CRANPOSE_RIM_MESH"),
     ("debug.cranpose.round_cull", "CRANPOSE_ROUND_CULL"),
+    (
+        "debug.cranpose.retained_mesh_px2",
+        "CRANPOSE_RETAINED_MESH_PX2",
+    ),
     ("debug.cranpose.catchup_pacing", "CRANPOSE_CATCHUP_PACING"),
     ("debug.cranpose.instanced_quads", "CRANPOSE_INSTANCED_QUADS"),
     (

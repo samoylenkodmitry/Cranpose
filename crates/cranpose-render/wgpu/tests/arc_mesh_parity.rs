@@ -2,10 +2,15 @@
 //!
 //! Renders the same churning retained scene as `command_feed_parity` under
 //! two capture regimes — `CRANPOSE_ARC_MESH=0` (plain quad expansion) and
-//! `CRANPOSE_ARC_MESH=1` (the opt-in conservative mesh, indexed since P1b)
-//! — and compares same-position passes. The instanced-quad selection is
-//! pinned OFF for the whole test so both arms match the regime this envelope
-//! was measured under (see the note at the top of the test body).
+//! `CRANPOSE_ARC_MESH=1` (the conservative mesh: indexed since P1b,
+//! size-gated and default-ON since Stage 3) — and compares same-position
+//! passes. Each sector ring is backed by a full annulus whose quad clears
+//! the retained size gate, so the mesh arm still meshes under the default
+//! threshold while the ~1.3k tiny sector bricks take the passthrough quad —
+//! the engagement split the gate exists for, asserted below. The
+//! instanced-quad selection is pinned OFF for the whole test so both arms
+//! match the regime this envelope was measured under (see the note at the
+//! top of the test body).
 //!
 //! THE MEASURED ENVELOPE, AND WHY IT IS NOT ZERO. The design bar was
 //! byte-identical output, on the argument that any vertex stream carrying
@@ -92,6 +97,17 @@ fn record_frame(frame: usize) -> DrawScopeDefault {
     {
         let radius = radius * breathing;
         let band = band * breathing;
+        // A full backing annulus under each sector ring, rotating with it:
+        // its ~32k-90k px² quad clears the retained size gate, so the mesh
+        // arm keeps meshing now that the tiny sectors below pass through.
+        scope.draw_annular_sector(
+            Brush::solid(Color(0.08, 0.12, 0.22, 1.0)),
+            Point::new(CENTER, CENTER),
+            radius - band,
+            radius,
+            speed * frame as f32,
+            std::f32::consts::TAU,
+        );
         let count = 420usize;
         let sweep = std::f32::consts::TAU / count as f32 * 0.8;
         for i in 0..count {
@@ -262,6 +278,22 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
         mesh_slots < total_slots,
         "the quad arm's slots must have captured without meshes \
          ({mesh_slots} of {total_slots} meshed)"
+    );
+    // The size gate's engagement split: the big backing annuli meshed, the
+    // ~1.3k tiny sector bricks per capture took the passthrough quad (the
+    // regime that meshed them wholesale measured 4-11 fps slower on the
+    // watch), and nothing in this scene is a stroked-circle rim.
+    let (arcs_meshed, rims_meshed, passthrough) = renderer.replay_slot_mesh_engagement();
+    eprintln!("arc-mesh engagement: {arcs_meshed} arcs, {rims_meshed} rims, {passthrough} quads");
+    assert!(
+        arcs_meshed >= 1,
+        "the backing annuli must clear the size gate"
+    );
+    assert_eq!(rims_meshed, 0, "no shape here is a stroked-circle rim");
+    assert!(
+        passthrough > arcs_meshed,
+        "the tiny sector bricks must stay on the passthrough quad \
+         ({passthrough} quads vs {arcs_meshed} meshed)"
     );
 
     for (frame, (quad, mesh)) in quad_frames.iter().zip(&mesh_frames).enumerate() {
