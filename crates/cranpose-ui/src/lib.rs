@@ -28,6 +28,7 @@ pub mod round_scaling_list;
 pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
+mod semantics_dispatch;
 mod subcompose_layout;
 pub mod text;
 pub mod text_field_focus;
@@ -105,8 +106,8 @@ pub use modifier::{
     FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
     PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
-    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader, Shadow,
-    ShadowScope, Size, TransformOrigin,
+    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader,
+    SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
@@ -147,6 +148,10 @@ pub use render_state::{
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollSettlePolicy, ScrollState};
+pub use semantics_dispatch::{
+    clear_semantics_invalidations, has_pending_semantics_invalidations,
+    process_semantics_invalidations, schedule_semantics_invalidation,
+};
 pub use zoom::ZoomState;
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]

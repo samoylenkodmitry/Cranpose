@@ -406,6 +406,21 @@ where
                 }
             });
         }
+
+        // Process semantics invalidations raised from outside composition.
+        //
+        // Mirrors Compose's `SemanticsModifierNode.invalidateSemantics()`: an
+        // app whose recorder reads state the composition does not observe says
+        // so here, and the flag is bubbled to the root because
+        // `tree_needs_semantics` reads the root alone. Without this a screen
+        // that never relays out — a game drawn on one `Canvas` — publishes its
+        // semantics once and then keeps publishing that same stale tree.
+        if has_pending_semantics_invalidations() {
+            let mut applier = self.composition.applier_mut();
+            process_semantics_invalidations(|node_id| {
+                cranpose_core::bubble_semantics_dirty(&mut *applier, node_id);
+            });
+        }
     }
 
     fn refresh_draw_repasses(&mut self) -> Vec<NodeId> {

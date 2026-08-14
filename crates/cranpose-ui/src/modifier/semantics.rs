@@ -1,13 +1,114 @@
+use std::cell::Cell;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use cranpose_core::NodeId;
 use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeChain, ModifierNodeElement, NodeCapabilities,
-    NodeState, SemanticsConfiguration, SemanticsNode as SemanticsNodeTrait,
+    DelegatableNode, ModifierNode, ModifierNodeChain, ModifierNodeContext, ModifierNodeElement,
+    NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode as SemanticsNodeTrait,
 };
 
 use super::{Modifier, ModifierChainHandle};
+use crate::render_state::AppContextId;
+
+/// A handle an app holds to say that what its semantics recorder would report
+/// has changed.
+///
+/// A `.semantics()` recorder is re-run on every collection, so it always reports
+/// the app's current answer. It cannot say *when* that answer changed, and a
+/// tree is only re-collected when some node marks its semantics dirty — which
+/// until now meant attaching a node, rebuilding its modifier chain, or a layout
+/// pass. A screen that is one `Canvas` does none of those: its layout never
+/// changes and its frame loop draws rather than recomposes, so the tree it
+/// published at boot was the tree a screen reader kept reading.
+///
+/// This is the way out, and it is Jetpack Compose's:
+/// `SemanticsModifierNode.invalidateSemantics()`. Remember one requester, hang
+/// it on the same node as the recorder, and call [`invalidate`] when the content
+/// changes — no recomposition, no layout pass.
+///
+/// ```ignore
+/// let semantics = remember(SemanticsRequester::new).with(Clone::clone);
+/// // ... in the composition:
+/// Modifier::empty()
+///     .semantics_requester(&semantics)
+///     .semantics(move |config| { /* reads live app state */ })
+/// // ... and in the frame loop, guarded by a revision so an unchanged tree is
+/// // not republished every frame:
+/// if revision != last_revision {
+///     last_revision = revision;
+///     semantics.invalidate();
+/// }
+/// ```
+///
+/// [`invalidate`]: SemanticsRequester::invalidate
+#[derive(Clone, Default)]
+pub struct SemanticsRequester {
+    /// Which node, in which app context, the recorder is attached to — learned
+    /// at attach time, because that is when a modifier node is told either.
+    ///
+    /// Shared rather than copied so that a requester cloned into a frame loop
+    /// before the first composition still learns the node when one attaches.
+    /// The app context is carried alongside the node so that `invalidate` can be
+    /// called from a frame loop or an event callback that is inside no context
+    /// at all, and still reach the right queue rather than a neighbour's.
+    binding: Rc<Cell<Option<SemanticsBinding>>>,
+}
+
+#[derive(Clone, Copy)]
+struct SemanticsBinding {
+    app_context: AppContextId,
+    node_id: NodeId,
+}
+
+impl SemanticsRequester {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Marks the attached node's semantics for re-collection on the next frame.
+    ///
+    /// Idempotent within a frame and cheap: the node joins a set the shell
+    /// drains once per frame. Before the node attaches, and after it detaches,
+    /// this does nothing — there is no tree to mark.
+    pub fn invalidate(&self) {
+        if let Some(binding) = self.binding.get() {
+            crate::semantics_dispatch::schedule_semantics_invalidation_in(
+                binding.app_context,
+                binding.node_id,
+            );
+        }
+    }
+
+    /// The layout node this requester is bound to, if it is attached.
+    pub fn node_id(&self) -> Option<NodeId> {
+        self.binding.get().map(|binding| binding.node_id)
+    }
+
+    fn bind(&self, binding: Option<SemanticsBinding>) {
+        self.binding.set(binding);
+    }
+
+    /// The binding for the node and context this call is running inside.
+    ///
+    /// `None` when either is unknown, which is the honest answer for a node the
+    /// applier has not given an id: a request naming no node cannot be serviced.
+    fn binding_here(node_id: Option<NodeId>) -> Option<SemanticsBinding> {
+        Some(SemanticsBinding {
+            app_context: crate::render_state::current_app_context_id_opt()?,
+            node_id: node_id?,
+        })
+    }
+}
+
+impl fmt::Debug for SemanticsRequester {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SemanticsRequester")
+            .field("node_id", &self.node_id())
+            .finish()
+    }
+}
 
 pub struct SemanticsModifierNode {
     recorder: Rc<dyn Fn(&mut SemanticsConfiguration)>,
@@ -36,6 +137,106 @@ impl ModifierNode for SemanticsModifierNode {
 
     fn as_semantics_node_mut(&mut self) -> Option<&mut dyn SemanticsNodeTrait> {
         Some(self)
+    }
+}
+
+/// Binds a [`SemanticsRequester`] to the layout node it is attached to.
+///
+/// Carries no capability of its own: it neither records semantics nor takes part
+/// in any pass. All it does is learn the node id, which a modifier node is only
+/// told at attach time.
+pub struct SemanticsRequesterNode {
+    state: NodeState,
+    requester: SemanticsRequester,
+}
+
+impl SemanticsRequesterNode {
+    pub(crate) fn new(requester: SemanticsRequester) -> Self {
+        Self {
+            state: NodeState::new(),
+            requester,
+        }
+    }
+}
+
+impl DelegatableNode for SemanticsRequesterNode {
+    fn node_state(&self) -> &NodeState {
+        &self.state
+    }
+}
+
+impl ModifierNode for SemanticsRequesterNode {
+    fn on_attach(&mut self, context: &mut dyn ModifierNodeContext) {
+        self.state.set_attached(true);
+        self.requester
+            .bind(SemanticsRequester::binding_here(context.node_id()));
+    }
+
+    fn on_detach(&mut self) {
+        self.state.set_attached(false);
+        // Requests raised after this point would name a node that is gone, and
+        // the queue is keyed by node id, so unbind rather than leave a stale one.
+        self.requester.bind(None);
+    }
+}
+
+/// Modifier element for [`SemanticsRequester`].
+#[derive(Clone)]
+pub struct SemanticsRequesterElement {
+    requester: SemanticsRequester,
+}
+
+impl SemanticsRequesterElement {
+    pub(crate) fn new(requester: SemanticsRequester) -> Self {
+        Self { requester }
+    }
+}
+
+impl fmt::Debug for SemanticsRequesterElement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SemanticsRequesterElement")
+    }
+}
+
+impl PartialEq for SemanticsRequesterElement {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.requester.binding, &other.requester.binding)
+    }
+}
+
+impl Eq for SemanticsRequesterElement {}
+
+impl Hash for SemanticsRequesterElement {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        Rc::as_ptr(&self.requester.binding).hash(state);
+    }
+}
+
+impl ModifierNodeElement for SemanticsRequesterElement {
+    type Node = SemanticsRequesterNode;
+
+    fn create(&self) -> Self::Node {
+        SemanticsRequesterNode::new(self.requester.clone())
+    }
+
+    fn update(&self, node: &mut Self::Node) {
+        // A recomposition that hands over a different requester moves the
+        // binding with it: the old one must stop naming this node, and the new
+        // one must start.
+        if !Rc::ptr_eq(&node.requester.binding, &self.requester.binding) {
+            let bound = node.requester.binding.get();
+            node.requester.bind(None);
+            node.requester = self.requester.clone();
+            node.requester.bind(bound);
+        }
+    }
+
+    fn inspector_name(&self) -> &'static str {
+        "semanticsRequester"
+    }
+
+    fn capabilities(&self) -> NodeCapabilities {
+        NodeCapabilities::NONE
     }
 }
 
