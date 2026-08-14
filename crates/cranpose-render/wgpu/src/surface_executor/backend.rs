@@ -10,7 +10,7 @@ use crate::surface_requirements::SurfaceRequirementSet;
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::LayerNode;
 use cranpose_render_common::raster_cache::LayerRasterCacheKey;
-use cranpose_ui_graphics::{BlendMode, LayerShape, Rect, RenderEffect, RuntimeShader};
+use cranpose_ui_graphics::{BlendMode, Brush, LayerShape, Rect, RenderEffect, RuntimeShader};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -149,6 +149,7 @@ pub(crate) trait SurfaceExecutionBackend {
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -167,6 +168,7 @@ pub(crate) trait SurfaceExecutionBackend {
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -187,6 +189,7 @@ pub(crate) trait SurfaceExecutionBackend {
         &mut self,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
