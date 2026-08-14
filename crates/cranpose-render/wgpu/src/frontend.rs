@@ -37,6 +37,11 @@ use cranpose_ui_graphics::Rect;
 use std::rc::Weak;
 use web_time::Instant;
 
+/// Direct scenes kept for recycling: one per packet that can be in flight
+/// (depth-one publishing allows one rendering and one waiting) plus the one
+/// being filled. Beyond that the buffers are dropped rather than hoarded.
+const MAX_RETAINED_DIRECT_SCENES: usize = 3;
+
 #[derive(Clone, Debug)]
 pub(crate) struct DevOverlayCache {
     pub(crate) text: String,
@@ -59,7 +64,13 @@ pub(crate) struct RendererFrontend {
     /// Last frame's direct-root scene, kept so its (potentially multi-MB)
     /// draw vectors are reused instead of reallocated every frame. Returned
     /// by the present stage through [`RenderReturns`].
-    pub(crate) retained_direct_scene: Option<CompositorScene>,
+    /// Recycled direct-root scenes. Depth-one publishing keeps up to two
+    /// packets in flight (one rendering, one waiting), so ONE spare scene
+    /// would leave the producer allocating a fresh multi-megabyte
+    /// `CompositorScene` on every other frame — the mmap churn the
+    /// recycling exists to prevent. The pool holds one scene per in-flight
+    /// packet plus the one being filled.
+    pub(crate) retained_direct_scenes: Vec<CompositorScene>,
     pub(crate) direct_scene_capacity: SceneCapacityHint,
     /// Monotone id stamped on each [`FramePacket`] this producer publishes.
     pub(crate) frame_sequence: u64,
@@ -80,7 +91,7 @@ impl RendererFrontend {
             root_scale: 1.0,
             dev_overlay_cache: None,
             dev_overlay_graph: None,
-            retained_direct_scene: None,
+            retained_direct_scenes: Vec::new(),
             direct_scene_capacity: SceneCapacityHint::default(),
             frame_sequence: 0,
             layer_surface_rect_cache: HashMap::new(),
@@ -182,8 +193,8 @@ impl RendererFrontend {
             &mut self.layer_surface_requirements_cache,
         ) {
             let recycled_scene = self
-                .retained_direct_scene
-                .take()
+                .retained_direct_scenes
+                .pop()
                 .unwrap_or_else(|| CompositorScene::with_capacity(self.direct_scene_capacity));
             #[cfg(not(target_arch = "wasm32"))]
             crate::shape_replay::SHAPE_REPLAY
@@ -215,7 +226,9 @@ impl RendererFrontend {
                 // frame.
                 #[cfg(not(target_arch = "wasm32"))]
                 crate::shape_replay::SHAPE_REPLAY.with(|state| state.borrow_mut().retire_all());
-                self.retained_direct_scene = Some(collected.scene);
+                if self.retained_direct_scenes.len() < MAX_RETAINED_DIRECT_SCENES {
+                    self.retained_direct_scenes.push(collected.scene);
+                }
                 None
             }
         } else {
@@ -295,6 +308,8 @@ impl RendererFrontend {
             overlay,
             replay,
             text_cache_len: self.text_state.text_cache_len(),
+            recycled_confirmations: None,
+            replay_preconsumed: false,
         };
         let after_build = Instant::now();
         if let Some(total_ms) = should_log_wgpu_render_stage(build_start, after_build) {
@@ -325,12 +340,15 @@ impl RendererFrontend {
             frame_id: _,
             outcome: _,
             cancelled_replay,
+            timings: _,
         } = returns;
         if let Some(scene) = scene {
             // The packet's scene buffers return to the producer pool — for
             // a heavy animated frame they are megabytes of Vec. A cancelled
             // packet returns its scene the same way as a presented one.
-            self.retained_direct_scene = Some(scene);
+            if self.retained_direct_scenes.len() < MAX_RETAINED_DIRECT_SCENES {
+                self.retained_direct_scenes.push(scene);
+            }
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -536,7 +554,7 @@ mod tests {
         );
         assert_eq!(packet.frame_id, 1);
         assert!(
-            frontend.retained_direct_scene.is_none(),
+            frontend.retained_direct_scenes.is_empty(),
             "the non-direct gate rejects before any direct scene is collected"
         );
     }
@@ -584,7 +602,7 @@ mod tests {
             "the surface source must carry the collected root content"
         );
         assert!(
-            frontend.retained_direct_scene.is_some(),
+            !frontend.retained_direct_scenes.is_empty(),
             "rejected collect must stash the scene for recycling"
         );
         assert_eq!(packet.frame_id, 1);
@@ -635,7 +653,7 @@ mod tests {
             .build_frame_packet(320, 240, false, 0, 0)
             .expect("direct root must lower into a packet");
         assert!(
-            frontend.retained_direct_scene.is_none(),
+            frontend.retained_direct_scenes.is_empty(),
             "the packet owns the scene while the present stage renders it"
         );
 
@@ -649,7 +667,7 @@ mod tests {
         });
         assert!(confirmations.is_none(), "no ack means nothing to recycle");
         assert!(
-            frontend.retained_direct_scene.is_some(),
+            !frontend.retained_direct_scenes.is_empty(),
             "apply_returns must stash the scene for the next build"
         );
 
@@ -658,7 +676,7 @@ mod tests {
             .expect("recycled scene must feed the next frame");
         assert_eq!(next.frame_id, 2);
         assert!(
-            frontend.retained_direct_scene.is_none(),
+            frontend.retained_direct_scenes.is_empty(),
             "the next build must take the recycled scene"
         );
     }

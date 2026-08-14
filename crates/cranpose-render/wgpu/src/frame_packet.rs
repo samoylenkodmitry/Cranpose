@@ -68,6 +68,11 @@ pub enum CancelReason {
     SurfaceEpoch,
     /// The packet was lowered for a different surface size.
     Viewport,
+    /// The present stage had no usable surface to draw the packet on: the
+    /// surface was dropped, or acquire failed past its one reconfigure
+    /// retry. Producer state (epochs, viewport) still matched — only the
+    /// swapchain was missing.
+    SurfaceUnavailable,
 }
 
 /// What the present stage did with a packet. `NotRun` is the `Default` so a
@@ -93,6 +98,11 @@ pub(crate) struct ReplayAck {
     /// The generation the confirmations are stamped with — the slot
     /// universe they verifiably exist in.
     pub(crate) generation: u64,
+    /// The staleness ordinal of the batch this answers, echoed back so the
+    /// planner purges exactly THIS batch's unconfirmed requests. With a
+    /// packet rendering and another already published, a later batch's
+    /// requests are live when this ack lands and must survive it.
+    pub(crate) frame: u64,
     pub(crate) confirmations: Vec<ReplayConfirmation>,
 }
 
@@ -172,6 +182,33 @@ pub(crate) struct FramePacket {
     /// for the present backend's frame stats — the present call tree holds
     /// no text layout state to read it from.
     pub(crate) text_cache_len: usize,
+    /// Threaded mode only: the emptied confirmations vec from a previous
+    /// frame's [`ReplayAck`], riding back to the present-side store so it
+    /// recycles the capacity instead of allocating per frame. The sync path
+    /// (and wasm) hands the vec straight back via
+    /// `restore_replay_ack_confirmations` and leaves this `None`.
+    pub(crate) recycled_confirmations: Option<Vec<ReplayConfirmation>>,
+    /// Threaded mode only: set by the present stage's early replay-ops
+    /// consumption (`GpuRenderer::take_replay_ack_early`), which runs
+    /// BEFORE surface acquire so the [`ReplayAck`] reaches the producer in
+    /// time for the very next frame's planning. When set, `replay` has
+    /// been taken (it holds the empty default), the render path must not
+    /// consume it again, and a later cancel must not reclaim it. Always
+    /// `false` as built by the producer and on the sync path.
+    pub(crate) replay_preconsumed: bool,
+}
+
+/// Present-stage timestamps for one consumed packet, in nanoseconds on the
+/// clock the producer injected at runtime start (`0` = stage did not run or
+/// no clock was injected). Carried back in [`RenderReturns`] so the
+/// producer's frame telemetry keeps recording acquire/render/present phases
+/// after those stages move to the present thread. Plain integers so the
+/// packet types stay clock-library-free on every target.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PresentTimings {
+    pub after_acquire_ns: i64,
+    pub after_render_ns: i64,
+    pub after_present_ns: i64,
 }
 
 /// What the present stage hands back to the producer after consuming a
@@ -200,6 +237,10 @@ pub(crate) struct RenderReturns {
     /// planner can re-queue its releases and recycle its buffers. `None`
     /// on the presented path (the ops travel back through `ack` there).
     pub(crate) cancelled_replay: Option<ReplayFrameOps>,
+    /// Present-thread stage timestamps for this packet; all-zero on the
+    /// sync path (the producer already holds the clock there) and on any
+    /// outcome that never reached the swapchain.
+    pub(crate) timings: PresentTimings,
 }
 
 /// Compile-time proof that the packet and every member chain can cross a
@@ -227,6 +268,8 @@ const _: () = {
     assert_send::<RenderReturns>();
     assert_send::<CancelReason>();
     assert_send::<PresentOutcome>();
+    assert_send::<PresentTimings>();
+    assert_send::<Option<Vec<ReplayConfirmation>>>();
 };
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -15,6 +15,8 @@ pub(crate) enum AndroidSurfaceError {
     NoSurfaceFormat,
     #[error("Android WGPU surface reports no supported alpha modes")]
     NoAlphaMode,
+    #[error("failed to start Android present runtime: {0}")]
+    PresentRuntime(String),
 }
 
 pub(crate) fn create_android_wgpu_surface(

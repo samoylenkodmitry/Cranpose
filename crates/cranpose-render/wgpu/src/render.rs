@@ -8199,10 +8199,17 @@ impl GpuRenderer {
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        packet: FramePacket,
+        mut packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
+        // Threaded mode rides the emptied ack-confirmations buffer back to
+        // the store inside the next packet ([`FramePacket::recycled_confirmations`]);
+        // adopt it before the validity gate so even a cancelled packet
+        // cannot leak the capacity. Sync callers always carry `None`.
+        if let Some(confirmations) = packet.recycled_confirmations.take() {
+            self.restore_replay_ack_confirmations(confirmations);
+        }
         // Packet validity gate — BEFORE consume_replay_ops and any
         // encoding. A packet built against another renderer instance,
         // another surface configuration, or another viewport is cancelled
@@ -8355,7 +8362,13 @@ impl GpuRenderer {
     /// re-queue (its releases name still-live store slots; dropping them
     /// would leak pool ids forever). A cancel is a protocol outcome, not a
     /// draw error, so the render call returns `Ok(())`.
-    fn cancel_packet(
+    ///
+    /// `pub(crate)` for the present runtime, which must cancel a packet
+    /// that cannot render at all (surface dropped) without touching the
+    /// GPU. Callers that bypass [`render`][Self::render] must take the
+    /// packet's `recycled_confirmations` first — this refuses the packet
+    /// without a store to adopt them into.
+    pub(crate) fn cancel_packet(
         packet: FramePacket,
         reason: CancelReason,
         returns: &mut RenderReturns,
@@ -8370,6 +8383,8 @@ impl GpuRenderer {
             overlay: _,
             replay,
             text_cache_len: _,
+            recycled_confirmations: _,
+            replay_preconsumed,
         } = packet;
         match root {
             PacketRoot::Direct(root) => {
@@ -8378,17 +8393,20 @@ impl GpuRenderer {
                 // packet's replay plan came from the planner and must go
                 // back to it unconsumed — a Surface packet only ever
                 // carries the empty default plan, which has nothing to
-                // reclaim.
+                // reclaim. A plan the present stage already consumed
+                // (`take_replay_ack_early`) is not here to reclaim: the
+                // store honored it and its ack is on the way to the
+                // planner, so `replay` holds only the taken-out default.
                 returns.scene = Some(root.scene);
                 #[cfg(not(target_arch = "wasm32"))]
-                {
+                if !replay_preconsumed {
                     returns.cancelled_replay = Some(replay);
                 }
             }
             PacketRoot::Surface(_) => {}
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = replay;
+        let _ = (replay, replay_preconsumed);
         returns.ack = None;
         returns.frame_id = frame_id;
         returns.outcome = PresentOutcome::Cancelled(reason);
@@ -8657,19 +8675,24 @@ impl GpuRenderer {
         // equivalent to the in-store drain this replaces, because both
         // application points sit after this frame's graph build and before
         // the next collect, which is where the bypass gate and `feed_slots`
-        // are read.
+        // are read. The threaded present runtime consumes EARLIER
+        // (`take_replay_ack_early`, before surface acquire) and marks the
+        // packet, so this block must not feed the taken-out default plan
+        // to the store.
         #[cfg(not(target_arch = "wasm32"))]
         let mut packet = packet;
         #[cfg(not(target_arch = "wasm32"))]
-        if let PacketRoot::Direct(root) = &packet.root {
-            let ops = std::mem::take(&mut packet.replay);
-            let (ack, recycled) = self.consume_replay_ops(
-                ops,
-                &root.scene.shapes,
-                &root.scene.brushes,
-                packet.root_scale,
-            );
-            returns.ack = Some((ack, recycled));
+        if !packet.replay_preconsumed {
+            if let PacketRoot::Direct(root) = &packet.root {
+                let ops = std::mem::take(&mut packet.replay);
+                let (ack, recycled) = self.consume_replay_ops(
+                    ops,
+                    &root.scene.shapes,
+                    &root.scene.brushes,
+                    packet.root_scale,
+                );
+                returns.ack = Some((ack, recycled));
+            }
         }
 
         let FramePacket {
@@ -8682,6 +8705,8 @@ impl GpuRenderer {
             overlay,
             replay: _,
             text_cache_len: _,
+            recycled_confirmations: _,
+            replay_preconsumed: _,
         } = packet;
 
         let mut backend = RecordingSurfaceBackend {
@@ -11531,6 +11556,53 @@ impl GpuRenderer {
         let _ = confirmations;
     }
 
+    /// The surface format this renderer was constructed for — the present
+    /// runtime's offscreen test target must match it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_format
+    }
+
+    /// Test inspector for the threaded confirmations round-trip: the
+    /// store-side ack buffer's current capacity.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn replay_ack_confirmations_capacity(&self) -> usize {
+        self.replay_ack_confirmations.capacity()
+    }
+
+    /// EARLY present-side consumption of a validated packet's replay plan
+    /// (threaded runtime only): identical store work to the render-time
+    /// block in `render_graph_recorded`, but runnable BEFORE surface
+    /// acquire, so the [`crate::frame_packet::ReplayAck`] can travel to the
+    /// producer without waiting out the swapchain — a capture confirmed
+    /// here is available to the very next frame's planning, the same
+    /// one-frame latency the synchronous path has. Marks the packet so the
+    /// render path does not consume the taken-out default plan, and so a
+    /// later cancel does not reclaim it. `None` for Surface roots, which
+    /// never touch the planner. The caller must have validated the packet
+    /// (epochs, viewport) first: this executes against the live store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn take_replay_ack_early(
+        &mut self,
+        packet: &mut FramePacket,
+    ) -> Option<(
+        crate::frame_packet::ReplayAck,
+        crate::frame_packet::ReplayFrameOps,
+    )> {
+        if packet.replay_preconsumed {
+            return None;
+        }
+        let PacketRoot::Direct(root) = &packet.root else {
+            return None;
+        };
+        let ops = std::mem::take(&mut packet.replay);
+        let root_scale = packet.root_scale;
+        let (ack, recycled) =
+            self.consume_replay_ops(ops, &root.scene.shapes, &root.scene.brushes, root_scale);
+        packet.replay_preconsumed = true;
+        Some((ack, recycled))
+    }
+
     /// Present-side consumption of one frame's [`ReplayFrameOps`]: frees
     /// the plan's releases, then honors its capture requests against the
     /// scene they were recorded for, answering with a [`ReplayAck`] of
@@ -11556,6 +11628,10 @@ impl GpuRenderer {
         crate::frame_packet::ReplayAck,
         crate::frame_packet::ReplayFrameOps,
     ) {
+        // The batch's own staleness ordinal, echoed in the ack so the
+        // planner purges exactly this batch's unconfirmed requests even
+        // when another batch is already in flight behind it.
+        let acked_frame = ops.frame;
         if ops.generation < self.store_feed_generation {
             // Fail-closed: ops planned under an OLDER slot universe name
             // slots this store does not hold. Drop the batch whole —
@@ -11579,6 +11655,7 @@ impl GpuRenderer {
             return (
                 crate::frame_packet::ReplayAck {
                     generation: self.store_feed_generation,
+                    frame: acked_frame,
                     confirmations: Vec::new(),
                 },
                 ops,
@@ -11643,6 +11720,7 @@ impl GpuRenderer {
         (
             crate::frame_packet::ReplayAck {
                 generation,
+                frame: acked_frame,
                 confirmations,
             },
             ops,
