@@ -524,6 +524,18 @@ impl WgpuRenderer {
             .unwrap_or((0, 0))
     }
 
+    /// Test/diagnostic view of the retained capture size gate, summed over
+    /// live slots holding a mesh: (arc bands meshed, stroked-circle rim
+    /// bands meshed, passthrough quads).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn replay_slot_mesh_engagement(&self) -> (usize, usize, usize) {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::replay_slot_mesh_engagement)
+            .unwrap_or((0, 0, 0))
+    }
+
     /// Test/diagnostic view of the retained bundle cache: lifetime
     /// (rebuilds, cached executes).
     #[cfg(not(target_arch = "wasm32"))]
