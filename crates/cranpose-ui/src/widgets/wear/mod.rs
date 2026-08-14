@@ -14,6 +14,8 @@
 //! The pieces, in dependency order:
 //!
 //! - [`density`] — the integral-layout grid everything else rounds against;
+//! - [`color_appearance`] — `setLuminance`, the CAM16 round trip Wear derives
+//!   its scroll-indicator colours with;
 //! - [`theme`] — colour roles and the four Wear type-scale entries;
 //! - [`scaling_list`] — the shrink-and-fade list, and the transform channel
 //!   that makes it possible at all;
@@ -22,6 +24,7 @@
 //! - [`list_header`], [`button`], [`switch_button`] — the row widgets.
 
 pub mod button;
+pub mod color_appearance;
 pub mod density;
 pub mod list_header;
 pub mod scaffold;
@@ -31,6 +34,7 @@ pub mod switch_button;
 pub mod theme;
 
 pub use button::*;
+pub use color_appearance::*;
 pub use density::*;
 pub use list_header::*;
 pub use scaffold::*;

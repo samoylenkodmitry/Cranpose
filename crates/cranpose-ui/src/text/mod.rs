@@ -16,7 +16,7 @@ pub use annotated_string::{
 
 pub use crate::text_layout_result::TextLayoutResult;
 pub use decoration::{Shadow, TextDecoration};
-pub use draw_scope_text::{text_style_for_draw_style, AppContextTextMeasurer};
+pub use draw_scope_text::{draw_style_line_box, text_style_for_draw_style, AppContextTextMeasurer};
 pub use font::{
     FileBackedFontFamily, FontFamily, FontFile, FontStyle, FontSynthesis, FontWeight,
     LoadedTypefacePath,

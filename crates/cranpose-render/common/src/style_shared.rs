@@ -82,7 +82,17 @@ pub fn combine_layers(
 
 pub use crate::graph::quad_bounds;
 
+/// The colour a primitive is actually painted in, once this layer has had its
+/// say.
+///
+/// The colour is snapped to eight bits *first*, because that is where the
+/// platform's own colour type already is by the time anything paints with it
+/// (see [`Color::srgb_8bit`]). Only then does the layer's alpha multiply it.
+/// The order is the whole point: an isolated layer's contents land in an 8-bit
+/// buffer and the alpha multiplies whole channel values, so
+/// `round(round(c * 255) * a)` and not `round(c * 255 * a)`.
 pub fn apply_layer_to_color(color: Color, layer: &GraphicsLayer) -> Color {
+    let color = color.srgb_8bit();
     apply_color_filter_to_color(
         Color(
             color.0,
@@ -117,21 +127,72 @@ pub fn compose_color_filters(
 
 pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     // The overwhelmingly common case — full-alpha layer, no filter, unit
-    // scale — leaves every brush untouched; a scene of thousands of shape
-    // draws per frame should not rebuild its colors to discover that.
+    // scale — leaves every brush's geometry untouched; a scene of thousands of
+    // shape draws per frame should not rebuild it to discover that. The
+    // colours are still snapped, because a colour reaches the framebuffer at
+    // eight bits whether or not a layer touched it on the way.
     if layer.alpha == 1.0
         && layer.color_filter.is_none()
         && layer_scale_x(layer) == 1.0
         && layer_scale_y(layer) == 1.0
     {
-        return brush;
+        return map_brush_colors(brush, Color::srgb_8bit);
     }
+    map_brush_colors(scale_brush_geometry(brush, layer), |color| {
+        apply_layer_to_color(color, layer)
+    })
+}
+
+/// Every colour a brush carries through `paint`, leaving its geometry alone.
+fn map_brush_colors(brush: Brush, paint: impl Fn(Color) -> Color) -> Brush {
+    match brush {
+        Brush::Solid(color) => Brush::solid(paint(color)),
+        Brush::LinearGradient {
+            colors,
+            stops,
+            start,
+            end,
+            tile_mode,
+        } => Brush::LinearGradient {
+            colors: colors.into_iter().map(paint).collect(),
+            stops,
+            start,
+            end,
+            tile_mode,
+        },
+        Brush::RadialGradient {
+            colors,
+            stops,
+            center,
+            radius,
+            tile_mode,
+        } => Brush::RadialGradient {
+            colors: colors.into_iter().map(paint).collect(),
+            stops,
+            center,
+            radius,
+            tile_mode,
+        },
+        Brush::SweepGradient {
+            colors,
+            stops,
+            center,
+        } => Brush::SweepGradient {
+            colors: colors.into_iter().map(paint).collect(),
+            stops,
+            center,
+        },
+    }
+}
+
+/// A brush's geometry under this layer's scale, leaving its colours alone.
+fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {
     let scale_x = layer_scale_x(layer);
     let scale_y = layer_scale_y(layer);
     let uniform_scale = layer_uniform_scale(layer);
 
     match brush {
-        Brush::Solid(color) => Brush::solid(apply_layer_to_color(color, layer)),
+        Brush::Solid(color) => Brush::Solid(color),
         Brush::LinearGradient {
             colors,
             stops,
@@ -144,10 +205,7 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
             end.x *= scale_x;
             end.y *= scale_y;
             Brush::LinearGradient {
-                colors: colors
-                    .into_iter()
-                    .map(|c| apply_layer_to_color(c, layer))
-                    .collect(),
+                colors,
                 stops,
                 start,
                 end,
@@ -165,10 +223,7 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
             center.y *= scale_y;
             radius *= uniform_scale;
             Brush::RadialGradient {
-                colors: colors
-                    .into_iter()
-                    .map(|c| apply_layer_to_color(c, layer))
-                    .collect(),
+                colors,
                 stops,
                 center,
                 radius,
@@ -183,10 +238,7 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
             center.x *= scale_x;
             center.y *= scale_y;
             Brush::SweepGradient {
-                colors: colors
-                    .into_iter()
-                    .map(|c| apply_layer_to_color(c, layer))
-                    .collect(),
+                colors,
                 stops,
                 center,
             }

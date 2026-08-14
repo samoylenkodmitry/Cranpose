@@ -130,6 +130,104 @@ fn instances_of_one_variable_file_do_not_share_glyph_cache_entries() {
     );
 }
 
+/// A directory shaped like `/system/fonts`, holding the variable file under the
+/// name Android's `sans-serif` names.
+struct SystemFontDir(PathBuf);
+
+impl SystemFontDir {
+    fn new(name: &str) -> Self {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-output/cranpose-system-font-weights")
+            .join(name);
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("scratch directory");
+        std::fs::copy(variable_font_path(), path.join("Roboto-Regular.ttf"))
+            .expect("the demo's variable font must copy");
+        Self(path)
+    }
+}
+
+impl Drop for SystemFontDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn system_font_set(dir: &SystemFontDir, weight: FontWeight) -> SoftwareTextFontSet {
+    let mut registry = SoftwareTextFontRegistry::new();
+    registry
+        .register_system_face(&dir.0, &FontFamily::SansSerif, weight, FontStyle::Normal)
+        .expect("the system face must load");
+    registry.into_font_set_or_default(&[])
+}
+
+/// The defect this guards against: Wear Material 3 asks `sans-serif` for body
+/// 450 and title 550, `/system/etc/fonts.xml` declares the family only in
+/// hundreds, and Minikin resolves both to the hundred below. A registry that
+/// instead instanced the `wght` axis at 450 drew a face the platform cannot
+/// draw — measured at +12.3% ink per glyph at 24 px on a Wear device, text that
+/// measures and lays out perfectly and is simply heavier than every other app.
+#[test]
+fn a_system_weight_the_font_config_does_not_declare_draws_the_declared_face() {
+    let dir = SystemFontDir::new("sans-serif");
+    let family = FontFamily::SansSerif;
+
+    let regular = ink_area(
+        &system_font_set(&dir, FontWeight::NORMAL),
+        "Weighted",
+        &style_for(&family, FontWeight::NORMAL),
+    );
+    let medium = ink_area(
+        &system_font_set(&dir, FontWeight::MEDIUM),
+        "Weighted",
+        &style_for(&family, FontWeight::MEDIUM),
+    );
+    // Asked for off-grid; must draw exactly what the platform's matcher returns.
+    let off_grid = ink_area(
+        &system_font_set(&dir, FontWeight(450)),
+        "Weighted",
+        &style_for(&family, FontWeight(450)),
+    );
+
+    assert!(
+        medium > regular,
+        "the fixture must have a wght axis worth instancing, \
+         or this test cannot fail: regular={regular} medium={medium}"
+    );
+    assert_eq!(
+        off_grid, regular,
+        "450 must draw the 400 entry: regular={regular} medium={medium} off_grid={off_grid}"
+    );
+}
+
+/// The same request against an app's own file must keep instancing freely — a
+/// variable axis belongs to the font, and only the platform's aliases are
+/// limited to the platform's declared entries.
+#[test]
+fn an_app_supplied_variable_face_still_instances_an_arbitrary_weight() {
+    let path = variable_font_path();
+    let family = FontFamily::file_backed(vec![
+        FontFile::new(path.clone()),
+        FontFile::new(path).with_weight(FontWeight(450)),
+    ])
+    .expect("a family needs at least one file");
+
+    let fonts = font_set(&family);
+    let regular = fonts
+        .resolve(&style_for(&family, FontWeight::NORMAL))
+        .expect("regular face");
+    let off_grid = fonts
+        .resolve(&style_for(&family, FontWeight(450)))
+        .expect("off-grid face");
+
+    assert_eq!(off_grid.weight(), FontWeight(450));
+    assert_ne!(
+        regular.content_hash(),
+        off_grid.content_hash(),
+        "an app's own variable font must still instance at the weight it declares"
+    );
+}
+
 #[test]
 fn a_static_face_declared_at_a_weight_it_does_not_have_keeps_its_own_outlines() {
     // No `wght` axis to instance, so the declaration only affects matching —

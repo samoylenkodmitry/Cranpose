@@ -16,7 +16,8 @@
 //! `WearDensity` converts to and from device pixels and does the rounding on
 //! the pixel side, which is the only side where rounding means anything.
 
-use crate::render_state::{current_density, current_font_scale};
+use crate::font_scale::FontScaleCurve;
+use crate::render_state::{current_density, current_font_scale_curve};
 use crate::round_scaling_list::round_to_px;
 
 /// The device pixel grid a Wear widget measures against.
@@ -28,28 +29,37 @@ use crate::round_scaling_list::round_to_px;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WearDensity {
     density: f32,
-    font_scale: f32,
+    font_scale: FontScaleCurve,
 }
 
 impl WearDensity {
     /// The grid the running app is on.
     pub fn current() -> Self {
-        Self::new(current_density(), current_font_scale())
+        Self::with_curve(current_density(), current_font_scale_curve())
     }
 
-    /// A grid stated outright, for a test or a golden.
+    /// A grid stated outright, for a test or a golden. The setting is taken as
+    /// a plain multiplier, which is what it is wherever the platform reports no
+    /// conversion of its own.
     pub fn new(density: f32, font_scale: f32) -> Self {
+        let font_scale = if font_scale.is_finite() && font_scale > 0.0 {
+            font_scale
+        } else {
+            1.0
+        };
+        Self::with_curve(density, FontScaleCurve::linear(font_scale))
+    }
+
+    /// A grid whose text size follows the platform's own `Sp` conversion rather
+    /// than a multiplier. See [`crate::font_scale`].
+    pub fn with_curve(density: f32, font_scale: FontScaleCurve) -> Self {
         Self {
             density: if density.is_finite() && density > 0.0 {
                 density
             } else {
                 1.0
             },
-            font_scale: if font_scale.is_finite() && font_scale > 0.0 {
-                font_scale
-            } else {
-                1.0
-            },
+            font_scale,
         }
     }
 
@@ -60,6 +70,11 @@ impl WearDensity {
 
     /// The user's text size setting.
     pub fn font_scale(self) -> f32 {
+        self.font_scale.scale()
+    }
+
+    /// The conversion the platform performs for a size in `Sp`.
+    pub fn font_scale_curve(self) -> FontScaleCurve {
         self.font_scale
     }
 
@@ -75,7 +90,7 @@ impl WearDensity {
     /// measured with [`WearDensity::dp`] instead — that is the whole difference
     /// between the two.
     pub fn sp(self, value: f32) -> f32 {
-        self.dp(value * self.font_scale)
+        self.dp(self.font_scale.sp_to_dp(value))
     }
 
     /// A length snapped to the nearest whole device pixel, exact halves up.

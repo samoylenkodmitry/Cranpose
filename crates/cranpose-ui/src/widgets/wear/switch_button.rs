@@ -23,6 +23,7 @@ use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
 use cranpose_core::NodeId;
+use cranpose_foundation::SemanticsWidgetRole;
 use cranpose_ui_graphics::{DrawScope, Size, VectorPath};
 use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
 
@@ -341,9 +342,15 @@ where
         .draw_behind(move |scope: &mut dyn DrawScope| {
             scope.draw_round_rect(Brush::Solid(container), CornerRadii::uniform(radius));
         })
+        // `Role.Switch`, which is what tells a screen reader the row is a
+        // toggle before it is acted on rather than after. Wear puts it on the
+        // `Switch` control inside the row and lets the merge carry it up; this
+        // names it on the row, which is the same announcement and does not
+        // depend on the merge.
         .toggleable(
             checked,
             Some(format!("{label}, {}", if checked { "on" } else { "off" })),
+            Some(SemanticsWidgetRole::Switch),
             move |_next| on_toggle(),
         );
 

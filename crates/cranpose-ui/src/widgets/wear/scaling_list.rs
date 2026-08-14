@@ -70,22 +70,35 @@
 //! exact rather than a heuristic. Pinned by
 //! `the_anchored_items_top_does_not_depend_on_the_heights_above_it`.
 //!
-//! What genuinely does need every height is the **scroll indicator**, which
-//! wants the list's total extent. That comes out of a per-index height cache on
-//! the state, filled as items are measured, with the mean of the known heights
-//! standing in for the rest. The two clamps that matter are exact anyway: at
-//! the top the first item's centre is on the centre line and `scrolled()` is
-//! `0` however wrong the estimate is, and at the bottom `scrolled()` and
-//! `travel()` are both `last_centre - first_centre`, so the estimate cancels
-//! against itself. Only the thumb's *length* mid-list carries the estimate, and
-//! it converges to exact as rows are seen.
+//! What genuinely does need every height is the **scroll clamp**, which wants
+//! the list's total extent. That comes out of a per-index height cache on the
+//! state, filled as items are measured, with the mean of the known heights
+//! standing in for the rest. The two ends that matter are exact anyway: at the
+//! top the first item's centre is on the centre line and `scrolled()` is `0`
+//! however wrong the estimate is, and at the bottom `scrolled()` and `travel()`
+//! are both `last_centre - first_centre`, so the estimate cancels against
+//! itself.
+//!
+//! The **scroll indicator** needs none of it. Wear measures its thumb in
+//! fractional item indices rather than in pixels — see
+//! [`crate::round_scroll_indicator::scaling_list_geometry`] — so what it reads
+//! is the window this list already placed, plus the count, plus the blank at
+//! each end. [`IndicatorState`] is that reading, filled by the measure pass and
+//! lent out by [`WearScalingListState::with_indicator_list`]. The height cache
+//! reaches it in one place only, the auto-centring spacers, and cannot carry an
+//! estimate into a pixel: a spacer counts only while the row at its own end of
+//! the list is on screen, and a row on screen has been measured.
 
 #![allow(non_snake_case)]
 
 use crate::composable;
 use crate::modifier::{GraphicsLayer, Modifier, TransformOrigin};
 use crate::round_scaling_list::{
-    place_row_with, round_to_px, CentreAnchor, ScaleAlpha, ScalingParams,
+    leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
+    CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+};
+use crate::round_scroll_indicator::{
+    scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength,
 };
 use crate::subcompose_layout::{
     MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
@@ -189,6 +202,7 @@ pub struct WearScalingListState {
     anchor: MutableState<CentreAnchor>,
     layout: Rc<RefCell<WearScalingLayoutInfo>>,
     heights: Rc<RefCell<ItemHeights>>,
+    indicator: Rc<RefCell<IndicatorState>>,
 }
 
 impl PartialEq for WearScalingListState {
@@ -196,6 +210,110 @@ impl PartialEq for WearScalingListState {
         self.anchor == other.anchor
             && Rc::ptr_eq(&self.layout, &other.layout)
             && Rc::ptr_eq(&self.heights, &other.heights)
+            && Rc::ptr_eq(&self.indicator, &other.indicator)
+    }
+}
+
+/// The list as `ScalingLazyColumnStateAdapter` reads it, in device pixels.
+///
+/// Wear's indicator does not work in pixels at all: it takes the first and last
+/// visible rows as **fractional item indices** and divides by the item count.
+/// What it is handed is a `ScalingLazyListLayoutInfo` whose sizes and offsets
+/// have already landed on the pixel grid, and it divides those integers, so
+/// this is pixels throughout — points would quietly lose the halves that decide
+/// which index an end lands on.
+///
+/// It is filled by the measure pass rather than derived when the indicator
+/// draws, because the measure pass is the one place where the density, the
+/// viewport and the rows the virtualising walk kept all exist at once.
+#[derive(Debug, Default)]
+struct IndicatorState {
+    visible: Vec<IndicatorItem>,
+    total: usize,
+    viewport: f32,
+    before_padding: f32,
+    after_padding: f32,
+    /// `currentSizeFraction`, which the adapter recomputes **only** when
+    /// `totalItemsCount` changes. It lives here rather than in the widget
+    /// because it belongs to one list, for as long as that list: a thumb
+    /// re-measured per frame breathes as tall rows scroll past, and Wear's does
+    /// not move at all.
+    thumb: ThumbLength,
+}
+
+impl IndicatorState {
+    /// Forgets the window, for a list with nothing in it to describe.
+    ///
+    /// The measured thumb length survives, because [`ThumbLength`] keys itself
+    /// on the item count and an empty list is not a new length.
+    fn clear(&mut self) {
+        self.visible.clear();
+        self.total = 0;
+        self.viewport = 0.0;
+        self.before_padding = 0.0;
+        self.after_padding = 0.0;
+    }
+
+    /// Reads a measured window the way `ScalingLazyListLayoutInfo` reports one.
+    fn record(
+        &mut self,
+        window: &[WindowedRow],
+        spec: &WearScalingLazyColumnSpec,
+        known: &ItemHeights,
+        viewport: f32,
+        density: WearDensity,
+    ) {
+        let count = known.len();
+        if count == 0 {
+            self.clear();
+            return;
+        }
+        let viewport_px = density.to_px(viewport).round();
+        self.total = count;
+        self.viewport = viewport_px;
+        scaling_list_items_with(
+            spec.scaling,
+            viewport,
+            density.density(),
+            window.iter().map(|row| (row.top, row.height)),
+            &mut self.visible,
+        );
+        // `scaling_list_items` numbers the rows it is handed from zero, and what
+        // it is handed here is a window that starts wherever the walk did.
+        if let Some(base) = window.first().map(|row| row.index) {
+            for item in &mut self.visible {
+                item.index += base;
+            }
+        }
+        // `beforeContentPadding + beforeAutoCenteringPadding`, and its mirror
+        // below. The content padding is the one THIS list was given: a widget
+        // that reaches for a number an app happens to use is right by
+        // coincidence and wrong the moment a second app calls it.
+        let mut before = density.to_px(density.dp(spec.content_padding_top));
+        let mut after = density.to_px(density.dp(spec.content_padding_bottom));
+        if let Some(anchor) = spec.auto_centering {
+            // The spacers are stated against the auto-centring params, not
+            // against where the list has been scrolled to: they are two items
+            // Wear injects around the content once, and scrolling moves the
+            // content past them rather than resizing them.
+            let index = anchor.index.min(count - 1);
+            let spacing = density.dp(spec.item_spacing);
+            let centre = (0..index)
+                .map(|i| known.height_of(i) + spacing)
+                .sum::<f32>()
+                + known.height_of(index) * 0.5;
+            before += leading_auto_centring_spacer(
+                viewport_px,
+                density.to_px(centre).round(),
+                density.to_px(anchor.offset),
+            );
+            after += trailing_auto_centring_spacer(
+                viewport_px,
+                density.to_px(known.height_of(count - 1)).round(),
+            );
+        }
+        self.before_padding = before;
+        self.after_padding = after;
     }
 }
 
@@ -218,6 +336,11 @@ struct ItemHeights {
 }
 
 impl ItemHeights {
+    /// How many items the list has, measured or not.
+    fn len(&self) -> usize {
+        self.known.len()
+    }
+
     fn resize(&mut self, len: usize) {
         if self.known.len() == len {
             return;
@@ -289,6 +412,39 @@ impl WearScalingListState {
     pub fn layout_info(&self) -> WearScalingLayoutInfo {
         *self.layout.borrow()
     }
+
+    /// Reads the list the way `ScalingLazyColumnStateAdapter` reads one, for
+    /// [`crate::round_scroll_indicator::scaling_list_geometry`].
+    ///
+    /// The window is lent to a closure rather than returned because it is a
+    /// buffer the measure pass owns and refills; copying it out would put an
+    /// allocation per frame inside a draw. The [`ThumbLength`] comes with it
+    /// because it is the adapter's own field rather than the caller's — the
+    /// thumb is measured once per list and kept — and one list has exactly one.
+    pub fn with_indicator_list<R>(
+        &self,
+        read: impl FnOnce(&mut ThumbLength, ScalingList<'_>) -> R,
+    ) -> R {
+        let mut indicator = self.indicator.borrow_mut();
+        let IndicatorState {
+            visible,
+            total,
+            viewport,
+            before_padding,
+            after_padding,
+            thumb,
+        } = &mut *indicator;
+        read(
+            thumb,
+            ScalingList {
+                visible: visible.as_slice(),
+                total: *total,
+                viewport: *viewport,
+                before_padding: *before_padding,
+                after_padding: *after_padding,
+            },
+        )
+    }
 }
 
 /// Moves an anchor by `delta` and settles it on the nearest item.
@@ -323,10 +479,13 @@ pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListSta
         .with(|value| value.clone());
     let heights =
         remember(|| Rc::new(RefCell::new(ItemHeights::default()))).with(|value| value.clone());
+    let indicator =
+        remember(|| Rc::new(RefCell::new(IndicatorState::default()))).with(|value| value.clone());
     WearScalingListState {
         anchor,
         layout,
         heights,
+        indicator,
     }
 }
 
@@ -667,6 +826,7 @@ pub fn WearScalingLazyColumnNode(
         let transforms = transforms.clone();
         let layout = state.layout.clone();
         let heights = state.heights.clone();
+        let indicator = state.indicator.clone();
         move || {
             let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(
                 move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
@@ -677,6 +837,7 @@ pub fn WearScalingLazyColumnNode(
                         &transforms,
                         &layout,
                         &heights,
+                        &indicator,
                     )
                 },
             );
@@ -722,10 +883,14 @@ struct WindowedRow {
     index: usize,
     /// The item's root nodes and where each sits inside the item.
     roots: Vec<(NodeId, f32, f32)>,
-    /// Unscaled top, in the placed coordinate space.
+    /// The outward walk's cursor for this row: the drawn edge of the row
+    /// between it and the anchor, plus the gap. Its full height is stated from
+    /// here, and the ramp is read off that box.
     top: f32,
     /// Unscaled height, already on the pixel grid.
     height: f32,
+    /// Where the row is actually drawn, and by how much it shrank and faded.
+    placed: PlacedRow,
 }
 
 /// Composes, measures and places only the items the viewport can reach.
@@ -736,6 +901,7 @@ fn measure_wear_scaling_list(
     transforms: &Rc<RefCell<Vec<WearItemTransform>>>,
     layout: &Rc<RefCell<WearScalingLayoutInfo>>,
     heights: &Rc<RefCell<ItemHeights>>,
+    indicator: &Rc<RefCell<IndicatorState>>,
 ) -> MeasureResult {
     let spec = inputs.spec;
     let top_aligned = spec.auto_centering.is_none();
@@ -779,6 +945,7 @@ fn measure_wear_scaling_list(
             viewport,
             ..WearScalingLayoutInfo::default()
         };
+        indicator.borrow_mut().clear();
         return scope
             .layout_with_placement_builder(width, viewport, |placements| placements.clear());
     }
@@ -836,16 +1003,32 @@ fn measure_wear_scaling_list(
         )
     };
     let anchored_height = anchored.height;
+    // The walk stacks the DRAWN boxes, which is what `layoutInfo` does and not
+    // what the `LazyColumn` underneath does: its cursor advances by
+    // `PlacedRow::reported_height`, the scaled size the layout reports, rather
+    // than by the row's full one. See `round_scaling_list`'s module docs. The
+    // anchored row is never scaled, so both accounts seed the walk identically.
+    let place = |top: f32, height: f32| {
+        place_row_with(spec.scaling, viewport, top, height, scale).unwrap_or(PlacedRow {
+            top,
+            height,
+            reported_height: height,
+            scale: 1.0,
+            alpha: 1.0,
+        })
+    };
+    let anchored_placed = place(anchored_top, anchored_height);
     window.push(WindowedRow {
         index: start,
         roots: anchored.roots,
         top: anchored_top,
-        height: anchored.height,
+        height: anchored_height,
+        placed: anchored_placed,
     });
 
-    // Upward, until a slot can no longer reach the top edge. A shrunken row
-    // never leaves its unscaled slot, so a slot that misses the viewport draws
-    // nothing at all and the walk can stop on it.
+    // Upward, until a row can no longer reach the top edge. A shrunken row is
+    // always inside the box its cursor gave it, so a box that misses the
+    // viewport draws nothing at all and the walk can stop on it.
     let mut edge = anchored_top;
     let mut budget = spec.beyond_bounds_item_count;
     let mut index = start;
@@ -867,17 +1050,22 @@ fn measure_wear_scaling_list(
             &density,
             child_constraints,
         );
-        edge = bottom - item.height;
+        // The ramp is read off the row's FULL box hanging from `bottom`; the
+        // cursor then drops by only what the row was shrunk to.
+        let top = bottom - item.height;
+        let placed = place(top, item.height);
+        edge = bottom - placed.reported_height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
-            top: edge,
+            top,
             height: item.height,
+            placed,
         });
     }
 
     // Downward, the same walk against the bottom edge.
-    let mut edge = anchored_top + anchored_height;
+    let mut edge = anchored_top + anchored_placed.reported_height;
     let mut budget = spec.beyond_bounds_item_count;
     for index in (start + 1)..count {
         let top = edge + spacing;
@@ -896,12 +1084,14 @@ fn measure_wear_scaling_list(
             &density,
             child_constraints,
         );
-        edge = top + item.height;
+        let placed = place(top, item.height);
+        edge = top + placed.reported_height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
             top,
             height: item.height,
+            placed,
         });
     }
 
@@ -918,13 +1108,7 @@ fn measure_wear_scaling_list(
         scope.layout_with_placement_builder(width, viewport, |placements| {
             placements.clear();
             for item in &window {
-                let row = place_row_with(spec.scaling, viewport, item.top, item.height, scale)
-                    .unwrap_or(crate::round_scaling_list::PlacedRow {
-                        top: item.top,
-                        height: item.height,
-                        scale: 1.0,
-                        alpha: 1.0,
-                    });
+                let row = item.placed;
                 if let Some(transform) = handles.get(item.index) {
                     transform.set(ScaleAlpha {
                         scale: row.scale,
@@ -948,6 +1132,10 @@ fn measure_wear_scaling_list(
     };
 
     let known = heights.borrow();
+    indicator
+        .borrow_mut()
+        .record(&window, &spec, &known, viewport, density);
+
     let before: f32 = (0..start).map(|i| known.height_of(i) + spacing).sum();
     let after: f32 = ((start + 1)..count)
         .map(|i| spacing + known.height_of(i))

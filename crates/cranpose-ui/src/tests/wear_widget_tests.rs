@@ -12,10 +12,15 @@
 use super::*;
 use crate::modifier::{ModifierNodeSlices, PointerEvent, PointerEventKind};
 use crate::round_scaling_list::{scale_and_alpha, CentreAnchor};
+use crate::round_scroll_indicator::{
+    decimal_first_item_index, decimal_last_item_index, indicator_geometry, IndicatorGeometry,
+    ThumbLength,
+};
 use crate::widgets::wear::{
-    ListHeader, ListHeaderSpec, ScreenScaffold, ScreenScaffoldSpec, ScrollIndicatorSpec,
-    SwitchButton, SwitchButtonSpec, SwitchColors, WearButton, WearButtonSpec, WearColors,
-    WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState, WearTextStyle,
+    indicator_for_scaling_list, ListHeader, ListHeaderSpec, ScreenScaffold, ScreenScaffoldSpec,
+    ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, SwitchColors, WearButton, WearButtonSpec,
+    WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState,
+    WearTextStyle,
 };
 use crate::widgets::Spacer;
 use cranpose_core::NodeId;
@@ -352,16 +357,28 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
 /// an anchor. Deliberately written from `round_scaling_list` directly, so the
 /// widget is checked against the geometry rather than against itself.
 fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
-    use crate::round_scaling_list::{centre_offset, place_row, stack_into, Slot};
+    use crate::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
     // No content padding term: auto-centring absorbs it. See
     // `content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it`.
     let offset = centre_offset(&slots, WATCH, anchor, PX);
-    slots
-        .iter()
-        .map(|slot| place_row(WATCH, slot.top + offset, slot.height, PX).expect("in range"))
-        .collect()
+    // The anchored row is the only one whose slot IS its cursor; every other
+    // row is walked out from it against the scaled sizes in between.
+    let index = anchor.index.min(count.saturating_sub(1));
+    let mut rows = Vec::new();
+    place_rows(
+        RowRun {
+            viewport: WATCH,
+            anchor: index,
+            anchor_top: slots[index].top + offset,
+            gap: 4.0,
+            density: PX,
+        },
+        &vec![ROW_HEIGHT; count],
+        &mut rows,
+    );
+    rows
 }
 
 #[test]
@@ -729,6 +746,175 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
     }
 }
 
+/// The shape both list screens have: a header, then rows. Uniform rows are the
+/// one case where every model of a scroll indicator agrees, so a list under
+/// test must not have them.
+fn header_and_rows() -> Vec<f32> {
+    let mut heights = vec![HEADER_HEIGHT];
+    heights.extend([ROW_HEIGHT; 9]);
+    heights
+}
+
+fn indicator_at_vertical_padding(vertical: f32) -> IndicatorGeometry {
+    let spec = WearScalingLazyColumnSpec::default().content_padding(SETTINGS_SIDE, vertical);
+    let mut composition = compose_fixed_rows(header_and_rows(), spec);
+    let root = composition.root().expect("list root");
+    let _ = tree(&mut composition, root);
+    indicator_for_scaling_list(&state()).expect("a ten-row list is scrollable")
+}
+
+#[test]
+fn the_composed_indicator_reads_item_indices_where_the_flat_model_reads_pixels() {
+    // The composed path shipped on `indicator_geometry`, the flat model: the
+    // thumb is the share of the CONTENT on screen and it moves with the pixels.
+    // Wear's own adapter works in fractional item indices, and the two agree
+    // only on a list of uniform rows — so the flat model looked right until the
+    // header was a different height from the rows under it.
+    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let root = composition.root().expect("list root");
+    let _ = tree(&mut composition, root);
+    let list = state();
+    let wear = indicator_for_scaling_list(&list).expect("a ten-row list is scrollable");
+
+    // The length is the span of the visible rows over the item COUNT.
+    let span = list.with_indicator_list(|_, items| {
+        (decimal_last_item_index(items) - decimal_first_item_index(items)) / items.total as f32
+    });
+    assert!(
+        (wear.thumb - span).abs() < 1e-6,
+        "{wear:?} against an item span of {span}"
+    );
+
+    // And neither number is the flat model's. The gap is far wider than the rim
+    // can hide: the whole track is about a hundred device pixels long, so a
+    // tenth of it is ten pixels of thumb in the wrong place.
+    let info = list.layout_info();
+    let flat = indicator_geometry(info.content, info.viewport, info.scrolled())
+        .expect("the flat model has an answer too");
+    assert!(
+        (wear.thumb - flat.thumb).abs() > 0.05,
+        "wear {wear:?} against flat {flat:?}"
+    );
+    assert!(
+        (wear.offset - flat.offset).abs() > 0.05,
+        "wear {wear:?} against flat {flat:?}"
+    );
+}
+
+#[test]
+fn the_window_the_indicator_reads_carries_the_lists_own_item_indices() {
+    // A virtualised list hands the indicator a window that starts wherever the
+    // measure walk started, and `scaling_list_items` numbers what it is handed
+    // from zero. Without the list's own base put back, every scroll position
+    // reports "item 0 is on screen" — which is a thumb pinned to the top of the
+    // track for the whole length of a long list.
+    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let root = composition.root().expect("list root");
+    let _ = tree(&mut composition, root);
+    let list = state();
+    let at_rest = indicator_for_scaling_list(&list).expect("indicator");
+    assert_eq!(
+        list.with_indicator_list(|_, items| items.visible.first().map(|item| item.index)),
+        Some(0),
+        "at rest the list really is showing its first row"
+    );
+    assert!(at_rest.offset < 0.1, "{at_rest:?}");
+
+    list.scroll_by(list.layout_info().travel());
+    composition
+        .process_invalid_scopes()
+        .expect("scroll recomposition");
+    let _ = tree(&mut composition, root);
+    let list = state();
+    let indices = list
+        .with_indicator_list(|_, items| items.visible.iter().map(|i| i.index).collect::<Vec<_>>());
+    assert_eq!(
+        indices.last().copied(),
+        Some(9),
+        "the end of the list is the last row, not a window-local index: {indices:?}"
+    );
+    assert!(
+        indices.first().copied().unwrap_or(0) > 0,
+        "the window no longer starts at the list's first row: {indices:?}"
+    );
+    let at_end = indicator_for_scaling_list(&list).expect("indicator");
+    assert!(
+        at_end.offset > 0.6,
+        "a list scrolled to its end puts the thumb at the end of the track: {at_end:?}"
+    );
+}
+
+#[test]
+fn the_thumb_keeps_the_length_it_was_first_measured_at() {
+    // `previousItemsCount` in the adapter, and the reason the cache is threaded
+    // through the widget at all rather than being worked out per frame. It is
+    // not an optimisation: the thumb is measured once per list and does not
+    // breathe as rows of different heights scroll past it.
+    let mut composition = compose_fixed_rows(header_and_rows(), settings_spec());
+    let root = composition.root().expect("list root");
+    let _ = tree(&mut composition, root);
+    let list = state();
+    let at_rest = indicator_for_scaling_list(&list).expect("indicator");
+
+    list.scroll_by(list.layout_info().travel() * 0.5);
+    composition
+        .process_invalid_scopes()
+        .expect("scroll recomposition");
+    let _ = tree(&mut composition, root);
+    let list = state();
+    let scrolled = indicator_for_scaling_list(&list).expect("indicator");
+    assert_eq!(scrolled.thumb, at_rest.thumb, "the thumb changed length");
+    assert!(scrolled.offset > at_rest.offset, "and it did move");
+
+    // What it would be without the cache, so this cannot pass by measuring the
+    // same number twice.
+    let remeasured = list.with_indicator_list(|_, items| ThumbLength::default().of(items));
+    assert!(
+        (remeasured - at_rest.thumb).abs() > 0.05,
+        "a re-measured thumb is {remeasured} against the kept {}",
+        at_rest.thumb
+    );
+}
+
+#[test]
+fn the_indicator_counts_the_vertical_padding_this_list_was_given() {
+    // `decimalFirstItemIndex` adds `beforeContentPadding +
+    // beforeAutoCenteringPadding` to the first row's span while that row is on
+    // screen, which is what makes a list that cannot quite reach its own end
+    // report that it has not. It has to be the padding THIS list was handed:
+    // a widget that reaches for the number an app happens to use is right by
+    // coincidence and wrong for the next caller.
+    let bare = indicator_at_vertical_padding(0.0);
+    let padded = indicator_at_vertical_padding(SCREEN_VERTICAL);
+    let deeper = indicator_at_vertical_padding(60.0);
+    assert_eq!(
+        bare.offset, 0.0,
+        "with no blank above it, a list at rest is at its own top"
+    );
+    // With one, it is not: the list has already scrolled past that blank to put
+    // the anchored row on the centre line, and the indicator says so.
+    assert!(padded.offset > bare.offset, "{padded:?} against {bare:?}");
+    assert!(
+        deeper.offset > padded.offset,
+        "{deeper:?} against {padded:?}"
+    );
+    assert!(
+        deeper.thumb < padded.thumb && padded.thumb < bare.thumb,
+        "deeper padding is more travel, so a shorter thumb: {bare:?} {padded:?} {deeper:?}"
+    );
+}
+
+#[test]
+fn a_list_that_fits_on_its_screen_has_no_indicator_at_all() {
+    // Whether a list scrolls is `ScreenScaffold`'s question in Wear, not the
+    // adapter's, so the geometry answers a short list rather than declining to
+    // — and the widget is where the declining happens.
+    let mut composition = compose_fixed_rows(vec![ROW_HEIGHT; 2], settings_spec());
+    let root = composition.root().expect("list root");
+    let _ = tree(&mut composition, root);
+    assert_eq!(indicator_for_scaling_list(&state()), None);
+}
+
 #[test]
 fn the_indicator_sweep_is_the_one_measured_on_a_454_pixel_watch() {
     // 30.536 degrees at r = 113.5dp. The two other implementations of this in
@@ -853,13 +1039,23 @@ fn compose_credits_screen() -> TestComposition {
                     inner.clone(),
                     WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
                     move |scope| {
+                        // Six lines and then the button, rather than four: a
+                        // scaling list stacks its DRAWN boxes a gap apart, so a
+                        // shrunken row does not push the one after it down and
+                        // a short list keeps more of itself on the first
+                        // screen. `a_row_below_the_fold_paints_once_it_is_scrolled_to`
+                        // needs the button genuinely off screen at rest, and
+                        // with four lines above it no longer is.
                         let lines = [
                             "ORBIT BREAKER",
                             "Version 1.0.0-debug",
                             "Designed and built for Wear OS.",
                             "Every graphic and sound in this game is generated inside the project.",
+                            "No third-party assets, no downloads, nothing loaded at runtime.",
+                            "Built on Cranpose, a Compose-shaped UI framework written in Rust.",
                             "Back",
                         ];
+                        let button = lines.len() - 1;
                         scope.items(lines.len(), move |index| match index {
                             0 => {
                                 ListHeader(
@@ -868,11 +1064,11 @@ fn compose_credits_screen() -> TestComposition {
                                     lines[0].to_string(),
                                 );
                             }
-                            4 => {
+                            other if other == button => {
                                 WearButton(
                                     Modifier::empty().fill_max_width(),
                                     WearButtonSpec::default().colors(measured_colors()),
-                                    lines[4].to_string(),
+                                    lines[button].to_string(),
                                     None,
                                     || {},
                                 );
@@ -902,7 +1098,7 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
     let info = state().layout_info();
-    assert_eq!(info.item_count, 5);
+    assert_eq!(info.item_count, 7);
     assert_eq!(
         layers.len(),
         info.visible,

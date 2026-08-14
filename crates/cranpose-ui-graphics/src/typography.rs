@@ -84,6 +84,70 @@ pub enum TextVerticalAlign {
     Baseline,
 }
 
+/// Where the leading — the difference between a line's box and the font's own
+/// ascent-plus-descent extent — is spent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum LineHeightAlignment {
+    /// All of it below the glyphs.
+    Top,
+    /// Split evenly, with the odd whole pixel below the baseline.
+    Center,
+    #[default]
+    /// Split in the font's own ascent-to-descent ratio.
+    Proportional,
+    /// All of it above the glyphs.
+    Bottom,
+}
+
+/// Which edges of a text block give their leading back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum LineHeightTrim {
+    FirstLineTop,
+    LastLineBottom,
+    #[default]
+    Both,
+    None,
+}
+
+/// What a requested line height means when the font does not fit inside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum LineHeightMode {
+    /// The request wins and the glyphs overflow their box.
+    #[default]
+    Fixed,
+    /// The font's own extent is a floor. This is what Android does.
+    Minimum,
+    /// The font's extent, whatever was requested.
+    Tight,
+}
+
+/// How a line of text sits inside the height it was given.
+///
+/// A style that names one is laid out by AOSP's `StaticLayout` rule — whole-pixel
+/// metrics, a font that a short line height cannot shrink, and the odd pixel of
+/// leading below the baseline. A style that names none keeps the framework's
+/// plain arithmetic: the box is exactly the requested height with the leading
+/// split evenly. The two disagree by a device pixel on most faces, so a screen
+/// that draws through a [`crate::DrawScope`] and composes `Text` in the same
+/// frame has to state the same policy on both or the two sets of rows will not
+/// line up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LineHeightStyle {
+    pub alignment: LineHeightAlignment,
+    pub trim: LineHeightTrim,
+    pub mode: LineHeightMode,
+}
+
+impl Default for LineHeightStyle {
+    fn default() -> Self {
+        Self {
+            alignment: LineHeightAlignment::Proportional,
+            trim: LineHeightTrim::Both,
+            mode: LineHeightMode::Fixed,
+        }
+    }
+}
+
 /// Everything [`crate::DrawScope`] needs to measure and draw a run of text.
 ///
 /// A style is a plain value: sizes are already in scope (logical) units, and
@@ -107,6 +171,10 @@ pub struct TextStyle {
     /// Distance between consecutive baselines. `None` uses the font's natural
     /// line height.
     pub line_height: Option<f32>,
+    /// How the line sits inside that height. `None` takes the framework's plain
+    /// split; naming one asks for the platform rule, and is what makes a drawn
+    /// run land on the same rows as a composed `Text` of the same style.
+    pub line_height_style: Option<LineHeightStyle>,
     pub align: TextAlign,
     pub vertical_align: TextVerticalAlign,
 }
@@ -151,6 +219,13 @@ impl TextStyle {
 
     pub fn with_line_height(mut self, line_height: f32) -> Self {
         self.line_height = line_height.is_finite().then_some(line_height);
+        self
+    }
+
+    /// Asks for a line-height policy, which is what makes this run resolve its
+    /// line box by the same rule a `Text` composable of the same style does.
+    pub fn with_line_height_style(mut self, line_height_style: LineHeightStyle) -> Self {
+        self.line_height_style = Some(line_height_style);
         self
     }
 
@@ -203,6 +278,7 @@ impl Default for TextStyle {
             font_style: FontStyle::Normal,
             letter_spacing: 0.0,
             line_height: None,
+            line_height_style: None,
             align: TextAlign::Left,
             vertical_align: TextVerticalAlign::Top,
         }

@@ -18,7 +18,7 @@
 use crate::composable;
 use crate::modifier::{Brush, Color, Modifier, Point};
 use crate::round_scroll_indicator::{
-    indicator_arc, indicator_geometry, indicator_segments, IndicatorGeometry, IndicatorPart,
+    indicator_arc, indicator_segments, scaling_list_geometry, IndicatorGeometry, IndicatorPart,
     IndicatorSegment,
 };
 use crate::widgets::wear::scaling_list::WearScalingListState;
@@ -64,17 +64,28 @@ impl ScrollIndicatorSpec {
 
 /// The thumb for a scaling list.
 ///
-/// The travel is measured between the first and last item's **centres**, not
-/// across a flat content length, because a centring list holds those two rows
-/// on the centre line rather than against the display edges. Reading it the
-/// flat way puts the thumb a little short at both ends, on every screen.
+/// The thumb is measured in **fractional item indices**, which is what
+/// `ScalingLazyColumnStateAdapter` does and what
+/// [`scaling_list_geometry`] ports: its length is the share of the *items* on
+/// screen and its position is how many items are left, so a list whose rows
+/// differ in height puts it somewhere a pixel model cannot. The two answers
+/// agree only on a list of uniform rows that is as tall as its content, and a
+/// Wear list has a header. Measured against the shipping Compose build on a
+/// settled Settings screen, by integrating the indicator's ink across the
+/// stroke band row by row: the thumb's centroid was 5.97 device pixels below
+/// Compose's at 192dp and 7.73 at 227dp under the flat model, and is 0.61 and
+/// 0.83 under this one.
+///
+/// Whether a list is scrollable at all is a separate question, and Wear leaves
+/// it to `ScreenScaffold` rather than to the adapter — so it is asked here,
+/// against the list's own travel, and not inside the geometry.
 pub fn indicator_for_scaling_list(state: &WearScalingListState) -> Option<IndicatorGeometry> {
     let info = state.layout_info();
     let travel = info.travel();
     if travel <= 0.0 || info.viewport <= 0.0 || info.content <= info.viewport {
         return None;
     }
-    indicator_geometry(info.content, info.viewport, info.scrolled())
+    state.with_indicator_list(scaling_list_geometry)
 }
 
 /// Draws the indicator into a scope whose bounds are the whole display.

@@ -874,12 +874,27 @@ where
     /// Hosts call this at startup and on every configuration change. Sizes in
     /// `Sp` follow it, sizes in `Dp` do not, which is what lets an app grow its
     /// text with the user's setting while its layout stays where it was.
+    ///
+    /// This takes the setting as a plain multiplier. A host whose platform
+    /// converts `Sp` through a table of its own — Android 14 and up does — calls
+    /// [`AppShell::set_font_scale_curve`] with what the platform answered
+    /// instead, because the multiplication is not what that platform does.
     pub fn set_font_scale(&mut self, font_scale: f32) {
+        self.set_font_scale_curve(cranpose_ui::FontScaleCurve::linear(font_scale));
+    }
+
+    /// Reports the system font scale together with the conversion behind it.
+    ///
+    /// See [`cranpose_ui::font_scale`]: above a threshold setting Android
+    /// resolves a size in `Sp` through a piecewise-linear table rather than by
+    /// multiplying, so a host that can read that table hands it over here and
+    /// every `Sp` in the app resolves the way the platform's own text does.
+    pub fn set_font_scale_curve(&mut self, curve: cranpose_ui::FontScaleCurve) {
         let app_context = Rc::clone(&self.app_context);
         let changed = app_context.enter(|| {
-            let previous = cranpose_ui::current_font_scale().to_bits();
-            cranpose_ui::set_font_scale(font_scale);
-            previous != cranpose_ui::current_font_scale().to_bits()
+            let previous = cranpose_ui::current_font_scale_curve();
+            cranpose_ui::set_font_scale_curve(curve);
+            previous != cranpose_ui::current_font_scale_curve()
         });
         if changed {
             self.request_forced_layout_pass();
@@ -899,6 +914,13 @@ where
     pub fn debug_current_font_scale(&self) -> f32 {
         let app_context = Rc::clone(&self.app_context);
         app_context.enter(cranpose_ui::current_font_scale)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn debug_current_font_scale_curve(&self) -> cranpose_ui::FontScaleCurve {
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(cranpose_ui::current_font_scale_curve)
     }
 
     #[cfg(any(test, feature = "test-support"))]
