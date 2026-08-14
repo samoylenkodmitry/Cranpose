@@ -6,6 +6,15 @@ use crate::modifier::{Brush, Color};
 use cranpose_ui_graphics::{FxHasher, RenderHash};
 use std::hash::{Hash, Hasher};
 
+/// The line-height policy lives with the drawing-side text types, because a
+/// [`DrawScope`](cranpose_ui_graphics::DrawScope) has to be able to name it too:
+/// a run drawn through a canvas and a `Text` composable on the same screen must
+/// resolve their line boxes by the same rule, and the only style a draw scope
+/// can carry is the flat one from `cranpose-ui-graphics`.
+pub use cranpose_ui_graphics::{
+    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaselineShift(pub f32);
 
@@ -61,49 +70,6 @@ impl LocaleList {
 
     pub fn is_empty(&self) -> bool {
         self.locales.is_empty()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum LineHeightAlignment {
-    Top,
-    Center,
-    #[default]
-    Proportional,
-    Bottom,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum LineHeightTrim {
-    FirstLineTop,
-    LastLineBottom,
-    #[default]
-    Both,
-    None,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub enum LineHeightMode {
-    #[default]
-    Fixed,
-    Minimum,
-    Tight,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct LineHeightStyle {
-    pub alignment: LineHeightAlignment,
-    pub trim: LineHeightTrim,
-    pub mode: LineHeightMode,
-}
-
-impl Default for LineHeightStyle {
-    fn default() -> Self {
-        Self {
-            alignment: LineHeightAlignment::Proportional,
-            trim: LineHeightTrim::Both,
-            mode: LineHeightMode::Fixed,
-        }
     }
 }
 

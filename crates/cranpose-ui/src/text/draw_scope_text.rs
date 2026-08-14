@@ -17,15 +17,21 @@ use cranpose_ui_graphics::{
 };
 
 use super::font::{FontFamily, FontStyle, FontWeight};
+use super::line_box::LineBox;
 use super::style::{SpanStyle, TextStyle};
 use super::unit::TextUnit;
 
 /// Builds the [`TextStyle`] that describes a draw-scope text run.
 ///
 /// Everything a `DrawTextStyle` can say is a span attribute except the line
-/// height, so the paragraph style stays at its defaults — in particular
-/// `text_align` is left unspecified, because a draw scope has already resolved
-/// alignment into the primitive's rect.
+/// height and its policy, so the rest of the paragraph style stays at its
+/// defaults — in particular `text_align` is left unspecified, because a draw
+/// scope has already resolved alignment into the primitive's rect.
+///
+/// The policy has to come across. Without it every run drawn through a canvas
+/// takes [`line_box`](super::line_box)'s plain branch while a `Text` composable
+/// of the same style takes the AOSP one, and a screen that does both puts its
+/// two sets of rows a device pixel apart.
 pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
     let mut span_style = SpanStyle {
         font_size: TextUnit::Sp(style.resolved_font_size()),
@@ -52,7 +58,23 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
             text_style.paragraph_style.line_height = TextUnit::Sp(line_height);
         }
     }
+    text_style.paragraph_style.line_height_style = style.line_height_style;
     text_style
+}
+
+/// The line box a draw-scope style resolves to against the app's fonts: how
+/// tall one line is and where its baseline sits inside it.
+///
+/// This is the vertical half of [`DrawScope::measure_text`](cranpose_ui_graphics::DrawScope::measure_text),
+/// answerable without a string to measure or a scope to measure in — a layout
+/// that stacks rows of a known style needs the row pitch before it has any text
+/// for them. `None` when no app context owns the fonts.
+///
+/// It resolves the style exactly as the measurer does, which means the sizes are
+/// taken as stated: a `DrawTextStyle` is already resolved, so the system font
+/// scale must not be folded in a second time here.
+pub fn draw_style_line_box(style: &DrawTextStyle) -> Option<LineBox> {
+    super::measure::resolved_line_box(&text_style_for_draw_style(style))
 }
 
 /// Measures draw-scope text against the app's fonts.
@@ -149,7 +171,46 @@ mod tests {
         assert_eq!(mapped.span_style.font_family, None);
         assert!(mapped.span_style.letter_spacing.is_unspecified());
         assert!(mapped.paragraph_style.line_height.is_unspecified());
+        assert_eq!(mapped.paragraph_style.line_height_style, None);
         assert_eq!(mapped.span_style.color, None);
+    }
+
+    #[test]
+    fn a_drawn_run_and_a_composed_text_resolve_the_same_line_box() {
+        // The defect this field exists for: a canvas and a `Text` on one screen
+        // took different line-box rules, so every drawn row landed a device
+        // pixel off the composed rows beside it. Roboto at 16sp on a density-2
+        // watch, in device pixels.
+        use crate::text::line_box::{line_box, FontExtent};
+        use crate::widgets::wear::wear_line_height_style;
+
+        let extent = FontExtent::new(32.0 * 1900.0 / 2048.0, 32.0 * 500.0 / 2048.0, 0.0);
+        let drawn = DrawTextStyle::new(32.0)
+            .with_line_height(36.0)
+            .with_line_height_style(wear_line_height_style());
+        let resolved = line_box(&text_style_for_draw_style(&drawn), extent, 36.0, 1.0);
+        let composed = line_box(
+            &crate::widgets::wear::WearTextStyle::TITLE_MEDIUM
+                .resolve(cranpose_ui_graphics::Color::WHITE),
+            extent,
+            36.0,
+            1.0,
+        );
+        assert_eq!(resolved, composed);
+        // And it is the platform's answer, not the plain split: the font's own
+        // extent is 38px, which a 36px line height does not shrink.
+        assert_eq!(resolved.height, 38.0);
+        assert_eq!(resolved.baseline, 30.0);
+
+        // Without the policy the same run takes the plain branch and sits half
+        // a device pixel higher, which is what put the two paths out of step.
+        let unstyled = line_box(
+            &text_style_for_draw_style(&DrawTextStyle::new(32.0).with_line_height(36.0)),
+            extent,
+            36.0,
+            1.0,
+        );
+        assert_ne!(unstyled, resolved);
     }
 
     #[test]

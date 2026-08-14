@@ -915,6 +915,10 @@ impl TextMeasurer for SoftwareTextMeasurer {
     }
 
     fn first_baseline(&self, style: &TextStyle) -> Option<f32> {
+        Some(self.line_box(style)?.baseline)
+    }
+
+    fn line_box(&self, style: &TextStyle) -> Option<cranpose_ui::text::LineBox> {
         let font = self.fonts.resolve(style)?;
         let font_size = resolve_font_size(style);
         // Metrics must be read at the font's own px size, not the logical one:
@@ -926,7 +930,7 @@ impl TextMeasurer for SoftwareTextMeasurer {
             crate::font_layout::vertical_metrics(&font.font, font.ab_glyph_px_size(font_size));
         // A measurer works in layout points, so the line box rounds on the
         // device grid the app is running at rather than on whole points.
-        Some(baseline_y_for_line_box(
+        Some(line_box_for(
             style,
             metrics,
             line_height_for_render_style(style, font_size),
@@ -3038,15 +3042,6 @@ fn measure_grid() -> f32 {
     } else {
         1.0
     }
-}
-
-fn baseline_y_for_line_box(
-    style: &TextStyle,
-    metrics: crate::font_layout::FontVerticalMetrics,
-    line_height: f32,
-    grid: f32,
-) -> f32 {
-    line_box_for(style, metrics, line_height, grid).baseline
 }
 
 fn resolve_line_height(style: &TextStyle, font_size: f32) -> f32 {
@@ -5443,7 +5438,7 @@ mod tests {
 
         let metrics = vertical_metrics(font, font_size);
         let baseline =
-            baseline_y_for_line_box(&TextStyle::default(), metrics, font_size * 1.4, 1.0);
+            line_box_for(&TextStyle::default(), metrics, font_size * 1.4, 1.0).baseline;
         for glyph in layout_line_glyphs(font, text, font_size, point(0.0, baseline)) {
             let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
                 continue;

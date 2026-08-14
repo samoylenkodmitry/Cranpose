@@ -203,6 +203,21 @@ pub trait TextMeasurer: 'static {
         None
     }
 
+    /// One line's whole box for a style: its height and its baseline, with no
+    /// string to measure.
+    ///
+    /// A layout that stacks rows of a known style needs the row pitch before it
+    /// has any text to put in them, and taking the height from one call and the
+    /// baseline from another lets the two come from different rules. `None` when
+    /// the measurer has no font metrics, same as [`Self::first_baseline`].
+    fn line_box(&self, style: &TextStyle) -> Option<crate::text::LineBox> {
+        let baseline = self.first_baseline(style)?;
+        Some(crate::text::LineBox {
+            height: self.line_height(&crate::text::AnnotatedString::default(), style),
+            baseline,
+        })
+    }
+
     fn line_height_for_node(
         &self,
         node_id: Option<NodeId>,
@@ -712,6 +727,17 @@ pub(crate) fn resolved_first_baseline(style: &TextStyle) -> Option<f32> {
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.first_baseline(style))
     })
+}
+
+/// [`TextMeasurer::line_box`] for an already-resolved style — see
+/// [`measure_resolved_text`] for why the drawing side does not scale.
+///
+/// Answers `None` rather than panicking when no app context owns the fonts:
+/// tooling and host tests ask a draw style for its line box outside a running
+/// app, and the drawing side already has a font-free estimate to fall back to.
+pub(crate) fn resolved_line_box(style: &TextStyle) -> Option<crate::text::LineBox> {
+    crate::render_state::current_app_context()?;
+    crate::render_state::with_text_service(|service| service.with_measurer(|m| m.line_box(style)))
 }
 
 /// The tight glyph box `(top_offset, height)` of a `style` text line inside

@@ -7,8 +7,11 @@
 //! and the leading is split evenly above and below. That rule is not what
 //! Android does, and the difference is visible.
 //!
-//! AOSP's `StaticLayout` differs in three ways that each move a glyph row:
+//! AOSP's `StaticLayout` differs in four ways that each move a glyph row:
 //!
+//! - the font's ascent and descent are **whole pixels**, rounded the way
+//!   `Paint.getFontMetricsInt()` rounds them, and the line is built from that
+//!   pair rather than from the float metrics;
 //! - the line advance is a **whole pixel**, `ceil`ed, not a float;
 //! - a requested line height **shorter than the font's own ascent + descent
 //!   does not shrink the line** — the font wins, which is why a 16sp/18sp
@@ -16,11 +19,14 @@
 //! - the leading is split with the **odd pixel below** the baseline, not above.
 //!
 //! [`line_box`] implements that, and it implements it **only when the caller
-//! asked for it**. A style whose `line_height_style` is `None` — which is every
-//! style in the framework today — gets exactly the arithmetic it got before,
-//! bit for bit. That is deliberate: the rule changes where every glyph in the
-//! framework lands, and it is not a change to make silently on behalf of text
-//! that never asked.
+//! asked for it**. A style whose `line_height_style` is `None` gets exactly the
+//! arithmetic it got before, bit for bit. That is deliberate: the rule changes
+//! where every glyph lands, and it is not a change to make silently on behalf
+//! of text that never asked. The Wear widgets ask for it through
+//! [`WearTextStyle`](crate::widgets::wear::WearTextStyle), and a
+//! [`DrawScope`](cranpose_ui_graphics::DrawScope) run asks for it through
+//! [`TextStyle::with_line_height_style`](cranpose_ui_graphics::TextStyle::with_line_height_style)
+//! — which is what lets a canvas and a `Text` on one screen agree.
 
 use crate::text::style::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, TextStyle,
@@ -131,17 +137,37 @@ fn aosp_line_box(
     let up = |value: f32| (value * grid).ceil() / grid;
     let down = |value: f32| (value * grid).floor() / grid;
     // Android hands its layout `Paint.FontMetricsInt`, whose ascent and descent
-    // are whole pixels — both rounded AWAY from the baseline, so neither can
-    // clip a glyph. Doing the leading split on unrounded metrics leaves a
-    // fractional remainder that the `ceil` below then spends in the wrong
+    // are whole pixels. Doing the leading split on unrounded metrics leaves a
+    // fractional remainder that the rounding below then spends in the wrong
     // direction, and the baseline comes out under the ascent.
     //
-    // `round` per metric, which is what the app this was measured against
-    // uses, agrees with `ceil` on all four text styles these screens draw.
-    // They diverge only where a metric's fraction is under a half, and none of
-    // Roboto's are at these sizes.
-    let ascent = up(extent.ascent.max(0.0));
-    let descent = up(extent.descent.max(0.0));
+    // The rounding is Skia's `SkScalarRoundToInt`, `floor(x + 0.5)`, applied to
+    // the SIGNED metric — so it is round-half-up on the descent and round-half-
+    // down on the ascent, which is a positive distance here and therefore the
+    // negative one there. It is NOT rounding away from the baseline. Measured
+    // on a Wear OS 5 emulator (API 34, density 2) by asking the platform:
+    // `Paint.getFontMetricsInt()` for Roboto at eight text sizes, against
+    // `getFontMetrics()`'s floats.
+    //
+    //     size px   float ascent / descent      FontMetricsInt ascent / descent
+    //      24.0     -22.265625 /  5.859375           -22 /  6
+    //      26.0     -24.121094 /  6.3476562          -24 /  6
+    //      30.0     -27.832031 /  7.3242188          -28 /  7
+    //      32.0     -29.6875   /  7.8125             -30 /  8
+    //      37.2     -34.51172  /  9.082031           -35 /  9
+    //      38.72    -35.921875 /  9.453125           -36 /  9
+    //
+    // Five of those six fractions are under a half on at least one metric, and
+    // a `ceil` gets every one of them wrong. `StaticLayout`'s own line height
+    // with `includeFontPadding=false` was `(-ascent) + descent` of the rounded
+    // pair in all eight sizes, so this is the pair the layout is built from.
+    //
+    // The size that made it visible is 19sp at density 2, a 38px font: the
+    // rounded pair is 35 and 9 for a 44px line, and `ceil` makes it 36 and 10
+    // for a 46px one. The shipping Compose build lays that line out in 44.
+    let round = |value: f32| ((value * grid) + 0.5).floor() / grid;
+    let ascent = -round(-extent.ascent.max(0.0));
+    let descent = round(extent.descent.max(0.0));
     // Font padding widens the font's own demand, so it survives `Tight` and it
     // is what a shorter requested line height has to beat.
     let above_padding = down(padding * 0.5);
@@ -275,9 +301,93 @@ mod tests {
         let extent = FontExtent::new(30.0 * 1900.0 / 2048.0, 30.0 * 500.0 / 2048.0, 0.0);
         let box_ = line_box(&styled(36.0, Some(wear())), extent, 36.0, 1.0);
         assert_eq!(box_.height, 36.0);
-        // Whole-pixel metrics are 28 above and 8 below, so the ask is spent
-        // exactly and the baseline sits on the ascent.
+        // Whole-pixel metrics are 28 above and 7 below, so one pixel of leading
+        // is left and it goes below the baseline.
         assert_eq!(box_.baseline, 28.0);
+    }
+
+    #[test]
+    fn the_font_metrics_are_rounded_the_way_the_platform_rounds_them() {
+        // `Paint.getFontMetricsInt()` is `SkScalarRoundToInt` per metric, which
+        // is `floor(x + 0.5)` on the SIGNED value. Rounding away from the
+        // baseline instead makes a 19sp line at density 2 two pixels too tall,
+        // which moved the whole title screen. Every pair here was read off a
+        // Wear OS 5 emulator at density 2; the extent is the font's own float
+        // metrics at that size, and the assertion is the pair the platform
+        // reported.
+        for (size_px, ascent_px, descent_px) in [
+            (24.0_f32, 22.0_f32, 6.0_f32),
+            (26.0, 24.0, 6.0),
+            (30.0, 28.0, 7.0),
+            (32.0, 30.0, 8.0),
+            (37.2, 35.0, 9.0),
+            (38.72, 36.0, 9.0),
+            (43.76, 41.0, 11.0),
+            // Not in the probe's list, but the size the defect showed up at:
+            // 19sp at density 2, which Compose lays out in 44px and a `ceil`
+            // would lay out in 46.
+            (38.0, 35.0, 9.0),
+        ] {
+            let extent = FontExtent::new(
+                size_px * 1900.0 / 2048.0,
+                size_px * 500.0 / 2048.0,
+                0.0,
+            );
+            // `Tight` reports the font's own demand, which is exactly the
+            // rounded pair the platform's layout is built from.
+            let tight = line_box(
+                &styled(
+                    0.0,
+                    Some(LineHeightStyle {
+                        mode: LineHeightMode::Tight,
+                        ..wear()
+                    }),
+                ),
+                extent,
+                0.0,
+                1.0,
+            );
+            assert_eq!(
+                (tight.baseline, tight.height - tight.baseline),
+                (ascent_px, descent_px),
+                "{size_px}px",
+            );
+        }
+    }
+
+    #[test]
+    fn the_wear_type_scale_lays_out_in_the_boxes_the_platform_gives_it() {
+        // The composed widgets and the drawn canvas both resolve through here,
+        // so these are the numbers a Wear screen is built out of. Density 2,
+        // device pixels, at the two text-size settings that matter: 1.0, where
+        // an sp is a plain doubling, and the setting Wear calls large, where
+        // Android 14's table gives 13sp -> 32.72px, 15sp -> 37.2px,
+        // 16sp -> 38.72px and 18sp -> 41.76px.
+        for (name, size_px, line_height_px, height, baseline) in [
+            ("titleMedium 1.0", 32.0_f32, 36.0_f32, 38.0_f32, 30.0_f32),
+            ("labelMedium 1.0", 30.0, 36.0, 36.0, 28.0),
+            ("labelSmall 1.0", 26.0, 32.0, 32.0, 25.0),
+            ("titleMedium 1.24", 38.72, 41.76, 45.0, 36.0),
+            ("labelMedium 1.24", 37.2, 41.76, 44.0, 35.0),
+            ("labelSmall 1.24", 32.72, 38.72, 39.0, 30.0),
+        ] {
+            let extent = FontExtent::new(
+                size_px * 1900.0 / 2048.0,
+                size_px * 500.0 / 2048.0,
+                0.0,
+            );
+            let resolved = line_box(
+                &styled(line_height_px, Some(wear())),
+                extent,
+                line_height_px,
+                1.0,
+            );
+            assert_eq!(
+                (resolved.height, resolved.baseline),
+                (height, baseline),
+                "{name}",
+            );
+        }
     }
 
     #[test]
