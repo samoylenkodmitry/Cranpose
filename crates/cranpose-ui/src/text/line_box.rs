@@ -328,11 +328,7 @@ mod tests {
             // would lay out in 46.
             (38.0, 35.0, 9.0),
         ] {
-            let extent = FontExtent::new(
-                size_px * 1900.0 / 2048.0,
-                size_px * 500.0 / 2048.0,
-                0.0,
-            );
+            let extent = FontExtent::new(size_px * 1900.0 / 2048.0, size_px * 500.0 / 2048.0, 0.0);
             // `Tight` reports the font's own demand, which is exactly the
             // rounded pair the platform's layout is built from.
             let tight = line_box(
@@ -371,11 +367,7 @@ mod tests {
             ("labelMedium 1.24", 37.2, 41.76, 44.0, 35.0),
             ("labelSmall 1.24", 32.72, 38.72, 39.0, 30.0),
         ] {
-            let extent = FontExtent::new(
-                size_px * 1900.0 / 2048.0,
-                size_px * 500.0 / 2048.0,
-                0.0,
-            );
+            let extent = FontExtent::new(size_px * 1900.0 / 2048.0, size_px * 500.0 / 2048.0, 0.0);
             let resolved = line_box(
                 &styled(line_height_px, Some(wear())),
                 extent,

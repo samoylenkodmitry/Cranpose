@@ -940,7 +940,9 @@ mod tests {
         // the first row whose edge has left the viewport, which is the same
         // contiguous run.
         let mut out = Vec::new();
-        let rows: Vec<(f32, f32)> = (0..10).map(|index| (index as f32 * 40.0 - 100.0, 40.0)).collect();
+        let rows: Vec<(f32, f32)> = (0..10)
+            .map(|index| (index as f32 * 40.0 - 100.0, 40.0))
+            .collect();
         scaling_list_items(227.0, 2.0, rows.iter().copied(), &mut out);
         let indices: Vec<usize> = out.iter().map(|item| item.index).collect();
         assert_eq!(indices, vec![2, 3, 4, 5, 6, 7, 8]);
@@ -968,7 +970,10 @@ mod tests {
         ];
         let mut thumb = ThumbLength::default();
         let geometry = scaling_list_geometry(&mut thumb, list(&rows)).expect("a geometry");
-        assert!(geometry.thumb.is_finite() && geometry.offset.is_finite(), "{geometry:?}");
+        assert!(
+            geometry.thumb.is_finite() && geometry.offset.is_finite(),
+            "{geometry:?}"
+        );
         assert!(geometry.thumb >= INDICATOR_MIN_THUMB && geometry.thumb <= INDICATOR_MAX_THUMB);
         assert!(geometry.offset >= 0.0 && geometry.offset <= 1.0);
     }
