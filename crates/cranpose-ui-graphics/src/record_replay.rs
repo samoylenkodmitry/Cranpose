@@ -52,7 +52,11 @@ fn close_angle(a: f32, b: f32) -> bool {
 }
 
 fn close_point(a: Point, b: Point) -> bool {
-    close_rel(a.x, b.x) && close_rel(a.y, b.y)
+    // `&`, not `&&`: both comparisons are pure, so evaluating the second
+    // unconditionally cannot change the result — it removes a branch from
+    // the hot contiguous-run match loops. NaN anywhere makes its `close_rel`
+    // false regardless of evaluation order.
+    close_rel(a.x, b.x) & close_rel(a.y, b.y)
 }
 
 /// One segment's frame-over-frame motion: uniform scale and rotation about
@@ -165,11 +169,13 @@ pub fn circle_view(record: &SolidRoundRectRecord) -> Option<(Point, f32)> {
 /// Whether corner radii + extents describe a circle.
 pub fn is_circle(rect: Rect, radii: CornerRadii) -> bool {
     let half = rect.width * 0.5;
+    // `&`, not `&&`: every term is a pure comparison, so unconditional
+    // evaluation is result-identical and keeps the hot run loops branch-light.
     close_rel(rect.width, rect.height)
-        && close_rel(radii.top_left, half)
-        && close_rel(radii.top_right, half)
-        && close_rel(radii.bottom_right, half)
-        && close_rel(radii.bottom_left, half)
+        & close_rel(radii.top_left, half)
+        & close_rel(radii.top_right, half)
+        & close_rel(radii.bottom_right, half)
+        & close_rel(radii.bottom_left, half)
 }
 
 fn stroke_width(record_stroke: Option<crate::Stroke>) -> Option<f32> {
@@ -229,23 +235,32 @@ pub fn circle_anchor_transform_pinned(
 /// Verifies a fresh arc record against the retained one under `t`. Arc
 /// centers must sit on the shared pivot — that is what makes rotation a
 /// value change instead of a position change.
+///
+/// This is THE arc comparison — the serial per-pair path and the contiguous
+/// run loop both call it, so the tolerance semantics cannot drift between
+/// them. The tolerance terms combine with `&`, not `&&`: each `close_*` is a
+/// pure comparison, so evaluating all of them unconditionally is
+/// result-identical to the short-circuit form (a NaN in any field makes its
+/// own comparison false regardless of order) while the common all-match case
+/// takes one branch per record instead of seven.
 pub fn match_arc(
     current: &SolidArcRecord,
     retained: &SolidArcRecord,
     center: Point,
     t: RecordTransform,
 ) -> RecordMatch {
+    let stroke_ok = match (stroke_width(current.stroke), stroke_width(retained.stroke)) {
+        (None, None) => true,
+        (Some(now), Some(then)) => close_rel(now, then * t.scale),
+        _ => false,
+    };
     let geometry_ok = close_point(current.center, retained.center)
-        && close_point(current.center, center)
-        && close_rel(current.radius, retained.radius * t.scale)
-        && close_rel(current.inner_radius, retained.inner_radius * t.scale)
-        && close_angle(current.start_angle, retained.start_angle + t.angle)
-        && close_rel(current.sweep_angle, retained.sweep_angle)
-        && match (stroke_width(current.stroke), stroke_width(retained.stroke)) {
-            (None, None) => true,
-            (Some(now), Some(then)) => close_rel(now, then * t.scale),
-            _ => false,
-        };
+        & close_point(current.center, center)
+        & close_rel(current.radius, retained.radius * t.scale)
+        & close_rel(current.inner_radius, retained.inner_radius * t.scale)
+        & close_angle(current.start_angle, retained.start_angle + t.angle)
+        & close_rel(current.sweep_angle, retained.sweep_angle)
+        & stroke_ok;
     if !geometry_ok {
         return RecordMatch::Mismatch;
     }
@@ -259,6 +274,12 @@ pub fn match_arc(
 /// Verifies a fresh circular round-rect against the retained one under `t`.
 /// Non-circular round rects never match — they do not survive rotation
 /// about an external pivot.
+///
+/// Like [`match_arc`], this is the one round-rect comparison both the serial
+/// per-pair path and the contiguous run loop use; the tolerance terms
+/// combine with `&` because each is pure, so unconditional evaluation is
+/// result-identical (NaN included) and the all-match case stays
+/// branch-light.
 pub fn match_round_rect(
     current: &SolidRoundRectRecord,
     retained: &SolidRoundRectRecord,
@@ -270,13 +291,14 @@ pub fn match_round_rect(
     else {
         return RecordMatch::Mismatch;
     };
+    let stroke_ok = match (stroke_width(current.stroke), stroke_width(retained.stroke)) {
+        (None, None) => true,
+        (Some(now), Some(then)) => close_rel(now, then * t.scale),
+        _ => false,
+    };
     let geometry_ok = close_point(c_now, t.apply(center, c_then))
-        && close_rel(d_now, d_then * t.scale)
-        && match (stroke_width(current.stroke), stroke_width(retained.stroke)) {
-            (None, None) => true,
-            (Some(now), Some(then)) => close_rel(now, then * t.scale),
-            _ => false,
-        };
+        & close_rel(d_now, d_then * t.scale)
+        & stroke_ok;
     if !geometry_ok {
         return RecordMatch::Mismatch;
     }
@@ -1445,21 +1467,111 @@ impl<'a> From<&'a CommandRecording> for TypedRecords<'a> {
 }
 
 impl TypedRecords<'_> {
-    /// [`view_at`] over the POD slices, for worker-thread span matching —
-    /// the same [`view_at_slices`] implementation, so eligibility cannot
-    /// drift between the two forms.
+    /// [`view_at`] over the POD slices — the same [`view_at_slices`]
+    /// implementation, so eligibility cannot drift between the two forms.
+    /// The shipping span match no longer decodes per entry (it walks
+    /// contiguous per-store runs); only the tests' naive reference walk
+    /// still reads entries this way.
+    #[cfg(test)]
     fn view_at(&self, i: usize) -> Option<ReplayView> {
         view_at_slices(self.tape, self.round_rects, i)
     }
+}
+
+/// The length of the contiguous same-store run starting at `tape[at]`: the
+/// maximal `d` such that every entry in `tape[at..at + d]` is the same kind
+/// with consecutive store indices. Per-store indices appear on the tape in
+/// strictly increasing order (the [`CommandRecording`] tape invariant), so
+/// `tape[at + e].raw() == tape[at].raw() + e` holds exactly when all `e`
+/// entries after `at` are that kind — the predicate is monotone in `e`
+/// (true up to the run's end, false after, and never true again: a kind
+/// that leaves and returns has advanced its index by less than the tape
+/// distance). That monotonicity is what lets the boundary be binary-searched
+/// instead of walked: a 2048-entry single-kind span costs ~11 word compares,
+/// not 2048 decodes. The compare widens to u64 so `base + e` cannot wrap
+/// for probes past a large-index run.
+fn typed_run_len(tape: &[TapeRef], at: usize) -> usize {
+    let rest = &tape[at..];
+    let base = rest[0].raw() as u64;
+    // Invariant: the predicate holds for every d < lo and fails for every
+    // d >= hi. P(0) is trivially true; the run is the first failing d.
+    let mut lo = 1usize;
+    let mut hi = rest.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if rest[mid].raw() as u64 == base + mid as u64 {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
+/// The tight arc loop over one contiguous run pair: no tape decode, no kind
+/// dispatch — direct slice indexing with [`match_arc`] (the same function
+/// the serial per-pair path uses, so tolerance semantics cannot drift).
+/// Returns the cleanly matched length; recolors are pushed as
+/// (`span_offset` + run-relative index, color), exactly the entries the
+/// per-entry walk would have produced.
+fn match_arc_run(
+    current: &[SolidArcRecord],
+    snapshot: &[SolidArcRecord],
+    center: Point,
+    t: RecordTransform,
+    span_offset: usize,
+    recolors: &mut Vec<(u32, Color)>,
+) -> usize {
+    for (i, (now, then)) in current.iter().zip(snapshot).enumerate() {
+        match match_arc(now, then, center, t) {
+            RecordMatch::Exact => {}
+            RecordMatch::Recolor => recolors.push(((span_offset + i) as u32, now.color)),
+            RecordMatch::Mismatch => return i,
+        }
+    }
+    current.len()
+}
+
+/// [`match_arc_run`]'s round-rect twin. [`match_round_rect`] itself rejects
+/// non-circular round rects, which is the same verdict the per-entry walk's
+/// eligibility check produced for them (`view_at` maps a non-circle to
+/// `None`, and any `None` pairing is a mismatch), so no separate
+/// eligibility pass is needed here.
+fn match_round_rect_run(
+    current: &[SolidRoundRectRecord],
+    snapshot: &[SolidRoundRectRecord],
+    center: Point,
+    t: RecordTransform,
+    span_offset: usize,
+    recolors: &mut Vec<(u32, Color)>,
+) -> usize {
+    for (i, (now, then)) in current.iter().zip(snapshot).enumerate() {
+        match match_round_rect(now, then, center, t) {
+            RecordMatch::Exact => {}
+            RecordMatch::Recolor => recolors.push(((span_offset + i) as u32, now.color)),
+            RecordMatch::Mismatch => return i,
+        }
+    }
+    current.len()
 }
 
 /// The full-span commit body: matches `len` records of `current` from
 /// `start` against the snapshot span at `seg_start` under `t`. Fills
 /// `recolors` (cleared at entry) with the recolors inside the cleanly
 /// matched prefix and returns that prefix's length — the out-param lets
-/// callers own reusable buffers instead of allocating per call. The
-/// record dispatch mirrors [`match_pair`] exactly; it operates on the typed
-/// slices so one call per segment can run on a worker thread.
+/// callers own reusable buffers instead of allocating per call. It operates
+/// on the typed slices so one call per segment can run on a worker thread.
+///
+/// Instead of decoding every tape entry, the span decomposes into
+/// contiguous per-store runs (see [`typed_run_len`]): both sides' tape
+/// ranges are cut at kind transitions, each joint stretch where both sides
+/// stay in one store is matched by a tight per-kind loop over the store
+/// slices, and any stretch that is not arc-vs-arc or round-rect-vs-
+/// round-rect mismatches at its first record — exactly the verdict the
+/// per-entry dispatch gave every pairing involving a rect, an `Other`, or
+/// mixed kinds. Kind transitions are rare in real tapes (a ring is one long
+/// arc run), so the per-entry decode cost collapses to a few binary
+/// searches per span.
 #[allow(clippy::too_many_arguments)]
 fn match_span(
     current: TypedRecords<'_>,
@@ -1472,30 +1584,44 @@ fn match_span(
     recolors: &mut Vec<(u32, Color)>,
 ) -> usize {
     recolors.clear();
-    for offset in 0..len {
-        let entry_match = match (
-            current.view_at(start + offset),
-            snapshot.view_at(seg_start + offset),
-        ) {
-            (Some(ReplayView::Arc(i)), Some(ReplayView::Arc(j))) => {
-                match_arc(&current.arcs[i], &snapshot.arcs[j], center, t)
+    let current_tape = &current.tape[start..start + len];
+    let snapshot_tape = &snapshot.tape[seg_start..seg_start + len];
+    let mut offset = 0usize;
+    while offset < len {
+        let current_ref = current_tape[offset];
+        let snapshot_ref = snapshot_tape[offset];
+        let run = typed_run_len(current_tape, offset).min(typed_run_len(snapshot_tape, offset));
+        let matched = match (current_ref.kind(), snapshot_ref.kind()) {
+            (RecordKind::SolidArc, RecordKind::SolidArc) => {
+                let (a, b) = (current_ref.index(), snapshot_ref.index());
+                match_arc_run(
+                    &current.arcs[a..a + run],
+                    &snapshot.arcs[b..b + run],
+                    center,
+                    t,
+                    offset,
+                    recolors,
+                )
             }
-            (Some(ReplayView::RoundRect(i)), Some(ReplayView::RoundRect(j))) => {
-                match_round_rect(&current.round_rects[i], &snapshot.round_rects[j], center, t)
+            (RecordKind::SolidRoundRect, RecordKind::SolidRoundRect) => {
+                let (a, b) = (current_ref.index(), snapshot_ref.index());
+                match_round_rect_run(
+                    &current.round_rects[a..a + run],
+                    &snapshot.round_rects[b..b + run],
+                    center,
+                    t,
+                    offset,
+                    recolors,
+                )
             }
-            _ => RecordMatch::Mismatch,
+            // Rects, `Other`s, and cross-kind pairings are exactly what the
+            // eligibility rule rejects: the joint run's first record is a
+            // mismatch.
+            _ => 0,
         };
-        match entry_match {
-            RecordMatch::Exact => {}
-            RecordMatch::Recolor => {
-                let color = match current.view_at(start + offset) {
-                    Some(ReplayView::Arc(a)) => current.arcs[a].color,
-                    Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
-                    None => unreachable!("recolor requires a view"),
-                };
-                recolors.push((offset as u32, color));
-            }
-            RecordMatch::Mismatch => return offset,
+        offset += matched;
+        if matched < run {
+            return offset;
         }
     }
     len
@@ -1938,6 +2064,317 @@ mod tests {
             ));
         }
         assert!(state.segments().is_empty());
+    }
+
+    /// The naive per-entry walk [`match_span`] replaced: decode both
+    /// sides' views at every offset, dispatch on the pair, decode again for
+    /// a recolor's color. Kept verbatim as the reference the run-decomposed
+    /// path is checked against, verdict for verdict, recolor for recolor.
+    #[allow(clippy::too_many_arguments)]
+    fn match_span_reference(
+        current: TypedRecords<'_>,
+        snapshot: TypedRecords<'_>,
+        center: Point,
+        start: usize,
+        seg_start: usize,
+        len: usize,
+        t: RecordTransform,
+        recolors: &mut Vec<(u32, Color)>,
+    ) -> usize {
+        recolors.clear();
+        for offset in 0..len {
+            let entry_match = match (
+                current.view_at(start + offset),
+                snapshot.view_at(seg_start + offset),
+            ) {
+                (Some(ReplayView::Arc(i)), Some(ReplayView::Arc(j))) => {
+                    match_arc(&current.arcs[i], &snapshot.arcs[j], center, t)
+                }
+                (Some(ReplayView::RoundRect(i)), Some(ReplayView::RoundRect(j))) => {
+                    match_round_rect(&current.round_rects[i], &snapshot.round_rects[j], center, t)
+                }
+                _ => RecordMatch::Mismatch,
+            };
+            match entry_match {
+                RecordMatch::Exact => {}
+                RecordMatch::Recolor => {
+                    let color = match current.view_at(start + offset) {
+                        Some(ReplayView::Arc(a)) => current.arcs[a].color,
+                        Some(ReplayView::RoundRect(r)) => current.round_rects[r].color,
+                        None => unreachable!("recolor requires a view"),
+                    };
+                    recolors.push((offset as u32, color));
+                }
+                RecordMatch::Mismatch => return offset,
+            }
+        }
+        len
+    }
+
+    /// One mixed frame, in tape order: a run of arcs, a non-circular round
+    /// rect, a solid rect, a gradient rect (an `Other` entry), a run of
+    /// circles, a second run of arcs, and a closing pair of circles — every
+    /// run-breaking shape on one tape, PLUS matchable runs that directly
+    /// follow another matchable run (circles→arcs and arcs→circles). Those
+    /// adjacencies matter: a span entered mid-tape reaches its second run
+    /// at a non-zero span offset, so a recolor there catches any confusion
+    /// between run-relative and span-relative offsets. `t` moves the
+    /// movable content so a span match under `t` sees Exact/Recolor
+    /// entries, not wall-to-wall mismatches; `recolored` repaints one entry
+    /// in each matchable run.
+    fn mixed_frame(t: RecordTransform, recolored: bool) -> CommandRecording {
+        let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
+        for slot in 0..8 {
+            let color = if recolored && slot == 3 {
+                Color::rgb(1.0, 0.5, 0.1)
+            } else {
+                Color::WHITE
+            };
+            scope.draw_annular_sector(
+                Brush::solid(color),
+                CENTER,
+                80.0 * t.scale * 0.8,
+                80.0 * t.scale,
+                slot as f32 * 0.7 + t.angle,
+                0.02,
+            );
+        }
+        scope.draw_round_rect_at(
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            Brush::solid(Color::WHITE),
+            CornerRadii::uniform(4.0),
+        );
+        scope.draw_rect_at(
+            Rect {
+                x: 60.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            Brush::solid(Color::WHITE),
+        );
+        scope.draw_rect_at(
+            Rect {
+                x: 90.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            Brush::linear_gradient(vec![Color::WHITE, Color::RED]),
+        );
+        for slot in 0..3 {
+            let base = Point::new(304.0, 204.0 + slot as f32 * 20.0);
+            let color = if recolored && slot == 1 {
+                Color::rgb(0.1, 0.5, 1.0)
+            } else {
+                Color::WHITE
+            };
+            scope.draw_circle(Brush::solid(color), t.apply(CENTER, base), 5.0 * t.scale);
+        }
+        for slot in 0..6 {
+            let color = if recolored && slot == 1 {
+                Color::rgb(0.9, 0.2, 0.4)
+            } else {
+                Color::WHITE
+            };
+            scope.draw_annular_sector(
+                Brush::solid(color),
+                CENTER,
+                120.0 * t.scale * 0.8,
+                120.0 * t.scale,
+                slot as f32 * 0.9 + 0.1 + t.angle,
+                0.03,
+            );
+        }
+        for slot in 0..2 {
+            let base = Point::new(104.0, 204.0 + slot as f32 * 24.0);
+            let color = if recolored && slot == 1 {
+                Color::rgb(0.2, 0.9, 0.3)
+            } else {
+                Color::WHITE
+            };
+            scope.draw_circle(Brush::solid(color), t.apply(CENTER, base), 4.0 * t.scale);
+        }
+        scope.recorded().clone()
+    }
+
+    #[test]
+    fn interleaved_tape_decomposes_into_exact_runs() {
+        let recording = mixed_frame(RecordTransform::IDENTITY, false);
+        let tape = &recording.tape;
+        let mut runs: Vec<(RecordKind, usize, usize)> = Vec::new();
+        let mut at = 0usize;
+        while at < tape.len() {
+            let len = typed_run_len(tape, at);
+            runs.push((tape[at].kind(), tape[at].index(), len));
+            at += len;
+        }
+        assert_eq!(
+            runs,
+            vec![
+                (RecordKind::SolidArc, 0, 8),
+                (RecordKind::SolidRoundRect, 0, 1),
+                (RecordKind::SolidRect, 0, 1),
+                (RecordKind::Other, 0, 1),
+                (RecordKind::SolidRoundRect, 1, 3),
+                (RecordKind::SolidArc, 8, 6),
+                (RecordKind::SolidRoundRect, 4, 2),
+            ],
+            "run decomposition must cut exactly at kind transitions"
+        );
+        // A run read from the middle is that run's remainder, and a kind
+        // that leaves and returns starts a NEW run — index continuity
+        // across the gap must not fuse the two stretches.
+        assert_eq!(typed_run_len(tape, 3), 5);
+        assert_eq!(typed_run_len(tape, 8), 1);
+        assert_eq!(typed_run_len(tape, 12), 2);
+        assert_eq!(typed_run_len(tape, 14), 6);
+        assert_eq!(typed_run_len(tape, 20), 2);
+    }
+
+    #[test]
+    fn run_decomposed_span_match_equals_the_per_entry_walk() {
+        let t = RecordTransform {
+            scale: 0.9994,
+            angle: 0.0123,
+        };
+        let snapshot_rec = mixed_frame(RecordTransform::IDENTITY, false);
+        let mut current_rec = mixed_frame(t, true);
+        // A genuine geometry change inside the second arc run, and a
+        // NaN-carrying record right after it: both must fail through both
+        // paths at the same offset.
+        current_rec.arcs[11].sweep_angle *= 3.0;
+        current_rec.arcs[12].start_angle = f32::NAN;
+        let current = TypedRecords::from(&current_rec);
+        let snapshot = TypedRecords::from(&snapshot_rec);
+        let n = current_rec.tape.len();
+        assert_eq!(n, snapshot_rec.tape.len());
+        assert_eq!(n, 22);
+        let mut fast: Vec<(u32, Color)> = Vec::new();
+        let mut naive: Vec<(u32, Color)> = Vec::new();
+        // Every (start, seg_start) pairing — aligned, shifted into other
+        // runs, cross-kind — at several lengths including the longest one
+        // both sides can carry.
+        for start in 0..n {
+            for seg_start in 0..n {
+                let longest = n - start.max(seg_start);
+                for len in [0usize, 1, 2, 5, longest] {
+                    if start + len > n || seg_start + len > n {
+                        continue;
+                    }
+                    let matched = match_span(
+                        current, snapshot, CENTER, start, seg_start, len, t, &mut fast,
+                    );
+                    let reference = match_span_reference(
+                        current, snapshot, CENTER, start, seg_start, len, t, &mut naive,
+                    );
+                    assert_eq!(
+                        (matched, &fast),
+                        (reference, &naive),
+                        "diverged at start={start} seg_start={seg_start} len={len}"
+                    );
+                }
+            }
+        }
+        // The sweep must actually exercise the positive paths, not agree
+        // on wall-to-wall mismatches: the aligned leading arc run matches
+        // whole with its recolor, the aligned circles with theirs, and a
+        // span crossing circles into the second arc run carries recolors
+        // from BOTH runs — the arc one at span offset 4 (run offset 1), the
+        // pairing any run-relative recolor bookkeeping would get wrong —
+        // then stops exactly at the changed record. A span crossing the
+        // last arc into the closing circles pins the same offset arithmetic
+        // for the round-rect loop.
+        let matched = match_span(current, snapshot, CENTER, 0, 0, 8, t, &mut fast);
+        assert_eq!(
+            (matched, fast.as_slice()),
+            (8, &[(3, Color::rgb(1.0, 0.5, 0.1))][..])
+        );
+        let matched = match_span(current, snapshot, CENTER, 11, 11, 3, t, &mut fast);
+        assert_eq!(
+            (matched, fast.as_slice()),
+            (3, &[(1, Color::rgb(0.1, 0.5, 1.0))][..])
+        );
+        let matched = match_span(current, snapshot, CENTER, 11, 11, 9, t, &mut fast);
+        assert_eq!(
+            (matched, fast.as_slice()),
+            (
+                6,
+                &[
+                    (1, Color::rgb(0.1, 0.5, 1.0)),
+                    (4, Color::rgb(0.9, 0.2, 0.4)),
+                ][..]
+            ),
+            "the changed arc ends the clean prefix behind the circles"
+        );
+        let matched = match_span(current, snapshot, CENTER, 19, 19, 3, t, &mut fast);
+        assert_eq!(
+            (matched, fast.as_slice()),
+            (3, &[(2, Color::rgb(0.2, 0.9, 0.3))][..])
+        );
+    }
+
+    #[test]
+    fn nan_records_mismatch_through_both_paths() {
+        let t = RecordTransform::IDENTITY;
+        let base = arc(80.0, 0.2, Color::WHITE);
+        let poisoned_arcs: [fn(&mut SolidArcRecord); 6] = [
+            |a| a.center.x = f32::NAN,
+            |a| a.center.y = f32::NAN,
+            |a| a.radius = f32::NAN,
+            |a| a.inner_radius = f32::NAN,
+            |a| a.start_angle = f32::NAN,
+            |a| a.sweep_angle = f32::NAN,
+        ];
+        for poison in poisoned_arcs {
+            let mut poisoned = base;
+            poison(&mut poisoned);
+            assert_eq!(
+                match_arc(&poisoned, &base, CENTER, t),
+                RecordMatch::Mismatch
+            );
+            assert_eq!(
+                match_arc(&base, &poisoned, CENTER, t),
+                RecordMatch::Mismatch
+            );
+        }
+        // A NaN circle, both as a poisoned position (still circle-eligible,
+        // fails the point comparison) and as poisoned extents (loses circle
+        // eligibility itself).
+        let good = circle(304.0, 204.0, 10.0, Color::WHITE);
+        let poisoned_circles: [fn(&mut SolidRoundRectRecord); 2] =
+            [|r| r.rect.x = f32::NAN, |r| r.rect.width = f32::NAN];
+        for poison in poisoned_circles {
+            let mut poisoned = good;
+            poison(&mut poisoned);
+            assert_eq!(
+                match_round_rect(&poisoned, &good, CENTER, t),
+                RecordMatch::Mismatch
+            );
+            assert_eq!(
+                match_round_rect(&good, &poisoned, CENTER, t),
+                RecordMatch::Mismatch
+            );
+        }
+        // And at span level: the poisoned record ends the clean prefix at
+        // the same offset through the run-decomposed path and the naive
+        // walk.
+        let snapshot_rec = mixed_frame(RecordTransform::IDENTITY, false);
+        let mut current_rec = mixed_frame(RecordTransform::IDENTITY, false);
+        current_rec.arcs[4].sweep_angle = f32::NAN;
+        let current = TypedRecords::from(&current_rec);
+        let snapshot = TypedRecords::from(&snapshot_rec);
+        let mut fast: Vec<(u32, Color)> = Vec::new();
+        let mut naive: Vec<(u32, Color)> = Vec::new();
+        let matched = match_span(current, snapshot, CENTER, 0, 0, 8, t, &mut fast);
+        let reference = match_span_reference(current, snapshot, CENTER, 0, 0, 8, t, &mut naive);
+        assert_eq!(matched, 4, "the NaN record is a mismatch, not a match");
+        assert_eq!((matched, &fast), (reference, &naive));
     }
 
     /// A real multi-threaded executor for the equivalence test: lane 0 is

@@ -899,6 +899,16 @@ impl TapeRef {
     pub(crate) fn index(self) -> usize {
         (self.0 & Self::INDEX_MASK) as usize
     }
+
+    /// The packed word itself. Because per-store indices appear on the tape
+    /// in strictly increasing order (see [`CommandRecording::tape`]), `d`
+    /// consecutive tape entries are one kind's run exactly when
+    /// `tape[p + d].raw() == tape[p].raw() + d` — same kind bits, index
+    /// advanced by every step. Span verification decomposes tape ranges into
+    /// per-kind contiguous store runs on this single comparison.
+    pub(crate) fn raw(self) -> u32 {
+        self.0
+    }
 }
 
 /// A solid `SrcOver` rect, recorded as raw values.
