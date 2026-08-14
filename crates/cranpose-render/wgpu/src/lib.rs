@@ -510,6 +510,19 @@ impl WgpuRenderer {
             .unwrap_or(0)
     }
 
+    /// Test/diagnostic view of the opaque static leading-span cache:
+    /// lifetime (hits, recaptures) — frames drawn with the cached
+    /// full-target blit standing in for the leading span, and capture
+    /// passes rendered (`CRANPOSE_STATIC_SPAN` kill switch).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn static_span_stats(&self) -> (u64, u64) {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::static_span_stats)
+            .unwrap_or((0, 0))
+    }
+
     /// Test/diagnostic view of the present store's lifetime count of
     /// replay-ops batches dropped by the generation check. Surface (non
     /// direct) frames must never move it: their packets carry the default

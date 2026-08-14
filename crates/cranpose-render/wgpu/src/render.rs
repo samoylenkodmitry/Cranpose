@@ -2647,6 +2647,403 @@ fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     })
 }
 
+/// Kill switch for the opaque static leading-span cache, mirroring
+/// [`rim_mesh_enabled`]'s property bridge: `CRANPOSE_STATIC_SPAN=0` (or the
+/// `debug.cranpose.static_span` property on Android) makes the fused
+/// partition never skip, capture, or blit — a device A/B needs no rebuild.
+/// Default ON. Read once per engagement attempt (once per frame), so the
+/// cost is one `env::var` per frame.
+#[cfg(not(target_arch = "wasm32"))]
+fn static_span_enabled() -> bool {
+    !matches!(std::env::var("CRANPOSE_STATIC_SPAN").as_deref(), Ok("0"))
+}
+
+/// Upper bound on how many leading shapes one span may cover. The target
+/// span (full-screen background rect + vignette disc) is 2 shapes; the cap
+/// only bounds the per-frame memcmp (16 x 160 B) and the prev-frame copy.
+#[cfg(not(target_arch = "wasm32"))]
+const STATIC_SPAN_MAX_SHAPES: usize = 16;
+
+/// Consecutive stable frames an EXTENSION of an already-valid span must
+/// show before an upgrade recapture — see the hysteresis comment in
+/// [`StaticSpanCache::engage`].
+#[cfg(not(target_arch = "wasm32"))]
+const STATIC_SPAN_UPGRADE_FRAMES: u32 = 30;
+
+/// What the engagement check decided for this frame's leading fused
+/// partition.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StaticSpanDecision {
+    /// Not engaged: draw everything live, capture nothing.
+    Pass,
+    /// The cached span image is valid: skip the first `skip` shapes of the
+    /// first batch and draw the cached full-target blit before everything.
+    Hit { skip: usize },
+    /// The leading `len` shapes were byte-stable across the last two frames
+    /// but the cache does not match: draw live, then re-capture the span.
+    Capture { len: usize, clear: wgpu::Color },
+}
+
+/// Cache of the frame's leading static span — the opaque full-screen
+/// background rect plus whatever byte-stable draws sit directly on top of it
+/// (MEGA: the ~176k-px radial-gradient vignette disc) — as one composited
+/// full-target texture that replaces those draws with a single blit.
+///
+/// Byte-exactness by construction, no tolerance anywhere:
+///
+/// * The engaged partition is the frame's first content (`load_op` is the
+///   frame `Clear`, gated to alpha == 1.0), so what the live path would put
+///   under the span is exactly the opaque clear color — and the capture
+///   pass clears its offscreen with the SAME color before drawing the SAME
+///   shape range through the IDENTICAL pipelines (same `ShapeData` bytes,
+///   same gradient stop bytes, same viewport uniforms, same blend state,
+///   same `has_gradient` pipeline variant, same surface format, identity
+///   similarity offset 0). Deterministic pipelines on identical inputs give
+///   identical bytes, so the cached image IS the bytes the live span render
+///   would produce this frame.
+/// * With an opaque clear below and SrcOver-only draws above, every texel of
+///   that composite has alpha exactly 255: each blend step computes
+///   `a_out = a_src + (1 - a_src) * 1.0`, whose float error is far inside
+///   the half-level the unorm8 quantizer absorbs, and 255 reads back as
+///   exactly 1.0 for the next step. The replacement blit then draws SrcOver
+///   texels whose `1 - src.a` dst factor is exactly zero — the
+///   fixed-function blender computes `1*src + 0*dst`, a replace-write — and
+///   an unorm8 texel survives the sample/write round trip bit-exact
+///   (`CompositeSampleMode::Nearest` is a `textureLoad`, `alpha` is 1.0).
+///   Hence `over(rest, over(span, clear)) == over(rest, SPAN_IMAGE)`
+///   bitwise, whatever `rest` is.
+/// * Gradient dither cannot diverge between capture and screen: `shape.wgsl`
+///   keys its ordered-dither matrix off `world_pos` — the device coordinate
+///   interpolated from the `ShapeData` quad corners, deliberately not
+///   `@builtin(position)` — so the dither phase is a pure function of the
+///   memcmp'd bytes (see `gradient_dither` in `shape.wgsl`).
+/// * Rim-mesh candidates ([`rim_mesh_band`] Some) end the span: the live
+///   path may draw them through the band-mesh pipeline while the capture
+///   pass draws plain instanced quads, and this cache refuses to depend on
+///   that pair being byte-equal.
+///
+/// Validity is a memcmp: the leading K converted `ShapeData` records plus
+/// their gradient stop payloads against the cached copy, ~160 B x few
+/// shapes, sub-microsecond. The span length K itself comes from a two-frame
+/// stability probe (`prev_shapes`): a capture only happens once the leading
+/// run has already repeated byte-identically across two consecutive frames,
+/// so churning scenes never pay the extra capture pass every frame — and
+/// only when the span carries at least one gradient record, so scenes whose
+/// leading static draws are all solid (cheap fill the blit cannot beat)
+/// never engage at all.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct StaticSpanCache {
+    /// The captured span composite, same size and format as the frame
+    /// target. Held out of the offscreen pool across frames; released back
+    /// through the deferred-release path on resize.
+    texture: Option<OffscreenTarget>,
+    /// Validity key: the span's converted `ShapeData` records at capture.
+    key_shapes: Vec<ShapeData>,
+    /// Validity key: the span's gradient stop payload at capture.
+    key_gradients: Vec<GradientStop>,
+    key_width: u32,
+    key_height: u32,
+    /// The frame clear color the capture pass cleared with — pixels the
+    /// span shapes do not fully cover composite against it, so a different
+    /// clear invalidates the image even when every shape byte matches.
+    key_clear: [u64; 4],
+    /// The live first batch's whole-batch `has_gradient` flag at capture:
+    /// it selects the `fs_solid` vs gradient pipeline variant for every
+    /// shape in the batch, so the capture is only valid while the live
+    /// batch would draw the span through the same variant.
+    key_has_gradient: bool,
+    /// Last frame's leading records — the two-frame stability probe that
+    /// decides the span length at capture time.
+    prev_shapes: Vec<ShapeData>,
+    prev_gradients: Vec<GradientStop>,
+    /// Consecutive hit frames whose stable leading run extended past the
+    /// current key — the upgrade hysteresis counter.
+    extension_stable_frames: u32,
+    /// Set once per frame by [`GpuRenderer::render`], consumed by the first
+    /// fused partition that carries the frame's opaque clear, so offscreen
+    /// layer or shadow renders (transparent clears) can never engage and a
+    /// frame engages at most once.
+    armed: bool,
+    hits: u64,
+    recaptures: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StaticSpanCache {
+    /// One engagement attempt per frame, at fused-partition time.
+    /// `first_batch` is the chunk's first batch when it is a shape batch:
+    /// (shape count, blend mode, whole-batch has_gradient). `shapes` /
+    /// `gradients` are the partition's freshly converted scratch buffers,
+    /// whose leading records belong to the first batch.
+    fn engage(
+        &mut self,
+        load_op: wgpu::LoadOp<wgpu::Color>,
+        first_batch: Option<(usize, BlendMode, bool)>,
+        width: u32,
+        height: u32,
+        shapes: &[ShapeData],
+        gradients: &[GradientStop],
+    ) -> StaticSpanDecision {
+        if !self.armed || !static_span_enabled() {
+            return StaticSpanDecision::Pass;
+        }
+        let wgpu::LoadOp::Clear(clear) = load_op else {
+            return StaticSpanDecision::Pass;
+        };
+        // The frame's leading clear is the only opaque one a frame stream
+        // carries (layer and shadow sources clear transparent); engagement
+        // happens here or not at all this frame.
+        if clear.a != 1.0 {
+            return StaticSpanDecision::Pass;
+        }
+        self.armed = false;
+        let Some((batch_len, blend_mode, has_gradient)) = first_batch else {
+            self.forget_observation();
+            return StaticSpanDecision::Pass;
+        };
+        // SrcOver only: the alpha == 255 argument above is an SrcOver
+        // property.
+        if blend_mode != BlendMode::SrcOver || batch_len == 0 {
+            self.forget_observation();
+            return StaticSpanDecision::Pass;
+        }
+        let leading = &shapes[..batch_len.min(STATIC_SPAN_MAX_SHAPES).min(shapes.len())];
+        if leading.is_empty() {
+            self.forget_observation();
+            return StaticSpanDecision::Pass;
+        }
+        if !static_span_fullscreen_opaque(&leading[0], width, height) {
+            self.forget_observation();
+            return StaticSpanDecision::Pass;
+        }
+        // The span ends at the first shape the capture pass could not
+        // reproduce through the plain instanced arm (rim-mesh candidates).
+        let mut eligible = 1;
+        while eligible < leading.len() && rim_mesh_band(&leading[eligible]).is_none() {
+            eligible += 1;
+        }
+        let leading = &leading[..eligible];
+        let clear_key = [
+            clear.r.to_bits(),
+            clear.g.to_bits(),
+            clear.b.to_bits(),
+            clear.a.to_bits(),
+        ];
+
+        let key_len = self.key_shapes.len();
+        let valid = self.texture.is_some()
+            && key_len > 0
+            && key_len <= leading.len()
+            && self.key_width == width
+            && self.key_height == height
+            && self.key_clear == clear_key
+            && self.key_has_gradient == has_gradient
+            && span_records_equal(
+                &self.key_shapes,
+                &leading[..key_len],
+                &self.key_gradients,
+                gradients,
+            );
+
+        // Stability probe, shared by miss-capture and hit-upgrade: the
+        // longest leading run whose record AND gradient bytes repeat from
+        // last frame.
+        let mut stable = 0;
+        while stable < leading.len()
+            && stable < self.prev_shapes.len()
+            && span_records_equal(
+                &self.prev_shapes[stable..stable + 1],
+                &leading[stable..stable + 1],
+                &self.prev_gradients,
+                gradients,
+            )
+        {
+            stable += 1;
+        }
+        self.remember_observation(leading, gradients);
+
+        if valid {
+            // Upgrade hysteresis: a valid span may EXTEND (a partial
+            // invalidation — say a vignette-only palette change — shrank an
+            // earlier capture, and the tail has stabilized again) only after
+            // the extension repeats for a full window of consecutive
+            // frames. Without it, a leading shape animating with a period
+            // of a few frames would alternate upgrade-capture and
+            // shrink-capture forever — capture-churn instead of caching.
+            // The initial capture below takes no window because the whole
+            // span stabilizing at once is the cold-start common case. No
+            // gradient gate here: the stable prefix contains the key, and
+            // every stored key carries a gradient record.
+            if stable > key_len {
+                self.extension_stable_frames += 1;
+                if self.extension_stable_frames >= STATIC_SPAN_UPGRADE_FRAMES {
+                    self.extension_stable_frames = 0;
+                    return StaticSpanDecision::Capture { len: stable, clear };
+                }
+            } else {
+                self.extension_stable_frames = 0;
+            }
+            self.hits += 1;
+            if self.hits.is_multiple_of(600) {
+                log::debug!(
+                    "[static-span] {} hits / {} recaptures lifetime (span {} shapes, {}x{})",
+                    self.hits,
+                    self.recaptures,
+                    key_len,
+                    width,
+                    height,
+                );
+            }
+            return StaticSpanDecision::Hit { skip: key_len };
+        }
+
+        self.extension_stable_frames = 0;
+        // Engagement economics: a candidate span with no gradient records
+        // would replace the cheapest fill there is (solid quads) with a
+        // same-size texture blit — a wash at best on a mobile GPU, plus a
+        // held full-target texture and a capture pass. The fill this stage
+        // chases is the gradient+dither span, so a capture must carry at
+        // least one gradient record. This also keeps solid-background-only
+        // frames (most non-game screens) from ever paying an offscreen
+        // acquire.
+        if stable == 0 || span_gradient_len(&leading[..stable]) == 0 {
+            return StaticSpanDecision::Pass;
+        }
+        StaticSpanDecision::Capture { len: stable, clear }
+    }
+
+    /// Stores this frame's leading run for next frame's stability probe.
+    fn remember_observation(&mut self, leading: &[ShapeData], gradients: &[GradientStop]) {
+        self.prev_shapes.clear();
+        self.prev_shapes.extend_from_slice(leading);
+        let stop_len = span_gradient_len(leading);
+        self.prev_gradients.clear();
+        self.prev_gradients
+            .extend_from_slice(&gradients[..stop_len]);
+    }
+
+    fn forget_observation(&mut self) {
+        self.prev_shapes.clear();
+        self.prev_gradients.clear();
+        self.extension_stable_frames = 0;
+    }
+
+    /// Adopts a freshly captured span as the validity key. The caller has
+    /// already encoded the capture pass into `texture`.
+    #[allow(clippy::too_many_arguments)]
+    fn store_key(
+        &mut self,
+        span: &[ShapeData],
+        gradients: &[GradientStop],
+        width: u32,
+        height: u32,
+        clear: wgpu::Color,
+        has_gradient: bool,
+    ) {
+        self.key_shapes.clear();
+        self.key_shapes.extend_from_slice(span);
+        let stop_len = span_gradient_len(span);
+        self.key_gradients.clear();
+        self.key_gradients.extend_from_slice(&gradients[..stop_len]);
+        self.key_width = width;
+        self.key_height = height;
+        self.key_clear = [
+            clear.r.to_bits(),
+            clear.g.to_bits(),
+            clear.b.to_bits(),
+            clear.a.to_bits(),
+        ];
+        self.key_has_gradient = has_gradient;
+        self.recaptures += 1;
+        if self.recaptures.is_multiple_of(64) || self.recaptures == 1 {
+            log::debug!(
+                "[static-span] recapture #{} (span {} shapes, {} stops, {}x{}; {} hits lifetime)",
+                self.recaptures,
+                self.key_shapes.len(),
+                self.key_gradients.len(),
+                width,
+                height,
+                self.hits,
+            );
+        }
+    }
+}
+
+/// Total gradient stops a leading span consumes. The span is a prefix of
+/// the fused upload, so its stop payload is exactly the leading
+/// `sum(gradient_count)` entries of the scratch gradient buffer.
+#[cfg(not(target_arch = "wasm32"))]
+fn span_gradient_len(span: &[ShapeData]) -> usize {
+    span.iter().map(|shape| shape.gradient_count as usize).sum()
+}
+
+/// Byte equality of two span record runs INCLUDING their gradient stop
+/// payloads. Each record's stops live at
+/// `gradient_start..gradient_start + gradient_count` in its frame's leading
+/// gradient buffer; `gradient_start`/`gradient_count` are part of the
+/// memcmp'd record bytes, so matching records address matching stop ranges
+/// in both buffers.
+#[cfg(not(target_arch = "wasm32"))]
+fn span_records_equal(
+    expected: &[ShapeData],
+    actual: &[ShapeData],
+    expected_gradients: &[GradientStop],
+    actual_gradients: &[GradientStop],
+) -> bool {
+    if bytemuck::cast_slice::<ShapeData, u8>(expected)
+        != bytemuck::cast_slice::<ShapeData, u8>(actual)
+    {
+        return false;
+    }
+    for shape in expected {
+        let start = shape.gradient_start as usize;
+        let end = start + shape.gradient_count as usize;
+        if end > expected_gradients.len() || end > actual_gradients.len() {
+            return false;
+        }
+        if bytemuck::cast_slice::<GradientStop, u8>(&expected_gradients[start..end])
+            != bytemuck::cast_slice::<GradientStop, u8>(&actual_gradients[start..end])
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a converted record is the full-screen opaque base the span
+/// mechanism keys on: a plain solid fill (no stroke, no arc, no gradient,
+/// no clip, no corner rounding) whose axis-aligned quad covers the whole
+/// `width` x `height` target with alpha exactly 1.0. Soundness does not
+/// strictly need full coverage — the opaque clear already makes the
+/// composite alpha 255 — but requiring the measured scene shape keeps the
+/// cache from engaging on frames whose leading draw is not the static
+/// background this stage was built for.
+#[cfg(not(target_arch = "wasm32"))]
+fn static_span_fullscreen_opaque(shape: &ShapeData, width: u32, height: u32) -> bool {
+    if shape.brush_type != 0 || shape.gradient_count != 0 {
+        return false;
+    }
+    if shape.color[3] != 1.0 {
+        return false;
+    }
+    if shape.clip_rect != [0.0; 4] || shape.stroke_params != [0.0; 4] || shape.radii != [0.0; 4] {
+        return false;
+    }
+    // Same corner layout as `rim_mesh_band`: quad01 = TL.xy, TR.xy;
+    // quad23 = BL.xy, BR.xy.
+    let [left, top, right, top_right_y] = shape.quad01;
+    let [bl_x, bottom, br_x, br_y] = shape.quad23;
+    let axis_aligned = top_right_y == top
+        && bl_x == left
+        && br_x == right
+        && br_y == bottom
+        && left < right
+        && top < bottom;
+    axis_aligned && left <= 0.0 && top <= 0.0 && right >= width as f32 && bottom >= height as f32
+}
+
 /// Emits the quad `vs_main` would expand for this shape as four shared
 /// vertices plus the index pattern (0, 1, 2)(2, 1, 3) — the identical corner
 /// order, corner uvs and positions straight from the captured quad, so a
@@ -3451,6 +3848,26 @@ impl FillAreaDiag {
         }
         if corner > 0.0 {
             self.add_corner(corner);
+        }
+    }
+
+    /// A leading-span cache hit replaced these already-counted quads with
+    /// one cached-texture blit: subtract their submitted, lit and
+    /// opacity-class areas back out — those pixels now arrive through the
+    /// blit, an effect-renderer composite that the effect-comp bucket
+    /// prices at its own draw site and the opacity histogram excludes by
+    /// design (no CPU-known alpha). The corner counter stays as priced at
+    /// batch prepare: the full-target blit writes the very same corner
+    /// pixels, so the waste that counter exists to expose is unchanged.
+    fn note_static_span_skip(&self, shapes: &[ShapeData]) {
+        for shape in shapes {
+            let bucket = fill_diag_bucket(shape);
+            let quad = quad_shoelace_area(shape);
+            let lit = analytic_lit_area(shape).clamp(0.0, quad);
+            self.add(bucket, -quad);
+            self.add_lit(bucket, -lit);
+            let class = &self.frame_opacity[fill_opacity_class(shape) as usize];
+            class.set(class.get() - lit);
         }
     }
 
@@ -4881,6 +5298,11 @@ pub struct GpuRenderer {
     /// the flag is set.
     #[cfg(not(target_arch = "wasm32"))]
     fill_area_diag: FillAreaDiag,
+    /// Opaque static leading-span cache (`CRANPOSE_STATIC_SPAN` kill
+    /// switch): the frame's byte-stable leading draws as one cached
+    /// full-target blit.
+    #[cfg(not(target_arch = "wasm32"))]
+    static_span: StaticSpanCache,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -5458,6 +5880,8 @@ impl GpuRenderer {
             rim_meshes_emitted: 0,
             #[cfg(not(target_arch = "wasm32"))]
             fill_area_diag: FillAreaDiag::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            static_span: StaticSpanCache::default(),
         };
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms); \
@@ -7307,6 +7731,9 @@ impl GpuRenderer {
             if fill_area_diag_enabled() {
                 self.fill_area_diag.reset_frame(width, height);
             }
+            // One engagement per frame: the first fused partition carrying
+            // the frame's opaque clear consumes this.
+            self.static_span.armed = true;
         }
 
         // Producer-side text layout cache size, carried by the packet — the
@@ -8166,6 +8593,9 @@ impl GpuRenderer {
         let mut image_indices = std::mem::take(&mut self.scratch_image_indices);
         let mut image_cmds = std::mem::take(&mut self.scratch_image_cmds);
         let mut glyph_cmds = std::mem::take(&mut self.scratch_glyph_cmds);
+        // Moved out like the scratch vecs: the span blit borrows the cached
+        // texture across the render pass while `self` stays mutably usable.
+        let mut span_cache = std::mem::take(&mut self.static_span);
 
         image_vertices.clear();
         image_indices.clear();
@@ -8224,6 +8654,51 @@ impl GpuRenderer {
             }
             let after_shape_prepare = Instant::now();
 
+            // Opaque static leading-span cache: decide once per frame, on
+            // the partition carrying the frame's opaque clear, whether the
+            // leading run of converted records matches the cached span
+            // composite (skip them, blit instead), repeated byte-identically
+            // from last frame (draw live, then capture), or neither.
+            let first_batch_info = match chunk.batches.first() {
+                Some(&SegmentBatchPlan::Shape {
+                    start,
+                    end,
+                    blend_mode,
+                }) => {
+                    let mut has_gradient = false;
+                    for (_, item) in &ordered_items[start..end] {
+                        if let SegmentDrawItem::Shape(shape_index) = item {
+                            has_gradient |=
+                                shape_gradient_stop_count(&shapes[*shape_index], brushes) > 0;
+                        }
+                    }
+                    Some((end - start, blend_mode, has_gradient))
+                }
+                _ => None,
+            };
+            let span_decision = span_cache.engage(
+                load_op,
+                first_batch_info,
+                width,
+                height,
+                &self.scratch_shape_data,
+                &self.scratch_gradients,
+            );
+            let span_skip = match span_decision {
+                StaticSpanDecision::Hit { skip } => {
+                    if fill_area_diag_enabled() {
+                        // The skipped quads were counted at batch prepare;
+                        // the replacing blit is an effect-renderer
+                        // composite, which the instrument's policy does not
+                        // count.
+                        self.fill_area_diag
+                            .note_static_span_skip(&self.scratch_shape_data[..skip]);
+                    }
+                    skip
+                }
+                _ => 0,
+            };
+
             // Transient rim band meshes: scan the freshly converted shapes
             // (still in `scratch_shape_data` after
             // `prepare_shapes_batch_direct`) for huge circle rims and give
@@ -8238,7 +8713,7 @@ impl GpuRenderer {
             let mut shape_cursor = 0_u32;
             let mut composite_cursor = 0usize;
             let mut shader_composite_cursor = 0usize;
-            for batch in chunk.iter() {
+            for (batch_index, batch) in chunk.iter().enumerate() {
                 match batch {
                     SegmentBatchPlan::Shape {
                         start,
@@ -8255,13 +8730,18 @@ impl GpuRenderer {
                             has_gradient |=
                                 shape_gradient_stop_count(&shapes[*shape_index], brushes) > 0;
                         }
+                        // A span hit skips the leading shapes of the FIRST
+                        // batch only: they stay in the upload (indices of
+                        // everything after them are untouched) but the draw
+                        // range starts past them.
+                        let skip = if batch_index == 0 { span_skip } else { 0 };
                         let shape_count = end - start;
                         if shape_count > 0 {
                             if rim_mesh_on
                                 && self.instanced_quads.is_some()
                                 && blend_mode == BlendMode::SrcOver
                             {
-                                for offset in 0..shape_count {
+                                for offset in skip..shape_count {
                                     // The index `vs_mesh` reads into the
                                     // storage shape array: position within
                                     // the whole fused upload (shape_refs
@@ -8324,14 +8804,16 @@ impl GpuRenderer {
                                     }
                                 }
                             }
-                            fused_batches.push(FusedSegmentBatch::Shape {
-                                batch: PreparedShapeBatch {
-                                    vertex_start: shape_cursor * 6,
-                                    vertex_count: shape_count as u32 * 6,
-                                    has_gradient,
-                                },
-                                blend_mode,
-                            });
+                            if shape_count > skip {
+                                fused_batches.push(FusedSegmentBatch::Shape {
+                                    batch: PreparedShapeBatch {
+                                        vertex_start: (shape_cursor + skip as u32) * 6,
+                                        vertex_count: (shape_count - skip) as u32 * 6,
+                                        has_gradient,
+                                    },
+                                    blend_mode,
+                                });
+                            }
                             shape_cursor += shape_count as u32;
                         }
                     }
@@ -8528,9 +9010,39 @@ impl GpuRenderer {
                     .debug_effects
                     .set(self.effect_renderer.debug_effects.get() + shader_items.len() as u32);
             }
+            // Span hit: prepare the cached-texture blit that stands in for
+            // the skipped shapes. Reuses the effect renderer's composite
+            // machinery — the same prepared-draw path the Composite arms
+            // ride — with Nearest sampling (an exact `textureLoad`), alpha
+            // 1.0, no mask, no viewports: a 1:1 full-target replace-write
+            // of alpha-255 texels (see `StaticSpanCache`).
+            let span_blit_items =
+                span_cache
+                    .texture
+                    .as_ref()
+                    .filter(|_| span_skip > 0)
+                    .map(|texture| CompositeBatchItem {
+                        source: texture,
+                        alpha: 1.0,
+                        scissor: None,
+                        rounded_mask: None,
+                        blend_mode: BlendMode::SrcOver,
+                        dest_viewport: None,
+                        source_viewport: None,
+                        sample_mode: CompositeSampleMode::Nearest,
+                    });
+            let span_blit = match &span_blit_items {
+                Some(item) => self.effect_renderer.prepare_composite_batch_draws(
+                    frame_encoder,
+                    &device,
+                    load_op,
+                    std::slice::from_ref(item),
+                ),
+                None => Vec::new(),
+            };
             let after_composite_prepare = Instant::now();
 
-            if fused_batches.is_empty() {
+            if fused_batches.is_empty() && span_blit.is_empty() {
                 return Ok(SegmentRenderOutcome {
                     rendered_any: false,
                     pass_count: 0,
@@ -8574,6 +9086,16 @@ impl GpuRenderer {
                             multiview_mask: None,
                         });
 
+                // The cached span composite replaces the frame's leading
+                // draws, so it goes down before every fused batch — same
+                // z position the skipped shapes held.
+                for draw in &span_blit {
+                    self.effect_renderer.draw_prepared_composite(
+                        &mut render_pass,
+                        (width, height),
+                        draw,
+                    );
+                }
                 for batch in &fused_batches {
                     match batch {
                         FusedSegmentBatch::Shape { batch, blend_mode } => {
@@ -8681,6 +9203,84 @@ impl GpuRenderer {
                     }
                 }
             }
+            // Span capture (miss frames whose leading run proved stable):
+            // re-render JUST the span shapes into the pooled offscreen,
+            // through the IDENTICAL pipelines at identical device
+            // coordinates — the shapes are already in this partition's
+            // upload, so the capture is one extra pass drawing instances
+            // 0..len of the same buffers, cleared with the frame's own
+            // clear color. Rare by construction: palette drains, shakes,
+            // and resizes are the only events that invalidate the key.
+            let mut capture_passes = 0_u32;
+            if let StaticSpanDecision::Capture { len, clear } = span_decision {
+                let texture = match span_cache.texture.take() {
+                    Some(existing) if existing.width == width && existing.height == height => {
+                        existing
+                    }
+                    other => {
+                        if let Some(stale) = other {
+                            self.defer_offscreen_release(stale);
+                        }
+                        self.acquire_offscreen(width, height)
+                    }
+                };
+                {
+                    let mut capture_pass =
+                        frame_encoder
+                            .encoder()
+                            .begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("Static Span Capture Pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &texture.view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(clear),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                                multiview_mask: None,
+                            });
+                    // `has_gradient` is the LIVE first batch's whole-batch
+                    // flag: it selects the same fs_solid/gradient pipeline
+                    // variant the live path draws the span through.
+                    let has_gradient = first_batch_info
+                        .map(|(_, _, has_gradient)| has_gradient)
+                        .unwrap_or(false);
+                    self.draw_prepared_shapes(
+                        &mut capture_pass,
+                        BlendMode::SrcOver,
+                        PreparedShapeBatch {
+                            vertex_start: 0,
+                            vertex_count: len as u32 * 6,
+                            has_gradient,
+                        },
+                        width,
+                        height,
+                        &[],
+                    );
+                    if fill_area_diag_enabled() {
+                        // The capture genuinely re-submits the span's fill
+                        // this frame — submitted, lit, opacity and (the
+                        // capture target is frame-sized) corner alike.
+                        self.fill_area_diag
+                            .add_shape_quads(&self.scratch_shape_data[..len], viewport);
+                    }
+                    span_cache.store_key(
+                        &self.scratch_shape_data[..len],
+                        &self.scratch_gradients,
+                        width,
+                        height,
+                        clear,
+                        has_gradient,
+                    );
+                }
+                span_cache.texture = Some(texture);
+                capture_passes = 1;
+            }
             let after_pass = Instant::now();
             if let Some(total_ms) = should_log_wgpu_render_stage(partition_start, after_pass) {
                 log::warn!(
@@ -8701,7 +9301,7 @@ impl GpuRenderer {
 
             Ok(SegmentRenderOutcome {
                 rendered_any: true,
-                pass_count: 1,
+                pass_count: 1 + capture_passes,
             })
         })();
 
@@ -8710,6 +9310,7 @@ impl GpuRenderer {
         self.scratch_image_cmds = image_cmds;
         self.scratch_glyph_cmds = glyph_cmds;
         self.restore_staged_uploads(staged_uploads);
+        self.static_span = span_cache;
         result
     }
 
@@ -11153,6 +11754,12 @@ impl GpuRenderer {
     #[doc(hidden)]
     pub fn rim_meshes_emitted(&self) -> u64 {
         self.rim_meshes_emitted
+    }
+
+    /// Test/diagnostic view of the static leading-span cache: lifetime
+    /// (hits, recaptures).
+    pub fn static_span_stats(&self) -> (u64, u64) {
+        (self.static_span.hits, self.static_span.recaptures)
     }
 
     /// Uploads the region of the transient rim mesh scratch appended since
