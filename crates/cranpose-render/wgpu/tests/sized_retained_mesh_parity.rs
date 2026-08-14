@@ -1,5 +1,12 @@
 //! Pixel parity and gate engagement for the SIZE-GATED retained capture
-//! mesh (Stage 3 of the fill-reduction program).
+//! mesh (Stage 3 of the fill-reduction program), under the SPLIT draw walk
+//! (S3b): a meshed slot's mesh buffers hold band geometry only, and
+//! `encode_retained_op` alternates along the shape range — meshed runs
+//! through the mesh pipeline, everything else on the instanced-quad path
+//! it never left (with the suite's instanced pin OFF, the plain `vs_main`
+//! expansion — the identical entry point the quad arm uses, so passthrough
+//! shapes are not merely geometry-identical, they ride the same pipeline
+//! in both arms).
 //!
 //! The scene is the fill-truth top-slack dump made concrete: one big ring
 //! (the 86%-slack "quad 210000, lit 30000" shape class), a big
@@ -43,8 +50,8 @@
 //! * mesh arm (`CRANPOSE_ARC_MESH=1`, default gate) — asserts (a) the
 //!   identity bar above against the quad arm on same-position passes, (b)
 //!   the gate's exact engagement split (1 arc + 1 rim meshed, every brick
-//!   on the passthrough quad), (c) the rim acceptance actually engaged — a
-//!   meshed rim band, not a passthrough — via the engagement counters;
+//!   left instanced), (c) the rim acceptance actually engaged — a meshed
+//!   rim band, not an instanced quad — via the engagement counters;
 //! * gated arm (`CRANPOSE_RETAINED_MESH_PX2` at its clamp ceiling) — the
 //!   threshold rejects even the big shapes, the capture meshes nothing and
 //!   keeps no mesh buffers, and the engagement counters do not move.
@@ -296,7 +303,7 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
     // hold a mesh, so the counters are its capture verbatim: exactly the
     // big ring meshed as an arc band, exactly the big rim meshed as a rim
     // band (the acceptance the dynamic path cannot provide), and every
-    // brick arc — small in the precise px² sense — on the passthrough quad.
+    // brick arc — small in the precise px² sense — left on the instanced path.
     let (mesh_slots, total_slots) = renderer.replay_slot_mesh_stats();
     let (arcs_meshed, rims_meshed, passthrough) = renderer.replay_slot_mesh_engagement();
     eprintln!(
@@ -315,7 +322,7 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
     );
     assert!(
         passthrough >= BRICK_COUNT,
-        "every brick arc must take the passthrough quad ({passthrough} quads)"
+        "every brick arc must stay instanced ({passthrough} instanced)"
     );
 
     // The gated arm: at the clamp ceiling even the big shapes fall under
