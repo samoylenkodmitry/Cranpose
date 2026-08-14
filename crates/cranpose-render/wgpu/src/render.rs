@@ -2459,22 +2459,22 @@ impl MeshVertex {
 /// A/B needs no rebuild. Read per capture — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn arc_mesh_enabled() -> bool {
-    // Default ON because of the SIZE GATE ([`retained_mesh_min_px2`]), not
-    // because indexed geometry alone fixed anything: the off-charger watch
-    // A/Bs measured the retained mesh 4-11 fps SLOWER than plain quads on
-    // the Adreno 702 when it meshed ALL ~14k retained arcs — indexed
-    // band-boundary geometry included. Thousands of tiny meshes amplify
-    // vertex and binning work past whatever fragment slack they recover on
-    // a small binning GPU (big desktop GPUs and the at-vsync-ceiling Huawei
-    // masked it). The fill-truth instrument says where the recoverable
-    // slack actually lives: 0.45 Mpx/frame of retained slack out of 1.7
-    // total, dominated by a handful of huge shapes (a 210k-px² ring quad
-    // carrying 180k px² slack — 86% — and ~19k-px² stroked-circle rims at
-    // 94%), while the thousands of small brick arcs measure ~100-800 px²
-    // each. Gated to big shapes only — the regime the shipping
-    // [`rim_mesh_band`] path already proved WINS on this same GPU — the
-    // mesh recovers the slack without the amplification, so ON is safe.
-    !matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok("0"))
+    // OPT-IN by measurement, size gate and all: alternating watch pairs
+    // (Adreno 702, mega scene, gate at its 16384 px² default — 2 shapes
+    // meshed, ~550 passthrough per slot) read mesh ON 48.7/43.5 fps vs
+    // OFF 53.7/45.2 — both pairs lose. The earlier all-arcs regime lost
+    // 4-11 fps; the gate shrank the loss, never crossed zero. The likely
+    // mechanism is structural: a slot holding a mesh leaves the latched
+    // instanced-quad path for EVERY shape in the slot, so its passthrough
+    // quads pay per-vertex attribute bandwidth where the instanced path
+    // paid shared storage reads — on a bandwidth-bound part that swamps
+    // the meshed shapes' fill recovery (fill-truth: 0.45 Mpx/frame of
+    // retained slack, 86-94% in a handful of huge ring/rim shapes). The
+    // measured WIN regime stays the DYNAMIC transient rim mesh
+    // ([`rim_mesh_band`], +9 fps, default on). A retry that could earn
+    // default-on: split a meshed slot's draw so passthrough shapes stay
+    // instanced and only gate-passing shapes take the mesh.
+    matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok("1"))
 }
 
 /// Dilation applied to the band's half-thickness before meshing, in capture
