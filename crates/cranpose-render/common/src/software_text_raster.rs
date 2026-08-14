@@ -1287,6 +1287,30 @@ impl TextWeightSynthesis {
         }
     }
 
+    /// Minikin's `computeFakery`: semibold or darker, **and** at least two
+    /// grades above the face that answered.
+    ///
+    /// ```text
+    /// bool isFakeBold = wanted.weight() >= 600 && (wanted.weight() - actual.weight()) >= 200;
+    /// ```
+    ///
+    /// — `frameworks/minikin/libs/minikin/FontFamily.cpp`. Both halves matter.
+    /// Synthesising for *any* positive gap fabricates weights the platform
+    /// never draws: Wear Material 3 asks `sans-serif` for body 450 against a
+    /// family declared in hundreds, Android resolves that to the 400 face and
+    /// applies no fakery at all, while a proportional rule emboldens the 50
+    /// units of shortfall. That divergence is invisible in a screenshot of one
+    /// app and obvious next to every other app on the device.
+    ///
+    /// It also moves centred text. Only the measure paths scale advances by
+    /// [`Self::advance_scale`] — the glyph layout loops do not — so a run that
+    /// synthesises measures wider than it draws, and `TextAlign::Center`
+    /// offsets it by half that difference. On Wear's Credits screen a 450
+    /// request measured 231.16 px against 228.14 px drawn and every line sat
+    /// left of Kotlin's.
+    const FAKE_BOLD_MIN_WEIGHT: u16 = 600;
+    const FAKE_BOLD_MIN_DELTA: u16 = 200;
+
     fn for_style(
         style: &TextStyle,
         resolved_weight: FontWeight,
@@ -1295,6 +1319,11 @@ impl TextWeightSynthesis {
     ) -> Self {
         let requested_weight = style.span_style.font_weight.unwrap_or_default();
         if requested_weight <= resolved_weight {
+            return Self::none();
+        }
+        if requested_weight.value() < Self::FAKE_BOLD_MIN_WEIGHT
+            || requested_weight.value() - resolved_weight.value() < Self::FAKE_BOLD_MIN_DELTA
+        {
             return Self::none();
         }
 
