@@ -304,3 +304,67 @@ fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
 
     assert_frames_identical(&baseline, &cached, "glow-only flip");
 }
+
+/// The span capture pass shares its encoder with the culled fused pass but
+/// carries no depth attachment, so the depth-variant pipeline flag must die
+/// with the fused pass it described. This exact combination — a capturable
+/// static leading span under an `InscribedCircle` visible region — aborted
+/// the first round-display device build with a pipeline/pass depth-format
+/// validation panic. The bar: the sequence renders at all, the cache still
+/// recaptures mid-arm (the flip frame forces the capture pass to run while
+/// the region is cullable), and every VISIBLE pixel matches the Full-region
+/// cache-on arm byte-for-byte.
+#[test]
+fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
+    use cranpose_render_wgpu::{display_clip_pixel_is_visible, DisplayVisibleRegion};
+
+    // Before the first frame: latched process-wide (see module docs).
+    std::env::set_var("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", "1");
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping culled span capture: headless WGPU init failed: {err}");
+            return;
+        }
+    };
+
+    // Arm A: Full region, cache on.
+    let flat = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
+    let (_, recaptures_flat) = renderer.static_span_stats();
+
+    // Arm B: the platform reports a cullable region and the cull is opted
+    // in (it is opt-in while the on-device abort is under investigation).
+    // The mid-sequence palette flip forces a recapture INSIDE this arm, so
+    // the capture pass provably encodes while the fused pass is culled.
+    renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
+    std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+    let culled = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
+    std::env::remove_var("CRANPOSE_ROUND_CULL");
+    renderer.set_display_visible_region(DisplayVisibleRegion::Full);
+
+    let (hits, recaptures) = renderer.static_span_stats();
+    assert!(
+        recaptures > recaptures_flat,
+        "the culled arm must recapture at the flip frame \
+         (recaptures {recaptures_flat} -> {recaptures}, hits {hits})"
+    );
+
+    for (frame, (a, b)) in flat.iter().zip(&culled).enumerate() {
+        for (i, (pa, pb)) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate() {
+            let (x, y) = (i as u32 % SIZE, i as u32 / SIZE);
+            if display_clip_pixel_is_visible(
+                DisplayVisibleRegion::InscribedCircle,
+                SIZE,
+                SIZE,
+                x,
+                y,
+            ) && pa != pb
+            {
+                panic!(
+                    "frame {frame}: visible pixel ({x},{y}) diverged under the \
+                     culled span capture: {pa:?} vs {pb:?}"
+                );
+            }
+        }
+    }
+}

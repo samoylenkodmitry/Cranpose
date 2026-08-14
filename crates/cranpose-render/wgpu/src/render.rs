@@ -9713,6 +9713,12 @@ impl GpuRenderer {
                     }
                 }
             }
+            // The depth attachment died with the fused pass just dropped;
+            // anything encoded from here to the closure exit (the span
+            // capture below) is a depth-less pass, so the pipeline getters
+            // must stop handing out depth variants NOW — the closure-exit
+            // reset is only the error-path net.
+            self.display_clip.pass_depth.set(false);
             // Span capture (miss frames whose leading run proved stable):
             // re-render JUST the span shapes into the pooled offscreen,
             // through the IDENTICAL pipelines at identical device
