@@ -35,6 +35,13 @@ mod android_font_scale;
 mod android_frame_rate;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_frame_telemetry;
+/// The bounded command queue behind the Android haptics delivery thread.
+/// Built on the host as well so its ordering/coalescing test runs everywhere.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod android_haptics_queue;
 #[cfg_attr(not(all(feature = "android", target_os = "android")), allow(dead_code))]
 mod android_host_window;
 mod android_input;
