@@ -3,17 +3,49 @@
 //! A scaling list shrinks and fades its rows towards the top and bottom of the
 //! display so the content follows the bezel. The surprising part, and the part
 //! that is wrong in every from-scratch implementation, is that **the list does
-//! not re-measure a scaled row**: the column underneath stacks rows at their
-//! FULL height, and each is then drawn through a graphics layer whose
-//! `transformOrigin` sits on the edge facing the centre line. A row's position
-//! therefore depends only on the rows above it, never on how much any of them
-//! shrank. Scale first and stack the scaled heights and the list drifts further
-//! out of place with every row.
+//! not re-measure a scaled row**: the `LazyColumn` underneath stacks rows at
+//! their FULL height, measures and scrolls in that space, and each row is then
+//! moved and shrunk by a graphics layer over the top of it.
+//!
+//! # What that layer is told, and what it is not
+//!
+//! It is tempting to conclude that a row's drawn position therefore depends
+//! only on the rows above it and never on how much any of them shrank. That is
+//! true of the `LazyColumn`, and false of what you see.
+//! `ScalingLazyColumnItemWrapper` sets
+//!
+//! ```text
+//! translationY = startOffset(item, anchorType) - unadjustedStartOffset(item, anchorType)
+//! ```
+//!
+//! and both halves come out of `ScalingLazyListState.layoutInfo`, which builds
+//! its window by walking **outward from the centre item** with a cursor that
+//! advances by each row's `ScalingLazyListItemInfo.size` — the scaled size,
+//! `roundToInt(size * scale)` — plus the gap. Downward the next row starts at
+//! that cursor; upward the cursor is the next row's bottom. So the drawn boxes
+//! are stacked edge to edge **at their scaled sizes**, and the Nth row out does
+//! depend on how much the N-1 rows between it and the centre shrank.
+//!
+//! The two accounts agree exactly for the centre row (scale 1, so its scaled
+//! size is its full one) and for its immediate neighbours, and separate from
+//! the third row out: 15 device pixels by the seventh row on a 192dp display.
+//! Every row that far out is off screen at both display sizes shipping today,
+//! which is why this went unnoticed and not why it is acceptable.
+//! [`place_row`] therefore takes the **cursor**, not a slot in the unscaled
+//! stack, and [`PlacedRow::reported_height`] is what a caller advances that
+//! cursor by. Stacking full heights instead is the error that this module used
+//! to describe as the correct behaviour.
+//!
+//! The ramp itself is still stated on the row's FULL height at that cursor —
+//! `calculateItemInfo` passes `itemStart .. itemStart + item.size` — so a row
+//! is scaled by where its unshrunk box would fall and then pinned by whichever
+//! edge faces the centre line.
 //!
 //! Derived from `androidx.wear.compose.foundation.lazy`
-//! (`ScalingLazyColumnItemWrapper`, `calculateScaleAndAlpha`, and
-//! `convertToCenterOffset`), then checked against where Compose puts rows on
-//! 454x454 and 384x384 displays.
+//! (`ScalingLazyListState.layoutInfo`, `ScalingLazyColumnItemWrapper`,
+//! `calculateItemInfo`, `calculateScaleAndAlpha` and `convertToCenterOffset`,
+//! disassembled out of compose-foundation 1.6.2), then checked against where
+//! Compose puts rows on 454x454 and 384x384 displays.
 //!
 //! This is pure geometry: it answers where a row goes and takes no view of how
 //! it is drawn.
@@ -145,14 +177,28 @@ pub struct PlacedRow {
     pub top: f32,
     /// Height after the transform.
     pub height: f32,
+    /// The height the layout **reports** for this row:
+    /// `ScalingLazyListItemInfo.size`, which is `roundToInt(size * scale)`.
+    ///
+    /// It is not [`Self::height`]. The graphics layer scales by the unrounded
+    /// factor, so what is drawn is a fraction of a pixel different from what is
+    /// reported — and it is the reported one that Wear stacks the next row
+    /// against and that the scroll indicator divides by. Advance an outward
+    /// walk by this plus the gap; see the module docs for why the walk stacks
+    /// scaled sizes at all.
+    pub reported_height: f32,
     pub scale: f32,
     pub alpha: f32,
 }
 
 /// Places a row the way a scaling list places one.
 ///
-/// `top` is where the row would sit with nothing scaled — the running total of
-/// the FULL heights of the rows above it — and `height` is its full height.
+/// `top` is the outward walk's cursor for this row — the drawn bottom edge of
+/// the row between it and the centre, plus the gap — and `height` is its full,
+/// unscaled height. It is **not** the row's slot in a stack of full heights;
+/// the two agree only out to the centre row's immediate neighbours. See the
+/// module docs.
+///
 /// `density` is device pixels per unit; pass `0.0` to skip the pixel rounding
 /// and work in continuous coordinates.
 ///
@@ -181,9 +227,12 @@ pub fn place_row_with(
     }
     if density <= 0.0 {
         let transform = scale_and_alpha_with(params, viewport, top, top + height)?;
+        let scaled = height * transform.scale;
         return Some(PlacedRow {
             top,
-            height: height * transform.scale,
+            height: scaled,
+            // `roundToInt` has no meaning without a pixel grid to round onto.
+            reported_height: scaled,
             scale: transform.scale,
             alpha: transform.alpha,
         });
@@ -191,7 +240,7 @@ pub fn place_row_with(
     let viewport_px = (viewport * density).round();
     let top_px = (top * density).round();
     let height_px = (height * density).round();
-    let transform = scale_and_alpha(viewport_px, top_px, top_px + height_px)?;
+    let transform = scale_and_alpha_with(params, viewport_px, top_px, top_px + height_px)?;
     let scaled_px = (height_px * transform.scale).round();
     // Wear's `isAboveLine`, on the same integers it uses: a row above the
     // centre line keeps its BOTTOM edge, one below keeps its top.
@@ -204,9 +253,91 @@ pub fn place_row_with(
     Some(PlacedRow {
         top: (pinned + odd_pixel(height_px) - odd_pixel(scaled_px)) / density,
         height: height_px * transform.scale / density,
+        reported_height: scaled_px / density,
         scale: transform.scale,
         alpha: transform.alpha,
     })
+}
+
+/// Places a whole run of rows the way a scaling list places one, walking
+/// **outward from the anchored row**.
+///
+/// This is the shape the rule actually has. `place_row` answers for one row
+/// given its cursor, and the cursor for the row after it is
+/// `PlacedRow::reported_height + gap` further out — never the full height — so
+/// a per-row call cannot state the rule on its own and a caller that stacks
+/// full heights gets a list that drifts. See the module docs.
+///
+/// `anchor_top` is where the anchored row's own box starts, which is the one
+/// position the two accounts always agree on: the anchored row is never scaled,
+/// so its cursor and its slot are the same number.
+///
+/// `out` is cleared first and comes back one entry per height, in list order.
+pub fn place_rows_with(
+    params: ScalingParams,
+    viewport: f32,
+    heights: &[f32],
+    anchor: usize,
+    anchor_top: f32,
+    gap: f32,
+    density: f32,
+    out: &mut Vec<PlacedRow>,
+) {
+    out.clear();
+    if heights.is_empty() {
+        return;
+    }
+    let anchor = anchor.min(heights.len() - 1);
+    let unscaled = |top: f32, height: f32| PlacedRow {
+        top,
+        height,
+        reported_height: height,
+        scale: 1.0,
+        alpha: 1.0,
+    };
+    out.resize(heights.len(), unscaled(0.0, 0.0));
+
+    let mut cursor = anchor_top;
+    for index in anchor..heights.len() {
+        let height = heights[index];
+        let row = place_row_with(params, viewport, cursor, height, density)
+            .unwrap_or_else(|| unscaled(cursor, height));
+        cursor += row.reported_height + gap;
+        out[index] = row;
+    }
+    // Upward the cursor is the next row's BOTTOM, and the ramp is still read
+    // off the row's full box hanging from it.
+    let mut bottom = anchor_top;
+    for index in (0..anchor).rev() {
+        let height = heights[index];
+        bottom -= gap;
+        let row = place_row_with(params, viewport, bottom - height, height, density)
+            .unwrap_or_else(|| unscaled(bottom - height, height));
+        bottom -= row.reported_height;
+        out[index] = row;
+    }
+}
+
+/// [`place_rows_with`] under Wear's own ramp.
+pub fn place_rows(
+    viewport: f32,
+    heights: &[f32],
+    anchor: usize,
+    anchor_top: f32,
+    gap: f32,
+    density: f32,
+    out: &mut Vec<PlacedRow>,
+) {
+    place_rows_with(
+        ScalingParams::WEAR,
+        viewport,
+        heights,
+        anchor,
+        anchor_top,
+        gap,
+        density,
+        out,
+    )
 }
 
 /// A row's unscaled place in the column: where it would sit and how tall it is
@@ -579,6 +710,79 @@ mod tests {
         let params = ScalingParams::default().reduced_motion();
         let edge = scale_and_alpha_with(params, VIEWPORT, 0.0, 0.0).unwrap();
         assert_eq!(edge, ScaleAlpha::UNCHANGED);
+    }
+
+    #[test]
+    fn the_supplied_params_reach_the_pixel_path_and_not_only_the_continuous_one() {
+        // `place_row_with` used to hand the pixel branch the Wear defaults and
+        // ignore its own argument, so a `reduced_motion` list was identical to
+        // a scaling one on every real display and only differed at density 0 —
+        // which is the one case no device is in.
+        let params = ScalingParams::default().reduced_motion();
+        let still = place_row_with(params, VIEWPORT, 4.0, 50.0, 2.0).unwrap();
+        assert_eq!(still.scale, 1.0, "{still:?}");
+        assert_eq!(still.alpha, 1.0, "{still:?}");
+        assert_eq!(still.top, 4.0, "an unscaled row is not pinned anywhere");
+        // And the Wear defaults still scale the same row, so the test is not
+        // passing because the row was out of the band.
+        assert!(place_row(VIEWPORT, 4.0, 50.0, 2.0).unwrap().scale < 1.0);
+    }
+
+    #[test]
+    fn a_row_is_placed_against_the_scaled_size_of_the_row_between_it_and_the_centre() {
+        // `ScalingLazyListState.layoutInfo` walks outward from the centre item
+        // with a cursor that advances by `ScalingLazyListItemInfo.size`, which
+        // is the SCALED size. Two rows below the anchor, that cursor has
+        // already lost whatever the first one shrank by.
+        let viewport = 192.0;
+        let density = 2.0;
+        let (gap, height) = (4.0, 52.0);
+        let anchor_top = 70.0;
+
+        let anchor = place_row(viewport, anchor_top, height, density).unwrap();
+        assert_eq!(anchor.scale, 1.0, "the anchored row is not scaled");
+        assert_eq!(
+            anchor.reported_height, height,
+            "so it reports its full height"
+        );
+
+        // First row below: both accounts agree, because the anchor is unscaled.
+        let first_top = anchor_top + anchor.reported_height + gap;
+        assert_eq!(first_top, anchor_top + height + gap);
+        let first = place_row(viewport, first_top, height, density).unwrap();
+        assert!(first.scale < 1.0, "{first:?}");
+        assert!(
+            first.reported_height < height,
+            "and it reports less than its full height: {first:?}"
+        );
+
+        // Second row below: the cursor and the full-height stack part company.
+        let second_top = first_top + first.reported_height + gap;
+        let stacked_top = first_top + height + gap;
+        assert!(
+            second_top < stacked_top,
+            "cursor {second_top} vs full stack {stacked_top}"
+        );
+        let by_cursor = place_row(viewport, second_top, height, density).unwrap();
+        let by_stack = place_row(viewport, stacked_top, height, density).unwrap();
+        assert_ne!(by_cursor.top, by_stack.top);
+    }
+
+    #[test]
+    fn the_reported_height_is_the_rounded_one_and_the_drawn_height_is_not() {
+        // 51 device pixels at some scale under one: the layout reports a whole
+        // pixel and the graphics layer draws the fraction.
+        let placed = place_row(VIEWPORT, 3.0, 25.5, 2.0).unwrap();
+        assert!(
+            placed.scale < 1.0,
+            "needs to be in the scaled band: {placed:?}"
+        );
+        assert_eq!(
+            placed.reported_height * 2.0,
+            (placed.reported_height * 2.0).round(),
+            "the reported height is a whole pixel: {placed:?}"
+        );
+        assert_ne!(placed.reported_height, placed.height);
     }
 
     #[test]

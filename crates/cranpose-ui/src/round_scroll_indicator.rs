@@ -16,6 +16,7 @@
 //! and takes no view of how they are drawn, so it costs nothing to a platform
 //! that never shows it and can be tested without a GPU.
 
+use crate::round_scaling_list::ScalingParams;
 use std::f32::consts::FRAC_PI_2;
 
 /// `ScrollIndicatorDefaults.indicatorHeight` — how far the track reaches up and
@@ -360,11 +361,11 @@ pub fn scaling_list_geometry(
 }
 
 /// The rows of a laid-out scaling list that are on screen, as the adapter reads
-/// them.
+/// them, for a list scaled by Wear's own ramp.
 ///
-/// `rows` are `(top, height)` pairs in the list's own unshrunk stack, already
-/// moved to where the list sits on screen — the same geometry
-/// [`crate::round_scaling_list::place_row`] takes — and in whatever unit
+/// `rows` are `(top, height)` pairs — the walk's cursor and the row's full
+/// height, the same geometry [`crate::round_scaling_list::place_row`] takes —
+/// already moved to where the list sits on screen, and in whatever unit
 /// `viewport` is given in. `density` converts that unit to device pixels;
 /// [`IndicatorItem`] is always in pixels, because that is the space Wear does
 /// this arithmetic in.
@@ -376,6 +377,26 @@ pub fn scaling_list_geometry(
 /// `out` is cleared first, so one buffer can be reused frame to frame.
 pub fn scaling_list_items<I>(viewport: f32, density: f32, rows: I, out: &mut Vec<IndicatorItem>)
 where
+    I: IntoIterator<Item = (f32, f32)>,
+{
+    scaling_list_items_with(ScalingParams::WEAR, viewport, density, rows, out)
+}
+
+/// [`scaling_list_items`] for a list whose ramp is not the default one.
+///
+/// A row's reported size is its full height times the scale the ramp gave it,
+/// so a list built with different [`ScalingParams`] reports different sizes and
+/// its thumb sits somewhere else. Every list Cranpose ships uses
+/// [`ScalingParams::WEAR`] and cannot tell the two apart; a list under
+/// `LocalReduceMotion` uses [`ScalingParams::reduced_motion`], where every row
+/// reports its full height, and can.
+pub fn scaling_list_items_with<I>(
+    params: ScalingParams,
+    viewport: f32,
+    density: f32,
+    rows: I,
+    out: &mut Vec<IndicatorItem>,
+) where
     I: IntoIterator<Item = (f32, f32)>,
 {
     out.clear();
@@ -397,7 +418,8 @@ where
         viewport_px * 0.5
     };
     for (index, (top, height)) in rows.into_iter().enumerate() {
-        let Some(placed) = crate::round_scaling_list::place_row(viewport, top, height, density)
+        let Some(placed) =
+            crate::round_scaling_list::place_row_with(params, viewport, top, height, density)
         else {
             continue;
         };
@@ -931,6 +953,39 @@ mod tests {
             // which is not the height the graphics layer scales to.
             assert_eq!(item.size, (drawn.height * density).round());
         }
+    }
+
+    #[test]
+    fn a_list_that_does_not_scale_its_rows_reports_them_at_full_height() {
+        // `scaling_list_items` baked in `ScalingParams::WEAR`, so a list under
+        // `LocalReduceMotion` — where the ramp is off and every row keeps its
+        // size — was described to the indicator as though its edge rows had
+        // shrunk. Identical for every list Cranpose ships and wrong for that
+        // one, which is the shape of defect a `_with` variant exists to stop.
+        let mut wear = Vec::new();
+        let mut still = Vec::new();
+        let rows = [(4.0, 52.0), (60.0, 52.0), (116.0, 52.0)];
+        scaling_list_items(227.0, 2.0, rows, &mut wear);
+        scaling_list_items_with(
+            ScalingParams::WEAR.reduced_motion(),
+            227.0,
+            2.0,
+            rows,
+            &mut still,
+        );
+        assert_eq!(wear.len(), still.len());
+        assert!(
+            wear[0].size < still[0].size,
+            "the top row shrinks under the Wear ramp and not under a stilled \
+             one: {} vs {}",
+            wear[0].size,
+            still[0].size
+        );
+        assert_eq!(still[0].size, 104.0, "52dp at density 2, unscaled");
+        // And the default entry point is still the Wear ramp.
+        let mut default = Vec::new();
+        scaling_list_items_with(ScalingParams::WEAR, 227.0, 2.0, rows, &mut default);
+        assert_eq!(default, wear);
     }
 
     #[test]

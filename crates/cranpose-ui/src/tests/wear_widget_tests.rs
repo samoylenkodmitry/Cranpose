@@ -357,16 +357,26 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
 /// an anchor. Deliberately written from `round_scaling_list` directly, so the
 /// widget is checked against the geometry rather than against itself.
 fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
-    use crate::round_scaling_list::{centre_offset, place_row, stack_into, Slot};
+    use crate::round_scaling_list::{centre_offset, place_rows, stack_into, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
     // No content padding term: auto-centring absorbs it. See
     // `content_padding_is_absorbed_by_auto_centring_rather_than_stacking_on_it`.
     let offset = centre_offset(&slots, WATCH, anchor, PX);
-    slots
-        .iter()
-        .map(|slot| place_row(WATCH, slot.top + offset, slot.height, PX).expect("in range"))
-        .collect()
+    // The anchored row is the only one whose slot IS its cursor; every other
+    // row is walked out from it against the scaled sizes in between.
+    let index = anchor.index.min(count.saturating_sub(1));
+    let mut rows = Vec::new();
+    place_rows(
+        WATCH,
+        &vec![ROW_HEIGHT; count],
+        index,
+        slots[index].top + offset,
+        4.0,
+        PX,
+        &mut rows,
+    );
+    rows
 }
 
 #[test]
@@ -1027,13 +1037,23 @@ fn compose_credits_screen() -> TestComposition {
                     inner.clone(),
                     WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
                     move |scope| {
+                        // Six lines and then the button, rather than four: a
+                        // scaling list stacks its DRAWN boxes a gap apart, so a
+                        // shrunken row does not push the one after it down and
+                        // a short list keeps more of itself on the first
+                        // screen. `a_row_below_the_fold_paints_once_it_is_scrolled_to`
+                        // needs the button genuinely off screen at rest, and
+                        // with four lines above it no longer is.
                         let lines = [
                             "ORBIT BREAKER",
                             "Version 1.0.0-debug",
                             "Designed and built for Wear OS.",
                             "Every graphic and sound in this game is generated inside the project.",
+                            "No third-party assets, no downloads, nothing loaded at runtime.",
+                            "Built on Cranpose, a Compose-shaped UI framework written in Rust.",
                             "Back",
                         ];
+                        let button = lines.len() - 1;
                         scope.items(lines.len(), move |index| match index {
                             0 => {
                                 ListHeader(
@@ -1042,11 +1062,11 @@ fn compose_credits_screen() -> TestComposition {
                                     lines[0].to_string(),
                                 );
                             }
-                            4 => {
+                            other if other == button => {
                                 WearButton(
                                     Modifier::empty().fill_max_width(),
                                     WearButtonSpec::default().colors(measured_colors()),
-                                    lines[4].to_string(),
+                                    lines[button].to_string(),
                                     None,
                                     || {},
                                 );
@@ -1076,7 +1096,7 @@ fn a_credits_screen_of_text_measured_rows_places_rows_that_are_not_empty() {
     let tree = tree(&mut composition, root);
     let layers = item_layers(&tree);
     let info = state().layout_info();
-    assert_eq!(info.item_count, 5);
+    assert_eq!(info.item_count, 7);
     assert_eq!(
         layers.len(),
         info.visible,

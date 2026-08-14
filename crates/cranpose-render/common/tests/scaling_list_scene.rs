@@ -269,14 +269,16 @@ fn a_shrunken_row_is_only_tappable_where_it_is_drawn() {
     // the target is the drawn quad and nothing else.
     //
     // The numbers below are the ramp's own, for six 52pt rows on a 454pt watch
-    // with 18/34 content padding, anchored on item 1:
+    // with 18/34 content padding, anchored on item 1, and they are the drawn
+    // boxes rather than the `LazyColumn`'s slots — the list stacks each row
+    // against the SCALED size of the one between it and the centre, which is
+    // what `ScalingLazyListState.layoutInfo` does. Consecutive drawn boxes are
+    // therefore always the 4pt gap apart; what a shrinking row gives up is
+    // taken out of its own span, not added to the gap.
     //
-    //   row 3   scale 0.98795   top 312.5   drawn height 51.37
-    //   row 4   scale 0.86493   top 368.5   drawn height 44.98
-    //   row 5   scale 0.72890   top 425.0   drawn height 37.90
-    //
-    // Rows 4 and 5 are the pair the original claim was about: unscaled they
-    // would be 4pt apart, and drawn they are 11.5pt apart.
+    //   row 3   drawn 312.50..363.85
+    //   row 4   drawn 367.50..412.60
+    //   row 5   drawn 416.50..453.95
     let (scene, ids, tapped) = tappable_list_scene(6);
     assert_eq!(ids.len(), 6, "every row is a hit target");
 
@@ -284,25 +286,25 @@ fn a_shrunken_row_is_only_tappable_where_it_is_drawn() {
     // yet.
     const CENTRE_X: f32 = WATCH / 2.0;
 
-    // Row 4 is drawn 368.5..413.48. Its unscaled box would run to 420.5.
+    // Row 4 is drawn 367.5..412.60. Its unscaled box would run to 419.5.
     assert_eq!(
         row_at(&scene, CENTRE_X, 400.0),
         Some(4),
         "a tap inside a shrunken row still reaches it"
     );
     assert_eq!(
-        row_at(&scene, CENTRE_X, 417.0),
+        row_at(&scene, CENTRE_X, 415.0),
         None,
-        "y=417 is inside row 4's UNSCALED box (368.5..420.5) and below the row \
-         as drawn (368.5..413.48); an unscaled hit rectangle would swallow it"
+        "y=415 is inside row 4's UNSCALED box (367.5..419.5) and below the row \
+         as drawn (367.5..412.60); an unscaled hit rectangle would swallow it"
     );
     assert_eq!(
         row_at(&scene, CENTRE_X, 430.0),
         Some(5),
-        "the next row starts at 425 and is reachable from its own top edge"
+        "the next row starts at 416.5 and is reachable from its own top edge"
     );
 
-    // The same shrink applies across. Row 5 is drawn x = 74.66..379.34; its
+    // The same shrink applies across. Row 5 is drawn x = 71.45..382.55; its
     // unscaled box is the list's full content width, x = 18..436.
     assert_eq!(
         row_at(&scene, 60.0, 430.0),

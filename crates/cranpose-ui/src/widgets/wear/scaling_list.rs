@@ -95,9 +95,11 @@ use crate::composable;
 use crate::modifier::{GraphicsLayer, Modifier, TransformOrigin};
 use crate::round_scaling_list::{
     leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
-    CentreAnchor, ScaleAlpha, ScalingParams,
+    CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
 };
-use crate::round_scroll_indicator::{scaling_list_items, IndicatorItem, ScalingList, ThumbLength};
+use crate::round_scroll_indicator::{
+    scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength,
+};
 use crate::subcompose_layout::{
     MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
@@ -269,7 +271,8 @@ impl IndicatorState {
         let viewport_px = density.to_px(viewport).round();
         self.total = count;
         self.viewport = viewport_px;
-        scaling_list_items(
+        scaling_list_items_with(
+            spec.scaling,
             viewport,
             density.density(),
             window.iter().map(|row| (row.top, row.height)),
@@ -880,10 +883,14 @@ struct WindowedRow {
     index: usize,
     /// The item's root nodes and where each sits inside the item.
     roots: Vec<(NodeId, f32, f32)>,
-    /// Unscaled top, in the placed coordinate space.
+    /// The outward walk's cursor for this row: the drawn edge of the row
+    /// between it and the anchor, plus the gap. Its full height is stated from
+    /// here, and the ramp is read off that box.
     top: f32,
     /// Unscaled height, already on the pixel grid.
     height: f32,
+    /// Where the row is actually drawn, and by how much it shrank and faded.
+    placed: PlacedRow,
 }
 
 /// Composes, measures and places only the items the viewport can reach.
@@ -996,16 +1003,32 @@ fn measure_wear_scaling_list(
         )
     };
     let anchored_height = anchored.height;
+    // The walk stacks the DRAWN boxes, which is what `layoutInfo` does and not
+    // what the `LazyColumn` underneath does: its cursor advances by
+    // `PlacedRow::reported_height`, the scaled size the layout reports, rather
+    // than by the row's full one. See `round_scaling_list`'s module docs. The
+    // anchored row is never scaled, so both accounts seed the walk identically.
+    let place = |top: f32, height: f32| {
+        place_row_with(spec.scaling, viewport, top, height, scale).unwrap_or(PlacedRow {
+            top,
+            height,
+            reported_height: height,
+            scale: 1.0,
+            alpha: 1.0,
+        })
+    };
+    let anchored_placed = place(anchored_top, anchored_height);
     window.push(WindowedRow {
         index: start,
         roots: anchored.roots,
         top: anchored_top,
-        height: anchored.height,
+        height: anchored_height,
+        placed: anchored_placed,
     });
 
-    // Upward, until a slot can no longer reach the top edge. A shrunken row
-    // never leaves its unscaled slot, so a slot that misses the viewport draws
-    // nothing at all and the walk can stop on it.
+    // Upward, until a row can no longer reach the top edge. A shrunken row is
+    // always inside the box its cursor gave it, so a box that misses the
+    // viewport draws nothing at all and the walk can stop on it.
     let mut edge = anchored_top;
     let mut budget = spec.beyond_bounds_item_count;
     let mut index = start;
@@ -1027,17 +1050,22 @@ fn measure_wear_scaling_list(
             &density,
             child_constraints,
         );
-        edge = bottom - item.height;
+        // The ramp is read off the row's FULL box hanging from `bottom`; the
+        // cursor then drops by only what the row was shrunk to.
+        let top = bottom - item.height;
+        let placed = place(top, item.height);
+        edge = bottom - placed.reported_height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
-            top: edge,
+            top,
             height: item.height,
+            placed,
         });
     }
 
     // Downward, the same walk against the bottom edge.
-    let mut edge = anchored_top + anchored_height;
+    let mut edge = anchored_top + anchored_placed.reported_height;
     let mut budget = spec.beyond_bounds_item_count;
     for index in (start + 1)..count {
         let top = edge + spacing;
@@ -1056,12 +1084,14 @@ fn measure_wear_scaling_list(
             &density,
             child_constraints,
         );
-        edge = top + item.height;
+        let placed = place(top, item.height);
+        edge = top + placed.reported_height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
             top,
             height: item.height,
+            placed,
         });
     }
 
@@ -1078,13 +1108,7 @@ fn measure_wear_scaling_list(
         scope.layout_with_placement_builder(width, viewport, |placements| {
             placements.clear();
             for item in &window {
-                let row = place_row_with(spec.scaling, viewport, item.top, item.height, scale)
-                    .unwrap_or(crate::round_scaling_list::PlacedRow {
-                        top: item.top,
-                        height: item.height,
-                        scale: 1.0,
-                        alpha: 1.0,
-                    });
+                let row = item.placed;
                 if let Some(transform) = handles.get(item.index) {
                     transform.set(ScaleAlpha {
                         scale: row.scale,

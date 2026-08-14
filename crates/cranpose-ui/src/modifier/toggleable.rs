@@ -1,27 +1,39 @@
 use super::{inspector_metadata, Modifier, SemanticsConfiguration};
+use cranpose_foundation::SemanticsWidgetRole;
 use std::rc::Rc;
 
 impl Modifier {
     /// Make the component a two-state control.
     ///
-    /// This is Compose's `Modifier.toggleable(value, onValueChange)`: a click
-    /// hands the callback the **new** value, so a caller writes
-    /// `.toggleable(checked, move |next| state.set(next))` and never has to
-    /// read the old one back out of its own state to invert it.
+    /// This is Compose's `Modifier.toggleable(value, enabled, role,
+    /// onValueChange)`: a click hands the callback the **new** value, so a
+    /// caller writes `.toggleable(checked, None, None, move |next|
+    /// state.set(next))` and never has to read the old one back out of its own
+    /// state to invert it.
     ///
-    /// Compose deliberately sets no role here — a toggleable row could be a
-    /// checkbox or a switch, and only the control inside it knows which — and
-    /// this does the same.
+    /// `role` is what a screen reader announces the control **as** — "switch",
+    /// "checkbox" — before it is acted on, and it is genuinely optional: a
+    /// toggleable row could be either, so Compose's parameter defaults to
+    /// `null` and so does passing `None` here. Wear's own `SwitchButton` leaves
+    /// it unset on the row and puts `Role.Switch` on the `Switch` control
+    /// inside, which merges up into the same node; naming it on the row reaches
+    /// the same announcement without leaning on a merge rule.
     ///
-    /// The **state** it does publish: `toggled`, Compose's `toggleableState`,
-    /// so a screen reader landing on the row says whether it is on without the
-    /// caller spelling it into the description. `description` stays because a
-    /// row still needs a name, and a caller that wants the state spoken a
-    /// particular way ("Haptics, on") can still say it there.
+    /// A toggleable control with no role is not silent — the description and
+    /// the state below still speak — but it is announced as an unnamed
+    /// something the reader cannot say is toggleable, which is the whole of the
+    /// difference.
+    ///
+    /// The **state** it publishes regardless: `toggled`, Compose's
+    /// `toggleableState`, so a reader landing on the row says whether it is on
+    /// without the caller spelling it into the description. `description` stays
+    /// because a row still needs a name, and a caller that wants the state
+    /// spoken a particular way ("Haptics, on") can still say it there.
     pub fn toggleable(
         self,
         value: bool,
         description: Option<String>,
+        role: Option<SemanticsWidgetRole>,
         on_value_change: impl Fn(bool) + 'static,
     ) -> Self {
         let on_value_change = Rc::new(on_value_change);
@@ -38,6 +50,9 @@ impl Modifier {
                     config.toggled = Some(toggled);
                     if let Some(description) = &description {
                         config.content_description = Some(description.clone());
+                    }
+                    if let Some(role) = role {
+                        config.role = Some(role);
                     }
                 }),
             );
@@ -73,7 +88,7 @@ mod tests {
             let seen: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
             let sink = seen.clone();
             let modifier =
-                Modifier::empty().toggleable(start, None, move |next| sink.set(Some(next)));
+                Modifier::empty().toggleable(start, None, None, move |next| sink.set(Some(next)));
             tap(&modifier);
             assert_eq!(
                 seen.get(),
@@ -85,7 +100,8 @@ mod tests {
 
     #[test]
     fn a_toggleable_row_reads_as_clickable_and_carries_its_description() {
-        let modifier = Modifier::empty().toggleable(true, Some("Haptics, on".to_string()), |_| {});
+        let modifier =
+            Modifier::empty().toggleable(true, Some("Haptics, on".to_string()), None, |_| {});
         let semantics = collect_semantics_from_modifier(&modifier)
             .expect("a toggleable row publishes semantics");
         assert!(semantics.is_clickable);
@@ -96,8 +112,27 @@ mod tests {
         // The state is published, not left for the caller to spell into the
         // description: a reader landing here can say the row is on.
         assert_eq!(semantics.toggled, Some(true));
-        // And no role: a toggleable row could be a checkbox or a switch, and
-        // Compose leaves that to the control inside it.
+        // And no role unless one is asked for: a toggleable row could be a
+        // checkbox or a switch, which is why Compose's parameter is nullable.
         assert_eq!(semantics.role, None);
+    }
+
+    #[test]
+    fn a_role_reaches_the_semantics_so_a_reader_can_say_what_the_control_is() {
+        let modifier = Modifier::empty().toggleable(
+            false,
+            Some("Haptics, off".to_string()),
+            Some(SemanticsWidgetRole::Switch),
+            |_| {},
+        );
+        let semantics = collect_semantics_from_modifier(&modifier).expect("semantics");
+        assert_eq!(semantics.role, Some(SemanticsWidgetRole::Switch));
+        // And it does not displace anything the row already published.
+        assert!(semantics.is_clickable);
+        assert_eq!(semantics.toggled, Some(false));
+        assert_eq!(
+            semantics.content_description.as_deref(),
+            Some("Haptics, off")
+        );
     }
 }

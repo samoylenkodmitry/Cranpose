@@ -87,11 +87,15 @@ const PALETTE_FILL: (f32, f32, f32) = (15.0, 54.0, 78.0);
 /// Wear's own roles are all exact bytes, so quantising them is a no-op and both
 /// models agree — the palette case below can confirm the composite is sane but
 /// can never prove which rule produced it. A theme that lerps, as the Kotlin
-/// app's `mix(c, background, t)` does, lands between bytes: `surfaceContainer`
-/// is `mix(rail, bg, 0.55)` = (9.9, 22.5, 34.2). These three channels are the
-/// same shape, nudged off `.5` so neither model depends on which way a
-/// half rounds.
-const BETWEEN_FILL: (f32, f32, f32) = (22.6, 45.6, 78.6);
+/// app's `mix(c, background, t)` does, lands between bytes.
+///
+/// This is [`MEASURED_CAPSULE`] itself rather than a stand-in for it, because
+/// whether a fill discriminates depends on the alphas the ramp happens to hand
+/// the sampled rows, and a synthetic triple that separated the two models under
+/// one set of row positions stopped separating them under another. The real
+/// `surfaceContainer` separates them on every scaled row, and it is the colour
+/// the parity report was about.
+const BETWEEN_FILL: (f32, f32, f32) = MEASURED_CAPSULE;
 
 thread_local! {
     static FILL_UNDER_TEST: Cell<(f32, f32, f32)> = const { Cell::new((15.0, 54.0, 78.0)) };
@@ -191,25 +195,30 @@ fn expected_rows() -> Vec<(f32, f32, f32, f32)> {
 }
 
 fn rows_for(count: usize) -> Vec<(f32, f32, f32, f32)> {
-    use cranpose_ui::round_scaling_list::{centre_offset, place_row, stack_into, Slot};
+    use cranpose_ui::round_scaling_list::{centre_offset, place_rows, stack_into, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW, count), 4.0, &mut slots);
     let viewport = SIZE as f32;
-    let offset = centre_offset(&slots, viewport, CentreAnchor::default(), 1.0);
-    slots
-        .iter()
-        .map(|slot| {
-            let top = slot.top + offset;
-            let row = place_row(viewport, top, slot.height, 1.0).unwrap_or(
-                cranpose_ui::round_scaling_list::PlacedRow {
-                    top,
-                    height: slot.height,
-                    scale: 1.0,
-                    alpha: 1.0,
-                },
-            );
-            (row.top, row.height, row.scale, row.alpha)
-        })
+    let anchor = CentreAnchor::default();
+    let offset = centre_offset(&slots, viewport, anchor, 1.0);
+    // The list walks OUTWARD from the anchored row and advances its cursor by
+    // each row's reported (scaled) height plus the gap, which is what
+    // `ScalingLazyListState.layoutInfo` does. Stacking full heights instead
+    // parts company from the second row out and puts these samples on the wrong
+    // pixels.
+    let index = anchor.index.min(count.saturating_sub(1));
+    let mut rows = Vec::new();
+    place_rows(
+        viewport,
+        &vec![ROW; count],
+        index,
+        slots[index].top + offset,
+        4.0,
+        1.0,
+        &mut rows,
+    );
+    rows.into_iter()
+        .map(|row| (row.top, row.height, row.scale, row.alpha))
         .collect()
 }
 
