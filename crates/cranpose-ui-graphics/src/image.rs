@@ -208,7 +208,11 @@ impl ImageBitmap {
         }
 
         let id = bitmap_content_id(width, height, pixels);
-        let opaque = pixels.chunks_exact(4).all(|pixel| pixel[3] == u8::MAX);
+        let opaque = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| pixel[3] == u8::MAX);
         Ok(Self {
             width,
             height,

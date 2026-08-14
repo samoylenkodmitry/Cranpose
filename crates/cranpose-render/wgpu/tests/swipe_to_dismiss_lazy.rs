@@ -13,7 +13,9 @@ const FRAME_HEIGHT: u32 = 480;
 
 fn bright_text_pixels(pixels: &[u8]) -> usize {
     pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 120 && pixel[1] > 90 && pixel[2] > 40)
         .count()
 }

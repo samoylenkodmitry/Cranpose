@@ -41,7 +41,9 @@ fn colors() -> WearColors {
 fn lit_pixel_count(frame: &CapturedFrame) -> usize {
     frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 16 || pixel[1] > 16 || pixel[2] > 16)
         .count()
 }

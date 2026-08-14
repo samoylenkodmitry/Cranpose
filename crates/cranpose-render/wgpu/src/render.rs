@@ -2457,6 +2457,170 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
     })
 }
 
+/// Kill switch for the transient rim band mesh, mirroring
+/// [`arc_mesh_enabled`]'s property bridge: `CRANPOSE_RIM_MESH=0` (or the
+/// `debug.cranpose.rim_mesh` property on Android) makes the fused shape
+/// prepare skip rim detection entirely, so a device A/B needs no rebuild.
+/// Default ON — unlike the retained arc mesh, the rim path is indexed
+/// band-boundary geometry from the start, so the vertex-amplification
+/// regression that demoted `CRANPOSE_ARC_MESH` to opt-in does not apply.
+/// Read once per fused-chunk prepare (cheap), not per shape.
+#[cfg(not(target_arch = "wasm32"))]
+fn rim_mesh_enabled() -> bool {
+    !matches!(std::env::var("CRANPOSE_RIM_MESH").as_deref(), Ok("0"))
+}
+
+/// Fixed capacity of the per-frame transient rim mesh vertex buffer, in
+/// vertices. The buffers are never recreated mid-frame — draws are encoded
+/// before submit, so a reallocation would orphan already-encoded rims — and
+/// overflow means "skip the rim, draw it as a quad", never truncation.
+/// MEGA's arena meshes 2-3 rims per frame at ~80 vertices each (measured on
+/// the Pixel Watch 3 via the emit log below), so ~100 rims of headroom; the
+/// rate-limited warn below is the tell if a scene ever exceeds it.
+#[cfg(not(target_arch = "wasm32"))]
+const RIM_MESH_VERTEX_CAPACITY: usize = 8192;
+/// Fixed capacity of the per-frame transient rim mesh index buffer, in
+/// `u32` indices.
+#[cfg(not(target_arch = "wasm32"))]
+const RIM_MESH_INDEX_CAPACITY: usize = 32768;
+
+/// A dynamic shape inside a fused chunk that draws as a band mesh instead of
+/// its full bounding quad: `shape_index` is the shape's position within the
+/// whole fused upload (the index `vs_mesh` reads into the storage shape
+/// array), `first_index..first_index + index_count` its span of the frame's
+/// transient rim index buffer.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[derive(Clone, Copy, Debug)]
+struct RimDraw {
+    shape_index: u32,
+    first_index: u32,
+    index_count: u32,
+}
+
+/// Rate-limited overflow warning: silent skipping would hide a scene whose
+/// rims permanently miss the fast path, while warning every frame would
+/// flood the watch's logcat.
+#[cfg(not(target_arch = "wasm32"))]
+fn rim_mesh_capacity_warn() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static OVERFLOWS: AtomicU64 = AtomicU64::new(0);
+    let count = OVERFLOWS.fetch_add(1, Ordering::Relaxed);
+    if count.is_multiple_of(512) {
+        log::warn!(
+            "[rim-mesh] transient buffers full; rim falls back to quad expansion \
+             (lifetime overflows {})",
+            count + 1,
+        );
+    }
+}
+
+/// Band parameters of a DYNAMIC stroked round-rect whose outline is
+/// geometrically a circle — an arena "rim". Everything else returns `None`
+/// and rasterizes through the ordinary quad expansion.
+///
+/// Derivation: `ShapeData::rect` for a stroked shape is the stroke-inflated
+/// box (geometry plus half the stroke width on each side), so the geometry
+/// half-extent is `geom_half = (rect.w - stroke_width) / 2`. When the corner
+/// radius equals that half-extent the outline is a circle of radius
+/// `geom_half`, and `sdf_stroked_rounded_rect` degenerates exactly to an
+/// annulus: its outer offset rounded-rect (`half_size` = `geom_half + hw`,
+/// radius `geom_half + hw`) is the circle of radius `geom_half + sw/2`, its
+/// inner offset the circle of radius `geom_half - sw/2` — centerline
+/// `geom_half`, half-width `sw/2`. The bevel-join chamfer plane can only CUT
+/// pixels from that annulus (`max(dist, chamfer)`), never add any, so for
+/// every join style the shader's kept set is a subset of the annulus band.
+/// [`emit_arc_band_mesh`] adds its own `ARC_MESH_MARGIN`, treats
+/// `sweep >= TAU` as closed, and clips to the quad box, so containment
+/// (mesh ⊇ every pixel with `|dist| < 0.5`, mesh ⊆ quad box) follows from
+/// the same argument the retained arc mesh documents.
+///
+/// The CIRCLE gate is what keeps this correct: a false positive on a rounded
+/// SQUARE ring would under-cover its flat spans and damage pixels, so the
+/// radius must match `geom_half` to within 0.01 px (a deviation that small
+/// stays inside the mesh margin's 0.5 px float-slop budget).
+#[cfg(not(target_arch = "wasm32"))]
+fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
+    // Mirror the fragment shader's flag decode (`u32(max(x, 0.0))`).
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    if flags & 3 != SHAPE_KIND_STROKE {
+        return None;
+    }
+    // Solid brushes only — same narrow byte-exactness surface as
+    // `arc_mesh_band`.
+    if shape.brush_type != 0 {
+        return None;
+    }
+    // A live clip is a hard `world_pos` comparison in the fragment shader;
+    // meshed rims interpolate `world_pos` across different triangles and one
+    // ulp at the clip boundary flips whole pixels.
+    if shape.clip_rect[2] > 0.0 && shape.clip_rect[3] > 0.0 {
+        return None;
+    }
+    let [x, y, w, h] = shape.rect;
+    if !(w > 0.0 && h > 0.0) {
+        return None;
+    }
+    // The quad must be an axis-aligned box, tolerance zero — the identical
+    // check `arc_mesh_band` makes (compare quad corners against each other,
+    // never against `rect`, which differs by an ulp under non-dyadic root
+    // scales).
+    let [left, top, right, _] = shape.quad01;
+    let [bl_x, bottom, br_x, br_y] = shape.quad23;
+    let axis_aligned = shape.quad01[3] == top
+        && bl_x == left
+        && br_x == right
+        && br_y == bottom
+        && left < right
+        && top < bottom;
+    if !axis_aligned {
+        return None;
+    }
+    // Big shapes only: the win is proportional to the discarded quad area,
+    // and small quads are cheaper than the extra pipeline switches.
+    if w * h < 65536.0 {
+        return None;
+    }
+    // A circle's box is square, bitwise.
+    if w.to_bits() != h.to_bits() {
+        return None;
+    }
+    // All four corner radii bitwise equal, finite and positive.
+    let [r0, r1, r2, r3] = shape.radii;
+    if r0.to_bits() != r1.to_bits() || r0.to_bits() != r2.to_bits() || r0.to_bits() != r3.to_bits()
+    {
+        return None;
+    }
+    if !r0.is_finite() || r0 <= 0.0 {
+        return None;
+    }
+    let sw = shape.stroke_params[0];
+    if !sw.is_finite() || sw <= 0.0 {
+        return None;
+    }
+    // Finiteness before the circle gate: with every operand finite the
+    // radius comparison below cannot see a NaN.
+    let geom_half = (w - sw) * 0.5;
+    let center = [x + w * 0.5, y + h * 0.5];
+    let inner = geom_half - sw * 0.5;
+    let outer = geom_half + sw * 0.5;
+    let finite =
+        center[0].is_finite() && center[1].is_finite() && inner.is_finite() && outer.is_finite();
+    if !finite || outer <= 0.0 {
+        return None;
+    }
+    // The circle gate (see the doc comment).
+    if (r0 - geom_half).abs() > 0.01 {
+        return None;
+    }
+    Some(ArcMeshBand {
+        center,
+        inner,
+        outer,
+        start: 0.0,
+        sweep: cranpose_ui_graphics::TAU,
+    })
+}
+
 /// Emits the quad `vs_main` would expand for this shape as four shared
 /// vertices plus the index pattern (0, 1, 2)(2, 1, 3) — the identical corner
 /// order, corner uvs and positions straight from the captured quad, so a
@@ -2736,7 +2900,9 @@ fn emit_arc_band_mesh(
 #[cfg(not(target_arch = "wasm32"))]
 fn triangles_shoelace_area(vertices: &[MeshVertex], indices: &[u32]) -> f64 {
     indices
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|tri| {
             let [a, b, c] = [
                 vertices[tri[0] as usize].position,
@@ -3921,6 +4087,33 @@ pub struct GpuRenderer {
     /// the fused segment pass (`CRANPOSE_RETAINED_BUNDLES` kill switch).
     #[cfg(not(target_arch = "wasm32"))]
     retained_bundle_cache: RetainedBundleCache,
+    /// Per-frame scratch for transient rim band meshes (`rim_mesh_band`):
+    /// appended per fused chunk, cleared at the top of every frame. Index
+    /// values are absolute into the frame's vertex list, so later chunks
+    /// append without rebasing.
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_vertices: Vec<MeshVertex>,
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_indices: Vec<u32>,
+    /// Fixed-capacity GPU twins of the rim scratch vecs, created lazily on
+    /// the first rim ([`RIM_MESH_VERTEX_CAPACITY`] /
+    /// [`RIM_MESH_INDEX_CAPACITY`]). NEVER recreated mid-frame: draws are
+    /// encoded before submit, so a replacement buffer would orphan every
+    /// already-encoded rim draw.
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_vertex_buffer: Option<wgpu::Buffer>,
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_index_buffer: Option<wgpu::Buffer>,
+    /// Counts of scratch vertices/indices already uploaded this frame, so
+    /// each fused chunk uploads only its newly appended region.
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_uploaded_vertices: usize,
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_mesh_uploaded_indices: usize,
+    /// Lifetime count of rims drawn as band meshes — the test hook behind
+    /// [`Self::rim_meshes_emitted`].
+    #[cfg(not(target_arch = "wasm32"))]
+    rim_meshes_emitted: u64,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -4472,6 +4665,20 @@ impl GpuRenderer {
             replay_generation_drops: 0,
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_vertices: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_indices: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_vertex_buffer: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_index_buffer: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_uploaded_vertices: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_mesh_uploaded_indices: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            rim_meshes_emitted: 0,
         }
     }
 
@@ -6289,6 +6496,14 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.retained_glyph_uniform_cursor = 0;
+            // Transient rim meshes live for exactly one frame: the scratch
+            // restarts here and every fused chunk appends after the region
+            // already uploaded (the GPU buffers themselves are fixed-capacity
+            // and persist).
+            self.rim_mesh_vertices.clear();
+            self.rim_mesh_indices.clear();
+            self.rim_mesh_uploaded_vertices = 0;
+            self.rim_mesh_uploaded_indices = 0;
         }
 
         // Producer-side text layout cache size, carried by the packet — the
@@ -7183,6 +7398,16 @@ impl GpuRenderer {
             }
             let after_shape_prepare = Instant::now();
 
+            // Transient rim band meshes: scan the freshly converted shapes
+            // (still in `scratch_shape_data` after
+            // `prepare_shapes_batch_direct`) for huge circle rims and give
+            // each a band mesh covering ring ± AA margin instead of its full
+            // bounding quad. Kill switch read once per chunk; the mesh
+            // pipeline exists in storage mode only and blends SrcOver only,
+            // hence the two extra gates at the batch arm below.
+            let rim_mesh_on = rim_mesh_enabled();
+            let mut chunk_rims: Vec<RimDraw> = Vec::new();
+
             let mut fused_batches = Vec::with_capacity(chunk.batches.len());
             let mut shape_cursor = 0_u32;
             let mut composite_cursor = 0usize;
@@ -7205,6 +7430,64 @@ impl GpuRenderer {
                         }
                         let shape_count = end - start;
                         if shape_count > 0 {
+                            if rim_mesh_on
+                                && self.instanced_quads.is_some()
+                                && blend_mode == BlendMode::SrcOver
+                            {
+                                for offset in 0..shape_count {
+                                    // The index `vs_mesh` reads into the
+                                    // storage shape array: position within
+                                    // the whole fused upload (shape_refs
+                                    // order == scratch_shape_data order).
+                                    let global_index = shape_cursor + offset as u32;
+                                    let converted = &self.scratch_shape_data[global_index as usize];
+                                    let Some(band) = rim_mesh_band(converted) else {
+                                        continue;
+                                    };
+                                    let vertex_mark = self.rim_mesh_vertices.len();
+                                    let index_mark = self.rim_mesh_indices.len();
+                                    if emit_arc_band_mesh(
+                                        converted,
+                                        global_index,
+                                        &band,
+                                        &mut self.rim_mesh_vertices,
+                                        &mut self.rim_mesh_indices,
+                                    )
+                                    .is_none()
+                                    {
+                                        // Nothing emitted (fully clipped) —
+                                        // the quad path draws it as today.
+                                        self.rim_mesh_vertices.truncate(vertex_mark);
+                                        self.rim_mesh_indices.truncate(index_mark);
+                                        continue;
+                                    }
+                                    if self.rim_mesh_vertices.len() > RIM_MESH_VERTEX_CAPACITY
+                                        || self.rim_mesh_indices.len() > RIM_MESH_INDEX_CAPACITY
+                                    {
+                                        // Whole-rim rollback, never a
+                                        // truncation: a partial band would
+                                        // break the containment invariant.
+                                        self.rim_mesh_vertices.truncate(vertex_mark);
+                                        self.rim_mesh_indices.truncate(index_mark);
+                                        rim_mesh_capacity_warn();
+                                        continue;
+                                    }
+                                    chunk_rims.push(RimDraw {
+                                        shape_index: global_index,
+                                        first_index: index_mark as u32,
+                                        index_count: (self.rim_mesh_indices.len() - index_mark)
+                                            as u32,
+                                    });
+                                    self.rim_meshes_emitted += 1;
+                                    if self.rim_meshes_emitted % 600 == 1 {
+                                        log::debug!(
+                                            "[rim-mesh] {} rims meshed lifetime ({} verts live this frame)",
+                                            self.rim_meshes_emitted,
+                                            self.rim_mesh_vertices.len(),
+                                        );
+                                    }
+                                }
+                            }
                             fused_batches.push(FusedSegmentBatch::Shape {
                                 batch: PreparedShapeBatch {
                                     vertex_start: shape_cursor * 6,
@@ -7344,6 +7627,9 @@ impl GpuRenderer {
                     }
                 }
             }
+            if !chunk_rims.is_empty() {
+                self.upload_transient_rim_meshes();
+            }
             let after_batch_prepare = Instant::now();
 
             if !image_indices.is_empty() {
@@ -7461,6 +7747,7 @@ impl GpuRenderer {
                                 *batch,
                                 width,
                                 height,
+                                &chunk_rims,
                             );
                         }
                         FusedSegmentBatch::Image {
@@ -7706,6 +7993,7 @@ impl GpuRenderer {
                                 prepared,
                                 width,
                                 height,
+                                &[],
                             );
                         }
                         pass_count = pass_count.saturating_add(1);
@@ -8740,6 +9028,7 @@ impl GpuRenderer {
                     prepared_shape,
                     width,
                     height,
+                    &[],
                 );
             }
 
@@ -9935,6 +10224,71 @@ impl GpuRenderer {
         self.retained_bundle_cache.stats()
     }
 
+    /// Test/diagnostic view of the transient rim mesh path: lifetime count
+    /// of rims drawn as band meshes instead of full bounding quads.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn rim_meshes_emitted(&self) -> u64 {
+        self.rim_meshes_emitted
+    }
+
+    /// Uploads the region of the transient rim mesh scratch appended since
+    /// the previous upload — chunks later in the frame append after regions
+    /// whose draws are already encoded, so earlier bytes are never
+    /// rewritten and the fixed-capacity buffers are never recreated
+    /// mid-frame. The executor-owned upload lands at the head of the next
+    /// submit, which is where this frame's passes execute.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn upload_transient_rim_meshes(&mut self) {
+        let device = self.device.clone();
+        let mut upload_stats = crate::frame_graph::FrameCommandStats::default();
+        if self.rim_mesh_vertices.len() > self.rim_mesh_uploaded_vertices {
+            let vertex_buffer = self.rim_mesh_vertex_buffer.get_or_insert_with(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Rim Mesh Vertex Buffer"),
+                    size: (RIM_MESH_VERTEX_CAPACITY * std::mem::size_of::<MeshVertex>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            upload_stats.upload_bytes += self
+                .frame_graph_executor
+                .upload_buffer(
+                    &self.queue,
+                    vertex_buffer,
+                    (self.rim_mesh_uploaded_vertices * std::mem::size_of::<MeshVertex>()) as u64,
+                    bytemuck::cast_slice(
+                        &self.rim_mesh_vertices[self.rim_mesh_uploaded_vertices..],
+                    ),
+                )
+                .upload_bytes;
+            self.rim_mesh_uploaded_vertices = self.rim_mesh_vertices.len();
+        }
+        if self.rim_mesh_indices.len() > self.rim_mesh_uploaded_indices {
+            let index_buffer = self.rim_mesh_index_buffer.get_or_insert_with(|| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Rim Mesh Index Buffer"),
+                    size: (RIM_MESH_INDEX_CAPACITY * std::mem::size_of::<u32>()) as u64,
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            upload_stats.upload_bytes += self
+                .frame_graph_executor
+                .upload_buffer(
+                    &self.queue,
+                    index_buffer,
+                    (self.rim_mesh_uploaded_indices * std::mem::size_of::<u32>()) as u64,
+                    bytemuck::cast_slice(&self.rim_mesh_indices[self.rim_mesh_uploaded_indices..]),
+                )
+                .upload_bytes;
+            self.rim_mesh_uploaded_indices = self.rim_mesh_indices.len();
+        }
+        if upload_stats.upload_bytes > 0 {
+            self.frame_stats.record_command_stats(upload_stats);
+        }
+    }
+
     fn draw_prepared_shapes(
         &self,
         render_pass: &mut wgpu::RenderPass<'_>,
@@ -9942,7 +10296,10 @@ impl GpuRenderer {
         batch: PreparedShapeBatch,
         width: u32,
         height: u32,
+        rims: &[RimDraw],
     ) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = rims;
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
         render_pass.set_scissor_rect(0, 0, width, height);
@@ -9966,11 +10323,16 @@ impl GpuRenderer {
                 batch.vertex_start,
                 batch.vertex_count,
             );
-            if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
-                render_pass.set_pipeline(self.instanced_pipeline_solid(instanced));
-            } else {
-                render_pass.set_pipeline(self.instanced_pipeline(instanced, blend_mode));
-            }
+            // The same selection the preamble and every post-rim restore
+            // make — factored so the two sites cannot disagree.
+            let set_instanced_pipeline = |render_pass: &mut wgpu::RenderPass<'_>| {
+                if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
+                    render_pass.set_pipeline(self.instanced_pipeline_solid(instanced));
+                } else {
+                    render_pass.set_pipeline(self.instanced_pipeline(instanced, blend_mode));
+                }
+            };
+            set_instanced_pipeline(render_pass);
             render_pass.set_bind_group(0, uniform_bind_group, &[]);
             // Dynamic offset 0: ordinary batches read the identity
             // similarity transform.
@@ -9979,7 +10341,62 @@ impl GpuRenderer {
             let shape_count = batch.vertex_count / 6;
             render_pass
                 .set_index_buffer(instanced.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
+            // Rims arrive in ascending shape order (step 4 walks the fused
+            // upload front to back), so this batch's rims are one contiguous
+            // run of the slice.
+            debug_assert!(
+                rims.windows(2)
+                    .all(|pair| pair[0].shape_index < pair[1].shape_index),
+                "rim draws must arrive in ascending shape order"
+            );
+            let rim_start = rims.partition_point(|rim| rim.shape_index < first_shape);
+            let rim_end = rims.partition_point(|rim| rim.shape_index < first_shape + shape_count);
+            let batch_rims = &rims[rim_start..rim_end];
+            let rim_buffers = match (&self.rim_mesh_vertex_buffer, &self.rim_mesh_index_buffer) {
+                (Some(vertex_buffer), Some(index_buffer)) if !batch_rims.is_empty() => {
+                    Some((vertex_buffer, index_buffer))
+                }
+                _ => None,
+            };
+            let Some((rim_vertex_buffer, rim_index_buffer)) = rim_buffers else {
+                render_pass.draw_indexed(0..6, 0, first_shape..first_shape + shape_count);
+                return;
+            };
+            // Split the instance range around each rim, in exact shape
+            // order, so z is untouched: instances before the rim, the rim's
+            // band mesh through `vs_mesh`, instances after. Bind groups
+            // persist across `set_pipeline` because the mesh and instanced
+            // pipelines share identical bind group layouts (uniform layout +
+            // shape layout, dynamic similarity offset included), so only the
+            // pipeline and index/vertex buffers are re-set per switch.
+            let mut draw_calls = 0u32;
+            let mut cursor = first_shape;
+            for rim in batch_rims {
+                if cursor < rim.shape_index {
+                    render_pass.draw_indexed(0..6, 0, cursor..rim.shape_index);
+                    draw_calls += 1;
+                }
+                render_pass.set_pipeline(self.mesh_pipeline());
+                render_pass.set_vertex_buffer(0, rim_vertex_buffer.slice(..));
+                render_pass.set_index_buffer(rim_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(
+                    rim.first_index..rim.first_index + rim.index_count,
+                    0,
+                    0..1,
+                );
+                draw_calls += 1;
+                set_instanced_pipeline(render_pass);
+                render_pass
+                    .set_index_buffer(instanced.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                cursor = rim.shape_index + 1;
+            }
+            if cursor < first_shape + shape_count {
+                render_pass.draw_indexed(0..6, 0, cursor..first_shape + shape_count);
+                draw_calls += 1;
+            }
+            // One draw call was already counted at the top of the fn.
+            self.frame_stats
+                .add_draw_calls(draw_calls.saturating_sub(1));
             return;
         }
         if blend_mode == BlendMode::SrcOver && !batch.has_gradient {
@@ -10055,7 +10472,7 @@ impl GpuRenderer {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-        self.draw_prepared_shapes(&mut render_pass, blend_mode, batch, width, height);
+        self.draw_prepared_shapes(&mut render_pass, blend_mode, batch, width, height, &[]);
     }
 
     fn draw_prepared_images(
@@ -11991,7 +12408,7 @@ impl GpuRenderer {
         match self.surface_format {
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => Ok(()),
             wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
                 Ok(())
@@ -12859,7 +13276,7 @@ fn source_axis_uv(start: f32, extent: f32, image_extent: f32) -> Option<(f32, f3
 
 fn apply_filter_to_bitmap(image: &ImageBitmap, filter: ColorFilter) -> Result<ImageBitmap, String> {
     let mut filtered = Vec::with_capacity(image.pixels().len());
-    for pixel in image.pixels().chunks_exact(4) {
+    for pixel in image.pixels().as_chunks::<4>().0 {
         let rgba = [
             pixel[0] as f32 / 255.0,
             pixel[1] as f32 / 255.0,
@@ -18182,7 +18599,9 @@ mod tests {
                     [p[0] as f64, p[1] as f64]
                 };
                 let triangles: Vec<[[f64; 2]; 3]> = indices
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|tri| [position(tri[0]), position(tri[1]), position(tri[2])])
                     .collect();
 
@@ -18323,7 +18742,7 @@ mod tests {
             // Inner vertices ride the dilated inner radius, outer vertices
             // the pushed-out chord radius — sanity that pairs are ordered
             // (inner, outer).
-            for pair in vertices.chunks_exact(2) {
+            for pair in vertices.as_chunks::<2>().0 {
                 let radius = |v: &MeshVertex| {
                     let dx = v.position[0] - 250.0;
                     let dy = v.position[1] - 250.0;
@@ -18414,6 +18833,98 @@ mod tests {
         let converted = converted_arc_shape(arc, 1.0);
         let shapes = vec![converted; 100];
         assert!(build_arc_mesh_vertices(&shapes).is_none());
+    }
+
+    /// A converted circle rim, hand-built in `ShapeData` terms: `rect` is the
+    /// stroke-inflated 300×300 box, the geometry is 292×292, and the corner
+    /// radius (300 − 8) / 2 = 146 equals the geometry half-extent — a circle.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rim_test_shape_data() -> ShapeData {
+        let mut shape = ShapeData::zeroed();
+        shape.rect = [40.0, 40.0, 300.0, 300.0];
+        shape.radii = [146.0; 4];
+        shape.stroke_params = [
+            8.0,
+            pack_shape_flags(SHAPE_KIND_STROKE, StrokeCap::Butt, StrokeJoin::Miter),
+            0.0,
+            0.0,
+        ];
+        shape.quad01 = [40.0, 40.0, 340.0, 40.0];
+        shape.quad23 = [40.0, 340.0, 340.0, 340.0];
+        shape.color = [1.0, 1.0, 1.0, 1.0];
+        shape
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn rim_mesh_band_accepts_only_huge_solid_unclipped_circle_rims() {
+        let band = rim_mesh_band(&rim_test_shape_data()).expect("circle rim must qualify");
+        assert_eq!(band.center, [190.0, 190.0]);
+        assert_eq!(band.inner, 142.0);
+        assert_eq!(band.outer, 150.0);
+        assert_eq!(band.start, 0.0);
+        assert!(
+            band.sweep >= cranpose_ui_graphics::TAU,
+            "a rim band is a closed ring"
+        );
+        // And it actually meshes through the shared emitter.
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        emit_arc_band_mesh(
+            &rim_test_shape_data(),
+            7,
+            &band,
+            &mut vertices,
+            &mut indices,
+        )
+        .expect("rim must mesh");
+        assert!(vertices.iter().all(|vertex| vertex.shape_idx == 7));
+
+        // Rounded SQUARE ring: radius well below the geometry half-extent.
+        // Meshing it would under-cover the flat spans — the false positive
+        // the circle gate exists to prevent.
+        let mut square = rim_test_shape_data();
+        square.radii = [100.0; 4];
+        assert!(rim_mesh_band(&square).is_none());
+
+        // Non-square box.
+        let mut oblong = rim_test_shape_data();
+        oblong.rect = [40.0, 40.0, 300.0, 200.0];
+        assert!(rim_mesh_band(&oblong).is_none());
+
+        // Gradient brush.
+        let mut gradient = rim_test_shape_data();
+        gradient.brush_type = 1;
+        assert!(rim_mesh_band(&gradient).is_none());
+
+        // Live clip.
+        let mut clipped = rim_test_shape_data();
+        clipped.clip_rect = [0.0, 0.0, 400.0, 400.0];
+        assert!(rim_mesh_band(&clipped).is_none());
+
+        // Small (100 × 100 < 65536 px²), even as a perfect circle.
+        let mut small = rim_test_shape_data();
+        small.rect = [40.0, 40.0, 100.0, 100.0];
+        small.quad01 = [40.0, 40.0, 140.0, 40.0];
+        small.quad23 = [40.0, 140.0, 140.0, 140.0];
+        small.radii = [46.0; 4];
+        assert!(rim_mesh_band(&small).is_none());
+
+        // Fill kind, not stroke.
+        let mut fill = rim_test_shape_data();
+        fill.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        assert!(rim_mesh_band(&fill).is_none());
+
+        // Zero stroke width.
+        let mut hairline = rim_test_shape_data();
+        hairline.stroke_params[0] = 0.0;
+        assert!(rim_mesh_band(&hairline).is_none());
+
+        // Mismatched corner radii.
+        let mut uneven = rim_test_shape_data();
+        uneven.radii[2] = 145.0;
+        assert!(rim_mesh_band(&uneven).is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
