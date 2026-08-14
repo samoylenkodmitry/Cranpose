@@ -4061,6 +4061,14 @@ impl GpuRenderer {
     ) -> Self {
         #[cfg(target_arch = "wasm32")]
         let _ = store_feed_generation;
+        // Construction time is worth a line of its own. Before pipelines were
+        // built lazily this call linked every pipeline the frontend could ever
+        // need, and on a GL device each link ended in a blocking
+        // `glGetProgramiv` -- 25 s on an emulator, with nothing on screen. That
+        // is fixed, but "fixed" is a claim that needs a number on each device,
+        // and the per-pipeline `[gpu-pipeline]` lines cannot say what the
+        // renderer costs to build when it builds no pipelines at all.
+        let construction_started = Instant::now();
         let shape_batch_limits = ShapeBatchLimits::for_device(&device);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -4342,9 +4350,11 @@ impl GpuRenderer {
                 }],
             });
 
+        let effects_started = Instant::now();
         let effect_renderer = EffectRenderer::new(&device, surface_format, adapter_backend);
+        let effects_ms = instant_ms(effects_started, Instant::now());
 
-        Self {
+        let renderer = Self {
             device,
             queue,
             renderer_epoch,
@@ -4472,7 +4482,15 @@ impl GpuRenderer {
             replay_generation_drops: 0,
             #[cfg(not(target_arch = "wasm32"))]
             retained_bundle_cache: RetainedBundleCache::new(),
-        }
+        };
+        log::info!(
+            "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms); \
+             pipelines build on first use",
+            adapter_backend,
+            instant_ms(construction_started, Instant::now()),
+            effects_ms,
+        );
+        renderer
     }
 
     fn shape_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
