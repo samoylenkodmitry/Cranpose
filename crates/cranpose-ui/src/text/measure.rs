@@ -11,6 +11,7 @@ use web_time::Instant;
 use super::layout_options::{TextLayoutOptions, TextOverflow};
 use super::paragraph::{Hyphens, LineBreak};
 use super::style::TextStyle;
+use crate::font_scale::FontScaleCurve;
 
 const ELLIPSIS: &str = "\u{2026}";
 const DEFAULT_FONT_SIZE_SP: f32 = 14.0;
@@ -717,7 +718,7 @@ pub(crate) fn resolved_first_baseline(style: &TextStyle) -> Option<f32> {
 /// its line slot (see [`TextMeasurer::glyph_line_box`]). Falls back to the
 /// full slot when the active measurer has no font metrics.
 pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
-    let style = scale_text_style_font_sizes(style, crate::current_font_scale());
+    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.glyph_line_box(&style))
     })
@@ -729,7 +730,7 @@ pub fn glyph_line_box(style: &TextStyle, line_height: f32) -> (f32, f32) {
 /// [`TextMeasurer::first_baseline`]). `None` when the active measurer carries
 /// no font metrics.
 pub fn first_baseline(style: &TextStyle) -> Option<f32> {
-    let style = scale_text_style_font_sizes(style, crate::current_font_scale());
+    let style = scale_text_style_font_sizes(style, crate::current_font_scale_curve());
     crate::render_state::with_text_service(|service| {
         service.with_measurer(|m| m.first_baseline(&style))
     })
@@ -1138,7 +1139,7 @@ fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
         style,
         clipped_options,
         max_width,
-        1.0,
+        FontScaleCurve::linear(1.0),
     );
     let Some(width_limit) = max_width else {
         return full_size;
@@ -1163,7 +1164,7 @@ fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
         style,
         clipped_options,
         Some(width_limit),
-        min_scale,
+        FontScaleCurve::linear(min_scale),
     );
     if min_size.did_overflow {
         return min_size;
@@ -1181,7 +1182,7 @@ fn prepare_scale_down_text_layout<M: TextMeasurer + ?Sized>(
             style,
             clipped_options,
             Some(width_limit),
-            mid,
+            FontScaleCurve::linear(mid),
         );
         if candidate.did_overflow {
             high = mid;
@@ -1201,10 +1202,10 @@ fn prepare_scaled_text_layout<M: TextMeasurer + ?Sized>(
     style: &TextStyle,
     options: TextLayoutOptions,
     max_width: Option<f32>,
-    font_scale: f32,
+    shrink: FontScaleCurve,
 ) -> PreparedTextLayout {
-    let visual_style = scale_text_style_font_sizes(style, font_scale);
-    let visual_text = scale_annotated_font_sizes(text, font_scale);
+    let visual_style = scale_text_style_font_sizes(style, shrink);
+    let visual_text = scale_annotated_font_sizes(text, shrink);
     prepare_text_layout_with_measurer_for_node(
         measurer,
         node_id,
@@ -1217,32 +1218,32 @@ fn prepare_scaled_text_layout<M: TextMeasurer + ?Sized>(
 
 fn scale_annotated_font_sizes(
     text: &crate::text::AnnotatedString,
-    factor: f32,
+    curve: FontScaleCurve,
 ) -> Cow<'_, crate::text::AnnotatedString> {
-    if is_identity_scale(factor) || !annotated_text_needs_scaling(text) {
+    if curve.is_identity() || !annotated_text_needs_scaling(text) {
         return Cow::Borrowed(text);
     }
 
     let mut scaled = text.clone();
     for span in &mut scaled.span_styles {
-        span.item = scale_span_style_font_sizes(&span.item, factor, None);
+        span.item = scale_span_style_font_sizes(&span.item, curve, None);
     }
     Cow::Owned(scaled)
 }
 
-fn scale_text_style_font_sizes(style: &TextStyle, factor: f32) -> TextStyle {
-    if is_identity_scale(factor) {
+fn scale_text_style_font_sizes(style: &TextStyle, curve: FontScaleCurve) -> TextStyle {
+    if curve.is_identity() {
         return style.clone();
     }
 
     let mut scaled = style.clone();
     scaled.span_style =
-        scale_span_style_font_sizes(&style.span_style, factor, Some(DEFAULT_FONT_SIZE_SP));
+        scale_span_style_font_sizes(&style.span_style, curve, Some(DEFAULT_FONT_SIZE_SP));
     scaled.paragraph_style.line_height =
-        scale_text_unit_sp(scaled.paragraph_style.line_height, factor);
+        scale_text_unit_sp(scaled.paragraph_style.line_height, curve);
     if let Some(mut indent) = scaled.paragraph_style.text_indent {
-        indent.first_line = scale_text_unit_sp(indent.first_line, factor);
-        indent.rest_line = scale_text_unit_sp(indent.rest_line, factor);
+        indent.first_line = scale_text_unit_sp(indent.first_line, curve);
+        indent.rest_line = scale_text_unit_sp(indent.rest_line, curve);
         scaled.paragraph_style.text_indent = Some(indent);
     }
     scaled
@@ -1253,26 +1254,27 @@ fn with_system_font_scale<R>(
     style: &TextStyle,
     block: impl FnOnce(&crate::text::AnnotatedString, &TextStyle) -> R,
 ) -> R {
-    let factor = crate::current_font_scale();
-    let visual_style = scale_text_style_font_sizes(style, factor);
-    let visual_text = scale_annotated_font_sizes(text, factor);
+    let curve = crate::current_font_scale_curve();
+    let visual_style = scale_text_style_font_sizes(style, curve);
+    let visual_text = scale_annotated_font_sizes(text, curve);
     block(visual_text.as_ref(), &visual_style)
 }
 
 fn scale_span_style_font_sizes(
     style: &crate::text::SpanStyle,
-    factor: f32,
+    curve: FontScaleCurve,
     default_font_size_sp: Option<f32>,
 ) -> crate::text::SpanStyle {
+    let factor = curve.scale();
     let mut scaled = style.clone();
     scaled.font_size = match (style.font_size, default_font_size_sp) {
         (crate::text::TextUnit::Unspecified, Some(default_size)) => {
-            crate::text::TextUnit::Sp(default_size * factor)
+            crate::text::TextUnit::Sp(curve.sp_to_dp(default_size))
         }
-        (unit, Some(_)) => scale_text_unit_sp_and_em(unit, factor),
-        (unit, None) => scale_text_unit_sp(unit, factor),
+        (unit, Some(_)) => scale_text_unit_sp_and_em(unit, curve),
+        (unit, None) => scale_text_unit_sp(unit, curve),
     };
-    scaled.letter_spacing = scale_text_unit_sp(scaled.letter_spacing, factor);
+    scaled.letter_spacing = scale_text_unit_sp(scaled.letter_spacing, curve);
     if let Some(mut shadow) = scaled.shadow {
         shadow.offset.x = scale_finite_dimension(shadow.offset.x, factor);
         shadow.offset.y = scale_finite_dimension(shadow.offset.y, factor);
@@ -1303,22 +1305,32 @@ fn span_style_needs_scaling(style: &crate::text::SpanStyle) -> bool {
         || style.shadow.is_some()
 }
 
-fn scale_text_unit_sp(unit: crate::text::TextUnit, factor: f32) -> crate::text::TextUnit {
+/// An `Sp` length resolved through the platform's own conversion.
+///
+/// Not `value * scale`: see [`crate::font_scale`] — above a threshold setting
+/// Android converts a size through a table instead of multiplying it, and a
+/// 13sp label is 1.5% wider than the multiplication says at the setting Wear
+/// calls large.
+fn scale_text_unit_sp(unit: crate::text::TextUnit, curve: FontScaleCurve) -> crate::text::TextUnit {
     match unit {
         crate::text::TextUnit::Sp(value) if value.is_finite() => {
-            crate::text::TextUnit::Sp(value * factor)
+            crate::text::TextUnit::Sp(curve.sp_to_dp(value))
         }
         other => other,
     }
 }
 
-fn scale_text_unit_sp_and_em(unit: crate::text::TextUnit, factor: f32) -> crate::text::TextUnit {
+/// The same, for a size that may instead be stated relative to the one it
+/// inherits. An `Em` is a ratio, so it follows the setting itself rather than
+/// the table, which converts absolute sizes.
+fn scale_text_unit_sp_and_em(
+    unit: crate::text::TextUnit,
+    curve: FontScaleCurve,
+) -> crate::text::TextUnit {
     match unit {
-        crate::text::TextUnit::Sp(value) if value.is_finite() => {
-            crate::text::TextUnit::Sp(value * factor)
-        }
+        crate::text::TextUnit::Sp(_) => scale_text_unit_sp(unit, curve),
         crate::text::TextUnit::Em(value) if value.is_finite() => {
-            crate::text::TextUnit::Em(value * factor)
+            crate::text::TextUnit::Em(value * curve.scale())
         }
         other => other,
     }
@@ -1330,10 +1342,6 @@ fn scale_finite_dimension(value: f32, factor: f32) -> f32 {
     } else {
         value
     }
-}
-
-fn is_identity_scale(factor: f32) -> bool {
-    (factor - 1.0).abs() <= f32::EPSILON
 }
 
 #[derive(Clone, Debug)]
@@ -2333,6 +2341,65 @@ mod tests {
     }
 
     #[test]
+    fn a_platform_curve_resolves_an_sp_where_the_platform_does_and_not_where_a_multiplier_would() {
+        // The defect this exists for: Wear Material 3 sets a Settings chip's
+        // secondary line in `labelSmall`, which is 13sp. On Android 14 at the
+        // font scale Wear calls large the platform resolves that to 16.36dp,
+        // not to 13 * 1.24 = 16.12 — measured on a Wear OS 5 emulator through
+        // both `TypedValue.applyDimension(COMPLEX_UNIT_SP, ..)` and
+        // `androidx.compose.ui.unit.Density(context)`, which agree exactly.
+        // 1.5% is small and it is the difference between the string
+        // `SOLID  next at 3 gold` taking one line and taking two.
+        let _app_context = crate::render_state::app_context_test_scope();
+        let text = crate::text::AnnotatedString::from("SOLID  next at 3 gold");
+        let style = TextStyle {
+            span_style: crate::text::SpanStyle {
+                font_size: TextUnit::Sp(13.0),
+                letter_spacing: TextUnit::Sp(0.4),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        crate::set_font_scale_curve(FontScaleCurve::from_samples(
+            1.24,
+            &[
+                (8.0, 9.92),
+                (10.0, 12.4),
+                (12.0, 14.88),
+                (14.0, 17.84),
+                (16.0, 19.36),
+                (18.0, 20.88),
+                (20.0, 22.88),
+                (24.0, 25.92),
+                (30.0, 30.0),
+                (100.0, 100.0),
+            ],
+        ));
+        let prepared = prepare_text_layout(&text, &style, TextLayoutOptions::default(), None);
+        assert_eq!(
+            prepared.visual_style.span_style.font_size,
+            TextUnit::Sp(16.36)
+        );
+        // The tracking is below the first knot, where the platform's curve is
+        // the multiplication again, so it must NOT move off it.
+        assert_eq!(
+            prepared.visual_style.span_style.letter_spacing,
+            TextUnit::Sp(0.4 * 1.24)
+        );
+        // And the setting itself is still the setting, whatever the table then
+        // does with an individual size.
+        assert_eq!(crate::current_font_scale(), 1.24);
+
+        crate::set_font_scale(1.24);
+        let multiplied = prepare_text_layout(&text, &style, TextLayoutOptions::default(), None);
+        assert_eq!(
+            multiplied.visual_style.span_style.font_size,
+            TextUnit::Sp(13.0 * 1.24)
+        );
+    }
+
+    #[test]
     fn text_service_cache_retains_large_lazy_text_working_set() {
         let mut cache = BoundedTextCache::new(TEXT_SERVICE_CACHE_CAPACITY);
         let metrics = TextMetrics {
@@ -3205,7 +3272,7 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         let plain = crate::text::AnnotatedString::from("plain");
         assert!(matches!(
-            scale_annotated_font_sizes(&plain, 0.5),
+            scale_annotated_font_sizes(&plain, FontScaleCurve::linear(0.5)),
             std::borrow::Cow::Borrowed(_)
         ));
 
@@ -3218,7 +3285,7 @@ mod tests {
             .pop()
             .to_annotated_string();
         assert!(matches!(
-            scale_annotated_font_sizes(&colored, 0.5),
+            scale_annotated_font_sizes(&colored, FontScaleCurve::linear(0.5)),
             std::borrow::Cow::Borrowed(_)
         ));
     }
@@ -3239,7 +3306,7 @@ mod tests {
             .pop()
             .to_annotated_string();
 
-        let scaled = scale_annotated_font_sizes(&text, 0.5);
+        let scaled = scale_annotated_font_sizes(&text, FontScaleCurve::linear(0.5));
         let std::borrow::Cow::Owned(scaled) = scaled else {
             panic!("shadowed span should be scaled into owned text");
         };

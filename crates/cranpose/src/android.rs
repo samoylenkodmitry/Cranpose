@@ -745,8 +745,10 @@ fn update_android_shell_geometry(
 ) -> Option<Size> {
     shell.renderer().set_root_scale(density);
     shell.set_density(density);
-    // The user's font-size setting. Sizes in Sp follow it, sizes in Dp do not.
-    shell.set_font_scale(crate::android_font_scale::font_scale());
+    // The user's font-size setting. Sizes in Sp follow it, sizes in Dp do not,
+    // and above a threshold setting Android converts an Sp through a table
+    // rather than by multiplying — so the conversion goes over, not the scalar.
+    shell.set_font_scale_curve(crate::android_font_scale::font_scale_curve());
     // Rotary detents are reported in device-independent units; the shell needs
     // a pixels-per-detent factor to match Compose. Approximates
     // `ViewConfiguration.getScaledVerticalScrollFactor()`; a host that reads
@@ -1971,7 +1973,9 @@ pub fn run(
                         // text out at the size the user just moved away from.
                         if crate::android_font_scale::refresh_font_scale(&app) {
                             if let Some(shell) = &mut app_shell {
-                                shell.set_font_scale(crate::android_font_scale::font_scale());
+                                shell.set_font_scale_curve(
+                                    crate::android_font_scale::font_scale_curve(),
+                                );
                             }
                         }
                     }

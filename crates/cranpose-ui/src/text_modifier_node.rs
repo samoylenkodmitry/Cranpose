@@ -50,7 +50,7 @@ const PREPARED_LAYOUT_CACHE_CAPACITY: usize = 4;
 struct TextPreparedLayoutCacheEntry {
     max_width_bits: Option<u32>,
     text_generation: u64,
-    font_scale_bits: u32,
+    font_scale_fingerprint: u32,
     layout: crate::text::PreparedTextLayout,
 }
 
@@ -118,14 +118,16 @@ impl TextPreparedLayoutOwner {
         let normalized_max_width = max_width.filter(|width| width.is_finite() && *width > 0.0);
         let max_width_bits = normalized_max_width.map(f32::to_bits);
         let text_generation = crate::text::measure::current_text_generation();
-        let font_scale_bits = crate::current_font_scale().to_bits();
+        // Keyed on the whole conversion and not on the setting alone: two
+        // curves can share a scale and resolve an `Sp` differently.
+        let font_scale_fingerprint = crate::current_font_scale_curve().fingerprint();
 
         {
             let mut cache = self.cache.borrow_mut();
             if let Some(index) = cache.iter().position(|entry| {
                 entry.max_width_bits == max_width_bits
                     && entry.text_generation == text_generation
-                    && entry.font_scale_bits == font_scale_bits
+                    && entry.font_scale_fingerprint == font_scale_fingerprint
             }) {
                 let entry = cache.remove(index);
                 let prepared = entry.layout.clone();
@@ -148,7 +150,7 @@ impl TextPreparedLayoutOwner {
             TextPreparedLayoutCacheEntry {
                 max_width_bits,
                 text_generation,
-                font_scale_bits,
+                font_scale_fingerprint,
                 layout: prepared.clone(),
             },
         );
