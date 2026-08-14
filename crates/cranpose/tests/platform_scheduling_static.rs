@@ -1497,6 +1497,14 @@ fn workspace_ffi_boundaries_are_explicit() {
         // on one screen; the crate root denies unsafe code and opts this one
         // module back in by name.
         "crates/cranpose-render/wgpu/src/run_entry.rs",
+        // The stage executor's spare-capacity map_fill: chunks write map
+        // results straight into the output vec's reserved capacity, which
+        // std vectors cannot express safely. The unsafety lives in the
+        // constructor-limited spare_fill module — claim flags turn a
+        // double-filled chunk into a panic, per-chunk watermarks bound the
+        // unwind path's drops — and the crate root denies unsafe code and
+        // opts this one module back in by name.
+        "crates/cranpose-render/wgpu/src/stage_executor.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];
