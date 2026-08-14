@@ -28,7 +28,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    RetainedDraw, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+    RetainedDraw, SceneBrush, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
 };
 use crate::shaders;
 #[cfg(test)]
@@ -1050,6 +1050,7 @@ fn hash_shadow_device_rect<H: Hasher>(
 
 fn hash_shape_shadow_item<H: Hasher>(
     shape: &DrawShape,
+    brushes: &[Brush],
     blend_mode: BlendMode,
     origin_x: f32,
     origin_y: f32,
@@ -1071,7 +1072,7 @@ fn hash_shape_shadow_item<H: Hasher>(
         }
         None => 0u8.hash(state),
     }
-    shape.brush.render_hash().hash(state);
+    shape.brush.render_hash(brushes).hash(state);
     match shape.shape {
         Some(corner_shape) => {
             1u8.hash(state);
@@ -1090,7 +1091,11 @@ fn hash_shape_shadow_item<H: Hasher>(
     shape.blend_mode.hash(state);
 }
 
-fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32) -> u64 {
+fn shape_shadow_content_hash(
+    shapes: &[(DrawShape, BlendMode)],
+    brushes: &[Brush],
+    root_scale: f32,
+) -> u64 {
     let mut hasher = FxHasher::default();
     // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
     // cancels out exactly. Anchoring to floored device-pixel bounds would leak
@@ -1107,6 +1112,7 @@ fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32)
     for (shape, blend_mode) in shapes {
         hash_shape_shadow_item(
             shape,
+            brushes,
             *blend_mode,
             origin.x,
             origin.y,
@@ -1119,12 +1125,13 @@ fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32)
 
 fn shape_shadow_surface_cache_key(
     shapes: &[(DrawShape, BlendMode)],
+    brushes: &[Brush],
     device_bounds: DevicePixelBounds,
     pixel_radius: f32,
     root_scale: f32,
 ) -> Option<ShadowSurfaceCacheKey> {
     (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shape_shadow_content_hash(shapes, root_scale),
+        content_hash: shape_shadow_content_hash(shapes, brushes, root_scale),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
@@ -1753,12 +1760,15 @@ pub(crate) fn shape_convert_worker_count() -> usize {
     1
 }
 
-fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
-    match &shape.brush {
-        Brush::Solid(_) => 0,
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.len(),
+fn shape_gradient_stop_count(shape: &DrawShape, brushes: &[Brush]) -> usize {
+    match shape.brush {
+        SceneBrush::Solid(_) => 0,
+        SceneBrush::Gradient(index) => match &brushes[index as usize] {
+            Brush::Solid(_) => 0,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => colors.len(),
+        },
     }
 }
 
@@ -1768,6 +1778,7 @@ fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
 /// gradient buffer; `gradient_out` is exactly its span of that buffer.
 fn convert_shape_into_slots(
     shape: &DrawShape,
+    brushes: &[Brush],
     root_scale: f32,
     gradient_start: u32,
     shape_out: &mut ShapeData,
@@ -1851,69 +1862,72 @@ fn convert_shape_into_slots(
     };
     let mut gradient_params = [0.0f32; 4];
     let (brush_type, gradient_count, gradient_tile_mode) = match &shape.brush {
-        Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.x,
-                    device_local_rect.width,
-                    start.x * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.y,
-                    device_local_rect.height,
-                    start.y * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.x,
-                    device_local_rect.width,
-                    end.x * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.y,
-                    device_local_rect.height,
-                    end.y * root_scale,
-                )),
-            ];
-            (1u32, count, gradient_tile_mode_value(*tile_mode))
-        }
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                (radius * root_scale).max(f32::EPSILON),
-                0.0,
-            ];
-            (2u32, count, gradient_tile_mode_value(*tile_mode))
-        }
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                0.0,
-                0.0,
-            ];
-            (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
-        }
+        SceneBrush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
+        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
+            Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
+            Brush::LinearGradient {
+                colors,
+                stops,
+                start,
+                end,
+                tile_mode,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.x,
+                        device_local_rect.width,
+                        start.x * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.y,
+                        device_local_rect.height,
+                        start.y * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.x,
+                        device_local_rect.width,
+                        end.x * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.y,
+                        device_local_rect.height,
+                        end.y * root_scale,
+                    )),
+                ];
+                (1u32, count, gradient_tile_mode_value(*tile_mode))
+            }
+            Brush::RadialGradient {
+                colors,
+                stops,
+                center,
+                radius,
+                tile_mode,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                    (radius * root_scale).max(f32::EPSILON),
+                    0.0,
+                ];
+                (2u32, count, gradient_tile_mode_value(*tile_mode))
+            }
+            Brush::SweepGradient {
+                colors,
+                stops,
+                center,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                    0.0,
+                    0.0,
+                ];
+                (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
+            }
+        },
     };
 
     // A stroked rect/round-rect was emitted with `local_rect` already
@@ -2003,15 +2017,18 @@ fn convert_shape_into_slots(
     };
 
     let color = match &shape.brush {
-        Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
-        Brush::LinearGradient { colors, .. } => {
-            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-            [first.r(), first.g(), first.b(), first.a()]
-        }
-        Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
-            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-            [first.r(), first.g(), first.b(), first.a()]
-        }
+        SceneBrush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
+            Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+            Brush::LinearGradient { colors, .. } => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                [first.r(), first.g(), first.b(), first.a()]
+            }
+            Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                [first.r(), first.g(), first.b(), first.a()]
+            }
+        },
     };
 
     *shape_out = ShapeData {
@@ -2059,6 +2076,7 @@ fn quad_area_diag_enabled() -> bool {
 /// hand-off keeps the parallel path free of any synchronization.
 fn convert_shapes_into_outputs(
     shape_refs: &[&DrawShape],
+    brushes: &[Brush],
     gradient_offsets: &[u32],
     root_scale: f32,
     shape_data_out: &mut [ShapeData],
@@ -2119,7 +2137,7 @@ fn convert_shapes_into_outputs(
         top_other.sort_by(|a, b| b.0.total_cmp(&a.0));
         for &(area, index) in top_other.iter().take(4) {
             let shape = shape_refs[index];
-            let brush = match &shape.brush {
+            let brush = match shape.brush.resolve(brushes).as_ref() {
                 cranpose_ui_graphics::Brush::Solid(color) => format!("solid a={:.2}", color.3),
                 cranpose_ui_graphics::Brush::LinearGradient { colors, .. } => {
                     format!("linear n={}", colors.len())
@@ -2160,6 +2178,7 @@ fn convert_shapes_into_outputs(
             let gradient_end = gradient_offsets[idx + 1];
             convert_shape_into_slots(
                 shape,
+                brushes,
                 root_scale,
                 gradient_start,
                 &mut shape_data_out[idx],
@@ -2199,6 +2218,7 @@ fn convert_shapes_into_outputs(
                     let local_end = (chunk_offsets[j + 1] - gradient_base) as usize;
                     convert_shape_into_slots(
                         shape,
+                        brushes,
                         root_scale,
                         gradient_start,
                         &mut shape_data_chunk[j],
@@ -2276,6 +2296,12 @@ struct ReplaySlot {
     /// for the life of the capture, so bundle keys need nothing beyond the
     /// capture epoch they already carry.
     has_gradient: bool,
+    /// Per-shape capture-space fill records for the `CRANPOSE_FILL_DIAG`
+    /// instrument (`shape_count` entries): submitted area (mesh triangles
+    /// when this slot replays its arc mesh, bounding quads otherwise),
+    /// analytic lit area, opacity class and quad AABB. Empty when the
+    /// diagnostic is off.
+    fill_diag_shapes: Vec<FillDiagShapeRecord>,
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
@@ -2930,6 +2956,743 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
         ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
     };
     tri(corners[0], corners[1], corners[2]) + tri(corners[2], corners[1], corners[3])
+}
+
+/// `CRANPOSE_FILL_DIAG` (`debug.cranpose.fill_diag` on Android): per-frame
+/// CPU-side accounting of the fill area the renderer submits, in device px².
+/// Off by default; any set value except "0" enables. Read once per process,
+/// so a disabled hot path pays one static load and a branch.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn fill_area_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(
+        || matches!(std::env::var("CRANPOSE_FILL_DIAG").as_deref(), Ok(value) if value != "0"),
+    )
+}
+
+/// Rendered frames aggregated into one `[fill-diag]` report line.
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_WINDOW_FRAMES: u32 = 120;
+
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_BUCKETS: usize = 9;
+
+/// Opacity class of a shape's fill for the `[fill-truth]` histogram, decided
+/// from the CONVERTED record: a solid brush with vertex alpha exactly 1.0 is
+/// opaque, any other solid is translucent, and every gradient counts as
+/// non-solid (its stops can each carry their own alpha). Retained shapes are
+/// classified from their capture-time colors — a later recolor patch through
+/// the slot's paint buffer is not re-classified.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FillOpacityClass {
+    Opaque = 0,
+    Translucent = 1,
+    NonSolid = 2,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_opacity_class(shape: &ShapeData) -> FillOpacityClass {
+    if shape.brush_type != 0 {
+        FillOpacityClass::NonSolid
+    } else if shape.color[3] == 1.0 {
+        FillOpacityClass::Opaque
+    } else {
+        FillOpacityClass::Translucent
+    }
+}
+
+/// The fill-diag bucket of a batched shape quad, decoded from the packed
+/// flags the way the fragment shader decodes them (`u32(max(x, 0.0)) & 3`).
+/// Fills keep real corner radii in `radii` (arcs reuse the field for trig,
+/// but they take the arc arm first).
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_bucket(shape: &ShapeData) -> usize {
+    match shape.stroke_params[1].max(0.0) as u32 & 3 {
+        SHAPE_KIND_ARC => FillAreaDiag::ARC,
+        SHAPE_KIND_STROKE => FillAreaDiag::RRECT_STROKE,
+        _ if shape.radii.iter().any(|radius| *radius > 0.0) => FillAreaDiag::RRECT_FILL,
+        _ => FillAreaDiag::RECT,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_bucket_name(bucket: usize) -> &'static str {
+    match bucket {
+        FillAreaDiag::ARC => "arc",
+        FillAreaDiag::RRECT_STROKE => "rrect-stroke",
+        FillAreaDiag::RRECT_FILL => "rrect-fill",
+        FillAreaDiag::RECT => "rect",
+        FillAreaDiag::MESH => "mesh",
+        FillAreaDiag::RETAINED => "retained",
+        FillAreaDiag::IMAGE_GLYPH => "img+glyph",
+        FillAreaDiag::EFFECT_COMPOSITE => "effect-comp",
+        FillAreaDiag::OFFSCREEN_SOURCE => "offscr-src",
+        _ => "?",
+    }
+}
+
+/// Analytic covered area of a shape in device px² — the pixels the SDF will
+/// actually keep, as opposed to the bounding quad it is rasterized with —
+/// decoded from the same converted `ShapeData` fields the classifier and the
+/// band-mesh builders read. Deliberately closed-form per class:
+///
+/// * arc / annular sector: `sweep · r_mid · thickness` plus the endcap area
+///   (two half-discs for round caps; square caps rasterize the same pixel
+///   measure — `sdf_arc_band` cuts the endpoint disc at `plane − rb`, which
+///   removes nothing but the tangent point; butt caps add nothing; a closed
+///   ring has no caps).
+/// * stroked round-rect: centerline perimeter × stroke width — exact while
+///   every corner radius ≥ half the stroke width (the offset-band identity);
+///   miter corner spurs at sharp corners are not modeled.
+/// * round-rect / circle fill: `w·h − (1 − π/4)·Σ rᵢ²`, radii clamped to the
+///   half-extent (a circle degenerates to exactly `π r²`).
+/// * plain rect: the submitted quad IS the covered set — priced at the quad
+///   area by the caller, this function returns `w·h` (equal under any
+///   similarity).
+///
+/// Clips and viewport scissors are not modeled, same as the quad accounting.
+#[cfg(not(target_arch = "wasm32"))]
+fn analytic_covered_area(shape: &ShapeData) -> f64 {
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    match flags & 3 {
+        SHAPE_KIND_ARC => {
+            let outer = f64::from(shape.stroke_params[2]).max(0.0);
+            let inner = f64::from(shape.stroke_params[3]).clamp(0.0, outer);
+            let tau = f64::from(cranpose_ui_graphics::TAU);
+            let sweep = f64::from(shape.arc_params[3]).clamp(0.0, tau);
+            let thickness = outer - inner;
+            let band = sweep * 0.5 * (outer + inner) * thickness;
+            let caps = if sweep >= tau {
+                0.0
+            } else {
+                match (flags >> 2) & 3 {
+                    // Round and square: two half-discs of radius t/2 — the
+                    // shader's square cap keeps the endpoint disc's measure
+                    // (see the doc comment).
+                    1 | 2 => std::f64::consts::PI * (thickness * 0.5) * (thickness * 0.5),
+                    _ => 0.0,
+                }
+            };
+            band + caps
+        }
+        SHAPE_KIND_STROKE => {
+            let stroke_width = f64::from(shape.stroke_params[0]).max(0.0);
+            // `rect` for a stroked shape is the stroke-inflated box.
+            let geom_w = (f64::from(shape.rect[2]) - stroke_width).max(0.0);
+            let geom_h = (f64::from(shape.rect[3]) - stroke_width).max(0.0);
+            let max_radius = geom_w.min(geom_h) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            let perimeter =
+                2.0 * (geom_w + geom_h) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum;
+            perimeter.max(0.0) * stroke_width
+        }
+        _ => {
+            let width = f64::from(shape.rect[2]).max(0.0);
+            let height = f64::from(shape.rect[3]).max(0.0);
+            let max_radius = width.min(height) * 0.5;
+            let radii_sq: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| {
+                    let radius = f64::from(*radius).clamp(0.0, max_radius);
+                    radius * radius
+                })
+                .sum();
+            width * height - (1.0 - std::f64::consts::FRAC_PI_4) * radii_sq
+        }
+    }
+}
+
+/// Antialiasing allowance added on top of [`analytic_covered_area`]: the SDF
+/// feathers over roughly one pixel of boundary, so ~1 px × the covered set's
+/// perimeter approximates the partially-lit fringe. Plain rects get none
+/// (their quad is exact); a stroked shape has two boundary curves, whose
+/// perimeters sum to twice the centerline perimeter for a convex outline.
+#[cfg(not(target_arch = "wasm32"))]
+fn aa_perimeter_allowance(shape: &ShapeData) -> f64 {
+    let flags = shape.stroke_params[1].max(0.0) as u32;
+    match flags & 3 {
+        SHAPE_KIND_ARC => {
+            let outer = f64::from(shape.stroke_params[2]).max(0.0);
+            let inner = f64::from(shape.stroke_params[3]).clamp(0.0, outer);
+            let tau = f64::from(cranpose_ui_graphics::TAU);
+            let sweep = f64::from(shape.arc_params[3]).clamp(0.0, tau);
+            let ends = if sweep >= tau {
+                0.0
+            } else {
+                2.0 * (outer - inner)
+            };
+            sweep * (outer + inner) + ends
+        }
+        SHAPE_KIND_STROKE => {
+            let stroke_width = f64::from(shape.stroke_params[0]).max(0.0);
+            let geom_w = (f64::from(shape.rect[2]) - stroke_width).max(0.0);
+            let geom_h = (f64::from(shape.rect[3]) - stroke_width).max(0.0);
+            let max_radius = geom_w.min(geom_h) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            let perimeter =
+                2.0 * (geom_w + geom_h) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum;
+            2.0 * perimeter.max(0.0)
+        }
+        _ if shape.radii.iter().any(|radius| *radius > 0.0) => {
+            let width = f64::from(shape.rect[2]).max(0.0);
+            let height = f64::from(shape.rect[3]).max(0.0);
+            let max_radius = width.min(height) * 0.5;
+            let radii_sum: f64 = shape
+                .radii
+                .iter()
+                .map(|radius| f64::from(*radius).clamp(0.0, max_radius))
+                .sum();
+            (2.0 * (width + height) - (2.0 - std::f64::consts::FRAC_PI_2) * radii_sum).max(0.0)
+        }
+        _ => 0.0,
+    }
+}
+
+/// Analytic lit area: covered pixels plus the AA fringe allowance. Callers
+/// clamp it to the shape's submitted area — the shader cannot light pixels
+/// its quad never rasterizes.
+#[cfg(not(target_arch = "wasm32"))]
+fn analytic_lit_area(shape: &ShapeData) -> f64 {
+    analytic_covered_area(shape) + aa_perimeter_allowance(shape)
+}
+
+/// Device-space AABB of a shape's submitted quad: min x, min y, max x, max y.
+#[cfg(not(target_arch = "wasm32"))]
+fn quad_aabb(shape: &ShapeData) -> [f64; 4] {
+    let xs = [
+        f64::from(shape.quad01[0]),
+        f64::from(shape.quad01[2]),
+        f64::from(shape.quad23[0]),
+        f64::from(shape.quad23[2]),
+    ];
+    let ys = [
+        f64::from(shape.quad01[1]),
+        f64::from(shape.quad01[3]),
+        f64::from(shape.quad23[1]),
+        f64::from(shape.quad23[3]),
+    ];
+    let fold = |values: [f64; 4], pick: fn(f64, f64) -> f64| {
+        values.into_iter().reduce(pick).unwrap_or(0.0)
+    };
+    [
+        fold(xs, f64::min),
+        fold(ys, f64::min),
+        fold(xs, f64::max),
+        fold(ys, f64::max),
+    ]
+}
+
+/// Vertical strips of the midpoint rule used by
+/// [`area_outside_inscribed_circle`]. 32 strips keep the chord error under
+/// ~0.5% for a full-viewport quad — plenty for a corner-waste ratio.
+#[cfg(not(target_arch = "wasm32"))]
+const CORNER_FILL_STRIPS: usize = 32;
+
+/// Area of an axis-aligned box lying inside the viewport but OUTSIDE the
+/// inscribed circle (diameter `min(w, h)`, centered) — the pixels a round
+/// watch display physically cannot show. Approximations, deliberate: the
+/// submitted quad is replaced by its AABB (exact for the axis-aligned quads
+/// that dominate full-frame scenes), and the circle chord is integrated with
+/// [`CORNER_FILL_STRIPS`] midpoint strips instead of closed-form segments.
+/// On a non-square viewport the side bands beyond the circle count as
+/// outside too, which is the honest answer for a round display.
+#[cfg(not(target_arch = "wasm32"))]
+fn area_outside_inscribed_circle(aabb: [f64; 4], viewport: (u32, u32)) -> f64 {
+    let viewport_w = f64::from(viewport.0);
+    let viewport_h = f64::from(viewport.1);
+    if viewport_w <= 0.0 || viewport_h <= 0.0 {
+        return 0.0;
+    }
+    let x0 = aabb[0].max(0.0);
+    let y0 = aabb[1].max(0.0);
+    let x1 = aabb[2].min(viewport_w);
+    let y1 = aabb[3].min(viewport_h);
+    if x1 <= x0 || y1 <= y0 {
+        return 0.0;
+    }
+    let center_x = viewport_w * 0.5;
+    let center_y = viewport_h * 0.5;
+    let radius = viewport_w.min(viewport_h) * 0.5;
+    let strip = (x1 - x0) / CORNER_FILL_STRIPS as f64;
+    let mut outside = 0.0;
+    for index in 0..CORNER_FILL_STRIPS {
+        let x = x0 + (index as f64 + 0.5) * strip;
+        let dx = x - center_x;
+        let chord_sq = radius * radius - dx * dx;
+        let inside = if chord_sq > 0.0 {
+            let half_chord = chord_sq.sqrt();
+            (y1.min(center_y + half_chord) - y0.max(center_y - half_chord)).max(0.0)
+        } else {
+            0.0
+        };
+        outside += ((y1 - y0) - inside) * strip;
+    }
+    outside
+}
+
+/// Per-shape fill-diag record a replay slot retains at capture, so retained
+/// draws can be priced per range without re-deriving anything per frame.
+/// Only built while `CRANPOSE_FILL_DIAG` is on.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct FillDiagShapeRecord {
+    /// Capture-space area actually submitted for this shape: mesh triangle
+    /// area when the slot replays its arc mesh, bounding-quad area otherwise.
+    drawn_px2: f64,
+    /// Analytic lit area ([`analytic_lit_area`]), clamped to `drawn_px2`.
+    lit_px2: f64,
+    /// SDF-class bucket ([`fill_diag_bucket`]), for the top-slack dump.
+    bucket: usize,
+    opacity: FillOpacityClass,
+    /// Capture-space AABB of the submitted quad, for the corner counter.
+    aabb: [f64; 4],
+}
+
+/// Builds a capture's fill-diag records. `mesh` carries the kept arc mesh's
+/// `(vertices, indices, index_prefix)` when the slot will replay it, so each
+/// shape is priced by its true triangle area.
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_diag_capture_records(
+    shape_data: &[ShapeData],
+    mesh: Option<(&[MeshVertex], &[u32], &[u32])>,
+) -> Vec<FillDiagShapeRecord> {
+    shape_data
+        .iter()
+        .enumerate()
+        .map(|(index, shape)| {
+            let drawn_px2 = match mesh {
+                Some((vertices, indices, index_prefix)) => {
+                    let start = index_prefix[index] as usize;
+                    let end = index_prefix[index + 1] as usize;
+                    triangles_shoelace_area(vertices, &indices[start..end])
+                }
+                None => quad_shoelace_area(shape),
+            };
+            FillDiagShapeRecord {
+                drawn_px2,
+                lit_px2: analytic_lit_area(shape).clamp(0.0, drawn_px2),
+                bucket: fill_diag_bucket(shape),
+                opacity: fill_opacity_class(shape),
+                aabb: quad_aabb(shape),
+            }
+        })
+        .collect()
+}
+
+/// One entry of the once-per-process top-slack dump: a retained shape whose
+/// submitted area most exceeds its lit area.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug)]
+struct FillDiagSlackEntry {
+    slot: u32,
+    shape: u32,
+    bucket: usize,
+    drawn_px2: f64,
+    lit_px2: f64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_SLACK_TOP: usize = 10;
+
+/// Submitted-fill-area accounting behind [`fill_area_diag_enabled`]. The
+/// watch's GPU counters are sepolicy-blocked, but the renderer knows every
+/// quad it emits, so summing their areas per bucket says where the fragment
+/// work goes; the point is the RATIO between buckets, and several are
+/// deliberately approximate where exactness would cost the hot path:
+///
+/// * `arc` / `rrect-stroke` / `rrect-fill` / `rect` — batched shape quads by
+///   decoded SDF class: exact shoelace area of the submitted quads, from the
+///   fused screen pass and the offscreen layer/shadow-source passes alike.
+///   Scissors and the SDF's own discards are not modeled. The latched
+///   instanced-quad path draws these same quads (one instance per shape), so
+///   instanced draws live in these buckets rather than a separate one.
+/// * `mesh` — transient rim band meshes: exact triangle area, replacing the
+///   rim's bounding quad (which is subtracted back out of `rrect-stroke`).
+/// * `retained` — replay-slot draws: exact capture-space area of the drawn
+///   shape range (mesh triangles when the slot replays its arc mesh, quads
+///   otherwise) times the draw's similarity scale squared.
+/// * `img+glyph` — image quads exactly; glyph atlas quads as width x height.
+///   A retained glyph run counts every quad of its cached buffer (the
+///   shared path's per-quad viewport cull is not re-run for it).
+/// * `effect-comp` — effect-renderer draws into a caller-supplied view:
+///   composites/blits (incl. batched, projective and masked variants) and
+///   src-over runtime shader passes. Priced per pass at the dest viewport
+///   area, clamped by the scissor when one is set (min of the two areas
+///   stands in for their exact intersection).
+/// * `offscr-src` — passes rendering INTO offscreen chain textures: blur
+///   ping-pong axis passes, offset passes, replace-mode shader passes, and
+///   the shadow-source target passes of `encode_shadow_shape_source_passes`
+///   (the whole bounds-sized target per pass — its load/store round trip —
+///   on top of the shape quads it draws, which the SDF-class buckets price
+///   as usual).
+///
+/// The `[fill-truth]` line splits every bucket into analytic lit vs slack
+/// (`lit` per [`analytic_lit_area`], `slack = submitted − lit`, clamped
+/// non-negative; effect passes are all-lit by definition), histograms lit
+/// pixels by [`FillOpacityClass`] (shape buckets only — image/glyph and
+/// effect fill has no CPU-known alpha and is excluded), and prices the
+/// full-frame corner waste per [`area_outside_inscribed_circle`]. The corner
+/// counter covers full-frame shape batches and identity-transform retained
+/// draws; meshed rims stay priced by their bounding AABB there (documented
+/// overcount), and image/glyph quads are excluded.
+///
+/// Not counted: frame-graph layer clears/attachments outside the effect
+/// renderer's own draw sites.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FillAreaDiag {
+    /// Current frame's per-bucket submitted area, device px². `Cell`s
+    /// because draw encoding accumulates through `&self`, the same pattern
+    /// as [`gpu_stats::FrameStats`].
+    frame: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
+    /// Current frame's per-bucket analytic lit area, ≤ the submitted area.
+    frame_lit: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
+    /// Current frame's lit area by [`FillOpacityClass`], shape buckets only.
+    frame_opacity: [std::cell::Cell<f64>; 3],
+    /// Current frame's full-frame fill outside the inscribed circle.
+    frame_corner: std::cell::Cell<f64>,
+    /// The frame's surface size, latched by [`Self::reset_frame`] — the
+    /// full-frame-pass gate and the inscribed circle both derive from it.
+    viewport: std::cell::Cell<(u32, u32)>,
+    /// Window totals, folded once per frame by [`Self::finish_frame`].
+    window: [f64; FILL_DIAG_BUCKETS],
+    window_lit: [f64; FILL_DIAG_BUCKETS],
+    window_opacity: [f64; 3],
+    window_corner: f64,
+    window_frames: u32,
+    /// Worst retained shapes by slack, collected at slot capture and dumped
+    /// once with the first report window that has any (then dropped).
+    slack_top: Vec<FillDiagSlackEntry>,
+    slack_dumped: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FillAreaDiag {
+    const ARC: usize = 0;
+    const RRECT_STROKE: usize = 1;
+    const RRECT_FILL: usize = 2;
+    const RECT: usize = 3;
+    const MESH: usize = 4;
+    const RETAINED: usize = 5;
+    const IMAGE_GLYPH: usize = 6;
+    const EFFECT_COMPOSITE: usize = 7;
+    const OFFSCREEN_SOURCE: usize = 8;
+
+    fn add(&self, bucket: usize, area_px2: f64) {
+        let cell = &self.frame[bucket];
+        cell.set(cell.get() + area_px2);
+    }
+
+    fn add_lit(&self, bucket: usize, lit_px2: f64) {
+        let cell = &self.frame_lit[bucket];
+        cell.set(cell.get() + lit_px2);
+    }
+
+    fn add_corner(&self, px2: f64) {
+        self.frame_corner.set(self.frame_corner.get() + px2);
+    }
+
+    /// Whether a batch's viewport IS this frame's surface — the gate for the
+    /// corner counter (offscreen shadow/layer passes carry their own bounds
+    /// viewport and never qualify).
+    fn is_full_frame(&self, viewport: ViewportUniformParams) -> bool {
+        let (width, height) = self.viewport.get();
+        width > 0
+            && height > 0
+            && viewport.width == width
+            && viewport.height == height
+            && viewport.offset == [0.0, 0.0]
+    }
+
+    /// Splits a freshly converted batch's quads by SDF class
+    /// ([`fill_diag_bucket`]), alongside each bucket's analytic lit area,
+    /// the opacity histogram and — for full-frame passes — the corner
+    /// counter.
+    fn add_shape_quads(&self, shapes: &[ShapeData], viewport: ViewportUniformParams) {
+        let full_frame = self.is_full_frame(viewport);
+        let frame_viewport = self.viewport.get();
+        let mut buckets = [0.0_f64; FILL_DIAG_BUCKETS];
+        let mut lit_buckets = [0.0_f64; FILL_DIAG_BUCKETS];
+        let mut opacity = [0.0_f64; 3];
+        let mut corner = 0.0_f64;
+        for shape in shapes {
+            let bucket = fill_diag_bucket(shape);
+            let quad = quad_shoelace_area(shape);
+            let lit = analytic_lit_area(shape).clamp(0.0, quad);
+            buckets[bucket] += quad;
+            lit_buckets[bucket] += lit;
+            opacity[fill_opacity_class(shape) as usize] += lit;
+            if full_frame {
+                corner += area_outside_inscribed_circle(quad_aabb(shape), frame_viewport);
+            }
+        }
+        for (bucket, area) in buckets.into_iter().enumerate() {
+            if area > 0.0 {
+                self.add(bucket, area);
+            }
+        }
+        for (bucket, lit) in lit_buckets.into_iter().enumerate() {
+            if lit > 0.0 {
+                self.add_lit(bucket, lit);
+            }
+        }
+        for (class, lit) in self.frame_opacity.iter().zip(opacity) {
+            class.set(class.get() + lit);
+        }
+        if corner > 0.0 {
+            self.add_corner(corner);
+        }
+    }
+
+    /// A transient rim replaced its bounding quad with a band mesh: move the
+    /// quad's area and lit (already counted at batch prepare) out of the
+    /// stroke bucket and count the mesh triangles instead. The opacity
+    /// histogram and corner counter stay as priced at batch prepare — the
+    /// same pixels light up either way, and the corner counter deliberately
+    /// keeps the quad AABB (documented overcount for meshed rims).
+    fn note_rim_mesh(&self, shape: &ShapeData, mesh_px2: f64) {
+        let quad = quad_shoelace_area(shape);
+        let lit = analytic_lit_area(shape).clamp(0.0, quad);
+        self.add(Self::RRECT_STROKE, -quad);
+        self.add_lit(Self::RRECT_STROKE, -lit);
+        self.add(Self::MESH, mesh_px2);
+        self.add_lit(Self::MESH, lit.min(mesh_px2));
+    }
+
+    /// One retained replay draw over `first..last` of a slot's capture:
+    /// capture-space records times the draw's similarity scale squared. The
+    /// corner counter only accumulates for identity-transform draws (rot 0,
+    /// scale 1 — the static background/rings case it exists for), because a
+    /// moved batch's capture-space AABBs no longer say where it lands.
+    fn add_retained_range(
+        &self,
+        records: &[FillDiagShapeRecord],
+        first: u32,
+        last: u32,
+        transform: &SimilarityTransform,
+    ) {
+        let Some(range) = records.get(first as usize..last as usize) else {
+            return;
+        };
+        let scale = f64::from(transform.scale);
+        let factor = scale * scale;
+        let identity = transform.rot == [1.0, 0.0] && transform.scale == 1.0;
+        let frame_viewport = self.viewport.get();
+        let mut drawn = 0.0_f64;
+        let mut lit = 0.0_f64;
+        let mut opacity = [0.0_f64; 3];
+        let mut corner = 0.0_f64;
+        for record in range {
+            drawn += record.drawn_px2;
+            lit += record.lit_px2;
+            opacity[record.opacity as usize] += record.lit_px2;
+            if identity {
+                corner += area_outside_inscribed_circle(record.aabb, frame_viewport);
+            }
+        }
+        self.add(Self::RETAINED, drawn * factor);
+        self.add_lit(Self::RETAINED, lit * factor);
+        for (class, value) in self.frame_opacity.iter().zip(opacity) {
+            class.set(class.get() + value * factor);
+        }
+        if corner > 0.0 {
+            self.add_corner(corner);
+        }
+    }
+
+    /// Collects top-slack candidates from a fresh capture, keeping the
+    /// [`FILL_DIAG_SLACK_TOP`] worst across all captures until the first
+    /// report window dumps them.
+    fn note_retained_capture(&mut self, slot: u32, records: &[FillDiagShapeRecord]) {
+        if self.slack_dumped {
+            return;
+        }
+        for (index, record) in records.iter().enumerate() {
+            if record.drawn_px2 - record.lit_px2 <= 0.0 {
+                continue;
+            }
+            self.slack_top.push(FillDiagSlackEntry {
+                slot,
+                shape: index as u32,
+                bucket: record.bucket,
+                drawn_px2: record.drawn_px2,
+                lit_px2: record.lit_px2,
+            });
+        }
+        self.slack_top
+            .sort_by(|a, b| (b.drawn_px2 - b.lit_px2).total_cmp(&(a.drawn_px2 - a.lit_px2)));
+        self.slack_top.truncate(FILL_DIAG_SLACK_TOP);
+    }
+
+    /// Area of an image or text-image quad from its four device-space
+    /// corners (TL, TR, BL, BR — the shared `(0, 1, 2)(2, 1, 3)` pattern).
+    /// Textures light every pixel of their quad, so lit == submitted.
+    fn add_image_quad(&self, quad: &[[f32; 2]; 4]) {
+        let corner = |index: usize| [f64::from(quad[index][0]), f64::from(quad[index][1])];
+        let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+            ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
+        };
+        let [a, b, c, d] = [corner(0), corner(1), corner(2), corner(3)];
+        let area = tri(a, b, c) + tri(c, b, d);
+        self.add(Self::IMAGE_GLYPH, area);
+        self.add_lit(Self::IMAGE_GLYPH, area);
+    }
+
+    /// One glyph atlas quad, axis-aligned by construction.
+    fn add_glyph_quad(&self, quad: &CachedTextGlyphQuad) {
+        let area = quad.width as f64 * quad.height as f64;
+        self.add(Self::IMAGE_GLYPH, area);
+        self.add_lit(Self::IMAGE_GLYPH, area);
+    }
+
+    /// Effect-renderer pass fill drained once per frame from the effect
+    /// renderer's own counters. Full-target draws: every counted pixel is
+    /// shaded, so lit == submitted and slack is zero by construction.
+    fn add_effect_fill(&self, composite_px2: f64, offscreen_px2: f64) {
+        if composite_px2 > 0.0 {
+            self.add(Self::EFFECT_COMPOSITE, composite_px2);
+            self.add_lit(Self::EFFECT_COMPOSITE, composite_px2);
+        }
+        if offscreen_px2 > 0.0 {
+            self.add(Self::OFFSCREEN_SOURCE, offscreen_px2);
+            self.add_lit(Self::OFFSCREEN_SOURCE, offscreen_px2);
+        }
+    }
+
+    /// One render pass targeting an offscreen source texture (shadow source
+    /// passes): the whole target area counts — its clear/load/store round
+    /// trip — on top of the shape quads the pass draws, which
+    /// [`Self::add_shape_quads`] prices separately under the pass's own
+    /// bounds viewport.
+    fn add_offscreen_target_fill(&self, px2: f64) {
+        if px2 > 0.0 {
+            self.add(Self::OFFSCREEN_SOURCE, px2);
+            self.add_lit(Self::OFFSCREEN_SOURCE, px2);
+        }
+    }
+
+    /// Restarts the frame counters and latches the surface size — called
+    /// from the same per-frame reset point as the transient rim mesh
+    /// scratch.
+    fn reset_frame(&self, width: u32, height: u32) {
+        for cell in &self.frame {
+            cell.set(0.0);
+        }
+        for cell in &self.frame_lit {
+            cell.set(0.0);
+        }
+        for cell in &self.frame_opacity {
+            cell.set(0.0);
+        }
+        self.frame_corner.set(0.0);
+        self.viewport.set((width, height));
+    }
+
+    /// Folds the frame into the window and, every
+    /// [`FILL_DIAG_WINDOW_FRAMES`] rendered frames, emits the `[fill-diag]`
+    /// bucket line, the `[fill-truth]` lit/slack + opacity + corner line,
+    /// and — once per process — the retained top-slack dump.
+    fn finish_frame(&mut self, width: u32, height: u32) {
+        for (total, cell) in self.window.iter_mut().zip(&self.frame) {
+            *total += cell.get();
+        }
+        for (total, cell) in self.window_lit.iter_mut().zip(&self.frame_lit) {
+            *total += cell.get();
+        }
+        for (total, cell) in self.window_opacity.iter_mut().zip(&self.frame_opacity) {
+            *total += cell.get();
+        }
+        self.window_corner += self.frame_corner.get();
+        self.window_frames += 1;
+        if self.window_frames < FILL_DIAG_WINDOW_FRAMES {
+            return;
+        }
+        let frames = f64::from(self.window_frames);
+        let mega = |bucket: usize| self.window[bucket] / frames / 1e6;
+        let total_mega = self.window.iter().sum::<f64>() / frames / 1e6;
+        let screen_mega = f64::from(width) * f64::from(height) / 1e6;
+        let overdraw = if screen_mega > 0.0 {
+            total_mega / screen_mega
+        } else {
+            0.0
+        };
+        log::warn!(
+            "[fill-diag] Mpx/frame: arc {:.1}, rrect-stroke {:.1}, rrect-fill {:.1}, \
+             rect {:.1}, mesh {:.1}, retained {:.1}, img+glyph {:.1}, \
+             effect-comp {:.1}, offscr-src {:.1}, total {:.1} \
+             ({:.1}x overdraw of {:.3} Mpx)",
+            mega(Self::ARC),
+            mega(Self::RRECT_STROKE),
+            mega(Self::RRECT_FILL),
+            mega(Self::RECT),
+            mega(Self::MESH),
+            mega(Self::RETAINED),
+            mega(Self::IMAGE_GLYPH),
+            mega(Self::EFFECT_COMPOSITE),
+            mega(Self::OFFSCREEN_SOURCE),
+            total_mega,
+            overdraw,
+            screen_mega,
+        );
+        // Lit vs slack per bucket: lit per [`analytic_lit_area`], slack the
+        // remainder of the submitted area (clamped — negatives are rim-mesh
+        // rounding, not information).
+        let lit = |bucket: usize| self.window_lit[bucket] / frames / 1e6;
+        let slack = |bucket: usize| (mega(bucket) - lit(bucket)).max(0.0);
+        let truth = |bucket: usize| format!("{:.2}|{:.2}", lit(bucket), slack(bucket));
+        log::warn!(
+            "[fill-truth] Mpx/frame lit|slack: arc {}, rrect-stroke {}, rrect-fill {}, \
+             rect {}, mesh {}, retained {}, img+glyph {}, effect-comp {}, offscr-src {}; \
+             lit alpha Mpx: opaque {:.2}, translucent {:.2}, nonsolid {:.2}; \
+             corner-outside {:.2}",
+            truth(Self::ARC),
+            truth(Self::RRECT_STROKE),
+            truth(Self::RRECT_FILL),
+            truth(Self::RECT),
+            truth(Self::MESH),
+            truth(Self::RETAINED),
+            truth(Self::IMAGE_GLYPH),
+            truth(Self::EFFECT_COMPOSITE),
+            truth(Self::OFFSCREEN_SOURCE),
+            self.window_opacity[FillOpacityClass::Opaque as usize] / frames / 1e6,
+            self.window_opacity[FillOpacityClass::Translucent as usize] / frames / 1e6,
+            self.window_opacity[FillOpacityClass::NonSolid as usize] / frames / 1e6,
+            self.window_corner / frames / 1e6,
+        );
+        if !self.slack_dumped && !self.slack_top.is_empty() {
+            log::warn!("[fill-truth] top retained slack (once per process, capture-space px):");
+            for (rank, entry) in self.slack_top.iter().enumerate() {
+                log::warn!(
+                    "[fill-truth]   #{} slot {} shape {} {}: quad {:.0}, lit {:.0}, \
+                     slack {:.0}",
+                    rank + 1,
+                    entry.slot,
+                    entry.shape,
+                    fill_diag_bucket_name(entry.bucket),
+                    entry.drawn_px2,
+                    entry.lit_px2,
+                    entry.drawn_px2 - entry.lit_px2,
+                );
+            }
+            self.slack_dumped = true;
+            self.slack_top = Vec::new();
+        }
+        self.window = [0.0; FILL_DIAG_BUCKETS];
+        self.window_lit = [0.0; FILL_DIAG_BUCKETS];
+        self.window_opacity = [0.0; 3];
+        self.window_corner = 0.0;
+        self.window_frames = 0;
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -4114,6 +4877,10 @@ pub struct GpuRenderer {
     /// [`Self::rim_meshes_emitted`].
     #[cfg(not(target_arch = "wasm32"))]
     rim_meshes_emitted: u64,
+    /// Submitted fill-area accounting (`CRANPOSE_FILL_DIAG`); idle unless
+    /// the flag is set.
+    #[cfg(not(target_arch = "wasm32"))]
+    fill_area_diag: FillAreaDiag,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -4689,6 +5456,8 @@ impl GpuRenderer {
             rim_mesh_uploaded_indices: 0,
             #[cfg(not(target_arch = "wasm32"))]
             rim_meshes_emitted: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            fill_area_diag: FillAreaDiag::default(),
         };
         log::info!(
             "[gpu-init] {:?} renderer ready in {:.1} ms (effects {:.1} ms); \
@@ -5027,6 +5796,7 @@ impl GpuRenderer {
         )?;
         let key = shape_shadow_surface_cache_key(
             &shadow.shapes,
+            &shadow.brushes,
             plan.source_device_bounds,
             plan.pixel_radius,
             root_scale,
@@ -5105,6 +5875,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         &mut self,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -5153,6 +5924,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     self.render_non_effect_segment(
                         &target.view,
                         shapes,
+                        brushes,
                         images,
                         texts,
                         shadow_draws,
@@ -5185,6 +5957,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         let effective_backdrop_underlay = if backdrop_underlay.is_some()
                             && backdrop_underlay_is_covered_by_local_content(
                                 shapes,
+                                brushes,
                                 images,
                                 shadow_draws,
                                 draw_ops,
@@ -5216,6 +5989,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             self,
                             target,
                             shapes,
+                            brushes,
                             images,
                             texts,
                             shadow_draws,
@@ -5237,6 +6011,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 self.render_non_effect_segment(
                     &target.view,
                     shapes,
+                    brushes,
                     images,
                     texts,
                     shadow_draws,
@@ -5871,6 +6646,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -5887,6 +6663,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.render_non_effect_segment_with_composites(
             target_view,
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -5909,6 +6686,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -6003,6 +6781,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             z_start..z_end,
             &ordered_items,
             shapes,
+            brushes,
             images,
             SegmentDiagCounts {
                 raw_shadow_items,
@@ -6023,6 +6802,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 &merged_composites,
                 shader_composites,
                 shapes,
+                brushes,
                 images,
                 texts,
                 shadow_draws,
@@ -6045,6 +6825,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -6063,6 +6844,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.render_range_with_layer_events_to_target_recorded(
             target,
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -6522,6 +7304,9 @@ impl GpuRenderer {
             self.rim_mesh_indices.clear();
             self.rim_mesh_uploaded_vertices = 0;
             self.rim_mesh_uploaded_indices = 0;
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.reset_frame(width, height);
+            }
         }
 
         // Producer-side text layout cache size, carried by the packet — the
@@ -6531,6 +7316,18 @@ impl GpuRenderer {
         let result = self.render_graph(view, packet, returns);
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                // Effect/composite fill accumulated during the graph walk
+                // lives in the effect renderer's own cells; fold it into
+                // this frame before the window closes over it.
+                let (composite_px2, offscreen_px2) = self.effect_renderer.take_fill_diag_fill_px2();
+                self.fill_area_diag
+                    .add_effect_fill(composite_px2, offscreen_px2);
+                self.fill_area_diag.finish_frame(width, height);
+            }
+        }
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -6918,8 +7715,12 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if let PacketRoot::Direct(root) = &packet.root {
             let ops = std::mem::take(&mut packet.replay);
-            let (ack, recycled) =
-                self.consume_replay_ops(ops, &root.scene.shapes, packet.root_scale);
+            let (ack, recycled) = self.consume_replay_ops(
+                ops,
+                &root.scene.shapes,
+                &root.scene.brushes,
+                packet.root_scale,
+            );
             returns.ack = Some((ack, recycled));
         }
 
@@ -7185,6 +7986,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -7212,6 +8014,7 @@ impl GpuRenderer {
                         composites,
                         shader_composites,
                         shapes,
+                        brushes,
                         images,
                         texts,
                         retained_draws,
@@ -7279,6 +8082,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7291,6 +8095,7 @@ impl GpuRenderer {
         let Some(partitions) = native_segment_fusion_partitions(
             ordered_items,
             shapes,
+            brushes,
             chunk,
             self.shape_batch_limits,
         )?
@@ -7309,6 +8114,7 @@ impl GpuRenderer {
                 composites,
                 shader_composites,
                 shapes,
+                brushes,
                 images,
                 texts,
                 retained_draws,
@@ -7342,6 +8148,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7404,6 +8211,7 @@ impl GpuRenderer {
                 let Some((_, upload_base)) = self.prepare_shapes_batch_direct(
                     frame_encoder,
                     shape_refs.iter().copied(),
+                    brushes,
                     root_scale,
                     viewport,
                     &mut direct_shape_uploads,
@@ -7444,7 +8252,8 @@ impl GpuRenderer {
                                     "shape batch contains non-shape draw item: {item:?}"
                                 ));
                             };
-                            has_gradient |= shape_gradient_stop_count(&shapes[*shape_index]) > 0;
+                            has_gradient |=
+                                shape_gradient_stop_count(&shapes[*shape_index], brushes) > 0;
                         }
                         let shape_count = end - start;
                         if shape_count > 0 {
@@ -7496,6 +8305,15 @@ impl GpuRenderer {
                                         index_count: (self.rim_mesh_indices.len() - index_mark)
                                             as u32,
                                     });
+                                    if fill_area_diag_enabled() {
+                                        self.fill_area_diag.note_rim_mesh(
+                                            converted,
+                                            triangles_shoelace_area(
+                                                &self.rim_mesh_vertices,
+                                                &self.rim_mesh_indices[index_mark..],
+                                            ),
+                                        );
+                                    }
                                     self.rim_meshes_emitted += 1;
                                     if self.rim_meshes_emitted % 600 == 1 {
                                         log::debug!(
@@ -7904,6 +8722,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7923,6 +8742,7 @@ impl GpuRenderer {
             composites,
             shader_composites,
             shapes,
+            brushes,
             images,
             texts,
             retained_draws,
@@ -7973,6 +8793,7 @@ impl GpuRenderer {
                                 SegmentDrawItem::Shape(shape_index) => Some(&shapes[*shape_index]),
                                 _ => None,
                             }),
+                            brushes,
                             root_scale,
                             viewport,
                             &mut staged_uploads,
@@ -8690,6 +9511,7 @@ impl GpuRenderer {
                     frame_encoder,
                     target_view,
                     std::iter::once(shape),
+                    &shadow.brushes,
                     *blend_mode,
                     width,
                     height,
@@ -8817,6 +9639,7 @@ impl GpuRenderer {
             frame_encoder,
             &source.view,
             &shadow.shapes,
+            &shadow.brushes,
             bounds_w,
             bounds_h,
             viewport_offset,
@@ -8970,6 +9793,7 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         source_view: &wgpu::TextureView,
         shapes: &[(DrawShape, BlendMode)],
+        brushes: &[Brush],
         width: u32,
         height: u32,
         viewport_offset: [f32; 2],
@@ -9008,6 +9832,7 @@ impl GpuRenderer {
                     .iter()
                     .map(|(shape, _blend_mode)| shape)
                     .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+                brushes,
                 root_scale,
                 viewport,
                 &mut staged_uploads,
@@ -9050,6 +9875,19 @@ impl GpuRenderer {
                 );
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if fill_area_diag_enabled() {
+                    // Each shadow-source pass round-trips the whole
+                    // bounds-sized offscreen target (clear on the first
+                    // pass, load/store after); the shape quads inside were
+                    // already priced by `prepare_shapes_batch` under this
+                    // pass's bounds viewport.
+                    self.fill_area_diag
+                        .add_offscreen_target_fill(f64::from(width) * f64::from(height));
+                }
+            }
+
             pass_count = pass_count.saturating_add(1);
             rendered_any = true;
             *next_load_op = wgpu::LoadOp::Load;
@@ -9079,8 +9917,13 @@ impl GpuRenderer {
         let bounds_w = device_bounds.width;
         let bounds_h = device_bounds.height;
         let viewport_offset = [device_bounds.x, device_bounds.y];
-        let cache_key =
-            shape_shadow_surface_cache_key(&shadow.shapes, device_bounds, pixel_radius, root_scale);
+        let cache_key = shape_shadow_surface_cache_key(
+            &shadow.shapes,
+            &shadow.brushes,
+            device_bounds,
+            pixel_radius,
+            root_scale,
+        );
 
         if let Some(key) = cache_key {
             if let Some(cached) = self.cached_shadow_surface(&key) {
@@ -9152,6 +9995,7 @@ impl GpuRenderer {
             frame_encoder,
             &source.view,
             &shadow.shapes,
+            &shadow.brushes,
             bounds_w,
             bounds_h,
             viewport_offset,
@@ -9232,6 +10076,7 @@ impl GpuRenderer {
     fn prepare_shapes_batch<'a, I>(
         &mut self,
         layer_shapes: I,
+        brushes: &[Brush],
         root_scale: f32,
         viewport: ViewportUniformParams,
         staged_uploads: &mut StagedBufferUploads,
@@ -9261,7 +10106,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in &shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9274,11 +10119,19 @@ impl GpuRenderer {
 
         convert_shapes_into_outputs(
             &shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut self.scratch_shape_data,
             &mut self.scratch_gradients,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag
+                    .add_shape_quads(&self.scratch_shape_data, viewport);
+            }
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -9356,6 +10209,7 @@ impl GpuRenderer {
         &mut self,
         frame_encoder: &mut C,
         layer_shapes: I,
+        brushes: &[Brush],
         root_scale: f32,
         viewport: ViewportUniformParams,
         staged_uploads: &mut StagedBufferUploads,
@@ -9375,7 +10229,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in &shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9396,11 +10250,16 @@ impl GpuRenderer {
             .resize(total_gradient_stops as usize, GradientStop::zeroed());
         convert_shapes_into_outputs(
             &shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut self.scratch_shape_data,
             &mut self.scratch_gradients,
         );
+        if fill_area_diag_enabled() {
+            self.fill_area_diag
+                .add_shape_quads(&self.scratch_shape_data, viewport);
+        }
 
         // Region layout inside the frame upload buffer. Every element type is
         // f32/u32-based, so all lengths are multiples of
@@ -9521,6 +10380,7 @@ impl GpuRenderer {
         &mut self,
         mut ops: crate::frame_packet::ReplayFrameOps,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         root_scale: f32,
     ) -> (
         crate::frame_packet::ReplayAck,
@@ -9596,7 +10456,7 @@ impl GpuRenderer {
                 continue;
             };
             let refs: Vec<&DrawShape> = slice.iter().collect();
-            let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
+            let Some(gpu_slot) = self.capture_replay_slot(&refs, brushes, root_scale) else {
                 continue;
             };
             confirmations.push((capture.key, gpu_slot));
@@ -9640,7 +10500,7 @@ impl GpuRenderer {
         let generation = self.store_feed_generation.wrapping_add(generation_skew);
         let ops = crate::shape_replay::SHAPE_REPLAY
             .with(|state| state.borrow_mut().take_frame_ops(generation));
-        let (ack, recycled) = self.consume_replay_ops(ops, &[], 1.0);
+        let (ack, recycled) = self.consume_replay_ops(ops, &[], &[], 1.0);
         let confirmed = ack.confirmations.len();
         self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
             .with(|state| state.borrow_mut().apply_ack(ack, recycled));
@@ -9754,6 +10614,7 @@ impl GpuRenderer {
     pub(crate) fn capture_replay_slot(
         &mut self,
         shape_refs: &[&DrawShape],
+        brushes: &[Brush],
         root_scale: f32,
     ) -> Option<u32> {
         if !self.shape_batch_limits.storage || shape_refs.is_empty() {
@@ -9766,7 +10627,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9774,6 +10635,7 @@ impl GpuRenderer {
         let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
         convert_shapes_into_outputs(
             shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut shape_data,
@@ -9804,6 +10666,10 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::cast_slice(&gradients));
         gradient_buffer.unmap();
 
+        // Filled by the mesh arm when the capture keeps its arc mesh, so
+        // the fill-diag records can price those shapes by their true
+        // triangle area.
+        let mut mesh_fill_records: Option<Vec<FillDiagShapeRecord>> = None;
         let mesh = if arc_mesh_enabled() {
             match build_arc_mesh_vertices(&shape_data) {
                 Some(build) => {
@@ -9831,6 +10697,12 @@ impl GpuRenderer {
                         build.mesh_area,
                         cut,
                     );
+                    if build.meshed_arcs > 0 && fill_area_diag_enabled() {
+                        mesh_fill_records = Some(fill_diag_capture_records(
+                            &shape_data,
+                            Some((&build.vertices, &build.indices, &build.index_prefix)),
+                        ));
+                    }
                     // A slot that meshed nothing gains nothing over the
                     // indexless quad path — skip the buffers.
                     (build.meshed_arcs > 0).then(|| {
@@ -9873,6 +10745,17 @@ impl GpuRenderer {
             }
         } else {
             None
+        };
+
+        let fill_diag_shapes = if fill_area_diag_enabled() {
+            let records =
+                mesh_fill_records.unwrap_or_else(|| fill_diag_capture_records(&shape_data, None));
+            // Feed the once-per-process top-slack dump before the records
+            // move into the slot.
+            self.fill_area_diag.note_retained_capture(id, &records);
+            records
+        } else {
+            Vec::new()
         };
 
         // Seed the mutable paint from the converted colors, so an unpatched
@@ -9937,6 +10820,7 @@ impl GpuRenderer {
                 mesh,
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
+                fill_diag_shapes,
             },
         );
         Some(id)
@@ -10003,6 +10887,14 @@ impl GpuRenderer {
             .min(slot.shape_count);
         if first >= last {
             return;
+        }
+        if fill_area_diag_enabled() {
+            self.fill_area_diag.add_retained_range(
+                &slot.fill_diag_shapes,
+                first,
+                last,
+                &retained.transform,
+            );
         }
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
@@ -10222,6 +11114,19 @@ impl GpuRenderer {
             {
                 self.frame_stats.bump_shapes();
                 self.frame_stats.add_draw_calls(1);
+                if fill_area_diag_enabled() {
+                    // Mirror the direct path's fill accounting per bundled op.
+                    let slot = self.replay_slots.slots.get(&op.slot);
+                    let retained = retained_draws.get(op.retained_index as usize);
+                    if let (Some(slot), Some(retained)) = (slot, retained) {
+                        self.fill_area_diag.add_retained_range(
+                            &slot.fill_diag_shapes,
+                            op.first,
+                            op.last,
+                            &retained.transform,
+                        );
+                    }
+                }
             }
         }
         // Bundles inherit the pass scissor: set the same full-target rect
@@ -10442,6 +11347,7 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         layer_shapes: I,
+        brushes: &[Brush],
         blend_mode: BlendMode,
         width: u32,
         height: u32,
@@ -10460,6 +11366,7 @@ impl GpuRenderer {
         let Some(batch) = self.prepare_shapes_batch(
             layer_shapes
                 .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+            brushes,
             root_scale,
             viewport,
             &mut staged_uploads,
@@ -10752,6 +11659,12 @@ impl GpuRenderer {
                     scaled_quad(adjusted_image.quad, root_scale)
                 }
             });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.add_image_quad(&device_quad);
+            }
+        }
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -11054,6 +11967,12 @@ impl GpuRenderer {
                 if record_cached_hits {
                     self.frame_stats.record_text_glyph_atlas_hit();
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if fill_area_diag_enabled() {
+                        self.fill_area_diag.add_glyph_quad(quad);
+                    }
+                }
                 appended = appended.saturating_add(1);
             }
         }
@@ -11109,6 +12028,13 @@ impl GpuRenderer {
             staged_uploads,
             Self::retained_glyph_viewport(viewport, source_raster_rect),
         );
+        if fill_area_diag_enabled() {
+            // The retained run draws every quad of its cached buffer; the
+            // shared path's per-quad viewport cull is not re-run for it.
+            for quad in quads {
+                self.fill_area_diag.add_glyph_quad(quad);
+            }
+        }
         glyph_cmds.push(GlyphDrawCmd::retained(cache_key, uniform_slot, scissor));
         true
     }
@@ -11781,6 +12707,12 @@ impl GpuRenderer {
         let Some(uv_rect) = image_uv_rect(image, None) else {
             return Ok(());
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.add_image_quad(&device_quad);
+            }
+        }
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -12691,12 +13623,15 @@ impl PreparedGlyphBatch {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn gradient_stop_count_for_shape(shape: &DrawShape) -> usize {
-    match &shape.brush {
-        Brush::Solid(_) => 0,
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.len(),
+fn gradient_stop_count_for_shape(shape: &DrawShape, brushes: &[Brush]) -> usize {
+    match shape.brush {
+        SceneBrush::Solid(_) => 0,
+        SceneBrush::Gradient(index) => match &brushes[index as usize] {
+            Brush::Solid(_) => 0,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => colors.len(),
+        },
     }
 }
 
@@ -12704,6 +13639,7 @@ fn gradient_stop_count_for_shape(shape: &DrawShape) -> usize {
 fn native_segment_fusion_budget(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     chunk: &SegmentDrawChunkPlan,
     batch_limits: ShapeBatchLimits,
 ) -> Result<Option<NativeSegmentFusionBudget>, String> {
@@ -12723,7 +13659,7 @@ fn native_segment_fusion_budget(
             let shape = &shapes[*shape_index];
             shape_count = shape_count.saturating_add(1);
             gradient_stop_count =
-                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape));
+                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape, brushes));
         }
     }
 
@@ -12763,10 +13699,12 @@ fn push_native_segment_fusion_partition(
 fn native_segment_fusion_partitions(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     chunk: &SegmentDrawChunkPlan,
     batch_limits: ShapeBatchLimits,
 ) -> Result<Option<Vec<NativeSegmentFusionPartition>>, String> {
-    if let Some(budget) = native_segment_fusion_budget(ordered_items, shapes, chunk, batch_limits)?
+    if let Some(budget) =
+        native_segment_fusion_budget(ordered_items, shapes, brushes, chunk, batch_limits)?
     {
         return Ok(Some(vec![NativeSegmentFusionPartition {
             chunk: chunk.clone(),
@@ -12800,7 +13738,7 @@ fn native_segment_fusion_partitions(
                     item
                 ));
             };
-            let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index]);
+            let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index], brushes);
             if gradient_stop_count > batch_limits.max_gradient_stops {
                 return Ok(None);
             }
@@ -13026,6 +13964,7 @@ fn maybe_print_segment_diag(
     z_range: Range<usize>,
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     counts: SegmentDiagCounts,
     batch_limits: ShapeBatchLimits,
@@ -13058,7 +13997,8 @@ fn maybe_print_segment_diag(
         let SegmentRenderCommand::DrawChunk(chunk) = command else {
             continue;
         };
-        match native_segment_fusion_partitions(ordered_items, shapes, chunk, batch_limits) {
+        match native_segment_fusion_partitions(ordered_items, shapes, brushes, chunk, batch_limits)
+        {
             Ok(Some(partitions)) => native_partitions += partitions.len(),
             Ok(None) | Err(_) => native_unfused_chunks += 1,
         }
@@ -14355,7 +15295,7 @@ mod tests {
             },
             quad: [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0, 8.0]],
             snap_anchor: None,
-            brush: Brush::solid(Color::BLACK),
+            brush: SceneBrush::Solid(Color::BLACK),
             shape: None,
             stroke: None,
             arc: None,
@@ -14369,7 +15309,7 @@ mod tests {
     #[test]
     fn shape_shadow_content_hash_ignores_viewport_translation() {
         fn translate_shape(shape: &DrawShape, dx: f32, dy: f32) -> DrawShape {
-            let mut translated = shape.clone();
+            let mut translated = *shape;
             translated.rect.x += dx;
             translated.rect.y += dy;
             translated.local_rect.x += dx;
@@ -14423,23 +15363,20 @@ mod tests {
         let translated_cutout = translate_shape(&cutout, dx, dy);
 
         let root_scale = 1.25;
-        let first_shapes = vec![
-            (first.clone(), BlendMode::SrcOver),
-            (cutout, BlendMode::DstOut),
-        ];
+        let first_shapes = vec![(first, BlendMode::SrcOver), (cutout, BlendMode::DstOut)];
         let translated_shapes = vec![
-            (translated.clone(), BlendMode::SrcOver),
+            (translated, BlendMode::SrcOver),
             (translated_cutout, BlendMode::DstOut),
         ];
 
-        let first_hash = shape_shadow_content_hash(&first_shapes, root_scale);
-        let translated_hash = shape_shadow_content_hash(&translated_shapes, root_scale);
+        let first_hash = shape_shadow_content_hash(&first_shapes, &[], root_scale);
+        let translated_hash = shape_shadow_content_hash(&translated_shapes, &[], root_scale);
 
         assert_eq!(first_hash, translated_hash);
 
         let mut changed_shapes = translated_shapes;
         changed_shapes[0].0.rect.width += 1.0;
-        let changed_hash = shape_shadow_content_hash(&changed_shapes, root_scale);
+        let changed_hash = shape_shadow_content_hash(&changed_shapes, &[], root_scale);
 
         assert_ne!(first_hash, changed_hash);
     }
@@ -14476,6 +15413,7 @@ mod tests {
                     .expect("surface plan");
             shape_shadow_surface_cache_key(
                 &shapes,
+                &[],
                 plan.source_device_bounds,
                 pixel_radius,
                 root_scale,
@@ -14535,6 +15473,7 @@ mod tests {
             .expect("surface plan");
             shape_shadow_surface_cache_key(
                 &shapes,
+                &[],
                 plan.source_device_bounds,
                 plan.pixel_radius,
                 root_scale,
@@ -14592,6 +15531,7 @@ mod tests {
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
         ShadowDraw {
             shapes,
+            brushes: vec![],
             texts: vec![],
             blur_radius: 8.0,
             clip: None,
@@ -18047,6 +18987,7 @@ mod tests {
         let window = build_scene_window(
             SceneWindowSource {
                 shapes: &[test_shape(4, BlendMode::SrcOver), shape],
+                brushes: &[],
                 images: &[image],
                 texts: &[text],
                 shadow_draws: &[shadow],
@@ -18359,6 +19300,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
@@ -18409,6 +19351,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
@@ -18553,7 +19496,7 @@ mod tests {
         ];
         shape.arc = Some(arc);
         let mut converted = ShapeData::zeroed();
-        convert_shape_into_slots(&shape, root_scale, 0, &mut converted, &mut []);
+        convert_shape_into_slots(&shape, &[], root_scale, 0, &mut converted, &mut []);
         converted
     }
 
@@ -18671,7 +19614,7 @@ mod tests {
     fn arc_mesh_passthrough_replicates_the_quad_expansion() {
         let shape = test_shape(0, BlendMode::SrcOver);
         let mut converted = ShapeData::zeroed();
-        convert_shape_into_slots(&shape, 1.0, 0, &mut converted, &mut []);
+        convert_shape_into_slots(&shape, &[], 1.0, 0, &mut converted, &mut []);
         let build =
             build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
         assert_eq!(build.meshed_arcs, 0);
@@ -18871,6 +19814,368 @@ mod tests {
         shape.quad23 = [40.0, 340.0, 340.0, 340.0];
         shape.color = [1.0, 1.0, 1.0, 1.0];
         shape
+    }
+
+    /// A viewport that never matches the diag's latched surface, so bucket
+    /// tests exercise no corner accounting.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn offscreen_test_viewport() -> ViewportUniformParams {
+        ViewportUniformParams {
+            width: 64,
+            height: 64,
+            offset: [7.0, 7.0],
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_buckets_shape_quads_by_decoded_sdf_class() {
+        let diag = FillAreaDiag::default();
+        let mut arc = ShapeData::zeroed();
+        arc.stroke_params[1] = pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter);
+        // Arcs keep trig in `radii`; nonzero values there must not classify
+        // the shape as a rounded fill.
+        arc.radii = [0.5; 4];
+        arc.quad01 = [0.0, 0.0, 10.0, 0.0];
+        arc.quad23 = [0.0, 10.0, 10.0, 10.0];
+        let mut rounded = ShapeData::zeroed();
+        rounded.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        rounded.radii = [2.0; 4];
+        rounded.quad01 = [0.0, 0.0, 4.0, 0.0];
+        rounded.quad23 = [0.0, 5.0, 4.0, 5.0];
+        let mut plain = ShapeData::zeroed();
+        plain.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        plain.quad01 = [0.0, 0.0, 2.0, 0.0];
+        plain.quad23 = [0.0, 3.0, 2.0, 3.0];
+        diag.add_shape_quads(
+            &[rim_test_shape_data(), arc, rounded, plain],
+            offscreen_test_viewport(),
+        );
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 300.0 * 300.0);
+        assert_eq!(diag.frame[FillAreaDiag::ARC].get(), 100.0);
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_FILL].get(), 20.0);
+        assert_eq!(diag.frame[FillAreaDiag::RECT].get(), 6.0);
+        // Off-frame passes never touch the corner counter.
+        assert_eq!(diag.frame_corner.get(), 0.0);
+        // Lit never exceeds the submitted area, bucket by bucket.
+        for (lit, quad) in diag.frame_lit.iter().zip(&diag.frame) {
+            assert!(lit.get() <= quad.get() + 1e-9);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_rim_mesh_moves_quad_area_to_the_mesh_bucket() {
+        let diag = FillAreaDiag::default();
+        diag.add_shape_quads(&[rim_test_shape_data()], offscreen_test_viewport());
+        diag.note_rim_mesh(&rim_test_shape_data(), 1234.5);
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 0.0);
+        assert_eq!(diag.frame[FillAreaDiag::MESH].get(), 1234.5);
+        // The lit accounting moves with the quad: nothing left in the
+        // stroke bucket, and the mesh bucket's lit stays within the mesh.
+        assert_eq!(diag.frame_lit[FillAreaDiag::RRECT_STROKE].get(), 0.0);
+        assert!(diag.frame_lit[FillAreaDiag::MESH].get() <= 1234.5);
+        assert!(diag.frame_lit[FillAreaDiag::MESH].get() > 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_image_and_glyph_quads_share_one_bucket() {
+        let diag = FillAreaDiag::default();
+        diag.add_image_quad(&[[0.0, 0.0], [8.0, 0.0], [0.0, 4.0], [8.0, 4.0]]);
+        let quad = CachedTextGlyphQuad {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 7,
+            color: (1.0, 1.0, 1.0, 1.0),
+            uv: ImageUvRect {
+                min: [0.0, 0.0],
+                max: [1.0, 1.0],
+                sample_bounds: [0.0, 0.0, 1.0, 1.0],
+            },
+        };
+        diag.add_glyph_quad(&quad);
+        assert_eq!(diag.frame[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
+        // Textures light their whole quad: lit tracks the submitted area.
+        assert_eq!(diag.frame_lit[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
+    }
+
+    /// Midpoint-rule area of `inside` over `bounds` (min x, min y, max x,
+    /// max y), the reference the analytic-lit formulas are tested against.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn numeric_area(bounds: [f64; 4], steps: usize, inside: impl Fn(f64, f64) -> bool) -> f64 {
+        let dx = (bounds[2] - bounds[0]) / steps as f64;
+        let dy = (bounds[3] - bounds[1]) / steps as f64;
+        let mut area = 0.0;
+        for column in 0..steps {
+            let x = bounds[0] + (column as f64 + 0.5) * dx;
+            for row in 0..steps {
+                let y = bounds[1] + (row as f64 + 0.5) * dy;
+                if inside(x, y) {
+                    area += dx * dy;
+                }
+            }
+        }
+        area
+    }
+
+    /// f64 rounded-rect SDF (uniform radius), the reference for the
+    /// round-rect fill and stroke lit formulas.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sdf_rounded_rect_reference(
+        p: [f64; 2],
+        center: [f64; 2],
+        half: [f64; 2],
+        radius: f64,
+    ) -> f64 {
+        let qx = (p[0] - center[0]).abs() - (half[0] - radius);
+        let qy = (p[1] - center[1]).abs() - (half[1] - radius);
+        qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_arc_lit_matches_the_sdf_covered_area() {
+        use cranpose_ui_graphics::ArcGeometry;
+        let tau = cranpose_ui_graphics::TAU;
+        let center = Point::new(250.0, 250.0);
+        // (inner, outer, start, sweep, cap): partial arcs with every cap,
+        // a closed ring, and a full disc.
+        let cases: &[(f32, f32, f32, f32, StrokeCap)] = &[
+            (90.0, 100.0, 0.7, 2.5, StrokeCap::Butt),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Round),
+            (30.0, 80.0, 0.7, 2.5, StrokeCap::Square),
+            (80.0, 100.0, 0.0, tau, StrokeCap::Round),
+            (0.0, 40.0, 0.0, tau, StrokeCap::Round),
+        ];
+        for (case, &(inner, outer, start, sweep, cap)) in cases.iter().enumerate() {
+            let arc = ArcGeometry::new(center, inner, outer, start, sweep, cap);
+            let converted = converted_arc_shape(arc, 1.0);
+            let cap_code = (converted.stroke_params[1].max(0.0) as u32 >> 2) & 3;
+            let arc_center = [converted.arc_params[0], converted.arc_params[1]];
+            let mid = [converted.radii[0], converted.radii[1]];
+            let half = [converted.radii[2], converted.radii[3]];
+            let aabb = quad_aabb(&converted);
+            // Pad past the fast-trig AABB slop so the whole kept set is
+            // integrated.
+            let bounds = [aabb[0] - 2.0, aabb[1] - 2.0, aabb[2] + 2.0, aabb[3] + 2.0];
+            let numeric = numeric_area(bounds, 1000, |x, y| {
+                sdf_arc_band_reference(
+                    [x as f32, y as f32],
+                    arc_center,
+                    converted.stroke_params[3],
+                    converted.stroke_params[2],
+                    mid,
+                    half,
+                    cap_code,
+                ) < 0.0
+            });
+            let analytic = analytic_covered_area(&converted);
+            let error = (analytic - numeric).abs() / numeric.max(1.0);
+            assert!(
+                error < 0.02,
+                "case {case}: analytic {analytic:.1} vs sdf {numeric:.1} \
+                 ({:.2}% off)",
+                error * 100.0
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_circle_and_rrect_fill_lit_match_references() {
+        // A filled circle degenerates to exactly pi r^2.
+        let mut circle = ShapeData::zeroed();
+        circle.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        circle.rect = [10.0, 10.0, 200.0, 200.0];
+        circle.radii = [100.0; 4];
+        let analytic = analytic_covered_area(&circle);
+        let exact = std::f64::consts::PI * 100.0 * 100.0;
+        assert!(
+            (analytic - exact).abs() / exact < 1e-9,
+            "circle: {analytic} vs {exact}"
+        );
+
+        // A rounded rect against the SDF reference.
+        let mut rounded = ShapeData::zeroed();
+        rounded.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        rounded.rect = [50.0, 80.0, 200.0, 120.0];
+        rounded.radii = [40.0; 4];
+        let numeric = numeric_area([48.0, 78.0, 252.0, 202.0], 1000, |x, y| {
+            sdf_rounded_rect_reference([x, y], [150.0, 140.0], [100.0, 60.0], 40.0) < 0.0
+        });
+        let analytic = analytic_covered_area(&rounded);
+        let error = (analytic - numeric).abs() / numeric;
+        assert!(
+            error < 0.02,
+            "rrect fill: analytic {analytic:.1} vs sdf {numeric:.1}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_stroked_rrect_lit_matches_the_band_area() {
+        // The circle rim: perimeter x stroke width equals the exact annulus
+        // pi (outer^2 - inner^2) = 2 pi geom_half sw.
+        let rim = rim_test_shape_data();
+        let analytic = analytic_covered_area(&rim);
+        let exact = std::f64::consts::PI * (150.0 * 150.0 - 142.0 * 142.0);
+        assert!(
+            (analytic - exact).abs() / exact < 1e-9,
+            "circle rim: {analytic} vs {exact}"
+        );
+
+        // A rounded-SQUARE ring (radius well below the half-extent) against
+        // the SDF band |sdf| < sw/2.
+        let mut square_ring = rim_test_shape_data();
+        square_ring.radii = [60.0; 4];
+        let numeric = numeric_area([38.0, 38.0, 342.0, 342.0], 1000, |x, y| {
+            sdf_rounded_rect_reference([x, y], [190.0, 190.0], [146.0, 146.0], 60.0).abs() < 4.0
+        });
+        let analytic = analytic_covered_area(&square_ring);
+        let error = (analytic - numeric).abs() / numeric;
+        assert!(
+            error < 0.02,
+            "square ring: analytic {analytic:.1} vs sdf {numeric:.1}"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_corner_counter_prices_the_area_outside_the_inscribed_circle() {
+        // A full-viewport quad on a square (watch) surface wastes exactly
+        // the four corner lunes: (1 - pi/4) of the screen.
+        let full = area_outside_inscribed_circle([0.0, 0.0, 454.0, 454.0], (454, 454));
+        let exact = (1.0 - std::f64::consts::FRAC_PI_4) * 454.0 * 454.0;
+        assert!(
+            (full - exact).abs() / exact < 0.01,
+            "full quad: {full} vs {exact}"
+        );
+        // A centered box inside the circle wastes nothing, exactly.
+        assert_eq!(
+            area_outside_inscribed_circle([127.0, 127.0, 327.0, 327.0], (454, 454)),
+            0.0
+        );
+        // A box entirely inside a corner is all waste.
+        let corner = area_outside_inscribed_circle([0.0, 0.0, 40.0, 40.0], (454, 454));
+        assert!((corner - 1600.0).abs() < 1e-6, "corner box: {corner}");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_opacity_histogram_classifies_solid_alpha_exactly() {
+        let diag = FillAreaDiag::default();
+        diag.reset_frame(454, 454);
+        let full_frame = ViewportUniformParams {
+            width: 454,
+            height: 454,
+            offset: [0.0, 0.0],
+        };
+        let mut opaque = ShapeData::zeroed();
+        opaque.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        opaque.rect = [0.0, 0.0, 100.0, 50.0];
+        opaque.quad01 = [0.0, 0.0, 100.0, 0.0];
+        opaque.quad23 = [0.0, 50.0, 100.0, 50.0];
+        opaque.color = [1.0, 1.0, 1.0, 1.0];
+        let mut faded = opaque;
+        faded.color[3] = 0.82;
+        let mut gradient = opaque;
+        gradient.brush_type = 1;
+        diag.add_shape_quads(&[opaque, faded, gradient], full_frame);
+        // Plain rects are all-lit: 5000 px each, one per class.
+        let lit = |class: FillOpacityClass| diag.frame_opacity[class as usize].get();
+        assert_eq!(lit(FillOpacityClass::Opaque), 5000.0);
+        assert_eq!(lit(FillOpacityClass::Translucent), 5000.0);
+        assert_eq!(lit(FillOpacityClass::NonSolid), 5000.0);
+        // The corner-hugging quads waste real area on a round display.
+        assert!(diag.frame_corner.get() > 0.0);
+
+        // The same batch under an offset (offscreen) viewport must leave the
+        // corner counter alone.
+        let offscreen = FillAreaDiag::default();
+        offscreen.reset_frame(454, 454);
+        offscreen.add_shape_quads(&[opaque], offscreen_test_viewport());
+        assert_eq!(offscreen.frame_corner.get(), 0.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_retained_records_price_ranges_and_identity_corners() {
+        let mut plain = ShapeData::zeroed();
+        plain.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        plain.rect = [200.0, 200.0, 20.0, 10.0];
+        plain.quad01 = [200.0, 200.0, 220.0, 200.0];
+        plain.quad23 = [200.0, 210.0, 220.0, 210.0];
+        plain.color = [1.0, 1.0, 1.0, 1.0];
+        let shapes = vec![rim_test_shape_data(), plain];
+        let records = fill_diag_capture_records(&shapes, None);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].bucket, FillAreaDiag::RRECT_STROKE);
+        assert_eq!(records[0].drawn_px2, 300.0 * 300.0);
+        assert!(records[0].lit_px2 < records[0].drawn_px2, "a rim has slack");
+        // A plain rect is exact: no slack at all.
+        assert_eq!(records[1].bucket, FillAreaDiag::RECT);
+        assert_eq!(records[1].lit_px2, records[1].drawn_px2);
+
+        let diag = FillAreaDiag::default();
+        diag.reset_frame(454, 454);
+        // Scaled replay: areas scale with the similarity squared, and the
+        // capture-space AABBs no longer say where pixels land — no corner.
+        let scaled = SimilarityTransform::new([0.0, 0.0], 0.0, 2.0);
+        diag.add_retained_range(&records, 0, 2, &scaled);
+        let drawn: f64 = records.iter().map(|record| record.drawn_px2).sum();
+        assert!((diag.frame[FillAreaDiag::RETAINED].get() - drawn * 4.0).abs() < 1e-6);
+        assert_eq!(diag.frame_corner.get(), 0.0);
+
+        // Identity replay: the rim's 300 px box on a 454 px round screen
+        // pokes into the corner lunes.
+        let identity_diag = FillAreaDiag::default();
+        identity_diag.reset_frame(454, 454);
+        identity_diag.add_retained_range(&records, 0, 2, &SimilarityTransform::IDENTITY);
+        assert!(identity_diag.frame_corner.get() > 0.0);
+        // And the range is respected: shape 1 alone has no rim slack.
+        let tail = FillAreaDiag::default();
+        tail.reset_frame(454, 454);
+        tail.add_retained_range(&records, 1, 2, &SimilarityTransform::IDENTITY);
+        assert_eq!(
+            tail.frame[FillAreaDiag::RETAINED].get(),
+            records[1].drawn_px2
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_truth_top_slack_dump_keeps_the_worst_ten() {
+        let mut diag = FillAreaDiag::default();
+        let records: Vec<FillDiagShapeRecord> = (0..12)
+            .map(|index| FillDiagShapeRecord {
+                drawn_px2: 1000.0 * (index + 1) as f64,
+                lit_px2: 100.0,
+                bucket: FillAreaDiag::ARC,
+                opacity: FillOpacityClass::Opaque,
+                aabb: [0.0, 0.0, 10.0, 10.0],
+            })
+            .collect();
+        diag.note_retained_capture(3, &records);
+        assert_eq!(diag.slack_top.len(), FILL_DIAG_SLACK_TOP);
+        // Sorted by slack, worst first, and the two smallest fell off.
+        assert_eq!(diag.slack_top[0].drawn_px2, 12000.0);
+        assert_eq!(diag.slack_top[0].slot, 3);
+        assert_eq!(diag.slack_top[0].shape, 11);
+        for pair in diag.slack_top.windows(2) {
+            assert!(pair[0].drawn_px2 - pair[0].lit_px2 >= pair[1].drawn_px2 - pair[1].lit_px2);
+        }
+        assert!(diag
+            .slack_top
+            .iter()
+            .all(|entry| entry.drawn_px2 - entry.lit_px2 > 2000.0 - 100.0));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -19281,6 +20586,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19321,6 +20627,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19334,7 +20641,11 @@ mod tests {
     fn native_segment_fusion_budget_rejects_gradient_uniform_overflow() {
         let ordered_items = vec![(0, SegmentDrawItem::Shape(0))];
         let mut shape = test_shape(0, BlendMode::SrcOver);
-        shape.brush = Brush::linear_gradient(vec![Color::BLACK; MAX_GRADIENT_STOPS + 1]);
+        let brushes = vec![Brush::linear_gradient(vec![
+            Color::BLACK;
+            MAX_GRADIENT_STOPS + 1
+        ])];
+        shape.brush = SceneBrush::Gradient(0);
         let shapes = vec![shape];
         let segment = chunk(&[SegmentBatchPlan::Shape {
             start: 0,
@@ -19345,6 +20656,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &brushes,
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19381,6 +20693,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19428,9 +20741,10 @@ mod tests {
             (2, SegmentDrawItem::Shape(2)),
         ];
         let mut shapes = Vec::new();
+        let brushes = vec![Brush::linear_gradient(vec![Color::BLACK; STOPS_PER_SHAPE])];
         for index in 0..3 {
             let mut shape = test_shape(index, BlendMode::SrcOver);
-            shape.brush = Brush::linear_gradient(vec![Color::BLACK; STOPS_PER_SHAPE]);
+            shape.brush = SceneBrush::Gradient(0);
             shapes.push(shape);
         }
         let segment = chunk(&[SegmentBatchPlan::Shape {
@@ -19442,6 +20756,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &brushes,
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19510,6 +20825,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19569,6 +20885,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )

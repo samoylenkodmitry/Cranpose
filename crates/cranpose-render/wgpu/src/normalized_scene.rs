@@ -32,7 +32,7 @@ use cranpose_render_common::primitive_emit::{
     arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
     round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
 };
-use cranpose_ui_graphics::{DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
+use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -2514,6 +2514,9 @@ impl TranslateBy for CompositorScene {
 
 pub(crate) struct SceneWindowSource<'a> {
     pub(crate) shapes: &'a [DrawShape],
+    /// The brush table the shapes' gradient handles index — the owning
+    /// scene's `brushes`.
+    pub(crate) brushes: &'a [Brush],
     pub(crate) images: &'a [ImageDraw],
     pub(crate) texts: &'a [TextDraw],
     pub(crate) shadow_draws: &'a [ShadowDraw],
@@ -2533,11 +2536,15 @@ pub(crate) fn build_scene_window(
     window_rect: Rect,
 ) -> CompositorScene {
     let mut scene = CompositorScene::new();
+    // Windowed shapes keep their gradient handles, so the window carries the
+    // whole (gradients-only, tiny) source table — indices stay valid without
+    // remapping.
+    scene.brushes.extend_from_slice(source.brushes);
     let mut shape_map = vec![None; source.shapes.len()];
     for (source_index, shape) in source.shapes.iter().enumerate() {
         if shape.z_index >= z_start && shape.z_index < z_end {
             shape_map[source_index] = Some(scene.shapes.len());
-            scene.shapes.push(shape.clone());
+            scene.shapes.push(*shape);
         }
     }
     let mut image_map = vec![None; source.images.len()];

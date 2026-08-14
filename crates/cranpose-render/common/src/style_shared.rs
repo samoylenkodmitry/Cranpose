@@ -246,6 +246,59 @@ fn scale_brush_geometry(brush: Brush, layer: &GraphicsLayer) -> Brush {
     }
 }
 
+/// A layer-resolved brush, split at the solid/gradient boundary.
+///
+/// The per-frame shape emit produces one of these for every draw: the solid
+/// case — effectively all of a heavy animated scene — carries its color
+/// inline, so emitting a shape neither clones a `Brush` nor leaves an enum
+/// with heap-carrying variants for frame teardown to walk. Only the rare
+/// gradient still travels as a cloned [`Brush`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedBrush {
+    Solid(Color),
+    /// A non-solid brush (gradients), already layer-resolved.
+    Other(Brush),
+}
+
+impl ResolvedBrush {
+    pub fn from_brush(brush: Brush) -> Self {
+        match brush {
+            Brush::Solid(color) => Self::Solid(color),
+            other => Self::Other(other),
+        }
+    }
+
+    /// The plain `Brush` this resolved form stands for — same values,
+    /// reassembled for consumers that keep speaking `Brush`.
+    pub fn into_brush(self) -> Brush {
+        match self {
+            Self::Solid(color) => Brush::Solid(color),
+            Self::Other(brush) => brush,
+        }
+    }
+}
+
+/// [`apply_layer_to_brush`] without the solid-brush clone: the borrowed
+/// brush's color is copied (or layer-adjusted) inline, and only gradients
+/// are cloned. Produces exactly the values `apply_layer_to_brush` would —
+/// both branches below mirror its fast path and its `Solid` arm verbatim.
+pub fn resolve_layer_brush(brush: &Brush, layer: &GraphicsLayer) -> ResolvedBrush {
+    match brush {
+        Brush::Solid(color) => {
+            if layer.alpha == 1.0
+                && layer.color_filter.is_none()
+                && layer_scale_x(layer) == 1.0
+                && layer_scale_y(layer) == 1.0
+            {
+                ResolvedBrush::Solid(*color)
+            } else {
+                ResolvedBrush::Solid(apply_layer_to_color(*color, layer))
+            }
+        }
+        other => ResolvedBrush::Other(apply_layer_to_brush(other.clone(), layer)),
+    }
+}
+
 pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     CornerRadii {
         top_left: radii.top_left * scale,
@@ -435,6 +488,8 @@ pub fn primitives_for_placement_verified(
                     dynamic,
                     state.segments().len(),
                     state.stats(),
+                    state.optimistic_commits(),
+                    state.prefix_commits(),
                 ))
             } else {
                 None
@@ -442,6 +497,33 @@ pub fn primitives_for_placement_verified(
         } else {
             None
         };
+        // Rate-limited engagement line, always on: the watch cannot take
+        // flag-gated diagnostics (its logcat is the only channel), and
+        // whether the pooled and prefix-commit fast paths engage on-device
+        // must be provable from a plain measurement window. warn level:
+        // the platform loggers filter info on desktop.
+        if !state.segments().is_empty() {
+            thread_local! {
+                static VERIFIED_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+            }
+            let frames = VERIFIED_FRAMES.with(|cell| {
+                let next = cell.get().wrapping_add(1);
+                cell.set(next);
+                next
+            });
+            if frames.is_multiple_of(256) {
+                let (deaths, splits) = state.stats();
+                log::warn!(
+                    "[command-replay] health: {} segments, pooled commits {} + prefix {}, \
+                     lifetime deaths {} splits {}",
+                    state.segments().len(),
+                    state.optimistic_commits(),
+                    state.prefix_commits(),
+                    deaths,
+                    splits,
+                );
+            }
+        }
         let center = state.center();
         // Only spans whose retained buffer the renderer has confirmed may
         // skip materialization: everything else must exist as primitives
@@ -453,10 +535,12 @@ pub fn primitives_for_placement_verified(
                 && command.is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
         };
         let (finished, frame) = scope.finish_replay(center, outcome, &mut bypass);
-        if let Some((records, retained, dynamic, segments, (deaths, splits))) = diag {
+        if let Some((records, retained, dynamic, segments, (deaths, splits), pooled, prefix)) = diag
+        {
             log::warn!(
                 "[command-replay] {} records: {} retained spans, {} dynamic records, \
-                 {} materialized; {} segments alive, lifetime deaths {} splits {}",
+                 {} materialized; {} segments alive, lifetime deaths {} splits {}, \
+                 pooled commits {} + prefix {}",
                 records,
                 retained,
                 dynamic,
@@ -464,6 +548,8 @@ pub fn primitives_for_placement_verified(
                 segments,
                 deaths,
                 splits,
+                pooled,
+                prefix,
             );
         }
         (finished, frame)

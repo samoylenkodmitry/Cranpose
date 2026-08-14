@@ -1617,6 +1617,7 @@ pub fn run(
     }
     let mut last_present_at: Option<web_time::Instant> = None;
     let mut behind_deadline = false;
+    let mut catchup_coasts = 0u32;
 
     // Main event loop
     loop {
@@ -2422,9 +2423,23 @@ pub fn run(
                     // presentation jitter from triggering catch-up.
                     now.duration_since(previous).as_nanos() as i64 > period + period / 16
                 });
+            catchup_coasts = 0;
             last_present_at = Some(now);
-        } else {
-            behind_deadline = false;
+        } else if behind_deadline {
+            // Frame telemetry caught the original reset-on-any-idle rule
+            // defeating catch-up once per frame: a zero-poll iteration can
+            // land before the update clock has advanced, skip its present
+            // as "nothing changed", and the reset then handed the NEXT
+            // iteration back to the choreographer — a measured p50 10.9 ms
+            // poll sleep per presented frame at 33 fps. Behind-deadline now
+            // survives a bounded number of non-presenting iterations; the
+            // bound keeps the original guarantee that an idle app skipping
+            // presents for identical frames returns to vsync pacing after
+            // at most a few immediate polls instead of busy-looping.
+            catchup_coasts += 1;
+            if catchup_coasts >= 3 {
+                behind_deadline = false;
+            }
         }
     }
 }

@@ -95,7 +95,7 @@ fn shadow_shape(
             local_rect: rect,
             quad: rect_to_quad(rect),
             snap_anchor: None,
-            brush: Brush::solid(color),
+            brush: crate::scene::SceneBrush::Solid(color),
             shape,
             stroke: None,
             arc: None,
@@ -137,6 +137,7 @@ pub(crate) fn push_layer_shadow(
         );
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(ambient_pass.rect, ambient, resolved_shape)],
+            brushes: vec![],
             texts: vec![],
             blur_radius: ambient_pass.blur_radius,
             clip,
@@ -153,6 +154,7 @@ pub(crate) fn push_layer_shadow(
         );
         scene.push_shadow_draw(ShadowDraw {
             shapes: vec![shadow_shape(spot_pass.rect, spot, resolved_shape)],
+            brushes: vec![],
             texts: vec![],
             blur_radius: spot_pass.blur_radius,
             clip,
@@ -821,6 +823,7 @@ impl TextStyleDrawSink for CompositorScene {
     ) {
         self.push_shadow_draw(ShadowDraw {
             shapes: vec![],
+            brushes: vec![],
             texts: vec![TextDraw {
                 node_id,
                 rect,
@@ -2179,6 +2182,7 @@ fn push_shadow_primitive(
         layer_bounds: Rect,
         layer: &GraphicsLayer,
         blend_mode: BlendMode,
+        brushes: &mut Vec<Brush>,
     ) -> Option<(DrawShape, BlendMode)> {
         let params = draw_shape_params_for_primitive(prim, layer_bounds, layer, None, blend_mode)?;
         Some((
@@ -2187,7 +2191,9 @@ fn push_shadow_primitive(
                 local_rect: params.local_rect,
                 quad: params.quad,
                 snap_anchor: None,
-                brush: params.brush,
+                // A rare gradient caster interns into the shadow draw's own
+                // table, so the draw stays self-contained wherever it travels.
+                brush: crate::scene::intern_brush_into(brushes, params.brush),
                 shape: params.shape,
                 // Shadows silhouette the *rendered* shape, so a stroked or arc
                 // caster must cast a stroked or arc shadow, not a filled box.
@@ -2209,22 +2215,28 @@ fn push_shadow_primitive(
             blur_radius,
             blend_mode,
         } => {
+            let mut brushes = Vec::new();
             let Some(shape_pair) =
-                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode)
+                shape_pair_for_primitive(*shape, layer_bounds, layer, blend_mode, &mut brushes)
             else {
                 return;
             };
             let mut shapes = vec![shape_pair];
             if let Some(cutout) = cutout {
-                let Some(cutout_pair) =
-                    shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
-                else {
+                let Some(cutout_pair) = shape_pair_for_primitive(
+                    *cutout,
+                    layer_bounds,
+                    layer,
+                    BlendMode::DstOut,
+                    &mut brushes,
+                ) else {
                     return;
                 };
                 shapes.push(cutout_pair);
             }
             scene.push_shadow_draw(ShadowDraw {
                 shapes,
+                brushes,
                 texts: vec![],
                 blur_radius,
                 clip,
@@ -2238,13 +2250,19 @@ fn push_shadow_primitive(
             blend_mode,
             clip_rect,
         } => {
-            let Some(fill_pair) = shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode)
+            let mut brushes = Vec::new();
+            let Some(fill_pair) =
+                shape_pair_for_primitive(*fill, layer_bounds, layer, blend_mode, &mut brushes)
             else {
                 return;
             };
-            let Some(cutout_pair) =
-                shape_pair_for_primitive(*cutout, layer_bounds, layer, BlendMode::DstOut)
-            else {
+            let Some(cutout_pair) = shape_pair_for_primitive(
+                *cutout,
+                layer_bounds,
+                layer,
+                BlendMode::DstOut,
+                &mut brushes,
+            ) else {
                 return;
             };
             let abs_clip = Rect {
@@ -2256,6 +2274,7 @@ fn push_shadow_primitive(
             let transformed_clip = apply_layer_to_rect(abs_clip, layer_bounds, layer);
             scene.push_shadow_draw(ShadowDraw {
                 shapes: vec![fill_pair, cutout_pair],
+                brushes,
                 texts: vec![],
                 blur_radius,
                 clip: clip.map_or(Some(transformed_clip), |parent_clip| {
@@ -2443,7 +2462,7 @@ mod tests {
             "ambient shadow should clearly expand width"
         );
         let ambient_peak_alpha = match &ambient_shape.brush {
-            Brush::Solid(color) => color.a(),
+            crate::scene::SceneBrush::Solid(color) => color.a(),
             _ => 0.0,
         };
         assert!(
@@ -2458,7 +2477,7 @@ mod tests {
             spot_shape.rect.y > bounds.y,
             "spot shadow should be offset downward from source bounds"
         );
-        let Brush::Solid(spot_color) = &spot_shape.brush else {
+        let crate::scene::SceneBrush::Solid(spot_color) = &spot_shape.brush else {
             panic!("spot shadow must use solid color");
         };
         assert!(spot_color.a() > 0.02, "spot alpha should remain visible");
@@ -2883,7 +2902,7 @@ mod tests {
             1,
             "span background should emit one shape"
         );
-        let Brush::Solid(background) = &scene.shapes[0].brush else {
+        let crate::scene::SceneBrush::Solid(background) = &scene.shapes[0].brush else {
             panic!("background draw should use a solid brush");
         };
         // Painted colours arrive at eight bits per channel, which is where the
@@ -3563,7 +3582,7 @@ mod tests {
         );
 
         assert_eq!(scene.shapes.len(), 1, "one underline expected");
-        let Brush::Solid(color) = scene.shapes[0].brush else {
+        let crate::scene::SceneBrush::Solid(color) = scene.shapes[0].brush else {
             panic!("span color decoration should resolve to solid brush");
         };
         assert!((color.r() - 1.0).abs() < 1e-6);
