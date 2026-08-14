@@ -22,6 +22,7 @@ use crate::font_layout::{
     align_glyph_to_pixel_grid, line_advance_width, pixel_bounds_from_outlined, vertical_metrics,
     GlyphPixelBounds,
 };
+use crate::gpos_kerning::KernedFont;
 #[cfg(feature = "text-hyphenation")]
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::text_hyphenation::HyphenationDictionaryStore;
@@ -48,7 +49,7 @@ pub enum SoftwareTextFontError {
 
 #[derive(Clone)]
 pub struct SoftwareTextFont {
-    font: FontArc,
+    font: KernedFont,
     metadata: SoftwareTextFontMetadata,
     score: TextFontScore,
     content_hash: u64,
@@ -88,11 +89,12 @@ impl SoftwareTextFont {
         bytes.hash(&mut hasher);
         let content_hash = hasher.finish();
         let metadata = software_text_font_metadata(bytes.as_slice());
+        let kerning = KernedFont::read_kerning(bytes.as_slice(), &[]);
         let font = FontArc::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
         let score =
             text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, metadata.weight);
         Ok(Self {
-            font,
+            font: KernedFont::new(font, kerning),
             metadata,
             score,
             content_hash,
@@ -126,16 +128,24 @@ impl SoftwareTextFont {
             FontVec::try_from_vec(bytes).map_err(|_| SoftwareTextFontError::InvalidFont)?;
         // Two instances of one variable file draw different outlines, so the
         // axis values have to reach `content_hash` — it is the glyph atlas key.
-        for (tag, value) in apply_declared_variations(&mut font, weight, style) {
+        let variations = apply_declared_variations(&mut font, weight, style);
+        for (tag, value) in &variations {
             tag.hash(&mut hasher);
             value.to_bits().hash(&mut hasher);
         }
         let content_hash = hasher.finish();
 
+        // Read the kerning at the SAME axis position the outlines were
+        // instanced at. Roboto's GPOS pair values carry `VariationIndex`
+        // deltas worth up to 136 font units between wght 400 and wght 700, so
+        // a table read at the default instance would kern a Medium run as if
+        // it were Regular.
+        let kerning = KernedFont::read_kerning(font.font_data(), &variations);
+
         let font = FontArc::from(font);
         let score = text_font_score_from_parts(&font, metadata.ab_glyph_scale_factor, weight);
         Ok(Self {
-            font,
+            font: KernedFont::new(font, kerning),
             metadata,
             score,
             content_hash,
