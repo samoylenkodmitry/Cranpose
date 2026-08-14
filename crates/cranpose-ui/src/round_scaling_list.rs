@@ -514,6 +514,41 @@ pub fn trailing_auto_centring_spacer(viewport_px: f32, last_height_px: f32) -> f
     (viewport_px - (viewport_px * 0.5).floor() - last_height_px * 0.5).max(0.0)
 }
 
+/// The stretch of content a scaling list can hold on its centre line.
+///
+/// Both ends are content coordinates — the same space [`stack_into`] stacks
+/// slots in — and the pair is what a scroll position has to be kept inside.
+///
+/// **It is not "the anchored row centred" to "the last row centred".** The
+/// `LazyColumn` underneath takes its `contentPadding` OUTSIDE both auto-centring
+/// spacers, so the padding is scroll the list can spend at each end. At the
+/// bottom that means the last row settles `after_padding` **above** the centre
+/// line rather than on it; at the top the anchored row can be pulled
+/// `before_padding` **below** it. Wear says the same thing from the other side
+/// in `ScalingLazyListState.scrollToItem`, which scrolls the `LazyColumn` to
+/// `beforeContentPaddingPx - viewportCenterLinePx` to put a row on the line —
+/// so the list is already `before_padding` in from its own top when it opens,
+/// and a port that stops at the two centred rows cannot reach either end.
+///
+/// Clamping at the two centred rows costs behaviour and not only pixels: it is
+/// the difference between a user reaching the last row of a settings list and
+/// not reaching it.
+///
+/// Both spacers are clamped at zero in Wear (see [`auto_centring_spacers`]), and
+/// this states the travel for a list where neither clamp bit — a list long
+/// enough to scroll with a leading spacer left. On one clamped at either end the
+/// true travel is shorter at that end.
+pub fn anchor_travel(
+    anchor_centre: f32,
+    last_centre: f32,
+    before_padding: f32,
+    after_padding: f32,
+) -> (f32, f32) {
+    let end = last_centre + after_padding;
+    let start = anchor_centre - before_padding;
+    (start.min(end), end)
+}
+
 /// Half a pixel when a pixel height is odd, nothing when it is even — what
 /// Compose's integer halving leaves behind beside its floating-point one.
 fn odd_pixel(pixels: f32) -> f32 {
@@ -920,6 +955,33 @@ mod tests {
         let (leading, trailing) = auto_centring_spacers(&slots, 454.0, anchor);
         assert_eq!(leading, 0.0, "a tall first item needs no leading spacer");
         assert!(trailing >= 0.0, "{trailing}");
+    }
+
+    #[test]
+    fn the_content_padding_is_travel_at_both_ends_and_not_blank_beyond_them() {
+        let mut slots = Vec::new();
+        stack_into([96.0, 104.0, 104.0, 104.0], 8.0, &mut slots);
+        let anchor = slots[1].centre();
+        let last = slots[3].centre();
+        let (start, end) = anchor_travel(anchor, last, 68.0, 68.0);
+        // The anchored row can be pulled below the centre line by the padding,
+        // and the last row can be pushed above it by the same.
+        assert_eq!(start, anchor - 68.0);
+        assert_eq!(end, last + 68.0);
+        // Which is 136 px more travel than stopping at the two centred rows.
+        assert_eq!((end - start) - (last - anchor), 136.0);
+    }
+
+    #[test]
+    fn a_list_with_nowhere_to_go_does_not_travel_backwards() {
+        // One row, so both ends are the same row's centre. The padding must not
+        // hand back a range whose start is past its end.
+        let mut slots = Vec::new();
+        stack_into([104.0], 8.0, &mut slots);
+        let centre = slots[0].centre();
+        let (start, end) = anchor_travel(centre, centre, 68.0, 0.0);
+        assert!(start <= end, "{start} {end}");
+        assert_eq!(end, centre);
     }
 
     #[test]
