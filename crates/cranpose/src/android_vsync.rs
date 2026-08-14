@@ -86,9 +86,39 @@ pub(crate) fn request_wake_at_next_vsync() -> bool {
     true
 }
 
-unsafe extern "C" fn on_vsync(_frame_time_ns: i64, _data: *mut c_void) {
+unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
     CALLBACK_POSTED.store(false, Ordering::Release);
+    let previous = LAST_VSYNC_NS.swap(frame_time_ns, Ordering::Relaxed);
+    if previous != 0 {
+        let delta = frame_time_ns - previous;
+        // Only single-period deltas train the estimate: catch-up iterations
+        // skip arming the choreographer, so consecutive callbacks can be
+        // many periods apart and those gaps must not stretch the period.
+        if (4_000_000..50_000_000).contains(&delta) {
+            VSYNC_PERIOD_NS.store(delta, Ordering::Relaxed);
+        }
+    }
     if let Some(waker) = WAKER.get() {
         waker();
+    }
+}
+
+use std::sync::atomic::AtomicI64;
+
+/// Timestamp of the most recent choreographer callback, for period
+/// measurement in [`observed_vsync_period_ns`].
+static LAST_VSYNC_NS: AtomicI64 = AtomicI64::new(0);
+/// Most recent single-period delta between consecutive choreographer
+/// callbacks; 0 until two callbacks have been observed.
+static VSYNC_PERIOD_NS: AtomicI64 = AtomicI64::new(0);
+
+/// The display's refresh period as measured between consecutive
+/// choreographer callbacks, if two have been seen. Reflects
+/// SurfaceFlinger's `frameRateOverride` pinning automatically, which a
+/// panel-mode query would not.
+pub(crate) fn observed_vsync_period_ns() -> Option<i64> {
+    match VSYNC_PERIOD_NS.load(Ordering::Relaxed) {
+        0 => None,
+        period => Some(period),
     }
 }

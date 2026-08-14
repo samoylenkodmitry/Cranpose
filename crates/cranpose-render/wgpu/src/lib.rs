@@ -498,6 +498,18 @@ impl WgpuRenderer {
             .unwrap_or((0, 0))
     }
 
+    /// Test/diagnostic view of the transient rim mesh path: lifetime count
+    /// of dynamic circle rims drawn as band meshes instead of full bounding
+    /// quads (`CRANPOSE_RIM_MESH` kill switch).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn rim_meshes_emitted(&self) -> u64 {
+        self.gpu_renderer
+            .as_ref()
+            .map(GpuRenderer::rim_meshes_emitted)
+            .unwrap_or(0)
+    }
+
     /// Test/diagnostic view of the present store's lifetime count of
     /// replay-ops batches dropped by the generation check. Surface (non
     /// direct) frames must never move it: their packets carry the default

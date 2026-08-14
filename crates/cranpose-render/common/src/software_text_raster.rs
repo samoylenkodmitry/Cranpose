@@ -4699,7 +4699,9 @@ fn build_stroke_mask(
 
     let alpha: Vec<f32> = pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| pixel[3] as f32 / 255.0)
         .collect();
 

@@ -617,3 +617,27 @@ its timing as production-performance evidence.
   layer that never isolates, so the whole path under test is skipped. Build the
   transform with `layer_transform_to_parent(bounds, placement, &layer)` — the
   same call the scene builder makes — and pass the same `GraphicsLayer`.
+- Cancelling `publish.yml` mid-flight leaves main bumped and the tag stale
+  (2026-08-14): the workflow's first act is to rewrite the workspace versions,
+  commit `release: vX.Y.Z` to `main` and move the tag onto it; crates.io comes
+  later. Cancelling between those — the right call when the commit being
+  released has an unexplained CI failure — leaves `main` at the new version,
+  crates.io at the old one, and the tag pointing at the PRE-bump commit, which
+  is no longer `main` HEAD. Re-pushing that tag then fails the workflow's own
+  "Tag must be created from main HEAD" check.
+  The recovery is not a manual dispatch: move the tag onto the `release:`
+  commit (`git tag -f -a vX.Y.Z <release-commit>`, `git push -f origin vX.Y.Z`)
+  and let the tag-push path run again. The version rewrite is idempotent, so the
+  second run hits `git diff --quiet`, prints "No version changes needed", and
+  goes straight to publishing; the publish job checks out the default branch
+  rather than the tag, so it builds the bumped tree either way. Ends with the
+  tag on the `release:` commit, which is where every other release's tag sits.
+- `robot_text_handle_cycle_stability` flakes under full-suite load (2026-08-14):
+  it failed the `main` robot job on the v0.1.89 commit and passed on a rerun of
+  the same job on the same box, and passes locally in isolation. Its final
+  assertion is `late_work > early_work * 1.4 + 0.15` over select/sweep/release
+  cycles — an *accumulation ratio*, so host contention late in a long suite trips
+  it while a constant per-frame cost (the GPOS kerning landing in the same
+  commit) lifts both sides equally and cannot. Rerun the job before treating a
+  failure here as a regression, and do not "fix" it by widening the bound: the
+  ratio is the guard.

@@ -1600,6 +1600,22 @@ pub fn run(
     const MAX_EXIT_ATTEMPTS: u32 = 3;
     let mut exit_attempts = 0u32;
 
+    // Catch-up pacing (kill switch CRANPOSE_CATCHUP_PACING=0 /
+    // debug.cranpose.catchup_pacing): when the previous iteration's present
+    // landed more than a refresh period after the one before it, the frame
+    // already missed its vsync — sleeping until the NEXT choreographer tick
+    // would round that miss up to a whole extra period, turning an 18 ms
+    // frame into a 33 ms one. Behind-deadline iterations poll immediately
+    // instead; `Fifo` present back-pressure paces them. Any iteration that
+    // does not present resets to vsync pacing, so an idle app that skips
+    // presents can never busy-loop on the zero poll.
+    let catchup_pacing = !matches!(std::env::var("CRANPOSE_CATCHUP_PACING").as_deref(), Ok("0"));
+    if catchup_pacing {
+        log::info!("[pacing] catch-up pacing enabled");
+    }
+    let mut last_present_at: Option<web_time::Instant> = None;
+    let mut behind_deadline = false;
+
     // Main event loop
     loop {
         let mut frame_timings = crate::android_frame_telemetry::FrameTimings {
@@ -1681,7 +1697,12 @@ pub fn run(
             // turns an idle app into a busy loop. Fall back to the zero poll
             // when the display cannot wake us, so a device without a
             // choreographer keeps the behaviour it had.
-            if crate::android_vsync::request_wake_at_next_vsync() {
+            if behind_deadline {
+                // The last present already missed its vsync (see the
+                // catch-up pacing note above the loop); every behind
+                // iteration presents, so the busy-loop hazard cannot arise.
+                Some(Duration::ZERO)
+            } else if crate::android_vsync::request_wake_at_next_vsync() {
                 idle_timeout
             } else {
                 Some(Duration::ZERO)
@@ -2374,6 +2395,32 @@ pub fn run(
             }
         } else {
             frame_telemetry.note_idle_iteration();
+        }
+
+        // Catch-up pacing bookkeeping (see the note above the loop):
+        // `after_present_ns` is stamped only by a successful present, and
+        // `FrameTimings` is fresh per iteration, so a nonzero value is the
+        // exact "this iteration presented" signal.
+        if frame_timings.after_present_ns != 0 {
+            let now = web_time::Instant::now();
+            behind_deadline = catchup_pacing
+                && last_present_at.is_some_and(|previous| {
+                    // Display-reported period first (vsync-probe builds),
+                    // then the always-on estimate from consecutive
+                    // choreographer callback deltas, then the 60 Hz default.
+                    let reported = crate::android_frame_telemetry::vsync_period_ns();
+                    let period = if reported > 0 {
+                        reported
+                    } else {
+                        crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
+                    };
+                    // period/16 of slack (~1 ms at 60 Hz) keeps at-rate
+                    // presentation jitter from triggering catch-up.
+                    now.duration_since(previous).as_nanos() as i64 > period + period / 16
+                });
+            last_present_at = Some(now);
+        } else {
+            behind_deadline = false;
         }
     }
 }
