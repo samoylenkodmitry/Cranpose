@@ -80,15 +80,15 @@ impl FontExtent {
 /// it wrong does not shift a baseline by a fraction; it quantises the whole
 /// line box to the wrong step.
 pub fn line_box(style: &TextStyle, extent: FontExtent, asked: f32, grid: f32) -> LineBox {
+    let grid = if grid.is_finite() && grid > 0.0 {
+        grid
+    } else {
+        1.0
+    };
     match style.paragraph_style.line_height_style {
-        None => unstyled_line_box(extent, asked),
+        None => unstyled_line_box(extent, asked, grid),
         Some(line_height_style) => {
             let padding = font_padding(style, extent);
-            let grid = if grid.is_finite() && grid > 0.0 {
-                grid
-            } else {
-                1.0
-            };
             aosp_line_box(line_height_style, extent, asked, padding, grid)
         }
     }
@@ -97,10 +97,24 @@ pub fn line_box(style: &TextStyle, extent: FontExtent, asked: f32, grid: f32) ->
 /// The rule for a style that names no line-height policy: the box is the
 /// requested height and the leading is split evenly.
 ///
-/// This is what the rasterizer has always done, kept bit for bit, because every
-/// style in the framework still lands here and none of them asked to move.
-fn unstyled_line_box(extent: FontExtent, asked: f32) -> LineBox {
-    let natural = extent.natural().ceil();
+/// The ceil is on the **device grid**, not on the caller's own unit, and that
+/// is the whole of the fix here. A measurer works in layout points and passes
+/// the density; the rasterizer works in device pixels and passes `1.0`. Ceiling
+/// in the caller's unit made those two disagree: one 12sp/16sp style came out
+/// `ceil(14.0625 dp) = 15 dp = 30 px` on the measuring side and
+/// `ceil(28.125 px) = 29 px` on the drawing side, and the glyph landed on a
+/// half pixel that then rounded down. Faces whose two ceils happened to agree
+/// were exact, which is why this hid for so long and why it showed on Credits
+/// and the title but never on Settings.
+///
+/// There is no ground truth for what an unstyled box *should* be — Compose
+/// always names a policy, so there is no platform behaviour to copy — and this
+/// change does not invent one. It moves the measurer onto the number the
+/// rasterizer already produces, because the rasterizer can only work in whole
+/// device pixels and is therefore the side that cannot be wrong about them.
+/// At `grid = 1.0` the arithmetic is unchanged bit for bit.
+fn unstyled_line_box(extent: FontExtent, asked: f32, grid: f32) -> LineBox {
+    let natural = (extent.natural() * grid).ceil() / grid;
     LineBox {
         height: asked,
         baseline: extent.ascent + (asked - natural) * 0.5,
@@ -285,6 +299,51 @@ mod tests {
         assert_eq!(plain.height, 36.0);
         let natural = extent.natural().ceil();
         assert_eq!(plain.baseline, extent.ascent + (36.0 - natural) * 0.5);
+    }
+
+    #[test]
+    fn an_unstyled_box_is_the_same_box_measured_in_points_or_in_pixels() {
+        // The measurer works in layout points and passes the density; the
+        // rasterizer works in device pixels and passes 1.0. A style naming no
+        // line-height policy has to come out the same physical box either way,
+        // or a run measures one height and draws another. It did not: at
+        // density 2 the 12sp/16sp case below was 15dp = 30px measured and 29px
+        // drawn, and the glyph landed on a half pixel.
+        //
+        // The style here is deliberately the unstyled one -- `None` -- because
+        // the AOSP branch has always taken the grid and was never adrift.
+        let density = 2.0;
+        for glyph_px in [24.0f32, 26.0, 28.125, 30.0, 32.0, 37.2, 38.72] {
+            let ascent_px = glyph_px * 1900.0 / 2048.0;
+            let descent_px = glyph_px * 500.0 / 2048.0;
+            let asked_px = (glyph_px * 4.0 / 3.0).round();
+
+            let in_pixels = line_box(
+                &styled(asked_px, None),
+                FontExtent::new(ascent_px, descent_px, 0.0),
+                asked_px,
+                1.0,
+            );
+            let in_points = line_box(
+                &styled(asked_px / density, None),
+                FontExtent::new(ascent_px / density, descent_px / density, 0.0),
+                asked_px / density,
+                density,
+            );
+
+            assert!(
+                (in_points.height * density - in_pixels.height).abs() < 1e-4,
+                "{glyph_px}px: height {} in points against {} in pixels",
+                in_points.height * density,
+                in_pixels.height
+            );
+            assert!(
+                (in_points.baseline * density - in_pixels.baseline).abs() < 1e-4,
+                "{glyph_px}px: baseline {} in points against {} in pixels",
+                in_points.baseline * density,
+                in_pixels.baseline
+            );
+        }
     }
 
     #[test]
