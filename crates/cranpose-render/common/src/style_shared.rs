@@ -383,6 +383,8 @@ pub fn primitives_for_placement_verified(
                     dynamic,
                     state.segments().len(),
                     state.stats(),
+                    state.optimistic_commits(),
+                    state.prefix_commits(),
                 ))
             } else {
                 None
@@ -390,6 +392,33 @@ pub fn primitives_for_placement_verified(
         } else {
             None
         };
+        // Rate-limited engagement line, always on: the watch cannot take
+        // flag-gated diagnostics (its logcat is the only channel), and
+        // whether the pooled and prefix-commit fast paths engage on-device
+        // must be provable from a plain measurement window. warn level:
+        // the platform loggers filter info on desktop.
+        if !state.segments().is_empty() {
+            thread_local! {
+                static VERIFIED_FRAMES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+            }
+            let frames = VERIFIED_FRAMES.with(|cell| {
+                let next = cell.get().wrapping_add(1);
+                cell.set(next);
+                next
+            });
+            if frames.is_multiple_of(256) {
+                let (deaths, splits) = state.stats();
+                log::warn!(
+                    "[command-replay] health: {} segments, pooled commits {} + prefix {}, \
+                     lifetime deaths {} splits {}",
+                    state.segments().len(),
+                    state.optimistic_commits(),
+                    state.prefix_commits(),
+                    deaths,
+                    splits,
+                );
+            }
+        }
         let center = state.center();
         // Only spans whose retained buffer the renderer has confirmed may
         // skip materialization: everything else must exist as primitives
@@ -401,10 +430,12 @@ pub fn primitives_for_placement_verified(
                 && command.is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))
         };
         let (finished, frame) = scope.finish_replay(center, outcome, &mut bypass);
-        if let Some((records, retained, dynamic, segments, (deaths, splits))) = diag {
+        if let Some((records, retained, dynamic, segments, (deaths, splits), pooled, prefix)) = diag
+        {
             log::warn!(
                 "[command-replay] {} records: {} retained spans, {} dynamic records, \
-                 {} materialized; {} segments alive, lifetime deaths {} splits {}",
+                 {} materialized; {} segments alive, lifetime deaths {} splits {}, \
+                 pooled commits {} + prefix {}",
                 records,
                 retained,
                 dynamic,
@@ -412,6 +443,8 @@ pub fn primitives_for_placement_verified(
                 segments,
                 deaths,
                 splits,
+                pooled,
+                prefix,
             );
         }
         (finished, frame)
