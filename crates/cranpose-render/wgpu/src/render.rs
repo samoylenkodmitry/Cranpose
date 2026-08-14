@@ -4434,15 +4434,25 @@ fn instanced_quads_enabled() -> bool {
 
 /// Kill switch for the display clip region cull: default ON wherever the
 /// platform reports a cullable visible region
-/// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL=0` (or the
-/// `debug.cranpose.round_cull` property on Android) forces it off — the
+/// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL` (or the
+/// `debug.cranpose.round_cull` property on Android) gates it — the
 /// switch keeps the name of the capability's first provider, the round
 /// display. Read per frame — the parity harness flips it between passes.
 /// While the region is `Full` the variable is never consulted: the cull
 /// is structurally off.
+///
+/// OPT-IN (=1) for now, not default-on: on the Pixel Watch 3 (Adreno 702,
+/// armv7) the first on-device engagement aborted deterministically within a
+/// second of heavy retained content appearing — SIGABRT through
+/// `std::process::abort` with no panic line captured. The menu and light
+/// scenes run the cull fine, so the fault sits in an interaction between the
+/// depth-occluder pass and the heavy-scene paths (retained bundles /
+/// static-span blit are the suspects). Until that is root-caused on-device,
+/// a default-on cull would ship an abort to every round-display user; the
+/// A/B twins opt in explicitly with the same variable.
 #[cfg(not(target_arch = "wasm32"))]
 fn display_clip_cull_enabled() -> bool {
-    std::env::var("CRANPOSE_ROUND_CULL").as_deref() != Ok("0")
+    std::env::var("CRANPOSE_ROUND_CULL").as_deref() == Ok("1")
 }
 
 /// The index pattern of one instanced quad: the exact triangle pair

@@ -221,9 +221,13 @@ fn cull_is_bitwise_invisible_on_every_pixel_the_region_shows() {
     let flat = render_arm(&mut renderer, &graph);
 
     for region in CULLABLE_REGIONS {
-        // Arm B: the platform reports a cullable visible region.
+        // Arm B: the platform reports a cullable visible region. The cull is
+        // opt-in while the on-device abort is under investigation, so the
+        // active arms opt in the way a device build would.
         renderer.set_display_visible_region(region);
+        std::env::set_var("CRANPOSE_ROUND_CULL", "1");
         let culled = render_arm(&mut renderer, &graph);
+        std::env::remove_var("CRANPOSE_ROUND_CULL");
         renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
         let (visible_diffs, invisible_diffs, first_visible) =
@@ -271,7 +275,9 @@ fn occluder_never_covers_a_pixel_the_region_shows() {
 
     for region in CULLABLE_REGIONS {
         renderer.set_display_visible_region(region);
+        std::env::set_var("CRANPOSE_ROUND_CULL", "1");
         let culled = render_arm(&mut renderer, &graph);
+        std::env::remove_var("CRANPOSE_ROUND_CULL");
         renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
         let mut covered_visible = 0usize;
