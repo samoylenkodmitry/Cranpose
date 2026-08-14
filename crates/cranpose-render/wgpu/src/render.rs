@@ -2296,6 +2296,11 @@ struct ReplaySlot {
     /// for the life of the capture, so bundle keys need nothing beyond the
     /// capture epoch they already carry.
     has_gradient: bool,
+    /// Prefix sums of per-shape capture-space drawn area for the
+    /// `CRANPOSE_FILL_DIAG` instrument (`shape_count + 1` entries): mesh
+    /// triangle areas when this slot replays its arc mesh, bounding-quad
+    /// areas otherwise. Empty when the diagnostic is off.
+    area_prefix: Vec<f64>,
 }
 
 /// Vertex geometry a retained slot replays instead of per-shape quads: arc
@@ -2950,6 +2955,184 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
         ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
     };
     tri(corners[0], corners[1], corners[2]) + tri(corners[2], corners[1], corners[3])
+}
+
+/// `CRANPOSE_FILL_DIAG` (`debug.cranpose.fill_diag` on Android): per-frame
+/// CPU-side accounting of the fill area the renderer submits, in device px².
+/// Off by default; any set value except "0" enables. Read once per process,
+/// so a disabled hot path pays one static load and a branch.
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_area_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(
+        || matches!(std::env::var("CRANPOSE_FILL_DIAG").as_deref(), Ok(value) if value != "0"),
+    )
+}
+
+/// Rendered frames aggregated into one `[fill-diag]` report line.
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_WINDOW_FRAMES: u32 = 120;
+
+#[cfg(not(target_arch = "wasm32"))]
+const FILL_DIAG_BUCKETS: usize = 7;
+
+/// Submitted-fill-area accounting behind [`fill_area_diag_enabled`]. The
+/// watch's GPU counters are sepolicy-blocked, but the renderer knows every
+/// quad it emits, so summing their areas per bucket says where the fragment
+/// work goes; the point is the RATIO between buckets, and several are
+/// deliberately approximate where exactness would cost the hot path:
+///
+/// * `arc` / `rrect-stroke` / `rrect-fill` / `rect` — batched shape quads by
+///   decoded SDF class: exact shoelace area of the submitted quads, from the
+///   fused screen pass and the offscreen layer/shadow-source passes alike.
+///   Scissors and the SDF's own discards are not modeled. The latched
+///   instanced-quad path draws these same quads (one instance per shape), so
+///   instanced draws live in these buckets rather than a separate one.
+/// * `mesh` — transient rim band meshes: exact triangle area, replacing the
+///   rim's bounding quad (which is subtracted back out of `rrect-stroke`).
+/// * `retained` — replay-slot draws: exact capture-space area of the drawn
+///   shape range (mesh triangles when the slot replays its arc mesh, quads
+///   otherwise) times the draw's similarity scale squared.
+/// * `img+glyph` — image quads exactly; glyph atlas quads as width x height.
+///   A retained glyph run counts every quad of its cached buffer (the
+///   shared path's per-quad viewport cull is not re-run for it).
+///
+/// Not counted: effect-renderer composites (layer/blur blends) and clears —
+/// this instrument prices the scene's own submitted quads.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct FillAreaDiag {
+    /// Current frame's per-bucket submitted area, device px². `Cell`s
+    /// because draw encoding accumulates through `&self`, the same pattern
+    /// as [`gpu_stats::FrameStats`].
+    frame: [std::cell::Cell<f64>; FILL_DIAG_BUCKETS],
+    /// Window totals, folded once per frame by [`Self::finish_frame`].
+    window: [f64; FILL_DIAG_BUCKETS],
+    window_frames: u32,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FillAreaDiag {
+    const ARC: usize = 0;
+    const RRECT_STROKE: usize = 1;
+    const RRECT_FILL: usize = 2;
+    const RECT: usize = 3;
+    const MESH: usize = 4;
+    const RETAINED: usize = 5;
+    const IMAGE_GLYPH: usize = 6;
+
+    fn add(&self, bucket: usize, area_px2: f64) {
+        let cell = &self.frame[bucket];
+        cell.set(cell.get() + area_px2);
+    }
+
+    /// Splits a freshly converted batch's quads by the SDF class the
+    /// fragment shader will run, decoded from the packed flags the way the
+    /// shader decodes them (`u32(max(x, 0.0)) & 3`).
+    fn add_shape_quads(&self, shapes: &[ShapeData]) {
+        let mut buckets = [0.0_f64; FILL_DIAG_BUCKETS];
+        for shape in shapes {
+            let bucket = match shape.stroke_params[1].max(0.0) as u32 & 3 {
+                SHAPE_KIND_ARC => Self::ARC,
+                SHAPE_KIND_STROKE => Self::RRECT_STROKE,
+                // Fills keep real corner radii in `radii` (arcs reuse the
+                // field for trig, but they took the arm above).
+                _ if shape.radii.iter().any(|radius| *radius > 0.0) => Self::RRECT_FILL,
+                _ => Self::RECT,
+            };
+            buckets[bucket] += quad_shoelace_area(shape);
+        }
+        for (bucket, area) in buckets.into_iter().enumerate() {
+            if area > 0.0 {
+                self.add(bucket, area);
+            }
+        }
+    }
+
+    /// A transient rim replaced its bounding quad with a band mesh: move the
+    /// quad's area (already counted at batch prepare) out of the stroke
+    /// bucket and count the mesh triangles instead.
+    fn note_rim_mesh(&self, quad_px2: f64, mesh_px2: f64) {
+        self.add(Self::RRECT_STROKE, -quad_px2);
+        self.add(Self::MESH, mesh_px2);
+    }
+
+    /// One retained replay draw over `first..last` of a slot's capture:
+    /// capture-space area from the slot's prefix table, times the draw's
+    /// similarity scale squared.
+    fn add_retained_range(&self, slot: &ReplaySlot, first: u32, last: u32, scale: f32) {
+        let (Some(start), Some(end)) = (
+            slot.area_prefix.get(first as usize),
+            slot.area_prefix.get(last as usize),
+        ) else {
+            return;
+        };
+        let scale = f64::from(scale);
+        self.add(Self::RETAINED, (end - start) * scale * scale);
+    }
+
+    /// Area of an image or text-image quad from its four device-space
+    /// corners (TL, TR, BL, BR — the shared `(0, 1, 2)(2, 1, 3)` pattern).
+    fn add_image_quad(&self, quad: &[[f32; 2]; 4]) {
+        let corner = |index: usize| [f64::from(quad[index][0]), f64::from(quad[index][1])];
+        let tri = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| {
+            ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() * 0.5
+        };
+        let [a, b, c, d] = [corner(0), corner(1), corner(2), corner(3)];
+        self.add(Self::IMAGE_GLYPH, tri(a, b, c) + tri(c, b, d));
+    }
+
+    /// One glyph atlas quad, axis-aligned by construction.
+    fn add_glyph_quad(&self, quad: &CachedTextGlyphQuad) {
+        self.add(Self::IMAGE_GLYPH, quad.width as f64 * quad.height as f64);
+    }
+
+    /// Restarts the frame counters — called from the same per-frame reset
+    /// point as the transient rim mesh scratch.
+    fn reset_frame(&self) {
+        for cell in &self.frame {
+            cell.set(0.0);
+        }
+    }
+
+    /// Folds the frame into the window and, every
+    /// [`FILL_DIAG_WINDOW_FRAMES`] rendered frames, emits one warn-level
+    /// line of per-bucket window averages (Mpx/frame, one decimal).
+    fn finish_frame(&mut self, width: u32, height: u32) {
+        for (total, cell) in self.window.iter_mut().zip(&self.frame) {
+            *total += cell.get();
+        }
+        self.window_frames += 1;
+        if self.window_frames < FILL_DIAG_WINDOW_FRAMES {
+            return;
+        }
+        let frames = f64::from(self.window_frames);
+        let mega = |bucket: usize| self.window[bucket] / frames / 1e6;
+        let total_mega = self.window.iter().sum::<f64>() / frames / 1e6;
+        let screen_mega = f64::from(width) * f64::from(height) / 1e6;
+        let overdraw = if screen_mega > 0.0 {
+            total_mega / screen_mega
+        } else {
+            0.0
+        };
+        log::warn!(
+            "[fill-diag] Mpx/frame: arc {:.1}, rrect-stroke {:.1}, rrect-fill {:.1}, \
+             rect {:.1}, mesh {:.1}, retained {:.1}, img+glyph {:.1}, total {:.1} \
+             ({:.1}x overdraw of {:.3} Mpx)",
+            mega(Self::ARC),
+            mega(Self::RRECT_STROKE),
+            mega(Self::RRECT_FILL),
+            mega(Self::RECT),
+            mega(Self::MESH),
+            mega(Self::RETAINED),
+            mega(Self::IMAGE_GLYPH),
+            total_mega,
+            overdraw,
+            screen_mega,
+        );
+        self.window = [0.0; FILL_DIAG_BUCKETS];
+        self.window_frames = 0;
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -4134,6 +4317,10 @@ pub struct GpuRenderer {
     /// [`Self::rim_meshes_emitted`].
     #[cfg(not(target_arch = "wasm32"))]
     rim_meshes_emitted: u64,
+    /// Submitted fill-area accounting (`CRANPOSE_FILL_DIAG`); idle unless
+    /// the flag is set.
+    #[cfg(not(target_arch = "wasm32"))]
+    fill_area_diag: FillAreaDiag,
 }
 
 /// Running totals for retained-slot patch uploads, the paint-bandwidth
@@ -4699,6 +4886,8 @@ impl GpuRenderer {
             rim_mesh_uploaded_indices: 0,
             #[cfg(not(target_arch = "wasm32"))]
             rim_meshes_emitted: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            fill_area_diag: FillAreaDiag::default(),
         }
     }
 
@@ -6537,6 +6726,9 @@ impl GpuRenderer {
             self.rim_mesh_indices.clear();
             self.rim_mesh_uploaded_vertices = 0;
             self.rim_mesh_uploaded_indices = 0;
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.reset_frame();
+            }
         }
 
         // Producer-side text layout cache size, carried by the packet — the
@@ -6546,6 +6738,12 @@ impl GpuRenderer {
         let result = self.render_graph(view, packet, returns);
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.finish_frame(width, height);
+            }
+        }
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -7523,6 +7721,15 @@ impl GpuRenderer {
                                         index_count: (self.rim_mesh_indices.len() - index_mark)
                                             as u32,
                                     });
+                                    if fill_area_diag_enabled() {
+                                        self.fill_area_diag.note_rim_mesh(
+                                            quad_shoelace_area(converted),
+                                            triangles_shoelace_area(
+                                                &self.rim_mesh_vertices,
+                                                &self.rim_mesh_indices[index_mark..],
+                                            ),
+                                        );
+                                    }
                                     self.rim_meshes_emitted += 1;
                                     if self.rim_meshes_emitted % 600 == 1 {
                                         log::debug!(
@@ -9321,6 +9528,13 @@ impl GpuRenderer {
             &mut self.scratch_shape_data,
             &mut self.scratch_gradients,
         );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag
+                    .add_shape_quads(&self.scratch_shape_data);
+            }
+        }
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -9445,6 +9659,10 @@ impl GpuRenderer {
             &mut self.scratch_shape_data,
             &mut self.scratch_gradients,
         );
+        if fill_area_diag_enabled() {
+            self.fill_area_diag
+                .add_shape_quads(&self.scratch_shape_data);
+        }
 
         // Region layout inside the frame upload buffer. Every element type is
         // f32/u32-based, so all lengths are multiples of
@@ -9851,6 +10069,10 @@ impl GpuRenderer {
             .copy_from_slice(bytemuck::cast_slice(&gradients));
         gradient_buffer.unmap();
 
+        // Filled by the mesh arm when the capture keeps its arc mesh, so
+        // the fill-diag prefix can price those shapes by their true
+        // triangle area.
+        let mut mesh_area_prefix: Option<Vec<f64>> = None;
         let mesh = if arc_mesh_enabled() {
             match build_arc_mesh_vertices(&shape_data) {
                 Some(build) => {
@@ -9878,6 +10100,19 @@ impl GpuRenderer {
                         build.mesh_area,
                         cut,
                     );
+                    if build.meshed_arcs > 0 && fill_area_diag_enabled() {
+                        let mut prefix = Vec::with_capacity(build.index_prefix.len());
+                        let mut total = 0.0_f64;
+                        prefix.push(0.0);
+                        for span in build.index_prefix.windows(2) {
+                            total += triangles_shoelace_area(
+                                &build.vertices,
+                                &build.indices[span[0] as usize..span[1] as usize],
+                            );
+                            prefix.push(total);
+                        }
+                        mesh_area_prefix = Some(prefix);
+                    }
                     // A slot that meshed nothing gains nothing over the
                     // indexless quad path — skip the buffers.
                     (build.meshed_arcs > 0).then(|| {
@@ -9920,6 +10155,21 @@ impl GpuRenderer {
             }
         } else {
             None
+        };
+
+        let area_prefix = if fill_area_diag_enabled() {
+            mesh_area_prefix.unwrap_or_else(|| {
+                let mut prefix = Vec::with_capacity(shape_count + 1);
+                let mut total = 0.0_f64;
+                prefix.push(0.0);
+                for shape in &shape_data {
+                    total += quad_shoelace_area(shape);
+                    prefix.push(total);
+                }
+                prefix
+            })
+        } else {
+            Vec::new()
         };
 
         // Seed the mutable paint from the converted colors, so an unpatched
@@ -9984,6 +10234,7 @@ impl GpuRenderer {
                 mesh,
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
+                area_prefix,
             },
         );
         Some(id)
@@ -10050,6 +10301,10 @@ impl GpuRenderer {
             .min(slot.shape_count);
         if first >= last {
             return;
+        }
+        if fill_area_diag_enabled() {
+            self.fill_area_diag
+                .add_retained_range(slot, first, last, retained.transform.scale);
         }
         self.frame_stats.bump_shapes();
         self.frame_stats.add_draw_calls(1);
@@ -10269,6 +10524,19 @@ impl GpuRenderer {
             {
                 self.frame_stats.bump_shapes();
                 self.frame_stats.add_draw_calls(1);
+                if fill_area_diag_enabled() {
+                    // Mirror the direct path's fill accounting per bundled op.
+                    let slot = self.replay_slots.slots.get(&op.slot);
+                    let retained = retained_draws.get(op.retained_index as usize);
+                    if let (Some(slot), Some(retained)) = (slot, retained) {
+                        self.fill_area_diag.add_retained_range(
+                            slot,
+                            op.first,
+                            op.last,
+                            retained.transform.scale,
+                        );
+                    }
+                }
             }
         }
         // Bundles inherit the pass scissor: set the same full-target rect
@@ -10801,6 +11069,12 @@ impl GpuRenderer {
                     scaled_quad(adjusted_image.quad, root_scale)
                 }
             });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.add_image_quad(&device_quad);
+            }
+        }
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -11103,6 +11377,12 @@ impl GpuRenderer {
                 if record_cached_hits {
                     self.frame_stats.record_text_glyph_atlas_hit();
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    if fill_area_diag_enabled() {
+                        self.fill_area_diag.add_glyph_quad(quad);
+                    }
+                }
                 appended = appended.saturating_add(1);
             }
         }
@@ -11158,6 +11438,13 @@ impl GpuRenderer {
             staged_uploads,
             Self::retained_glyph_viewport(viewport, source_raster_rect),
         );
+        if fill_area_diag_enabled() {
+            // The retained run draws every quad of its cached buffer; the
+            // shared path's per-quad viewport cull is not re-run for it.
+            for quad in quads {
+                self.fill_area_diag.add_glyph_quad(quad);
+            }
+        }
         glyph_cmds.push(GlyphDrawCmd::retained(cache_key, uniform_slot, scissor));
         true
     }
@@ -11830,6 +12117,12 @@ impl GpuRenderer {
         let Some(uv_rect) = image_uv_rect(image, None) else {
             return Ok(());
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if fill_area_diag_enabled() {
+                self.fill_area_diag.add_image_quad(&device_quad);
+            }
+        }
 
         let base_vertex = image_vertices.len() as u32;
         let index_start = image_indices.len() as u32;
@@ -18931,6 +19224,66 @@ mod tests {
         shape.quad23 = [40.0, 340.0, 340.0, 340.0];
         shape.color = [1.0, 1.0, 1.0, 1.0];
         shape
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_buckets_shape_quads_by_decoded_sdf_class() {
+        let diag = FillAreaDiag::default();
+        let mut arc = ShapeData::zeroed();
+        arc.stroke_params[1] = pack_shape_flags(SHAPE_KIND_ARC, StrokeCap::Butt, StrokeJoin::Miter);
+        // Arcs keep trig in `radii`; nonzero values there must not classify
+        // the shape as a rounded fill.
+        arc.radii = [0.5; 4];
+        arc.quad01 = [0.0, 0.0, 10.0, 0.0];
+        arc.quad23 = [0.0, 10.0, 10.0, 10.0];
+        let mut rounded = ShapeData::zeroed();
+        rounded.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        rounded.radii = [2.0; 4];
+        rounded.quad01 = [0.0, 0.0, 4.0, 0.0];
+        rounded.quad23 = [0.0, 5.0, 4.0, 5.0];
+        let mut plain = ShapeData::zeroed();
+        plain.stroke_params[1] =
+            pack_shape_flags(SHAPE_KIND_FILL, StrokeCap::Butt, StrokeJoin::Miter);
+        plain.quad01 = [0.0, 0.0, 2.0, 0.0];
+        plain.quad23 = [0.0, 3.0, 2.0, 3.0];
+        diag.add_shape_quads(&[rim_test_shape_data(), arc, rounded, plain]);
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 300.0 * 300.0);
+        assert_eq!(diag.frame[FillAreaDiag::ARC].get(), 100.0);
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_FILL].get(), 20.0);
+        assert_eq!(diag.frame[FillAreaDiag::RECT].get(), 6.0);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_rim_mesh_moves_quad_area_to_the_mesh_bucket() {
+        let diag = FillAreaDiag::default();
+        diag.add_shape_quads(&[rim_test_shape_data()]);
+        diag.note_rim_mesh(300.0 * 300.0, 1234.5);
+        assert_eq!(diag.frame[FillAreaDiag::RRECT_STROKE].get(), 0.0);
+        assert_eq!(diag.frame[FillAreaDiag::MESH].get(), 1234.5);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fill_diag_image_and_glyph_quads_share_one_bucket() {
+        let diag = FillAreaDiag::default();
+        diag.add_image_quad(&[[0.0, 0.0], [8.0, 0.0], [0.0, 4.0], [8.0, 4.0]]);
+        let quad = CachedTextGlyphQuad {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 7,
+            color: (1.0, 1.0, 1.0, 1.0),
+            uv: ImageUvRect {
+                min: [0.0, 0.0],
+                max: [1.0, 1.0],
+                sample_bounds: [0.0, 0.0, 1.0, 1.0],
+            },
+        };
+        diag.add_glyph_quad(&quad);
+        assert_eq!(diag.frame[FillAreaDiag::IMAGE_GLYPH].get(), 32.0 + 35.0);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
