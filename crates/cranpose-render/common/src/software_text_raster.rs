@@ -5437,8 +5437,7 @@ mod tests {
         let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
 
         let metrics = vertical_metrics(font, font_size);
-        let baseline =
-            line_box_for(&TextStyle::default(), metrics, font_size * 1.4, 1.0).baseline;
+        let baseline = line_box_for(&TextStyle::default(), metrics, font_size * 1.4, 1.0).baseline;
         for glyph in layout_line_glyphs(font, text, font_size, point(0.0, baseline)) {
             let Some((outlined, bounds)) = outline_glyph_with_bounds(font, &glyph) else {
                 continue;
