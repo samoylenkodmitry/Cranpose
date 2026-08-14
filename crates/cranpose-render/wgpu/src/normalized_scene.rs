@@ -1304,7 +1304,12 @@ fn emit_unserved_frame_rematerialized<'a>(
     {
         static WALKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = WALKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        if n < 8 {
+        // First 8 walks verbatim, then every 1024th: a feed that fail-closes
+        // in steady state must stay visible in logcat forever (the counter
+        // in the line is the rate), not fall silent after startup — the
+        // difference between "startup reconcile" and "the bypass never
+        // engages" is exactly what a device log has to be able to answer.
+        if n < 8 || n.is_multiple_of(1024) {
             log::warn!(
                 "[command-feed] feed cannot serve a frame of {:?} with bypassed spans; \
                  rematerializing the whole run (fail-closed walk {})",
