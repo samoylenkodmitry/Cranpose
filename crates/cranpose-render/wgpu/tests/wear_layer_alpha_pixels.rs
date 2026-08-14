@@ -195,7 +195,7 @@ fn expected_rows() -> Vec<(f32, f32, f32, f32)> {
 }
 
 fn rows_for(count: usize) -> Vec<(f32, f32, f32, f32)> {
-    use cranpose_ui::round_scaling_list::{centre_offset, place_rows, stack_into, Slot};
+    use cranpose_ui::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW, count), 4.0, &mut slots);
     let viewport = SIZE as f32;
@@ -209,12 +209,14 @@ fn rows_for(count: usize) -> Vec<(f32, f32, f32, f32)> {
     let index = anchor.index.min(count.saturating_sub(1));
     let mut rows = Vec::new();
     place_rows(
-        viewport,
+        RowRun {
+            viewport,
+            anchor: index,
+            anchor_top: slots[index].top + offset,
+            gap: 4.0,
+            density: 1.0,
+        },
         &vec![ROW; count],
-        index,
-        slots[index].top + offset,
-        4.0,
-        1.0,
         &mut rows,
     );
     rows.into_iter()

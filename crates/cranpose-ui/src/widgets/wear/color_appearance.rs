@@ -50,7 +50,7 @@ use crate::modifier::Color;
 /// The result is **opaque**, as the platform's is: `setLuminance` goes through
 /// an ARGB int whose alpha byte the solver writes as `0xFF`.
 pub fn set_luminance(color: Color, l_star: f32) -> Color {
-    if l_star < 1.0e-4 || l_star > 99.9999 {
+    if !SOLVED_RANGE.contains(&(l_star as f64)) {
         return color_from_argb(argb_from_lstar(l_star as f64));
     }
     let (hue, chroma) = cam16_hue_chroma(argb_from_color(color));
@@ -128,7 +128,7 @@ pub fn cam16_hue_chroma(argb: u32) -> (f32, f32) {
 /// answer is on the cube's surface and is found by bisecting first to a segment
 /// between two vertices and then along that segment, one 8-bit plane at a time.
 pub fn hct_solve(hue_degrees: f64, chroma: f64, l_star: f64) -> u32 {
-    if chroma < 1.0e-4 || l_star < 1.0e-4 || l_star > 99.9999 {
+    if chroma < 1.0e-4 || !SOLVED_RANGE.contains(&l_star) {
         return argb_from_lstar(l_star);
     }
     let hue_degrees = sanitize_degrees(hue_degrees);
@@ -238,8 +238,8 @@ const SCALED_DISCOUNT_FROM_LINRGB: [[f64; 3]; 3] = [
 /// `HctSolver.LINRGB_FROM_SCALED_DISCOUNT`.
 const LINRGB_FROM_SCALED_DISCOUNT: [[f64; 3]; 3] = [
     [
-        1373.219_870_959_423_1,
-        -1100.425_119_075_482_1,
+        1373.2198709594231,
+        -1100.4251190754821,
         -7.278_681_089_101_213,
     ],
     [
@@ -520,6 +520,11 @@ const CRITICAL_PLANES: [f64; 255] = [
     99.55452497210776,
 ];
 
+/// The lightness band Wear actually solves in. Outside it `setLuminance` and
+/// `HctSolver.solveToInt` both return the neutral grey of that lightness
+/// rather than asking for a hue that black and white do not have.
+const SOLVED_RANGE: std::ops::RangeInclusive<f64> = 1.0e-4..=99.9999;
+
 /// `3.1415927f`, the literal `Cam.kt` divides degrees by. Named rather than
 /// spelled so it cannot drift from `std::f32::consts::PI`, which is the same
 /// value.
@@ -628,7 +633,7 @@ fn argb_from_xyz(x: f64, y: f64, z: f64) -> u32 {
 /// `CamUtils.delinearized`: linear light on 0..=100 to an 8-bit channel.
 fn delinearized(component: f64) -> u32 {
     let normalized = component / 100.0;
-    let delinearized = if normalized <= 0.003_1308 {
+    let delinearized = if normalized <= 0.0031308 {
         normalized * 12.92
     } else {
         1.055 * normalized.powf(INVERSE_GAMMA) - 0.055
@@ -642,7 +647,7 @@ fn delinearized(component: f64) -> u32 {
 /// what a plane index is read off.
 fn true_delinearized(rgb_component: f64) -> f64 {
     let normalized = rgb_component / 100.0;
-    let delinearized = if normalized <= 0.003_1308 {
+    let delinearized = if normalized <= 0.0031308 {
         normalized * 12.92
     } else {
         1.055 * normalized.powf(INVERSE_GAMMA) - 0.055
@@ -871,7 +876,7 @@ fn find_result_by_j(hue_radians: f64, chroma: f64, y: f64) -> Option<u32> {
     let n = FRAME.n as f64;
     let t_inner_coeff = 1.0 / (1.64 - 0.29f64.powf(n)).powf(0.73);
     let e_hue = 0.25 * ((hue_radians + 2.0).cos() + 3.8);
-    let p1 = e_hue * 3846.153_846_153_846 * FRAME.nc as f64 * FRAME.ncb as f64;
+    let p1 = e_hue * 3846.153846153846 * FRAME.nc as f64 * FRAME.ncb as f64;
     let h_sin = hue_radians.sin();
     let h_cos = hue_radians.cos();
     for round in 0..5 {

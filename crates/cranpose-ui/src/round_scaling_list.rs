@@ -28,13 +28,20 @@
 //!
 //! The two accounts agree exactly for the centre row (scale 1, so its scaled
 //! size is its full one) and for its immediate neighbours, and separate from
-//! the third row out: 15 device pixels by the seventh row on a 192dp display.
-//! Every row that far out is off screen at both display sizes shipping today,
-//! which is why this went unnoticed and not why it is acceptable.
+//! the second row out. How far they separate is the whole of what the rows in
+//! between shrank, so it depends on the list: on six 52pt rows down a 454pt
+//! watch the third row out is 8.5pt higher under this rule and comes fully on
+//! screen where the full-height stack ran it off the bottom, while on the real
+//! Settings list it is a device pixel of the bottom row's sliver at 192dp and
+//! nothing at all at 227dp. The **shape** of the error is the part worth
+//! keeping in mind: under the full-height stack the drawn boxes drift apart as
+//! they shrink, and under this one they stay exactly one gap apart however
+//! small they get.
+//!
 //! [`place_row`] therefore takes the **cursor**, not a slot in the unscaled
-//! stack, and [`PlacedRow::reported_height`] is what a caller advances that
-//! cursor by. Stacking full heights instead is the error that this module used
-//! to describe as the correct behaviour.
+//! stack; [`PlacedRow::reported_height`] is what advances it; and
+//! [`place_rows`] is the walk, because a per-row call cannot state a rule about
+//! the row after it.
 //!
 //! The ramp itself is still stated on the row's FULL height at that cursor —
 //! `calculateItemInfo` passes `itemStart .. itemStart + item.size` — so a row
@@ -259,35 +266,47 @@ pub fn place_row_with(
     })
 }
 
+/// Everything about a scaling list that is the same for all of its rows.
+///
+/// Held together rather than passed one by one because [`place_rows_with`]
+/// walks a run and every one of these is a property of the run, not of a row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RowRun {
+    /// The list's full height, which is what the ramp is stated against.
+    pub viewport: f32,
+    /// Which row the walk starts from — `ScalingLazyListState.centerItemIndex`.
+    pub anchor: usize,
+    /// Where the anchored row's own box starts. This is the one position the
+    /// unscaled stack and the walk always agree on: the anchored row is never
+    /// scaled, so its cursor and its slot are the same number.
+    pub anchor_top: f32,
+    /// `Arrangement.spacedBy`, between every pair of drawn boxes.
+    pub gap: f32,
+    /// Device pixels per unit; `0.0` works in continuous coordinates.
+    pub density: f32,
+}
+
 /// Places a whole run of rows the way a scaling list places one, walking
 /// **outward from the anchored row**.
 ///
-/// This is the shape the rule actually has. `place_row` answers for one row
+/// This is the shape the rule actually has. [`place_row`] answers for one row
 /// given its cursor, and the cursor for the row after it is
 /// `PlacedRow::reported_height + gap` further out — never the full height — so
 /// a per-row call cannot state the rule on its own and a caller that stacks
 /// full heights gets a list that drifts. See the module docs.
 ///
-/// `anchor_top` is where the anchored row's own box starts, which is the one
-/// position the two accounts always agree on: the anchored row is never scaled,
-/// so its cursor and its slot are the same number.
-///
 /// `out` is cleared first and comes back one entry per height, in list order.
 pub fn place_rows_with(
     params: ScalingParams,
-    viewport: f32,
+    run: RowRun,
     heights: &[f32],
-    anchor: usize,
-    anchor_top: f32,
-    gap: f32,
-    density: f32,
     out: &mut Vec<PlacedRow>,
 ) {
     out.clear();
     if heights.is_empty() {
         return;
     }
-    let anchor = anchor.min(heights.len() - 1);
+    let anchor = run.anchor.min(heights.len() - 1);
     let unscaled = |top: f32, height: f32| PlacedRow {
         top,
         height,
@@ -296,48 +315,32 @@ pub fn place_rows_with(
         alpha: 1.0,
     };
     out.resize(heights.len(), unscaled(0.0, 0.0));
+    let place = |top: f32, height: f32| {
+        place_row_with(params, run.viewport, top, height, run.density)
+            .unwrap_or_else(|| unscaled(top, height))
+    };
 
-    let mut cursor = anchor_top;
-    for index in anchor..heights.len() {
-        let height = heights[index];
-        let row = place_row_with(params, viewport, cursor, height, density)
-            .unwrap_or_else(|| unscaled(cursor, height));
-        cursor += row.reported_height + gap;
+    let mut cursor = run.anchor_top;
+    for (index, &height) in heights.iter().enumerate().skip(anchor) {
+        let row = place(cursor, height);
+        cursor += row.reported_height + run.gap;
         out[index] = row;
     }
     // Upward the cursor is the next row's BOTTOM, and the ramp is still read
     // off the row's full box hanging from it.
-    let mut bottom = anchor_top;
+    let mut bottom = run.anchor_top;
     for index in (0..anchor).rev() {
         let height = heights[index];
-        bottom -= gap;
-        let row = place_row_with(params, viewport, bottom - height, height, density)
-            .unwrap_or_else(|| unscaled(bottom - height, height));
+        bottom -= run.gap;
+        let row = place(bottom - height, height);
         bottom -= row.reported_height;
         out[index] = row;
     }
 }
 
 /// [`place_rows_with`] under Wear's own ramp.
-pub fn place_rows(
-    viewport: f32,
-    heights: &[f32],
-    anchor: usize,
-    anchor_top: f32,
-    gap: f32,
-    density: f32,
-    out: &mut Vec<PlacedRow>,
-) {
-    place_rows_with(
-        ScalingParams::WEAR,
-        viewport,
-        heights,
-        anchor,
-        anchor_top,
-        gap,
-        density,
-        out,
-    )
+pub fn place_rows(run: RowRun, heights: &[f32], out: &mut Vec<PlacedRow>) {
+    place_rows_with(ScalingParams::WEAR, run, heights, out)
 }
 
 /// A row's unscaled place in the column: where it would sit and how tall it is

@@ -357,7 +357,7 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
 /// an anchor. Deliberately written from `round_scaling_list` directly, so the
 /// widget is checked against the geometry rather than against itself.
 fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
-    use crate::round_scaling_list::{centre_offset, place_rows, stack_into, Slot};
+    use crate::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
     // No content padding term: auto-centring absorbs it. See
@@ -368,12 +368,14 @@ fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling
     let index = anchor.index.min(count.saturating_sub(1));
     let mut rows = Vec::new();
     place_rows(
-        WATCH,
+        RowRun {
+            viewport: WATCH,
+            anchor: index,
+            anchor_top: slots[index].top + offset,
+            gap: 4.0,
+            density: PX,
+        },
         &vec![ROW_HEIGHT; count],
-        index,
-        slots[index].top + offset,
-        4.0,
-        PX,
         &mut rows,
     );
     rows
