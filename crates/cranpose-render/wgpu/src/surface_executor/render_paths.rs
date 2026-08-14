@@ -1068,11 +1068,14 @@ fn scene_range_can_cache_as_transparent_surface(
     z_start: usize,
     z_end: usize,
 ) -> bool {
-    scene.draw_ops.iter().all(|op| {
-        if op.z_index < z_start || op.z_index >= z_end {
-            return true;
-        }
-        match op.kind {
+    // Only the ops inside the range decide the verdict; every op outside it
+    // passed trivially. The binary-searched slice visits exactly the deciding
+    // ops — the full-array scan it replaces cost O(total ops) per chunk, so a
+    // walk cutting an animated frame into ~19 chunks re-touched every op ~19
+    // times just to skip it.
+    scene_range_draw_ops(&scene.draw_ops, z_start, z_end)
+        .iter()
+        .all(|op| match op.kind {
             DrawOpKind::Shape(index) => scene
                 .shapes
                 .get(index)
@@ -1086,8 +1089,7 @@ fn scene_range_can_cache_as_transparent_surface(
             // A replayed batch transforms every frame; a texture of it would
             // be stale on arrival.
             DrawOpKind::Retained(_) => false,
-        }
-    })
+        })
 }
 
 fn scene_range_meets_direct_cache_floor(
@@ -1108,6 +1110,21 @@ fn scene_range_meets_direct_cache_floor(
         >= MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES
 }
 
+/// The visible bounds of a scene range snapped to whole device pixels — the
+/// logical rect a cache entry for the range would cover, `None` when nothing
+/// in the range draws. The direct-scene walk derives this once per chunk and
+/// threads it through the fits gate and the cache path, which used to union
+/// the same draw-op bounds independently.
+fn direct_scene_range_snapped_bounds(
+    scene: &CompositorScene,
+    z_start: usize,
+    z_end: usize,
+    root_scale: f32,
+) -> Option<Rect> {
+    scene_range_visible_bounds(scene, z_start, z_end)
+        .and_then(|bounds| snap_scene_range_bounds_to_pixels(bounds, root_scale))
+}
+
 /// Whether a chunk is small enough that the range cache would accept it.
 ///
 /// This is the same size gate [`cached_direct_scene_range_surface`] applies
@@ -1115,16 +1132,14 @@ fn scene_range_meets_direct_cache_floor(
 /// without touching the cache — whether cutting the range here could ever
 /// produce a stored entry. A chunk that fails it is going to be rendered
 /// directly whatever happens, so there is no reason to give it its own pass.
+/// `snapped_bounds` is the chunk's [`direct_scene_range_snapped_bounds`],
+/// computed by the caller and shared with the cache path.
 fn direct_scene_range_chunk_fits_cache_entry(
     max_texture_dim: u32,
-    scene: &CompositorScene,
-    z_start: usize,
-    z_end: usize,
+    snapped_bounds: Option<Rect>,
     root_scale: f32,
 ) -> bool {
-    let Some(logical_rect) = scene_range_visible_bounds(scene, z_start, z_end)
-        .and_then(|bounds| snap_scene_range_bounds_to_pixels(bounds, root_scale))
-    else {
+    let Some(logical_rect) = snapped_bounds else {
         return false;
     };
     let (target_width, target_height) =
@@ -3422,10 +3437,13 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     z_start: usize,
     z_end: usize,
     root_scale: f32,
+    snapped_bounds: Option<Rect>,
 ) -> Result<Option<LayerSurface>, String> {
-    let Some(logical_rect) = scene_range_visible_bounds(scene, z_start, z_end)
-        .and_then(|bounds| snap_scene_range_bounds_to_pixels(bounds, root_scale))
-    else {
+    // `snapped_bounds` is the caller's [`direct_scene_range_snapped_bounds`]
+    // for exactly this range — the same value this function used to derive
+    // itself, handed over so the union over the range's draw ops happens
+    // once per chunk instead of once per gate.
+    let Some(logical_rect) = snapped_bounds else {
         if layer_render_diag_enabled() {
             log::warn!(
                 "[wgpu-render-stage:direct-scene-cache] skip reason=no-visible-bounds z_start={z_start} z_end={z_end}",
@@ -3582,6 +3600,9 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
     }))
 }
 
+/// Queues a composite for the range when the cache can serve it. The sole
+/// caller — the direct-scene walk — checks [`direct_scene_range_cache_enabled`]
+/// before calling and hands over the range's precomputed snapped bounds.
 #[allow(clippy::too_many_arguments)]
 fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     backend: &mut B,
@@ -3589,16 +3610,19 @@ fn queue_cached_direct_scene_range<B: SurfaceExecutionBackend>(
     z_start: usize,
     z_end: usize,
     root_scale: f32,
+    snapped_bounds: Option<Rect>,
     pending_composites: &mut Vec<PendingLayerComposite>,
     pending_composite_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<bool, String> {
-    if !direct_scene_range_cache_enabled() {
-        return Ok(false);
-    }
-
-    let Some(surface) =
-        cached_direct_scene_range_surface(backend, scene, z_start, z_end, root_scale)?
+    let Some(surface) = cached_direct_scene_range_surface(
+        backend,
+        scene,
+        z_start,
+        z_end,
+        root_scale,
+        snapped_bounds,
+    )?
     else {
         return Ok(false);
     };
@@ -3640,6 +3664,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
     pending_shader_load_op: &mut Option<wgpu::LoadOp<wgpu::Color>>,
     next_load_op: &mut wgpu::LoadOp<wgpu::Color>,
 ) -> Result<(), String> {
+    let cache_enabled = direct_scene_range_cache_enabled();
     let mut cursor_z = z_start;
     let mut direct_run = DirectChunkRunCoalescer::default();
     while cursor_z < z_end {
@@ -3647,6 +3672,17 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         if chunk_end <= cursor_z {
             return Err("direct scene cache chunk did not advance".to_string());
         }
+        // The chunk's snapped visible bounds, derived once and read by both
+        // the fits gate and the cache path below (each used to union the
+        // same draw-op bounds itself). Only valid for the un-widened chunk:
+        // after a widen the chunk cannot cache and the value is never read.
+        // With the cache disabled no gate ever reads bounds, so none are
+        // derived.
+        let chunk_bounds = if cache_enabled {
+            direct_scene_range_snapped_bounds(scene, cursor_z, chunk_end, root_scale)
+        } else {
+            None
+        };
         // A chunk boundary only exists to keep a *cache entry* small enough to
         // store. When the chunk is too big to be admitted anyway, the split
         // buys nothing and costs a whole render pass — and on a tile-based
@@ -3656,15 +3692,14 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         // draw ops was being cut into ten passes that all wrote the same
         // pixels. Rendering the remainder in one pass measured 18% less CPU
         // on a Pixel 9 Pro.
-        let mut chunk_can_cache = true;
+        let mut chunk_can_cache = cache_enabled;
         if chunk_end < z_end
-            && !direct_scene_range_chunk_fits_cache_entry(
-                backend.max_texture_dim(),
-                scene,
-                cursor_z,
-                chunk_end,
-                root_scale,
-            )
+            && !(cache_enabled
+                && direct_scene_range_chunk_fits_cache_entry(
+                    backend.max_texture_dim(),
+                    chunk_bounds,
+                    root_scale,
+                ))
         {
             chunk_end = z_end;
             // The widened range can only fail the same admission check: its
@@ -3681,6 +3716,7 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
                 cursor_z,
                 chunk_end,
                 root_scale,
+                chunk_bounds,
                 pending_composites,
                 pending_composite_load_op,
                 next_load_op,
@@ -5436,14 +5472,14 @@ mod tests {
         child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
         direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
         direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
-        layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
-        layer_surface_dest_quad, layer_surface_translation_context,
-        minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
-        render_string_scene_hash, retained_render_effect_hash, snapped_backdrop_geometry,
-        surface_target_size, visible_backdrop_capture_rect, BackdropPrefixChildContribution,
-        DirectChunkRunCoalescer, SceneBrush, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
-        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        direct_scene_range_snapped_bounds, layer_source_cache_key,
+        layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
+        layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
+        rects_intersect, render_string_scene_hash, retained_render_effect_hash,
+        snapped_backdrop_geometry, surface_target_size, visible_backdrop_capture_rect,
+        BackdropPrefixChildContribution, DirectChunkRunCoalescer, SceneBrush,
+        DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::normalized_scene::TranslateBy;
@@ -6092,9 +6128,12 @@ mod tests {
         assert!(
             !direct_scene_range_chunk_fits_cache_entry(
                 8192,
-                &scene,
-                0,
-                MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                direct_scene_range_snapped_bounds(
+                    &scene,
+                    0,
+                    MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                    1.0,
+                ),
                 1.0,
             ),
             "a full-surface chunk is far past the per-entry byte budget"
@@ -6107,9 +6146,12 @@ mod tests {
         assert!(
             direct_scene_range_chunk_fits_cache_entry(
                 8192,
-                &scene,
-                0,
-                MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                direct_scene_range_snapped_bounds(
+                    &scene,
+                    0,
+                    MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+                    1.0,
+                ),
                 1.0,
             ),
             "a small range is exactly what the range cache is for"
