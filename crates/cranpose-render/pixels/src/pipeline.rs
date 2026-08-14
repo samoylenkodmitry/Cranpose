@@ -1156,7 +1156,7 @@ pub(crate) fn push_draw_primitive(
         fn push_shape(&mut self, params: ShapeDrawParams) {
             self.scene.push_shape_with_stroke_and_arc(
                 params.rect,
-                params.brush,
+                params.brush.into_brush(),
                 params.shape,
                 params.stroke,
                 params.arc,
@@ -1238,7 +1238,7 @@ fn push_shadow_primitive(
                 rect: params.rect,
                 snap_anchor: None,
                 snap_to_pixel_grid: false,
-                brush: params.brush,
+                brush: params.brush.into_brush(),
                 shape: params.shape,
                 // A stroked or arc caster must cast a stroked or arc shadow.
                 stroke: params.stroke,

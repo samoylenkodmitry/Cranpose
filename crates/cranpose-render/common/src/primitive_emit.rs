@@ -15,7 +15,8 @@ use crate::layer_transform::{
     apply_layer_to_rect, layer_uniform_scale,
 };
 use crate::style_shared::{
-    apply_layer_to_brush, apply_layer_to_color, compose_color_filters, scale_corner_radii,
+    apply_layer_to_color, compose_color_filters, resolve_layer_brush, scale_corner_radii,
+    ResolvedBrush,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +29,10 @@ pub struct ShapeDrawParams {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
-    pub brush: Brush,
+    /// Layer-resolved at emit time. Solid — effectively every shape of a
+    /// heavy animated frame — is an inline color; only gradients carry a
+    /// cloned [`Brush`].
+    pub brush: ResolvedBrush,
     pub shape: Option<RoundedCornerShape>,
     /// `Some` means "stroke the outline of `local_rect`/`shape`" instead of
     /// filling it. The width is already in `local_rect` units (the layer scale
@@ -227,7 +231,7 @@ pub fn rect_shape_params(
         rect: quad_bounds(quad),
         local_rect,
         quad,
-        brush: apply_layer_to_brush(brush.clone(), layer),
+        brush: resolve_layer_brush(brush, layer),
         shape: None,
         stroke,
         arc: None,
@@ -260,7 +264,7 @@ pub fn round_rect_shape_params(
         rect: quad_bounds(quad),
         local_rect,
         quad,
-        brush: apply_layer_to_brush(brush.clone(), layer),
+        brush: resolve_layer_brush(brush, layer),
         shape: Some(shape),
         stroke,
         arc: None,
@@ -320,7 +324,7 @@ pub fn arc_shape_params(
         rect: quad_bounds(quad),
         local_rect: out_rect,
         quad,
-        brush: apply_layer_to_brush(brush.clone(), layer),
+        brush: resolve_layer_brush(brush, layer),
         shape: None,
         stroke: None,
         arc: Some(arc.scaled_about(arc_center, scale)),

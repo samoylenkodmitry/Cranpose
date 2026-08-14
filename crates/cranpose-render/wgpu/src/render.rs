@@ -28,7 +28,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    RetainedDraw, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+    RetainedDraw, SceneBrush, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
 };
 use crate::shaders;
 #[cfg(test)]
@@ -1050,6 +1050,7 @@ fn hash_shadow_device_rect<H: Hasher>(
 
 fn hash_shape_shadow_item<H: Hasher>(
     shape: &DrawShape,
+    brushes: &[Brush],
     blend_mode: BlendMode,
     origin_x: f32,
     origin_y: f32,
@@ -1071,7 +1072,7 @@ fn hash_shape_shadow_item<H: Hasher>(
         }
         None => 0u8.hash(state),
     }
-    shape.brush.render_hash().hash(state);
+    shape.brush.render_hash(brushes).hash(state);
     match shape.shape {
         Some(corner_shape) => {
             1u8.hash(state);
@@ -1090,7 +1091,11 @@ fn hash_shape_shadow_item<H: Hasher>(
     shape.blend_mode.hash(state);
 }
 
-fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32) -> u64 {
+fn shape_shadow_content_hash(
+    shapes: &[(DrawShape, BlendMode)],
+    brushes: &[Brush],
+    root_scale: f32,
+) -> u64 {
     let mut hasher = FxHasher::default();
     // Anchor the hash to the shapes' own (unfloored) bounds so rigid translation
     // cancels out exactly. Anchoring to floored device-pixel bounds would leak
@@ -1107,6 +1112,7 @@ fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32)
     for (shape, blend_mode) in shapes {
         hash_shape_shadow_item(
             shape,
+            brushes,
             *blend_mode,
             origin.x,
             origin.y,
@@ -1119,12 +1125,13 @@ fn shape_shadow_content_hash(shapes: &[(DrawShape, BlendMode)], root_scale: f32)
 
 fn shape_shadow_surface_cache_key(
     shapes: &[(DrawShape, BlendMode)],
+    brushes: &[Brush],
     device_bounds: DevicePixelBounds,
     pixel_radius: f32,
     root_scale: f32,
 ) -> Option<ShadowSurfaceCacheKey> {
     (root_scale.is_finite() && root_scale > 0.0).then(|| ShadowSurfaceCacheKey {
-        content_hash: shape_shadow_content_hash(shapes, root_scale),
+        content_hash: shape_shadow_content_hash(shapes, brushes, root_scale),
         pixel_size: [device_bounds.width, device_bounds.height],
         root_scale_bits: root_scale.to_bits(),
         blur_radius_bits: pixel_radius.to_bits(),
@@ -1753,12 +1760,15 @@ pub(crate) fn shape_convert_worker_count() -> usize {
     1
 }
 
-fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
-    match &shape.brush {
-        Brush::Solid(_) => 0,
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.len(),
+fn shape_gradient_stop_count(shape: &DrawShape, brushes: &[Brush]) -> usize {
+    match shape.brush {
+        SceneBrush::Solid(_) => 0,
+        SceneBrush::Gradient(index) => match &brushes[index as usize] {
+            Brush::Solid(_) => 0,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => colors.len(),
+        },
     }
 }
 
@@ -1768,6 +1778,7 @@ fn shape_gradient_stop_count(shape: &DrawShape) -> usize {
 /// gradient buffer; `gradient_out` is exactly its span of that buffer.
 fn convert_shape_into_slots(
     shape: &DrawShape,
+    brushes: &[Brush],
     root_scale: f32,
     gradient_start: u32,
     shape_out: &mut ShapeData,
@@ -1851,69 +1862,72 @@ fn convert_shape_into_slots(
     };
     let mut gradient_params = [0.0f32; 4];
     let (brush_type, gradient_count, gradient_tile_mode) = match &shape.brush {
-        Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
-        Brush::LinearGradient {
-            colors,
-            stops,
-            start,
-            end,
-            tile_mode,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.x,
-                    device_local_rect.width,
-                    start.x * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.y,
-                    device_local_rect.height,
-                    start.y * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.x,
-                    device_local_rect.width,
-                    end.x * root_scale,
-                )),
-                canonicalize_brush_coordinate(resolve_gradient_point(
-                    device_local_rect.y,
-                    device_local_rect.height,
-                    end.y * root_scale,
-                )),
-            ];
-            (1u32, count, gradient_tile_mode_value(*tile_mode))
-        }
-        Brush::RadialGradient {
-            colors,
-            stops,
-            center,
-            radius,
-            tile_mode,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                (radius * root_scale).max(f32::EPSILON),
-                0.0,
-            ];
-            (2u32, count, gradient_tile_mode_value(*tile_mode))
-        }
-        Brush::SweepGradient {
-            colors,
-            stops,
-            center,
-        } => {
-            let count = fill_gradient_entries(colors, stops.as_deref());
-            gradient_params = [
-                canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
-                canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
-                0.0,
-                0.0,
-            ];
-            (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
-        }
+        SceneBrush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
+        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
+            Brush::Solid(_) => (0u32, 0u32, gradient_tile_mode_value(TileMode::Clamp)),
+            Brush::LinearGradient {
+                colors,
+                stops,
+                start,
+                end,
+                tile_mode,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.x,
+                        device_local_rect.width,
+                        start.x * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.y,
+                        device_local_rect.height,
+                        start.y * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.x,
+                        device_local_rect.width,
+                        end.x * root_scale,
+                    )),
+                    canonicalize_brush_coordinate(resolve_gradient_point(
+                        device_local_rect.y,
+                        device_local_rect.height,
+                        end.y * root_scale,
+                    )),
+                ];
+                (1u32, count, gradient_tile_mode_value(*tile_mode))
+            }
+            Brush::RadialGradient {
+                colors,
+                stops,
+                center,
+                radius,
+                tile_mode,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                    (radius * root_scale).max(f32::EPSILON),
+                    0.0,
+                ];
+                (2u32, count, gradient_tile_mode_value(*tile_mode))
+            }
+            Brush::SweepGradient {
+                colors,
+                stops,
+                center,
+            } => {
+                let count = fill_gradient_entries(colors, stops.as_deref());
+                gradient_params = [
+                    canonicalize_brush_coordinate(device_local_rect.x + center.x * root_scale),
+                    canonicalize_brush_coordinate(device_local_rect.y + center.y * root_scale),
+                    0.0,
+                    0.0,
+                ];
+                (3u32, count, gradient_tile_mode_value(TileMode::Clamp))
+            }
+        },
     };
 
     // A stroked rect/round-rect was emitted with `local_rect` already
@@ -2003,15 +2017,18 @@ fn convert_shape_into_slots(
     };
 
     let color = match &shape.brush {
-        Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
-        Brush::LinearGradient { colors, .. } => {
-            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-            [first.r(), first.g(), first.b(), first.a()]
-        }
-        Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
-            let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
-            [first.r(), first.g(), first.b(), first.a()]
-        }
+        SceneBrush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+        SceneBrush::Gradient(index) => match &brushes[*index as usize] {
+            Brush::Solid(c) => [c.r(), c.g(), c.b(), c.a()],
+            Brush::LinearGradient { colors, .. } => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                [first.r(), first.g(), first.b(), first.a()]
+            }
+            Brush::RadialGradient { colors, .. } | Brush::SweepGradient { colors, .. } => {
+                let first = colors.first().unwrap_or(&Color(1.0, 1.0, 1.0, 1.0));
+                [first.r(), first.g(), first.b(), first.a()]
+            }
+        },
     };
 
     *shape_out = ShapeData {
@@ -2059,6 +2076,7 @@ fn quad_area_diag_enabled() -> bool {
 /// hand-off keeps the parallel path free of any synchronization.
 fn convert_shapes_into_outputs(
     shape_refs: &[&DrawShape],
+    brushes: &[Brush],
     gradient_offsets: &[u32],
     root_scale: f32,
     shape_data_out: &mut [ShapeData],
@@ -2119,7 +2137,7 @@ fn convert_shapes_into_outputs(
         top_other.sort_by(|a, b| b.0.total_cmp(&a.0));
         for &(area, index) in top_other.iter().take(4) {
             let shape = shape_refs[index];
-            let brush = match &shape.brush {
+            let brush = match shape.brush.resolve(brushes).as_ref() {
                 cranpose_ui_graphics::Brush::Solid(color) => format!("solid a={:.2}", color.3),
                 cranpose_ui_graphics::Brush::LinearGradient { colors, .. } => {
                     format!("linear n={}", colors.len())
@@ -2160,6 +2178,7 @@ fn convert_shapes_into_outputs(
             let gradient_end = gradient_offsets[idx + 1];
             convert_shape_into_slots(
                 shape,
+                brushes,
                 root_scale,
                 gradient_start,
                 &mut shape_data_out[idx],
@@ -2199,6 +2218,7 @@ fn convert_shapes_into_outputs(
                     let local_end = (chunk_offsets[j + 1] - gradient_base) as usize;
                     convert_shape_into_slots(
                         shape,
+                        brushes,
                         root_scale,
                         gradient_start,
                         &mut shape_data_chunk[j],
@@ -5009,6 +5029,7 @@ impl GpuRenderer {
         )?;
         let key = shape_shadow_surface_cache_key(
             &shadow.shapes,
+            &shadow.brushes,
             plan.source_device_bounds,
             plan.pixel_radius,
             root_scale,
@@ -5087,6 +5108,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         &mut self,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -5135,6 +5157,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     self.render_non_effect_segment(
                         &target.view,
                         shapes,
+                        brushes,
                         images,
                         texts,
                         shadow_draws,
@@ -5167,6 +5190,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         let effective_backdrop_underlay = if backdrop_underlay.is_some()
                             && backdrop_underlay_is_covered_by_local_content(
                                 shapes,
+                                brushes,
                                 images,
                                 shadow_draws,
                                 draw_ops,
@@ -5198,6 +5222,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             self,
                             target,
                             shapes,
+                            brushes,
                             images,
                             texts,
                             shadow_draws,
@@ -5219,6 +5244,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 self.render_non_effect_segment(
                     &target.view,
                     shapes,
+                    brushes,
                     images,
                     texts,
                     shadow_draws,
@@ -5853,6 +5879,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -5869,6 +5896,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.render_non_effect_segment_with_composites(
             target_view,
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -5891,6 +5919,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target_view: &wgpu::TextureView,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -5985,6 +6014,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             z_start..z_end,
             &ordered_items,
             shapes,
+            brushes,
             images,
             SegmentDiagCounts {
                 raw_shadow_items,
@@ -6005,6 +6035,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
                 &merged_composites,
                 shader_composites,
                 shapes,
+                brushes,
                 images,
                 texts,
                 shadow_draws,
@@ -6027,6 +6058,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         &mut self,
         target: &OffscreenTarget,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -6045,6 +6077,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.render_range_with_layer_events_to_target_recorded(
             target,
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -6900,8 +6933,12 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         if let PacketRoot::Direct(root) = &packet.root {
             let ops = std::mem::take(&mut packet.replay);
-            let (ack, recycled) =
-                self.consume_replay_ops(ops, &root.scene.shapes, packet.root_scale);
+            let (ack, recycled) = self.consume_replay_ops(
+                ops,
+                &root.scene.shapes,
+                &root.scene.brushes,
+                packet.root_scale,
+            );
             returns.ack = Some((ack, recycled));
         }
 
@@ -7167,6 +7204,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
@@ -7194,6 +7232,7 @@ impl GpuRenderer {
                         composites,
                         shader_composites,
                         shapes,
+                        brushes,
                         images,
                         texts,
                         retained_draws,
@@ -7261,6 +7300,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7273,6 +7313,7 @@ impl GpuRenderer {
         let Some(partitions) = native_segment_fusion_partitions(
             ordered_items,
             shapes,
+            brushes,
             chunk,
             self.shape_batch_limits,
         )?
@@ -7291,6 +7332,7 @@ impl GpuRenderer {
                 composites,
                 shader_composites,
                 shapes,
+                brushes,
                 images,
                 texts,
                 retained_draws,
@@ -7324,6 +7366,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7386,6 +7429,7 @@ impl GpuRenderer {
                 let Some((_, upload_base)) = self.prepare_shapes_batch_direct(
                     frame_encoder,
                     shape_refs.iter().copied(),
+                    brushes,
                     root_scale,
                     viewport,
                     &mut direct_shape_uploads,
@@ -7426,7 +7470,8 @@ impl GpuRenderer {
                                     "shape batch contains non-shape draw item: {item:?}"
                                 ));
                             };
-                            has_gradient |= shape_gradient_stop_count(&shapes[*shape_index]) > 0;
+                            has_gradient |=
+                                shape_gradient_stop_count(&shapes[*shape_index], brushes) > 0;
                         }
                         let shape_count = end - start;
                         if shape_count > 0 {
@@ -7886,6 +7931,7 @@ impl GpuRenderer {
         composites: &[(usize, CompositeBatchItem<'_>)],
         shader_composites: &[(usize, ShaderCompositeBatchItem<'_>)],
         shapes: &[DrawShape],
+        brushes: &[Brush],
         images: &[ImageDraw],
         texts: &[TextDraw],
         retained_draws: &[RetainedDraw],
@@ -7905,6 +7951,7 @@ impl GpuRenderer {
             composites,
             shader_composites,
             shapes,
+            brushes,
             images,
             texts,
             retained_draws,
@@ -7955,6 +8002,7 @@ impl GpuRenderer {
                                 SegmentDrawItem::Shape(shape_index) => Some(&shapes[*shape_index]),
                                 _ => None,
                             }),
+                            brushes,
                             root_scale,
                             viewport,
                             &mut staged_uploads,
@@ -8672,6 +8720,7 @@ impl GpuRenderer {
                     frame_encoder,
                     target_view,
                     std::iter::once(shape),
+                    &shadow.brushes,
                     *blend_mode,
                     width,
                     height,
@@ -8799,6 +8848,7 @@ impl GpuRenderer {
             frame_encoder,
             &source.view,
             &shadow.shapes,
+            &shadow.brushes,
             bounds_w,
             bounds_h,
             viewport_offset,
@@ -8952,6 +9002,7 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         source_view: &wgpu::TextureView,
         shapes: &[(DrawShape, BlendMode)],
+        brushes: &[Brush],
         width: u32,
         height: u32,
         viewport_offset: [f32; 2],
@@ -8990,6 +9041,7 @@ impl GpuRenderer {
                     .iter()
                     .map(|(shape, _blend_mode)| shape)
                     .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+                brushes,
                 root_scale,
                 viewport,
                 &mut staged_uploads,
@@ -9061,8 +9113,13 @@ impl GpuRenderer {
         let bounds_w = device_bounds.width;
         let bounds_h = device_bounds.height;
         let viewport_offset = [device_bounds.x, device_bounds.y];
-        let cache_key =
-            shape_shadow_surface_cache_key(&shadow.shapes, device_bounds, pixel_radius, root_scale);
+        let cache_key = shape_shadow_surface_cache_key(
+            &shadow.shapes,
+            &shadow.brushes,
+            device_bounds,
+            pixel_radius,
+            root_scale,
+        );
 
         if let Some(key) = cache_key {
             if let Some(cached) = self.cached_shadow_surface(&key) {
@@ -9134,6 +9191,7 @@ impl GpuRenderer {
             frame_encoder,
             &source.view,
             &shadow.shapes,
+            &shadow.brushes,
             bounds_w,
             bounds_h,
             viewport_offset,
@@ -9214,6 +9272,7 @@ impl GpuRenderer {
     fn prepare_shapes_batch<'a, I>(
         &mut self,
         layer_shapes: I,
+        brushes: &[Brush],
         root_scale: f32,
         viewport: ViewportUniformParams,
         staged_uploads: &mut StagedBufferUploads,
@@ -9243,7 +9302,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in &shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9256,6 +9315,7 @@ impl GpuRenderer {
 
         convert_shapes_into_outputs(
             &shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut self.scratch_shape_data,
@@ -9338,6 +9398,7 @@ impl GpuRenderer {
         &mut self,
         frame_encoder: &mut C,
         layer_shapes: I,
+        brushes: &[Brush],
         root_scale: f32,
         viewport: ViewportUniformParams,
         staged_uploads: &mut StagedBufferUploads,
@@ -9357,7 +9418,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in &shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9378,6 +9439,7 @@ impl GpuRenderer {
             .resize(total_gradient_stops as usize, GradientStop::zeroed());
         convert_shapes_into_outputs(
             &shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut self.scratch_shape_data,
@@ -9503,6 +9565,7 @@ impl GpuRenderer {
         &mut self,
         mut ops: crate::frame_packet::ReplayFrameOps,
         shapes: &[DrawShape],
+        brushes: &[Brush],
         root_scale: f32,
     ) -> (
         crate::frame_packet::ReplayAck,
@@ -9578,7 +9641,7 @@ impl GpuRenderer {
                 continue;
             };
             let refs: Vec<&DrawShape> = slice.iter().collect();
-            let Some(gpu_slot) = self.capture_replay_slot(&refs, root_scale) else {
+            let Some(gpu_slot) = self.capture_replay_slot(&refs, brushes, root_scale) else {
                 continue;
             };
             confirmations.push((capture.key, gpu_slot));
@@ -9622,7 +9685,7 @@ impl GpuRenderer {
         let generation = self.store_feed_generation.wrapping_add(generation_skew);
         let ops = crate::shape_replay::SHAPE_REPLAY
             .with(|state| state.borrow_mut().take_frame_ops(generation));
-        let (ack, recycled) = self.consume_replay_ops(ops, &[], 1.0);
+        let (ack, recycled) = self.consume_replay_ops(ops, &[], &[], 1.0);
         let confirmed = ack.confirmations.len();
         self.replay_ack_confirmations = crate::shape_replay::SHAPE_REPLAY
             .with(|state| state.borrow_mut().apply_ack(ack, recycled));
@@ -9736,6 +9799,7 @@ impl GpuRenderer {
     pub(crate) fn capture_replay_slot(
         &mut self,
         shape_refs: &[&DrawShape],
+        brushes: &[Brush],
         root_scale: f32,
     ) -> Option<u32> {
         if !self.shape_batch_limits.storage || shape_refs.is_empty() {
@@ -9748,7 +9812,7 @@ impl GpuRenderer {
         let mut total_gradient_stops = 0u32;
         gradient_offsets.push(0);
         for shape in shape_refs {
-            total_gradient_stops += shape_gradient_stop_count(shape) as u32;
+            total_gradient_stops += shape_gradient_stop_count(shape, brushes) as u32;
             gradient_offsets.push(total_gradient_stops);
         }
 
@@ -9756,6 +9820,7 @@ impl GpuRenderer {
         let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
         convert_shapes_into_outputs(
             shape_refs,
+            brushes,
             &gradient_offsets,
             root_scale,
             &mut shape_data,
@@ -10424,6 +10489,7 @@ impl GpuRenderer {
         frame_encoder: &mut C,
         target_view: &wgpu::TextureView,
         layer_shapes: I,
+        brushes: &[Brush],
         blend_mode: BlendMode,
         width: u32,
         height: u32,
@@ -10442,6 +10508,7 @@ impl GpuRenderer {
         let Some(batch) = self.prepare_shapes_batch(
             layer_shapes
                 .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+            brushes,
             root_scale,
             viewport,
             &mut staged_uploads,
@@ -12673,12 +12740,15 @@ impl PreparedGlyphBatch {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn gradient_stop_count_for_shape(shape: &DrawShape) -> usize {
-    match &shape.brush {
-        Brush::Solid(_) => 0,
-        Brush::LinearGradient { colors, .. }
-        | Brush::RadialGradient { colors, .. }
-        | Brush::SweepGradient { colors, .. } => colors.len(),
+fn gradient_stop_count_for_shape(shape: &DrawShape, brushes: &[Brush]) -> usize {
+    match shape.brush {
+        SceneBrush::Solid(_) => 0,
+        SceneBrush::Gradient(index) => match &brushes[index as usize] {
+            Brush::Solid(_) => 0,
+            Brush::LinearGradient { colors, .. }
+            | Brush::RadialGradient { colors, .. }
+            | Brush::SweepGradient { colors, .. } => colors.len(),
+        },
     }
 }
 
@@ -12686,6 +12756,7 @@ fn gradient_stop_count_for_shape(shape: &DrawShape) -> usize {
 fn native_segment_fusion_budget(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     chunk: &SegmentDrawChunkPlan,
     batch_limits: ShapeBatchLimits,
 ) -> Result<Option<NativeSegmentFusionBudget>, String> {
@@ -12705,7 +12776,7 @@ fn native_segment_fusion_budget(
             let shape = &shapes[*shape_index];
             shape_count = shape_count.saturating_add(1);
             gradient_stop_count =
-                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape));
+                gradient_stop_count.saturating_add(gradient_stop_count_for_shape(shape, brushes));
         }
     }
 
@@ -12745,10 +12816,12 @@ fn push_native_segment_fusion_partition(
 fn native_segment_fusion_partitions(
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     chunk: &SegmentDrawChunkPlan,
     batch_limits: ShapeBatchLimits,
 ) -> Result<Option<Vec<NativeSegmentFusionPartition>>, String> {
-    if let Some(budget) = native_segment_fusion_budget(ordered_items, shapes, chunk, batch_limits)?
+    if let Some(budget) =
+        native_segment_fusion_budget(ordered_items, shapes, brushes, chunk, batch_limits)?
     {
         return Ok(Some(vec![NativeSegmentFusionPartition {
             chunk: chunk.clone(),
@@ -12782,7 +12855,7 @@ fn native_segment_fusion_partitions(
                     item
                 ));
             };
-            let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index]);
+            let gradient_stop_count = gradient_stop_count_for_shape(&shapes[shape_index], brushes);
             if gradient_stop_count > batch_limits.max_gradient_stops {
                 return Ok(None);
             }
@@ -13008,6 +13081,7 @@ fn maybe_print_segment_diag(
     z_range: Range<usize>,
     ordered_items: &[(usize, SegmentDrawItem)],
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     counts: SegmentDiagCounts,
     batch_limits: ShapeBatchLimits,
@@ -13040,7 +13114,8 @@ fn maybe_print_segment_diag(
         let SegmentRenderCommand::DrawChunk(chunk) = command else {
             continue;
         };
-        match native_segment_fusion_partitions(ordered_items, shapes, chunk, batch_limits) {
+        match native_segment_fusion_partitions(ordered_items, shapes, brushes, chunk, batch_limits)
+        {
             Ok(Some(partitions)) => native_partitions += partitions.len(),
             Ok(None) | Err(_) => native_unfused_chunks += 1,
         }
@@ -14337,7 +14412,7 @@ mod tests {
             },
             quad: [[0.0, 0.0], [8.0, 0.0], [0.0, 8.0], [8.0, 8.0]],
             snap_anchor: None,
-            brush: Brush::solid(Color::BLACK),
+            brush: SceneBrush::Solid(Color::BLACK),
             shape: None,
             stroke: None,
             arc: None,
@@ -14351,7 +14426,7 @@ mod tests {
     #[test]
     fn shape_shadow_content_hash_ignores_viewport_translation() {
         fn translate_shape(shape: &DrawShape, dx: f32, dy: f32) -> DrawShape {
-            let mut translated = shape.clone();
+            let mut translated = *shape;
             translated.rect.x += dx;
             translated.rect.y += dy;
             translated.local_rect.x += dx;
@@ -14405,23 +14480,20 @@ mod tests {
         let translated_cutout = translate_shape(&cutout, dx, dy);
 
         let root_scale = 1.25;
-        let first_shapes = vec![
-            (first.clone(), BlendMode::SrcOver),
-            (cutout, BlendMode::DstOut),
-        ];
+        let first_shapes = vec![(first, BlendMode::SrcOver), (cutout, BlendMode::DstOut)];
         let translated_shapes = vec![
-            (translated.clone(), BlendMode::SrcOver),
+            (translated, BlendMode::SrcOver),
             (translated_cutout, BlendMode::DstOut),
         ];
 
-        let first_hash = shape_shadow_content_hash(&first_shapes, root_scale);
-        let translated_hash = shape_shadow_content_hash(&translated_shapes, root_scale);
+        let first_hash = shape_shadow_content_hash(&first_shapes, &[], root_scale);
+        let translated_hash = shape_shadow_content_hash(&translated_shapes, &[], root_scale);
 
         assert_eq!(first_hash, translated_hash);
 
         let mut changed_shapes = translated_shapes;
         changed_shapes[0].0.rect.width += 1.0;
-        let changed_hash = shape_shadow_content_hash(&changed_shapes, root_scale);
+        let changed_hash = shape_shadow_content_hash(&changed_shapes, &[], root_scale);
 
         assert_ne!(first_hash, changed_hash);
     }
@@ -14458,6 +14530,7 @@ mod tests {
                     .expect("surface plan");
             shape_shadow_surface_cache_key(
                 &shapes,
+                &[],
                 plan.source_device_bounds,
                 pixel_radius,
                 root_scale,
@@ -14517,6 +14590,7 @@ mod tests {
             .expect("surface plan");
             shape_shadow_surface_cache_key(
                 &shapes,
+                &[],
                 plan.source_device_bounds,
                 plan.pixel_radius,
                 root_scale,
@@ -14574,6 +14648,7 @@ mod tests {
     fn test_shadow_draw(shapes: Vec<(DrawShape, BlendMode)>) -> ShadowDraw {
         ShadowDraw {
             shapes,
+            brushes: vec![],
             texts: vec![],
             blur_radius: 8.0,
             clip: None,
@@ -18029,6 +18104,7 @@ mod tests {
         let window = build_scene_window(
             SceneWindowSource {
                 shapes: &[test_shape(4, BlendMode::SrcOver), shape],
+                brushes: &[],
                 images: &[image],
                 texts: &[text],
                 shadow_draws: &[shadow],
@@ -18341,6 +18417,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
@@ -18391,6 +18468,7 @@ mod tests {
         };
         let shadow_draws = vec![ShadowDraw {
             shapes: vec![(shadow_shape, BlendMode::SrcOver)],
+            brushes: vec![],
             texts: Vec::new(),
             blur_radius: 8.0,
             clip: None,
@@ -18535,7 +18613,7 @@ mod tests {
         ];
         shape.arc = Some(arc);
         let mut converted = ShapeData::zeroed();
-        convert_shape_into_slots(&shape, root_scale, 0, &mut converted, &mut []);
+        convert_shape_into_slots(&shape, &[], root_scale, 0, &mut converted, &mut []);
         converted
     }
 
@@ -18653,7 +18731,7 @@ mod tests {
     fn arc_mesh_passthrough_replicates_the_quad_expansion() {
         let shape = test_shape(0, BlendMode::SrcOver);
         let mut converted = ShapeData::zeroed();
-        convert_shape_into_slots(&shape, 1.0, 0, &mut converted, &mut []);
+        convert_shape_into_slots(&shape, &[], 1.0, 0, &mut converted, &mut []);
         let build =
             build_arc_mesh_vertices(std::slice::from_ref(&converted)).expect("within budget");
         assert_eq!(build.meshed_arcs, 0);
@@ -19263,6 +19341,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19303,6 +19382,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19316,7 +19396,11 @@ mod tests {
     fn native_segment_fusion_budget_rejects_gradient_uniform_overflow() {
         let ordered_items = vec![(0, SegmentDrawItem::Shape(0))];
         let mut shape = test_shape(0, BlendMode::SrcOver);
-        shape.brush = Brush::linear_gradient(vec![Color::BLACK; MAX_GRADIENT_STOPS + 1]);
+        let brushes = vec![Brush::linear_gradient(vec![
+            Color::BLACK;
+            MAX_GRADIENT_STOPS + 1
+        ])];
+        shape.brush = SceneBrush::Gradient(0);
         let shapes = vec![shape];
         let segment = chunk(&[SegmentBatchPlan::Shape {
             start: 0,
@@ -19327,6 +19411,7 @@ mod tests {
         let budget = native_segment_fusion_budget(
             &ordered_items,
             &shapes,
+            &brushes,
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19363,6 +19448,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19410,9 +19496,10 @@ mod tests {
             (2, SegmentDrawItem::Shape(2)),
         ];
         let mut shapes = Vec::new();
+        let brushes = vec![Brush::linear_gradient(vec![Color::BLACK; STOPS_PER_SHAPE])];
         for index in 0..3 {
             let mut shape = test_shape(index, BlendMode::SrcOver);
-            shape.brush = Brush::linear_gradient(vec![Color::BLACK; STOPS_PER_SHAPE]);
+            shape.brush = SceneBrush::Gradient(0);
             shapes.push(shape);
         }
         let segment = chunk(&[SegmentBatchPlan::Shape {
@@ -19424,6 +19511,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &brushes,
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19492,6 +19580,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )
@@ -19551,6 +19640,7 @@ mod tests {
         let partitions = native_segment_fusion_partitions(
             &ordered_items,
             &shapes,
+            &[],
             &segment,
             ShapeBatchLimits::desktop(),
         )

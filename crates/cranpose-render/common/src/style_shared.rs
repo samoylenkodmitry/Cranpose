@@ -194,6 +194,59 @@ pub fn apply_layer_to_brush(brush: Brush, layer: &GraphicsLayer) -> Brush {
     }
 }
 
+/// A layer-resolved brush, split at the solid/gradient boundary.
+///
+/// The per-frame shape emit produces one of these for every draw: the solid
+/// case — effectively all of a heavy animated scene — carries its color
+/// inline, so emitting a shape neither clones a `Brush` nor leaves an enum
+/// with heap-carrying variants for frame teardown to walk. Only the rare
+/// gradient still travels as a cloned [`Brush`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolvedBrush {
+    Solid(Color),
+    /// A non-solid brush (gradients), already layer-resolved.
+    Other(Brush),
+}
+
+impl ResolvedBrush {
+    pub fn from_brush(brush: Brush) -> Self {
+        match brush {
+            Brush::Solid(color) => Self::Solid(color),
+            other => Self::Other(other),
+        }
+    }
+
+    /// The plain `Brush` this resolved form stands for — same values,
+    /// reassembled for consumers that keep speaking `Brush`.
+    pub fn into_brush(self) -> Brush {
+        match self {
+            Self::Solid(color) => Brush::Solid(color),
+            Self::Other(brush) => brush,
+        }
+    }
+}
+
+/// [`apply_layer_to_brush`] without the solid-brush clone: the borrowed
+/// brush's color is copied (or layer-adjusted) inline, and only gradients
+/// are cloned. Produces exactly the values `apply_layer_to_brush` would —
+/// both branches below mirror its fast path and its `Solid` arm verbatim.
+pub fn resolve_layer_brush(brush: &Brush, layer: &GraphicsLayer) -> ResolvedBrush {
+    match brush {
+        Brush::Solid(color) => {
+            if layer.alpha == 1.0
+                && layer.color_filter.is_none()
+                && layer_scale_x(layer) == 1.0
+                && layer_scale_y(layer) == 1.0
+            {
+                ResolvedBrush::Solid(*color)
+            } else {
+                ResolvedBrush::Solid(apply_layer_to_color(*color, layer))
+            }
+        }
+        other => ResolvedBrush::Other(apply_layer_to_brush(other.clone(), layer)),
+    }
+}
+
 pub fn scale_corner_radii(radii: CornerRadii, scale: f32) -> CornerRadii {
     CornerRadii {
         top_left: radii.top_left * scale,

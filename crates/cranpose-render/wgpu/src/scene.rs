@@ -3,6 +3,7 @@
 use crate::surface_requirements::SurfaceRequirementSet;
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
+use cranpose_render_common::style_shared::ResolvedBrush;
 use cranpose_ui::{TextLayoutOptions, TextStyle};
 use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
@@ -55,13 +56,63 @@ pub(crate) struct PendingFeedCapture {
     pub frame: u64,
 }
 
-#[derive(Clone)]
+/// A shape's paint, in the form the scene stores: solid colors inline, the
+/// rare gradient as an index into the owning [`CompositorScene::brushes`]
+/// table. `Copy` on purpose — it is what lets a frame's `Vec<DrawShape>`
+/// clear by truncation instead of walking ~17k `Brush` destructors, and what
+/// keeps every per-shape copy on the emit path free of clone/drop glue.
+/// Handles never outlive their scene's frame: the table is rebuilt with the
+/// scene each collect, so a stale index cannot exist by construction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SceneBrush {
+    Solid(Color),
+    /// Index into the owning scene's `brushes` table (non-solid brushes
+    /// only).
+    Gradient(u32),
+}
+
+/// [`CompositorScene::intern_brush`] against a bare table — shadow draws
+/// carry their own.
+pub(crate) fn intern_brush_into(table: &mut Vec<Brush>, brush: ResolvedBrush) -> SceneBrush {
+    match brush {
+        ResolvedBrush::Solid(color) => SceneBrush::Solid(color),
+        ResolvedBrush::Other(brush) => {
+            let index = table.len() as u32;
+            table.push(brush);
+            SceneBrush::Gradient(index)
+        }
+    }
+}
+
+impl SceneBrush {
+    /// The full `Brush` view, for consumers that need gradient payloads.
+    /// `brushes` must be the owning scene's table.
+    pub fn resolve<'a>(&self, brushes: &'a [Brush]) -> std::borrow::Cow<'a, Brush> {
+        match *self {
+            SceneBrush::Solid(color) => std::borrow::Cow::Owned(Brush::Solid(color)),
+            SceneBrush::Gradient(index) => std::borrow::Cow::Borrowed(&brushes[index as usize]),
+        }
+    }
+
+    /// The same value [`cranpose_ui_graphics::RenderHash`] produces for the
+    /// `Brush` this stands for — cache keys must not change because the
+    /// scene's storage form did.
+    pub fn render_hash(&self, brushes: &[Brush]) -> u64 {
+        use cranpose_ui_graphics::RenderHash as _;
+        match *self {
+            SceneBrush::Solid(color) => Brush::Solid(color).render_hash(),
+            SceneBrush::Gradient(index) => brushes[index as usize].render_hash(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct DrawShape {
     pub rect: Rect,
     pub local_rect: Rect,
     pub quad: [[f32; 2]; 4],
     pub snap_anchor: Option<SnapAnchor>,
-    pub brush: Brush,
+    pub brush: SceneBrush,
     pub shape: Option<RoundedCornerShape>,
     /// `Some` strokes the outline of `local_rect`/`shape` instead of filling
     /// it. `local_rect` and `quad` are already inflated by half the width.
@@ -264,6 +315,11 @@ pub(crate) struct ShadowDraw {
     /// Shapes to render to offscreen target before blur.
     /// Each shape carries its own blend mode (SrcOver for fill, DstOut for cutout).
     pub shapes: Vec<(DrawShape, BlendMode)>,
+    /// The table this draw's [`SceneBrush::Gradient`] handles index. A
+    /// shadow travels between scenes whole (window builds, retained
+    /// captures), so it carries its own — empty for the usual solid-color
+    /// casters, so no per-frame allocation in the common case.
+    pub brushes: Vec<Brush>,
     /// Texts to render to offscreen target before blur.
     pub texts: Vec<TextDraw>,
     /// Gaussian blur radius in pixels.
@@ -309,6 +365,11 @@ pub(crate) struct BackdropLayer {
 
 pub(crate) struct CompositorScene {
     pub shapes: Vec<DrawShape>,
+    /// Non-solid brushes referenced by [`SceneBrush::Gradient`] handles in
+    /// this scene's shapes (shadow-draw shapes included). Rebuilt with the
+    /// scene every frame; a handle is only meaningful against the table of
+    /// the scene that owns the shape.
+    pub brushes: Vec<Brush>,
     pub images: Vec<ImageDraw>,
     pub texts: Vec<TextDraw>,
     pub shadow_draws: Vec<ShadowDraw>,
@@ -348,6 +409,7 @@ thread_local! {
 /// The emptied-but-still-allocated vectors of a dropped [`CompositorScene`].
 struct SceneBuffers {
     shapes: Vec<DrawShape>,
+    brushes: Vec<Brush>,
     images: Vec<ImageDraw>,
     texts: Vec<TextDraw>,
     shadow_draws: Vec<ShadowDraw>,
@@ -366,6 +428,7 @@ impl Drop for CompositorScene {
             self.clear();
             pool.push(SceneBuffers {
                 shapes: std::mem::take(&mut self.shapes),
+                brushes: std::mem::take(&mut self.brushes),
                 images: std::mem::take(&mut self.images),
                 texts: std::mem::take(&mut self.texts),
                 shadow_draws: std::mem::take(&mut self.shadow_draws),
@@ -386,6 +449,7 @@ impl CompositorScene {
         if let Some(buffers) = SCENE_BUFFER_POOL.with(|pool| pool.borrow_mut().pop()) {
             return Self {
                 shapes: buffers.shapes,
+                brushes: buffers.brushes,
                 images: buffers.images,
                 texts: buffers.texts,
                 shadow_draws: buffers.shadow_draws,
@@ -398,6 +462,7 @@ impl CompositorScene {
         }
         Self {
             shapes: Vec::with_capacity(hint.shapes),
+            brushes: Vec::new(),
             images: Vec::with_capacity(hint.images),
             texts: Vec::with_capacity(hint.texts),
             shadow_draws: Vec::with_capacity(hint.shadow_draws),
@@ -423,6 +488,7 @@ impl CompositorScene {
 
     pub fn clear(&mut self) {
         self.shapes.clear();
+        self.brushes.clear();
         self.images.clear();
         self.texts.clear();
         self.shadow_draws.clear();
@@ -462,6 +528,13 @@ impl CompositorScene {
         });
     }
 
+    /// Stores a layer-resolved brush in this scene's form: solid colors
+    /// inline, anything else appended to the `brushes` table behind a
+    /// handle. Gradient handles are only valid against this scene.
+    pub fn intern_brush(&mut self, brush: ResolvedBrush) -> SceneBrush {
+        intern_brush_into(&mut self.brushes, brush)
+    }
+
     pub fn push_shape(
         &mut self,
         rect: Rect,
@@ -498,7 +571,7 @@ impl CompositorScene {
             rect,
             local_rect,
             quad,
-            brush,
+            ResolvedBrush::from_brush(brush),
             shape,
             None,
             None,
@@ -514,7 +587,7 @@ impl CompositorScene {
         rect: Rect,
         local_rect: Rect,
         quad: [[f32; 2]; 4],
-        brush: Brush,
+        brush: ResolvedBrush,
         shape: Option<RoundedCornerShape>,
         stroke: Option<Stroke>,
         arc: Option<ArcGeometry>,
@@ -522,6 +595,7 @@ impl CompositorScene {
         blend_mode: BlendMode,
         motion_context_animated: bool,
     ) {
+        let brush = self.intern_brush(brush);
         let z_index = self.next_z;
         self.next_z += 1;
         let index = self.shapes.len();

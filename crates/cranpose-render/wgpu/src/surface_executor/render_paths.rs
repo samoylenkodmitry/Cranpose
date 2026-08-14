@@ -25,7 +25,7 @@ use crate::offscreen::OffscreenTarget;
 use crate::render::{has_backdrop_layer_in_range, scissor_rect_for_rect};
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    ShadowDraw, SnapAnchor, TextDraw,
+    SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
 };
 use crate::surface_plan::{
     composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
@@ -295,6 +295,13 @@ fn clip_contains_rect(clip: Option<Rect>, rect: Rect) -> bool {
     clip.is_none_or(|clip| rect_contains_rect(clip, rect))
 }
 
+fn scene_brush_is_opaque(brush: SceneBrush, brushes: &[Brush]) -> bool {
+    match brush {
+        SceneBrush::Solid(color) => brush_is_opaque(&Brush::Solid(color)),
+        SceneBrush::Gradient(index) => brush_is_opaque(&brushes[index as usize]),
+    }
+}
+
 fn brush_is_opaque(brush: &Brush) -> bool {
     const OPAQUE_ALPHA: f32 = 0.999;
     match brush {
@@ -307,10 +314,10 @@ fn brush_is_opaque(brush: &Brush) -> bool {
     }
 }
 
-fn shape_opaque_covers_rect(shape: &DrawShape, rect: Rect) -> bool {
+fn shape_opaque_covers_rect(shape: &DrawShape, brushes: &[Brush], rect: Rect) -> bool {
     shape.blend_mode == BlendMode::SrcOver
         && shape.shape.is_none()
-        && brush_is_opaque(&shape.brush)
+        && scene_brush_is_opaque(shape.brush, brushes)
         && clip_contains_rect(shape.clip, rect)
         && axis_aligned_quad_rect(shape.quad).is_some_and(|bounds| rect_contains_rect(bounds, rect))
 }
@@ -372,6 +379,7 @@ fn prior_layer_event_intersects_rect(
 #[allow(clippy::too_many_arguments)]
 fn scene_range_has_opaque_cover_before(
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     shadow_draws: &[ShadowDraw],
     draw_ops: &[DrawOp],
@@ -393,7 +401,7 @@ fn scene_range_has_opaque_cover_before(
             DrawOpKind::Shape(index) => {
                 if shapes
                     .get(index)
-                    .is_some_and(|shape| shape_opaque_covers_rect(shape, rect))
+                    .is_some_and(|shape| shape_opaque_covers_rect(shape, brushes, rect))
                 {
                     return true;
                 }
@@ -420,8 +428,10 @@ fn scene_range_has_opaque_cover_before(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn backdrop_underlay_is_covered_by_local_content(
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     shadow_draws: &[ShadowDraw],
     draw_ops: &[DrawOp],
@@ -437,6 +447,7 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
         && rect.height > 0.0
         && scene_range_has_opaque_cover_before(
             shapes,
+            brushes,
             images,
             shadow_draws,
             draw_ops,
@@ -476,6 +487,7 @@ fn layer_source_uses_external_backdrop_underlay(
 
         !backdrop_underlay_is_covered_by_local_content(
             &local_scene.shapes,
+            &local_scene.brushes,
             &local_scene.images,
             &local_scene.shadow_draws,
             &local_scene.draw_ops,
@@ -982,6 +994,7 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
         backend.render_range_with_layer_events_to_target(
             target,
             &scene.shapes,
+            &scene.brushes,
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
@@ -1001,6 +1014,7 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
         backend.render_non_effect_segment(
             &target.view,
             &scene.shapes,
+            &scene.brushes,
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
@@ -1280,6 +1294,7 @@ fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
     let window_scene = build_scene_window(
         SceneWindowSource {
             shapes: &local_scene.shapes,
+            brushes: &local_scene.brushes,
             images: &local_scene.images,
             texts: &local_scene.texts,
             shadow_draws: &local_scene.shadow_draws,
@@ -1394,6 +1409,7 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target_view: &wgpu::TextureView,
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     texts: &[TextDraw],
     shadow_draws: &[ShadowDraw],
@@ -1443,6 +1459,7 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     let window_scene = build_scene_window(
         SceneWindowSource {
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -1472,6 +1489,7 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
     let render_result = backend.render_range_with_layer_events_to_target(
         &source,
         &window_scene.shapes,
+        &window_scene.brushes,
         &window_scene.images,
         &window_scene.texts,
         &window_scene.shadow_draws,
@@ -1681,6 +1699,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
             backend.render_non_effect_segment(
                 target_view,
                 &scene.shapes,
+                &scene.brushes,
                 &scene.images,
                 &scene.texts,
                 &scene.shadow_draws,
@@ -1720,6 +1739,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
                     backend,
                     target_view,
                     &scene.shapes,
+                    &scene.brushes,
                     &scene.images,
                     &scene.texts,
                     &scene.shadow_draws,
@@ -1740,6 +1760,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
         backend.render_non_effect_segment(
             target_view,
             &scene.shapes,
+            &scene.brushes,
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
@@ -2624,7 +2645,7 @@ fn log_direct_scene_draw_op_detail(scene: &CompositorScene, draw_op: &DrawOp) {
                     shape.clip.is_some(),
                     shape.blend_mode,
                     shape.motion_context_animated,
-                    shape.brush.render_hash(),
+                    shape.brush.render_hash(&scene.brushes),
                 );
             }
         }
@@ -2811,7 +2832,7 @@ fn hash_draw_op<H: Hasher>(scene: &CompositorScene, draw_op: &DrawOp, state: &mu
     match draw_op.kind {
         DrawOpKind::Shape(index) => {
             if let Some(shape) = scene.shapes.get(index) {
-                hash_draw_shape(shape, state);
+                hash_draw_shape(shape, &scene.brushes, state);
             }
         }
         DrawOpKind::Image(index) => {
@@ -2845,12 +2866,12 @@ fn hash_draw_op<H: Hasher>(scene: &CompositorScene, draw_op: &DrawOp, state: &mu
     }
 }
 
-fn hash_draw_shape<H: Hasher>(shape: &DrawShape, state: &mut H) {
+fn hash_draw_shape<H: Hasher>(shape: &DrawShape, brushes: &[Brush], state: &mut H) {
     hash_rect(shape.rect, state);
     hash_rect(shape.local_rect, state);
     hash_quad(shape.quad, state);
     hash_snap_anchor(shape.snap_anchor, state);
-    shape.brush.render_hash().hash(state);
+    shape.brush.render_hash(brushes).hash(state);
     shape
         .shape
         .map(|shape| shape.radii().render_hash())
@@ -2946,7 +2967,7 @@ fn hash_render_string_contents<H: Hasher>(text: &cranpose_ui::text::RenderString
 fn hash_shadow_draw<H: Hasher>(shadow: &ShadowDraw, state: &mut H) {
     shadow.shapes.len().hash(state);
     for (shape, blend_mode) in &shadow.shapes {
-        hash_draw_shape(shape, state);
+        hash_draw_shape(shape, &shadow.brushes, state);
         blend_mode.hash(state);
     }
     shadow.texts.len().hash(state);
@@ -3327,6 +3348,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
         backend.render_non_effect_segment(
             target_view,
             &scene.shapes,
+            &scene.brushes,
             &scene.images,
             &scene.texts,
             &scene.shadow_draws,
@@ -3357,6 +3379,7 @@ fn render_non_effect_range_with_pending_composites<B: SurfaceExecutionBackend>(
     backend.render_non_effect_segment_with_composites(
         target_view,
         &scene.shapes,
+        &scene.brushes,
         &scene.images,
         &scene.texts,
         &scene.shadow_draws,
@@ -3506,6 +3529,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
         let window_scene = build_scene_window(
             SceneWindowSource {
                 shapes: &scene.shapes,
+                brushes: &scene.brushes,
                 images: &scene.images,
                 texts: &scene.texts,
                 shadow_draws: &scene.shadow_draws,
@@ -3520,6 +3544,7 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
         let render_result = backend.render_non_effect_segment(
             &target.view,
             &window_scene.shapes,
+            &window_scene.brushes,
             &window_scene.images,
             &window_scene.texts,
             &window_scene.shadow_draws,
@@ -3771,6 +3796,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 backend.render_non_effect_segment_with_composites(
                     &target.view,
                     &local_scene.shapes,
+                    &local_scene.brushes,
                     &local_scene.images,
                     &local_scene.texts,
                     &local_scene.shadow_draws,
@@ -3799,6 +3825,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 backend.render_range_with_layer_events_to_target(
                     &target,
                     &local_scene.shapes,
+                    &local_scene.brushes,
                     &local_scene.images,
                     &local_scene.texts,
                     &local_scene.shadow_draws,
@@ -3955,6 +3982,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             let effective_backdrop_underlay = if backdrop_underlay.is_some()
                 && backdrop_underlay_is_covered_by_local_content(
                     &local_scene.shapes,
+                    &local_scene.brushes,
                     &local_scene.images,
                     &local_scene.shadow_draws,
                     &local_scene.draw_ops,
@@ -4124,6 +4152,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             backend.render_non_effect_segment_with_composites(
                 &target.view,
                 &local_scene.shapes,
+                &local_scene.brushes,
                 &local_scene.images,
                 &local_scene.texts,
                 &local_scene.shadow_draws,
@@ -4152,6 +4181,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             backend.render_range_with_layer_events_to_target(
                 &target,
                 &local_scene.shapes,
+                &local_scene.brushes,
                 &local_scene.images,
                 &local_scene.texts,
                 &local_scene.shadow_draws,
@@ -4545,6 +4575,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target: &OffscreenTarget,
     shapes: &[DrawShape],
+    brushes: &[Brush],
     images: &[ImageDraw],
     texts: &[TextDraw],
     shadow_draws: &[ShadowDraw],
@@ -4596,6 +4627,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     let window_scene = build_scene_window(
         SceneWindowSource {
             shapes,
+            brushes,
             images,
             texts,
             shadow_draws,
@@ -4638,6 +4670,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
     let render_result = backend.render_range_with_layer_events_to_target(
         &source,
         &window_scene.shapes,
+        &window_scene.brushes,
         &window_scene.images,
         &window_scene.texts,
         &window_scene.shadow_draws,
@@ -5408,7 +5441,7 @@ mod tests {
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
         render_string_scene_hash, retained_render_effect_hash, snapped_backdrop_geometry,
         surface_target_size, visible_backdrop_capture_rect, BackdropPrefixChildContribution,
-        DirectChunkRunCoalescer, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
+        DirectChunkRunCoalescer, SceneBrush, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
         MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
         MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
@@ -5577,7 +5610,7 @@ mod tests {
             local_rect: rect,
             quad: crate::rect_to_quad(rect),
             snap_anchor: None,
-            brush: Brush::solid(color),
+            brush: SceneBrush::Solid(color),
             shape: None,
             stroke: None,
             arc: None,
@@ -5963,6 +5996,7 @@ mod tests {
 
         assert!(backdrop_underlay_is_covered_by_local_content(
             &[],
+            &[],
             &[cover],
             &[],
             &draw_ops,
@@ -5995,6 +6029,7 @@ mod tests {
         }];
 
         assert!(!backdrop_underlay_is_covered_by_local_content(
+            &[],
             &[],
             &[cover],
             &[],
@@ -6231,9 +6266,9 @@ mod tests {
             first_shape.local_rect = first_shape.rect;
             first_shape.quad = crate::rect_to_quad(first_shape.rect);
 
-            let mut second_shape = first_shape.clone();
+            let mut second_shape = first_shape;
             if z_index == 0 {
-                second_shape.brush = Brush::solid(Color::RED);
+                second_shape.brush = SceneBrush::Solid(Color::RED);
             }
 
             let first_index = first.shapes.len();
@@ -6303,9 +6338,9 @@ mod tests {
             first_shape.rect.x = z_index as f32 * 20.0;
             first_shape.local_rect = first_shape.rect;
             first_shape.quad = crate::rect_to_quad(first_shape.rect);
-            let mut second_shape = first_shape.clone();
+            let mut second_shape = first_shape;
             if z_index == changed_z {
-                second_shape.brush = Brush::solid(Color::RED);
+                second_shape.brush = SceneBrush::Solid(Color::RED);
             }
 
             let first_index = first.shapes.len();
