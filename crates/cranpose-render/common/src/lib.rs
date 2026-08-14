@@ -13,6 +13,7 @@ pub mod brush_sampling;
 pub mod font_layout;
 pub mod font_source;
 pub mod geometry;
+pub mod gpos_kerning;
 pub mod graph;
 mod graph_hash;
 pub mod graph_scene;
