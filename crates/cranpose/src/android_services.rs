@@ -11,6 +11,7 @@
 //! applies them via [`apply_pending_platform_signals`].
 #![allow(unsafe_code)]
 
+use crate::android_haptics_queue::{HapticCommand, HapticQueue};
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 use crate::android_launch_args::decode_launch_arguments;
 use cranpose_services::{
@@ -25,7 +26,7 @@ use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 // --- Cross-thread signal parking (UI thread → native loop) -------------------
 
@@ -59,9 +60,16 @@ pub(crate) fn wake_native_loop() {
 /// activity handle.
 pub(crate) fn register(app: android_activity::AndroidApp) {
     let _ = LOOP_WAKER.set(Mutex::new(Some(app.create_waker())));
+    let haptics_queue = if async_haptics_enabled() {
+        spawn_haptics_thread(app.clone())
+    } else {
+        log::info!("CRANPOSE_ASYNC_HAPTICS=0: haptics stay on the calling thread");
+        None
+    };
     set_platform_haptics(Rc::new(AndroidHaptics {
         app: app.clone(),
         amplitude_control: Cell::new(None),
+        queue: haptics_queue,
     }));
     set_platform_share_sheet(Rc::new(AndroidShareSheet { app: app.clone() }));
     set_platform_notifier(Rc::new(AndroidNotifier { app: app.clone() }));
@@ -162,6 +170,22 @@ pub(crate) fn apply_pending_platform_signals(
 
 // --- Haptics ------------------------------------------------------------------
 
+/// Queue depth for the asynchronous dispatch. Small on purpose: at the
+/// profiled rate of about one waveform per frame the queue only ever holds
+/// what one slow binder call backs up, and past that waveforms coalesce.
+const HAPTIC_QUEUE_CAPACITY: usize = 8;
+
+/// Kill switch for the asynchronous dispatch: `CRANPOSE_ASYNC_HAPTICS=0`
+/// (reachable on a device as `debug.cranpose.async_haptics` through the
+/// property bridge in [`crate::android_frame_telemetry`]) keeps every
+/// vibrator call on the calling thread, the pre-queue behaviour.
+fn async_haptics_enabled() -> bool {
+    match std::env::var("CRANPOSE_ASYNC_HAPTICS") {
+        Ok(value) => !matches!(value.trim(), "0" | "false" | "off" | "no"),
+        Err(_) => true,
+    }
+}
+
 /// The Android vibrator, reached through `CranposeActivity`.
 ///
 /// `perform` routes through `View.performHapticFeedback` so the OS's own
@@ -169,36 +193,116 @@ pub(crate) fn apply_pending_platform_signals(
 /// paths address `Vibrator`/`VibrationEffect` directly, which is what a game
 /// designing its own set of distinct feels needs; each one is a single JNI
 /// call carrying primitives or a primitive array.
+///
+/// The vibrator methods run the `VibratorManagerService` binder call on the
+/// calling thread, and a watch profile measured that at 0.88 ms per frame on
+/// the render thread (946 waveform calls in 975 frames). Delivery therefore
+/// normally happens on the dedicated "cranpose-haptics" thread: the trait
+/// methods enqueue into `queue` and return immediately. When `queue` is
+/// `None` (kill switch, or the thread failed to start) every call delivers
+/// synchronously, exactly as before the queue existed.
 struct AndroidHaptics {
     app: android_activity::AndroidApp,
     /// `Vibrator.hasAmplitudeControl()`, queried once and cached: the answer
     /// cannot change for the life of the process, and the query costs a JNI
     /// round trip that UI code should not repeat.
     amplitude_control: Cell<Option<bool>>,
+    /// Handoff to the "cranpose-haptics" delivery thread, or `None` for the
+    /// synchronous path.
+    queue: Option<Arc<HapticQueue>>,
 }
 
 impl AndroidHaptics {
-    fn call(
-        &self,
-        what: &'static str,
-        run: impl FnOnce(&mut jni::Env<'_>, JObject<'_>) -> Result<(), String>,
-    ) {
-        if let Err(error) = with_android_activity_env(&self.app, run) {
-            log::debug!("Android {what} failed: {error}");
+    fn dispatch(&self, command: HapticCommand) {
+        let command = match &self.queue {
+            Some(queue) => match queue.enqueue(command) {
+                Ok(()) => return,
+                // The delivery thread is gone (shutdown, or it panicked and
+                // its exit guard closed the queue); deliver on this thread so
+                // the call is not lost.
+                Err(command) => command,
+            },
+            None => command,
+        };
+        deliver_haptic_command(&self.app, &command);
+    }
+}
+
+impl Drop for AndroidHaptics {
+    fn drop(&mut self) {
+        // Lets the delivery thread drain what it already accepted and exit
+        // cleanly. Not joined: drop runs on the render thread and the worker
+        // may be inside a binder call.
+        if let Some(queue) = &self.queue {
+            queue.shut_down();
         }
     }
 }
 
-impl Haptics for AndroidHaptics {
-    fn perform(&self, feedback: HapticFeedback) {
-        let kind: jint = match feedback {
-            HapticFeedback::ImpactLight | HapticFeedback::Selection => 0,
-            HapticFeedback::ImpactMedium => 1,
-            HapticFeedback::ImpactHeavy => 2,
-            HapticFeedback::Success => 3,
-            HapticFeedback::Warning | HapticFeedback::Error => 4,
-        };
-        self.call("haptic", |env, activity| {
+/// Starts the "cranpose-haptics" delivery thread, returning the queue the
+/// backend enqueues into, or `None` when the thread could not start.
+fn spawn_haptics_thread(app: android_activity::AndroidApp) -> Option<Arc<HapticQueue>> {
+    let queue = Arc::new(HapticQueue::new(HAPTIC_QUEUE_CAPACITY));
+    let worker_queue = Arc::clone(&queue);
+    match std::thread::Builder::new()
+        .name("cranpose-haptics".to_owned())
+        .spawn(move || run_haptics_thread(app, worker_queue))
+    {
+        Ok(_) => Some(queue),
+        Err(error) => {
+            log::warn!(
+                "cranpose-haptics thread failed to start; haptics stay synchronous: {error}"
+            );
+            None
+        }
+    }
+}
+
+/// Delivery loop for the "cranpose-haptics" thread.
+///
+/// The first `with_android_activity_env` call attaches the thread to the JVM
+/// once (`attach_current_thread` only checks a thread-local after that), and
+/// the attachment is released automatically when the thread exits after the
+/// queue shuts down and drains — so the render thread pays neither the attach
+/// nor the binder round trip.
+fn run_haptics_thread(app: android_activity::AndroidApp, queue: Arc<HapticQueue>) {
+    // Closes the queue even if delivery panics, so a caller blocked on a
+    // saturated queue is released (and falls back to synchronous delivery)
+    // instead of hanging the render thread forever.
+    struct ShutDownOnExit(Arc<HapticQueue>);
+    impl Drop for ShutDownOnExit {
+        fn drop(&mut self) {
+            self.0.shut_down();
+        }
+    }
+    let _guard = ShutDownOnExit(Arc::clone(&queue));
+    while let Some(command) = queue.dequeue() {
+        deliver_haptic_command(&app, &command);
+        queue.note_delivered();
+    }
+    log::debug!("cranpose-haptics thread exited after shutdown");
+}
+
+/// Forwards one haptic command to the activity — the single JNI path shared
+/// by the delivery thread and the synchronous fallback, so the two cannot
+/// drift apart.
+fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCommand) {
+    let what = match command {
+        HapticCommand::Perform(_) => "haptic",
+        HapticCommand::OneShot { .. } => "haptic one-shot",
+        HapticCommand::Waveform { .. } => "haptic waveform",
+        HapticCommand::Effect(_) => "haptic effect",
+        HapticCommand::Cancel => "haptic cancel",
+    };
+    let result = with_android_activity_env(app, |env, activity| match command {
+        HapticCommand::Perform(feedback) => {
+            let kind: jint = match feedback {
+                HapticFeedback::ImpactLight | HapticFeedback::Selection => 0,
+                HapticFeedback::ImpactMedium => 1,
+                HapticFeedback::ImpactHeavy => 2,
+                HapticFeedback::Success => 3,
+                HapticFeedback::Warning | HapticFeedback::Error => 4,
+            };
             env.call_method(
                 &activity,
                 jni_str!("cranposeHaptic"),
@@ -210,65 +314,50 @@ impl Haptics for AndroidHaptics {
                 error.to_string()
             })?;
             Ok(())
-        });
-    }
-
-    fn vibrate(&self, duration_ms: u32, amplitude: u8) {
-        if duration_ms == 0 {
-            return;
         }
-        // `VibrationEffect.createOneShot` takes DEFAULT_AMPLITUDE (-1) or
-        // 1..=255; 0 means "device default" in the framework API, so it is
-        // translated here rather than rejected by the platform.
-        let amplitude: jint = if amplitude == 0 {
-            -1
-        } else {
-            jint::from(amplitude)
-        };
-        let duration = jlong::from(duration_ms);
-        self.call("haptic one-shot", move |env, activity| {
+        HapticCommand::OneShot {
+            duration_ms,
+            amplitude,
+        } => {
+            // `VibrationEffect.createOneShot` takes DEFAULT_AMPLITUDE (-1) or
+            // 1..=255; 0 means "device default" in the framework API, so it is
+            // translated here rather than rejected by the platform.
+            let amplitude: jint = if *amplitude == 0 {
+                -1
+            } else {
+                jint::from(*amplitude)
+            };
             env.call_method(
                 &activity,
                 jni_str!("cranposeHapticOneShot"),
                 jni_sig!("(JI)V"),
-                &[JValue::Long(duration), JValue::Int(amplitude)],
+                &[
+                    JValue::Long(jlong::from(*duration_ms)),
+                    JValue::Int(amplitude),
+                ],
             )
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
                 error.to_string()
             })?;
             Ok(())
-        });
-    }
-
-    fn play_pattern(&self, pattern: &HapticPattern) {
-        let timings: Vec<jlong> = pattern
-            .timings_ms()
-            .iter()
-            .map(|step| jlong::from(*step))
-            .collect();
-        let amplitudes: Vec<jint> = pattern
-            .amplitudes()
-            .iter()
-            .map(|level| jint::from(*level))
-            .collect();
-        let repeat: jint = pattern
-            .repeat()
-            .and_then(|index| jint::try_from(index).ok())
-            .unwrap_or(-1);
-
-        self.call("haptic waveform", move |env, activity| {
+        }
+        HapticCommand::Waveform {
+            timings_ms,
+            amplitudes,
+            repeat,
+        } => {
             let timing_array = env
-                .new_long_array(timings.len())
+                .new_long_array(timings_ms.len())
                 .map_err(|error| error.to_string())?;
             timing_array
-                .set_region(env, 0, &timings)
+                .set_region(env, 0, timings_ms)
                 .map_err(|error| error.to_string())?;
             let amplitude_array = env
                 .new_int_array(amplitudes.len())
                 .map_err(|error| error.to_string())?;
             amplitude_array
-                .set_region(env, 0, &amplitudes)
+                .set_region(env, 0, amplitudes)
                 .map_err(|error| error.to_string())?;
             let timing_obj: &JObject = timing_array.as_ref();
             let amplitude_obj: &JObject = amplitude_array.as_ref();
@@ -279,7 +368,7 @@ impl Haptics for AndroidHaptics {
                 &[
                     JValue::Object(timing_obj),
                     JValue::Object(amplitude_obj),
-                    JValue::Int(repeat),
+                    JValue::Int(*repeat),
                 ],
             )
             .map_err(|error| {
@@ -287,19 +376,16 @@ impl Haptics for AndroidHaptics {
                 error.to_string()
             })?;
             Ok(())
-        });
-    }
-
-    fn perform_effect(&self, effect: HapticEffect) {
-        // Matches `VibrationEffect.EFFECT_*`, which the activity re-maps by
-        // name so the constants stay owned by the platform.
-        let id: jint = match effect {
-            HapticEffect::Click => 0,
-            HapticEffect::DoubleClick => 1,
-            HapticEffect::Tick => 2,
-            HapticEffect::HeavyClick => 3,
-        };
-        self.call("haptic effect", move |env, activity| {
+        }
+        HapticCommand::Effect(effect) => {
+            // Matches `VibrationEffect.EFFECT_*`, which the activity re-maps
+            // by name so the constants stay owned by the platform.
+            let id: jint = match effect {
+                HapticEffect::Click => 0,
+                HapticEffect::DoubleClick => 1,
+                HapticEffect::Tick => 2,
+                HapticEffect::HeavyClick => 3,
+            };
             env.call_method(
                 &activity,
                 jni_str!("cranposeHapticPredefined"),
@@ -311,11 +397,8 @@ impl Haptics for AndroidHaptics {
                 error.to_string()
             })?;
             Ok(())
-        });
-    }
-
-    fn cancel(&self) {
-        self.call("haptic cancel", |env, activity| {
+        }
+        HapticCommand::Cancel => {
             env.call_method(
                 &activity,
                 jni_str!("cranposeHapticCancel"),
@@ -327,7 +410,53 @@ impl Haptics for AndroidHaptics {
                 error.to_string()
             })?;
             Ok(())
+        }
+    });
+    if let Err(error) = result {
+        log::debug!("Android {what} failed: {error}");
+    }
+}
+
+impl Haptics for AndroidHaptics {
+    fn perform(&self, feedback: HapticFeedback) {
+        self.dispatch(HapticCommand::Perform(feedback));
+    }
+
+    fn vibrate(&self, duration_ms: u32, amplitude: u8) {
+        if duration_ms == 0 {
+            return;
+        }
+        self.dispatch(HapticCommand::OneShot {
+            duration_ms,
+            amplitude,
         });
+    }
+
+    fn play_pattern(&self, pattern: &HapticPattern) {
+        self.dispatch(HapticCommand::Waveform {
+            timings_ms: pattern
+                .timings_ms()
+                .iter()
+                .map(|step| i64::from(*step))
+                .collect(),
+            amplitudes: pattern
+                .amplitudes()
+                .iter()
+                .map(|level| i32::from(*level))
+                .collect(),
+            repeat: pattern
+                .repeat()
+                .and_then(|index| i32::try_from(index).ok())
+                .unwrap_or(-1),
+        });
+    }
+
+    fn perform_effect(&self, effect: HapticEffect) {
+        self.dispatch(HapticCommand::Effect(effect));
+    }
+
+    fn cancel(&self) {
+        self.dispatch(HapticCommand::Cancel);
     }
 
     fn has_amplitude_control(&self) -> bool {
