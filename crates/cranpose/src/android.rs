@@ -1724,6 +1724,17 @@ pub fn run(
     // update/lowering of the next frame. Kill switch CRANPOSE_PRESENT_THREAD
     // (`adb shell setprop debug.cranpose.present_thread 1`); read once —
     // the mode must not change while a renderer is live.
+    //
+    // OPT-IN by measurement, and expect it to stay off on small saturated
+    // parts: on the Pixel Watch 3 (4x in-order A53, CPU already 100-108%
+    // with the stage-executor pool fanned out) the overlap measured
+    // 38.7/38.4 fps vs 53.5 sync on a cool watch — a dedicated thread adds
+    // no cores, so depth-one just buys context switches and cache pressure
+    // there, even with the replay ack shipped pre-acquire. The regime it
+    // exists for is a part with idle cores to run the present half — a
+    // big.LITTLE phone with the producer pinned little and cores to spare.
+    // Earn any default flip with an A/B on that class, never by the
+    // arithmetic alone (the arithmetic said 60 here; the cores said no).
     let present_thread = matches!(
         std::env::var("CRANPOSE_PRESENT_THREAD").as_deref(),
         Ok("1") | Ok("true") | Ok("on")
