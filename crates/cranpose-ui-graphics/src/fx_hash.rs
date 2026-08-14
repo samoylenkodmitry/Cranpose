@@ -40,15 +40,12 @@ impl FxHasher {
 impl Hasher for FxHasher {
     #[inline]
     fn write(&mut self, bytes: &[u8]) {
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            let mut word = [0u8; 8];
-            word.copy_from_slice(chunk);
-            self.fold(u64::from_le_bytes(word));
+        let (chunks, tail) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            self.fold(u64::from_le_bytes(*chunk));
         }
         // The tail is folded together with its own length, so `[1]` and `[1, 0]`
         // stay distinct even though both pad to the same word.
-        let tail = chunks.remainder();
         if !tail.is_empty() {
             let mut word = [0u8; 8];
             word[..tail.len()].copy_from_slice(tail);
