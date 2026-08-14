@@ -74,6 +74,7 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 21] = [
     ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
     ("debug.cranpose.arc_mesh", "CRANPOSE_ARC_MESH"),
     ("debug.cranpose.rim_mesh", "CRANPOSE_RIM_MESH"),
+    ("debug.cranpose.round_cull", "CRANPOSE_ROUND_CULL"),
     ("debug.cranpose.catchup_pacing", "CRANPOSE_CATCHUP_PACING"),
     ("debug.cranpose.instanced_quads", "CRANPOSE_INSTANCED_QUADS"),
     (
