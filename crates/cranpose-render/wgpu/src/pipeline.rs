@@ -2886,16 +2886,18 @@ mod tests {
         let Brush::Solid(background) = &scene.shapes[0].brush else {
             panic!("background draw should use a solid brush");
         };
-        assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55));
+        // Painted colours arrive at eight bits per channel, which is where the
+        // platform's own colour type already is — see `Color::srgb_8bit`.
+        assert_eq!(*background, Color(0.2, 0.3, 0.52, 0.55).srgb_8bit());
 
         assert_eq!(scene.texts.len(), 1, "content text expected");
         assert_eq!(scene.shadow_draws.len(), 1, "shadow draw expected");
         assert_eq!(scene.shadow_draws[0].texts.len(), 1, "shadow text expected");
         assert_eq!(
             scene.shadow_draws[0].texts[0].color,
-            Color(0.0, 0.0, 0.0, 0.95)
+            Color(0.0, 0.0, 0.0, 0.95).srgb_8bit()
         );
-        assert_eq!(scene.texts[0].color, Color(0.9, 0.95, 1.0, 1.0));
+        assert_eq!(scene.texts[0].color, Color(0.9, 0.95, 1.0, 1.0).srgb_8bit());
         assert!(scene.shadow_draws[0].texts[0].rect.x > scene.texts[0].rect.x);
         assert!(scene.shadow_draws[0].texts[0].rect.y > scene.texts[0].rect.y);
         assert!(

@@ -11,45 +11,48 @@
 //! This runs the whole path an app runs — compose, `AppShell::update`, scene
 //! build, wgpu, framebuffer readback — and reads the composited pixels back.
 //!
-//! **The answer is that this renderer already gets it right**, and these tests
-//! exist to keep it that way rather than to drive a fix. The reason it is right
-//! is structural, not lucky: `CompositingStrategy::Auto` with alpha below one
-//! raises `SurfaceRequirement::GroupOpacity` (`surface_plan.rs`), which
-//! allocates a real offscreen target from the 8-bit `OffscreenPool`, and
-//! `layer_for_content` draws the row into it at alpha 1 and moves the alpha to
-//! the composite. The quantisation therefore happens where Skia's does — on the
-//! way into the layer buffer — instead of being modelled.
+//! The structure is right and was always right: `CompositingStrategy::Auto`
+//! with alpha below one raises `SurfaceRequirement::GroupOpacity`
+//! (`surface_plan.rs`), which allocates a real offscreen target from the 8-bit
+//! `OffscreenPool`, and `layer_for_content` draws the row into it at alpha 1
+//! and moves the alpha to the composite. The quantisation therefore happens
+//! where Skia's does — on the way into the layer buffer — instead of being
+//! modelled.
 //!
-//! What would break it is the `ModulateAlpha` strategy, which folds the alpha
-//! into each primitive in float and is one call away
-//! (`WearScalingLazyColumnSpec::compositing_strategy`). The discriminating test
-//! below is what would notice.
+//! What would break the structure is the `ModulateAlpha` strategy, which folds
+//! the alpha into each primitive in float and is one call away
+//! (`WearScalingLazyColumnSpec::compositing_strategy`). The discriminating
+//! tests below are what would notice.
 //!
-//! # The parity report that said otherwise
+//! # Structure was not enough, and this file said it was
 //!
-//! A pixel-parity run recorded the composed Settings capsule as `(9, 20, 31)`
-//! against Kotlin's `(9, 21, 31)` — the folded value — on
-//! `surfaceContainer = mix(rail, background, 0.55) = (9.9, 22.5, 34.2)`. Two
-//! things here answer it.
+//! Having the right shape left two arithmetic questions to whoever performed
+//! each step, and both were answered wrong. See
+//! `cranpose-render-common/tests/wear_faded_row_composite.rs`, which pins both
+//! against real Kotlin pixels; in short:
 //!
-//! `a_real_faded_row_capsule_composites_through_the_layer_too` runs that exact
-//! colour through a real `SwitchButton`, so the capsule is a rounded rect the
-//! widget draws rather than a flat `Box`, and the framebuffer still lands on the
-//! 8-bit-layer value on every row where the two models disagree.
+//! * The colour reaching the layer buffer was still a fraction, so the
+//!   conversion into that buffer had a tie to break and broke it in whatever
+//!   direction the hardware prefers. `Color::srgb_8bit` now snaps it first, as
+//!   `androidx.compose.ui.graphics.Color` does at construction, leaving no tie.
+//! * The composite ran at a float alpha where HWUI truncates it to a byte
+//!   (`saveLayerAlpha(&bounds, (int)(alpha * 255))`). `composite_alpha_8bit`
+//!   now does.
 //!
-//! `the_reported_composed_capsule_is_not_a_value_this_composite_can_produce`
-//! closes it: `(9, 20, 31)` is unreachable from `(9.9, 22.5, 34.2)` through an
-//! 8-bit layer at **any** alpha, because the green channel needs `alpha <
-//! 20.5/23` and the blue needs `alpha >= 30.5/34`, and those do not overlap. So
-//! whatever produced that pixel did not run this composite, and the fix is not
-//! in this file's subject.
+//! An earlier version of this file recorded a parity report of the composed
+//! Settings capsule as `(9, 20, 31)` against Kotlin's `(9, 21, 31)`, proved
+//! that value unreachable through an 8-bit layer at any alpha, and concluded
+//! that the fix was not in this file's subject. The proof was sound and the
+//! conclusion was wrong: it swept only the alpha, and the free variable was the
+//! *tie*. `the_capsule_the_composed_build_drew_is_a_tie_broken_the_other_way`
+//! below is that sweep done properly.
 //!
-//! One place in `cranpose-render` genuinely does fold: the software `pixels`
-//! backend has no offscreen at all (`pipeline.rs::is_render_effect_supported`
-//! returns `false` unconditionally), so a `CompositingStrategy::Auto` layer
-//! below full opacity silently degrades to `apply_layer_to_color`'s float
-//! multiply there. Nothing in the tree asserts or documents that divergence,
-//! and no Wear screen is rendered through it today.
+//! The software `pixels` backend has no offscreen at all
+//! (`pipeline.rs::is_render_effect_supported` returns `false` unconditionally),
+//! so a `CompositingStrategy::Auto` layer below full opacity folds instead of
+//! isolating. It folds `local_content_layer`'s alpha, which is the composite's
+//! byte, so the two backends land on the same pixel wherever a flat subtree
+//! makes the fold exact at all.
 
 mod support;
 
@@ -84,11 +87,15 @@ const PALETTE_FILL: (f32, f32, f32) = (15.0, 54.0, 78.0);
 /// Wear's own roles are all exact bytes, so quantising them is a no-op and both
 /// models agree — the palette case below can confirm the composite is sane but
 /// can never prove which rule produced it. A theme that lerps, as the Kotlin
-/// app's `mix(c, background, t)` does, lands between bytes: `surfaceContainer`
-/// is `mix(rail, bg, 0.55)` = (9.9, 22.5, 34.2). These three channels are the
-/// same shape, nudged off `.5` so neither model depends on which way a
-/// half rounds.
-const BETWEEN_FILL: (f32, f32, f32) = (22.6, 45.6, 78.6);
+/// app's `mix(c, background, t)` does, lands between bytes.
+///
+/// This is [`MEASURED_CAPSULE`] itself rather than a stand-in for it, because
+/// whether a fill discriminates depends on the alphas the ramp happens to hand
+/// the sampled rows, and a synthetic triple that separated the two models under
+/// one set of row positions stopped separating them under another. The real
+/// `surfaceContainer` separates them on every scaled row, and it is the colour
+/// the parity report was about.
+const BETWEEN_FILL: (f32, f32, f32) = MEASURED_CAPSULE;
 
 thread_local! {
     static FILL_UNDER_TEST: Cell<(f32, f32, f32)> = const { Cell::new((15.0, 54.0, 78.0)) };
@@ -104,10 +111,12 @@ fn pixel(frame: &CapturedFrame, x: u32, y: u32) -> (u8, u8, u8) {
 }
 
 /// What Skia gives: the layer is an 8-bit buffer, so the channel is a whole
-/// value BEFORE the alpha multiplies it, and the composite rounds once more.
+/// value BEFORE the alpha multiplies it — and the alpha is a whole value too,
+/// truncated, because that is what `saveLayerAlpha` takes.
 fn eight_bit_layer(channel_255: f32, alpha: f32) -> u8 {
-    let quantised = channel_255.clamp(0.0, 255.0).round();
-    (quantised * alpha).round().clamp(0.0, 255.0) as u8
+    let quantised = channel_255.clamp(0.0, 255.0).round() as u32;
+    let alpha_byte = (alpha.clamp(0.0, 1.0) * 255.0).floor() as u32;
+    ((quantised * alpha_byte + 127) / 255) as u8
 }
 
 /// What folding the alpha into each primitive in float gives instead: one
@@ -186,25 +195,32 @@ fn expected_rows() -> Vec<(f32, f32, f32, f32)> {
 }
 
 fn rows_for(count: usize) -> Vec<(f32, f32, f32, f32)> {
-    use cranpose_ui::round_scaling_list::{centre_offset, place_row, stack_into, Slot};
+    use cranpose_ui::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW, count), 4.0, &mut slots);
     let viewport = SIZE as f32;
-    let offset = centre_offset(&slots, viewport, CentreAnchor::default(), 1.0);
-    slots
-        .iter()
-        .map(|slot| {
-            let top = slot.top + offset;
-            let row = place_row(viewport, top, slot.height, 1.0).unwrap_or(
-                cranpose_ui::round_scaling_list::PlacedRow {
-                    top,
-                    height: slot.height,
-                    scale: 1.0,
-                    alpha: 1.0,
-                },
-            );
-            (row.top, row.height, row.scale, row.alpha)
-        })
+    let anchor = CentreAnchor::default();
+    let offset = centre_offset(&slots, viewport, anchor, 1.0);
+    // The list walks OUTWARD from the anchored row and advances its cursor by
+    // each row's reported (scaled) height plus the gap, which is what
+    // `ScalingLazyListState.layoutInfo` does. Stacking full heights instead
+    // parts company from the second row out and puts these samples on the wrong
+    // pixels.
+    let index = anchor.index.min(count.saturating_sub(1));
+    let mut rows = Vec::new();
+    place_rows(
+        RowRun {
+            viewport,
+            anchor: index,
+            anchor_top: slots[index].top + offset,
+            gap: 4.0,
+            density: 1.0,
+        },
+        &vec![ROW; count],
+        &mut rows,
+    );
+    rows.into_iter()
+        .map(|row| (row.top, row.height, row.scale, row.alpha))
         .collect()
 }
 
@@ -353,44 +369,59 @@ fn a_real_faded_row_capsule_composites_through_the_layer_too() {
 }
 
 #[test]
-fn the_reported_composed_capsule_is_not_a_value_this_composite_can_produce() {
-    // The parity report has the composed capsule at (9, 20, 31) where Kotlin
-    // draws (9, 21, 31). That is the folded-alpha value at alpha 0.9 — and it
-    // is not merely "the wrong model here", it is unreachable through an 8-bit
-    // layer at EVERY alpha, so no alpha error can explain it either. Green 20
-    // needs 19.5 <= 23a < 20.5 and blue 31 needs 30.5 <= 34a < 31.5, and the two
-    // windows do not meet. Swept rather than argued, so the claim cannot rot.
+fn the_capsule_the_composed_build_drew_is_a_tie_broken_the_other_way() {
+    // The parity report had the composed capsule at (9, 20, 31) where Kotlin
+    // drew (9, 21, 31). Sweeping the alpha with the tie held fixed says that
+    // value is unreachable, which is true and was the wrong sweep: green 22.5
+    // is an exact half, and the free variable is which way it goes. Sweep both
+    // and the reported pixel appears immediately.
     let reported = (9u8, 20u8, 31u8);
-    for step in 0..=10_000u32 {
+    let reachable_with_the_tie_down = (0..=10_000u32).any(|step| {
         let alpha = step as f32 / 10_000.0;
-        let produced = (
+        // The same composite with the layer's green taken DOWN to 22 instead of
+        // up to 23 — the answer a converter that breaks ties to even gives.
+        let tie_down = |channel: f32| {
+            let quantised = if (channel - channel.floor() - 0.5).abs() < 1e-6 {
+                channel.floor()
+            } else {
+                channel.round()
+            } as u32;
+            let alpha_byte = (alpha * 255.0).floor() as u32;
+            ((quantised * alpha_byte + 127) / 255) as u8
+        };
+        (
+            tie_down(MEASURED_CAPSULE.0),
+            tie_down(MEASURED_CAPSULE.1),
+            tie_down(MEASURED_CAPSULE.2),
+        ) == reported
+    });
+    assert!(
+        reachable_with_the_tie_down,
+        "the reported composed capsule is not reachable even with the tie taken \
+         down, so the diagnosis this file records is wrong"
+    );
+    let reachable_with_the_tie_up = (0..=10_000u32).any(|step| {
+        let alpha = step as f32 / 10_000.0;
+        (
             eight_bit_layer(MEASURED_CAPSULE.0, alpha),
             eight_bit_layer(MEASURED_CAPSULE.1, alpha),
             eight_bit_layer(MEASURED_CAPSULE.2, alpha),
-        );
-        assert_ne!(
-            produced, reported,
-            "alpha {alpha} reaches the reported composed capsule through an 8-bit layer"
-        );
-    }
-    // And the value the report has for Kotlin IS reachable, at the alpha it
-    // names — so the two sides of the report are not both off-model.
+        ) == reported
+    });
+    assert!(
+        !reachable_with_the_tie_up,
+        "with the tie taken up this composite can reach the reported capsule at \
+         some alpha, so the tie is not what distinguished it"
+    );
+    // And Kotlin's own value is what the fixed composite gives, at a byte alpha
+    // it actually uses.
     assert_eq!(
         (
-            eight_bit_layer(MEASURED_CAPSULE.0, 0.9),
-            eight_bit_layer(MEASURED_CAPSULE.1, 0.9),
-            eight_bit_layer(MEASURED_CAPSULE.2, 0.9),
+            eight_bit_layer(MEASURED_CAPSULE.0, 230.0 / 255.0),
+            eight_bit_layer(MEASURED_CAPSULE.1, 230.0 / 255.0),
+            eight_bit_layer(MEASURED_CAPSULE.2, 230.0 / 255.0),
         ),
         (9, 21, 31)
-    );
-    assert_eq!(
-        (
-            folded_alpha(MEASURED_CAPSULE.0, 0.9),
-            folded_alpha(MEASURED_CAPSULE.1, 0.9),
-            folded_alpha(MEASURED_CAPSULE.2, 0.9),
-        ),
-        reported,
-        "and the reported value is exactly what folding gives"
     );
 }
 

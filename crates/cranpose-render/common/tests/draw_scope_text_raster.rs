@@ -256,6 +256,64 @@ fn the_measured_baseline_is_the_row_glyphs_are_actually_placed_on() {
 }
 
 #[test]
+fn a_drawn_run_that_names_a_line_height_policy_is_laid_out_by_it() {
+    // A draw scope could not state a line-height policy at all, so every run it
+    // drew took the plain branch — the box is the requested height, the leading
+    // split evenly — while a `Text` composable of the same style took the AOSP
+    // one. Two rules in one frame, and a device pixel between them on every row.
+    use cranpose_ui::text::{LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim};
+
+    let asked = 30.0;
+    let plain = TextStyle::new(32.0).with_line_height(asked);
+    let styled = plain.clone().with_line_height_style(LineHeightStyle {
+        alignment: LineHeightAlignment::Center,
+        trim: LineHeightTrim::None,
+        mode: LineHeightMode::Minimum,
+    });
+
+    let measurer = measurer();
+    let plain_box = measurer
+        .line_box(&text_style_for_draw_style(&plain))
+        .expect("a font-backed measurer reports a line box");
+    let styled_box = measurer
+        .line_box(&text_style_for_draw_style(&styled))
+        .expect("a font-backed measurer reports a line box");
+
+    assert_eq!(
+        plain_box.height, asked,
+        "with no policy the request is the box, whatever the font needs"
+    );
+    assert!(
+        styled_box.height > asked,
+        "under the platform rule a line height shorter than the font does not \
+         shrink the line: got {}",
+        styled_box.height
+    );
+    assert_eq!(
+        styled_box.height,
+        styled_box.height.round(),
+        "the platform's line advance is a whole pixel, not a float: got {}",
+        styled_box.height
+    );
+    assert_ne!(plain_box.baseline, styled_box.baseline);
+
+    // And the policy reaches the rasterizer, not just the measurer: the glyphs
+    // are placed on the row the styled box reports.
+    let ui_style = text_style_for_draw_style(&styled);
+    let (rect, _) = measured_block((0.0, 0.0), "H", &styled);
+    let mut cache = SoftwareGlyphRasterCache::with_capacity_at_least_one(GLYPH_CACHE_CAPACITY);
+    let run = collect(rect, "H", &ui_style, &styled, &mut cache);
+    let placement = run.first().expect("one glyph").placement();
+    let ink_bottom = (placement.y + placement.height as i32) as f32;
+    assert!(
+        (ink_bottom - styled_box.baseline).abs() <= 1.5,
+        "cap-height ink ends at {ink_bottom}, the styled line box puts the \
+         baseline at {}",
+        styled_box.baseline
+    );
+}
+
+#[test]
 fn letter_spacing_pads_a_run_with_half_a_space_at_each_edge() {
     // Android resolves `letterSpacing` in Minikin, which puts HALF a letter
     // space on each side of every cluster: `LayoutCore.cpp` adds

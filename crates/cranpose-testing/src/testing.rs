@@ -157,6 +157,36 @@ impl ComposeTestRule {
         &mut self.composition
     }
 
+    /// Lay the installed content out on a `size` display and read back every
+    /// semantics node with the geometry it was placed and drawn at.
+    ///
+    /// This is the headless answer to "how big is that control, and where" —
+    /// see [`crate::placed_semantics`] for what the two boxes on a node mean
+    /// and why every walk behind this reads the retained tree.
+    ///
+    /// The runtime handle is installed for the duration and taken back off
+    /// afterwards: a subcomposing widget cannot be measured without one, and
+    /// leaving it on outlives the borrow the applier hands out.
+    pub fn placed_semantics(
+        &mut self,
+        size: cranpose_ui::Size,
+    ) -> Result<Option<crate::placed_semantics::PlacedSemanticsNode>, NodeError> {
+        self.pump_until_idle()?;
+        let Some(root) = self.composition.root() else {
+            return Ok(None);
+        };
+        let handle = self.composition.runtime_handle();
+        let app_context = StdRc::clone(&self.app_context);
+        app_context.enter(|| {
+            let mut applier = self.composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            let placed =
+                crate::placed_semantics::placed_semantics_from_applier(&mut applier, root, size);
+            applier.clear_runtime_handle();
+            placed
+        })
+    }
+
     fn render(&mut self) -> Result<(), NodeError> {
         let app_context = StdRc::clone(&self.app_context);
         app_context.enter(|| {

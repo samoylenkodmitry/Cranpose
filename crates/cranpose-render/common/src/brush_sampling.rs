@@ -19,12 +19,23 @@ const LEVEL: f32 = 1.0 / 255.0;
 /// output levels — the same value Skia adds, so a Cranpose gradient lands on
 /// the same bytes as the Jetpack Compose gradient it is standing in for.
 ///
-/// Skia dithers every gradient it draws to an 8-bit target. The pattern is not
+/// Skia dithers a gradient it draws to an 8-bit target. The pattern is not
 /// noise: it is a 4x4 Bayer matrix built by striping the low two bits of the
 /// device coordinate — `(X:a1a2, Y:b1b2)` becomes `b1 a1 b2 a2` — and mapped
 /// onto `[-15/32, +15/32]`, half a level either way. Undithered, a slow ramp
 /// quantises into visible bands; dithered, the band edges break into the
 /// checkerboard every Android gradient has.
+///
+/// "A gradient", not "every gradient ever": this is the behaviour of the
+/// platforms Cranpose targets, and it has a floor. Captured on one emulator
+/// host from one APK, a Compose `radialGradient` over black comes back as
+/// `round(255*v + m/16 − 15/32)` of the analytic ramp on an android-34 Wear
+/// image at both 454x454 and 384x384, and as bare `round(255*v)` — no spatial
+/// structure, residual variance exactly the 1/12 of a plain rounding — on an
+/// android-30 one. Only the system image moves between those. So an
+/// android-30 capture is not a reference for this function and never was; a
+/// build compared against one reads as half a level wrong over most of every
+/// gradient it draws, which is exactly what it should read as.
 ///
 /// ```text
 ///  x→   0   1   2   3
@@ -38,6 +49,13 @@ const LEVEL: f32 = 1.0 / 255.0;
 /// `compose − cranpose` over a radial gradient by `(x % 4, y % 4)` reproduces
 /// this matrix, and the per-cell means track `m / 16 − 15 / 32` to within the
 /// estimator's own bias.
+///
+/// Confirmed since without cranpose in the loop at all, which is the reading
+/// that matters — the difference of two builds cannot say which one carries
+/// the pattern. Against the gradient's own analytic ramp the Compose frame's
+/// residual, binned the same way, IS this table: rms 0.005 of a level per
+/// cell over 109k pixels, against 0.285 for the flat table an undithered
+/// build gives.
 ///
 /// The pattern is anchored one pixel on from the coordinate handed in, and
 /// that is measured too. Evaluated at the fragment's own coordinate the

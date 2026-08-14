@@ -23,6 +23,7 @@ use crate::text::style::{
     PlatformParagraphStyle, SpanStyle, TextStyle,
 };
 use crate::text::{FontFamily, FontWeight, TextUnit};
+use crate::widgets::wear::color_appearance::set_luminance;
 
 /// The colour roles these widgets read.
 ///
@@ -53,11 +54,13 @@ pub struct WearColors {
     /// therefore plain white unless an `AppScaffold` says otherwise. A bare
     /// `Text` in the list draws with this, **not** with `on_background`.
     pub content: Color,
-    /// The scroll indicator's thumb: `onBackground` taken to L\* 80 through a
-    /// CAM16 round trip. Held as a colour rather than computed, because the
-    /// round trip is a whole colour-appearance model for two constants.
+    /// The scroll indicator's thumb: `onBackground` taken to L\* 80.
+    ///
+    /// Derive it with [`WearColors::with_wear_scroll_indicator`] rather than
+    /// picking it — see that method for what Wear's own derivation is and why
+    /// the obvious substitute for it is wrong.
     pub indicator_thumb: Color,
-    /// The scroll indicator's track: `onBackground` at L\* 20.
+    /// The scroll indicator's track: the same colour at L\* 20.
     pub indicator_track: Color,
 }
 
@@ -77,9 +80,38 @@ impl Default for WearColors {
             background: Color::from_rgb_u8(0x00, 0x00, 0x00),
             on_background: Color::from_rgb_u8(0xE3, 0xE3, 0xE3),
             content: Color::WHITE,
-            indicator_thumb: Color::from_rgb_u8(0xB4, 0xB4, 0xB4),
-            indicator_track: Color::from_rgb_u8(0x30, 0x30, 0x30),
+            // Not written out: the scheme's own `on_background` through the
+            // rule below, so the default cannot say something the derivation
+            // does not.
+            indicator_thumb: Color::WHITE,
+            indicator_track: Color::WHITE,
         }
+        .with_wear_scroll_indicator()
+    }
+}
+
+impl WearColors {
+    /// The two scroll-indicator colours Wear derives from this scheme's
+    /// `on_background`.
+    ///
+    /// `ScrollIndicatorDefaults.colors()` reads one token and moves it to two
+    /// lightnesses: `setLuminance(fromToken(OnBackground), 80f)` for the thumb
+    /// and `setLuminance(..., 20f)` for the track. Nothing else feeds it — not
+    /// `outline`, not an alpha over the background — and both come from
+    /// `onBackground` rather than from `onSurface` or `primary`.
+    ///
+    /// The move itself is a **CAM16** round trip, not a CIE L\*a\*b\* one; see
+    /// [`crate::widgets::wear::color_appearance::set_luminance`] for the two
+    /// models' disagreement and why substituting L\* in Lab passes a check
+    /// against the thumb and fails against the track.
+    ///
+    /// Overriding either afterwards is what
+    /// `ScrollIndicatorDefaults.colors(indicatorColor, trackColor)` does: it
+    /// copies over the derived pair.
+    pub fn with_wear_scroll_indicator(mut self) -> Self {
+        self.indicator_thumb = set_luminance(self.on_background, 80.0);
+        self.indicator_track = set_luminance(self.on_background, 20.0);
+        self
     }
 }
 
@@ -235,6 +267,25 @@ impl WearTextStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_indicator_colours_come_from_on_background_and_nothing_else() {
+        // Measured against the shipping Compose build with this palette: the
+        // thumb is (180, 202, 211) and the track (30, 51, 58). A Lab round trip
+        // agrees on the thumb and gives 31 of red on the track, so a scheme
+        // whose track lands on 30 is the one that read Wear's own rule.
+        let colors = WearColors {
+            on_background: Color::from_rgb_u8(0xDF, 0xF6, 0xFF),
+            ..WearColors::default()
+        }
+        .with_wear_scroll_indicator();
+        assert_eq!(colors.indicator_thumb, Color::from_rgb_u8(180, 202, 211));
+        assert_eq!(colors.indicator_track, Color::from_rgb_u8(30, 51, 58));
+        // And the default scheme is derived by the same rule rather than
+        // written out beside it.
+        let default = WearColors::default();
+        assert_eq!(default, default.with_wear_scroll_indicator());
+    }
 
     #[test]
     fn a_bare_text_is_white_and_a_header_is_not() {

@@ -306,6 +306,35 @@ pub struct GraphicsLayer {
     pub backdrop_effect: Option<crate::render_effect::RenderEffect>,
 }
 
+impl GraphicsLayer {
+    /// The alpha an isolated layer is composited at: an **eight-bit** one,
+    /// truncated.
+    ///
+    /// The platform never composites a layer at a float alpha. HWUI hands an
+    /// isolated `RenderNode` to the rasterizer as
+    /// `canvas->saveLayerAlpha(&bounds, (int)(properties.getAlpha() * 255))`
+    /// (`frameworks/base/libs/hwui/pipeline/skia/RenderNodeDrawable.cpp`,
+    /// `setViewProperties`), and `(int)` truncates — 0.5 composites at 127/255,
+    /// not at 128/255. The fraction below that byte is gone before a single pixel
+    /// is blended, so anything that keeps it lands a level out wherever the byte
+    /// and the float fall on opposite sides of a half.
+    ///
+    /// The sibling branch is a float on purpose: where `getHasOverlappingRendering()`
+    /// is false HWUI takes `*alphaMultiplier = properties.getAlpha()` and folds it
+    /// into each draw without ever making a byte of it. That is what
+    /// `CompositingStrategy::ModulateAlpha` names.
+    ///
+    /// Truncating here and **rounding** in [`Color::srgb_8bit`] is not an
+    /// inconsistency: they are different call sites in the platform. A colour's own
+    /// alpha is snapped by `Color`'s constructor, which adds the half; a layer's
+    /// alpha is snapped by HWUI's cast, which does not. Anything modelling a faded
+    /// layer without allocating one — a canvas drawing a list row's fade by hand,
+    /// say — wants this rule and not the other.
+    pub fn composite_alpha_8bit(alpha: f32) -> f32 {
+        (alpha.clamp(0.0, 1.0) * 255.0).floor() / 255.0
+    }
+}
+
 impl Default for GraphicsLayer {
     fn default() -> Self {
         Self {
@@ -3409,5 +3438,31 @@ mod tests {
         scope.draw_text(Brush::solid(Color::WHITE), "AB", &style);
         let primitives = scope.into_primitives();
         assert_eq!(unwrap_text(&primitives[0]).style, style);
+    }
+
+    #[test]
+    fn a_layers_composite_alpha_is_a_truncated_byte() {
+        for byte in 0..=255u32 {
+            let exact = byte as f32 / 255.0;
+            assert!(
+                (GraphicsLayer::composite_alpha_8bit(exact) - exact).abs() < 1e-6,
+                "byte {byte} moved"
+            );
+            if byte < 255 {
+                // Anything above a byte and below the next composites at the
+                // byte below it, however close to the next it sits. Rounding
+                // would take the top of that range up, and HWUI's `(int)` does
+                // not.
+                let nearly_next = (byte as f32 + 0.999) / 255.0;
+                assert!(
+                    (GraphicsLayer::composite_alpha_8bit(nearly_next) - exact).abs() < 1e-6,
+                    "byte {byte} + 0.999 did not truncate"
+                );
+            }
+        }
+        assert_eq!(GraphicsLayer::composite_alpha_8bit(1.0), 1.0);
+        assert_eq!(GraphicsLayer::composite_alpha_8bit(0.0), 0.0);
+        assert_eq!(GraphicsLayer::composite_alpha_8bit(-3.0), 0.0);
+        assert_eq!(GraphicsLayer::composite_alpha_8bit(7.0), 1.0);
     }
 }
