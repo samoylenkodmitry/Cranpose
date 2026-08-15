@@ -82,15 +82,7 @@ fn vector_path_mask_key(
     hasher.finish()
 }
 
-fn vector_path_mask_cache_dropped() -> bool {
-    static DROPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *DROPPED.get_or_init(|| std::env::var_os("CRANPOSE_NO_PATH_CACHE").is_some())
-}
-
 fn vector_path_mask_cache_get(key: u64) -> Option<ImageBitmap> {
-    if vector_path_mask_cache_dropped() {
-        return None;
-    }
     VECTOR_PATH_MASKS.with(|cache| cache.borrow_mut().get(key))
 }
 

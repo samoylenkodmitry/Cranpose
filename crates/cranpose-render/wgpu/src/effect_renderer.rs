@@ -18,18 +18,6 @@ use crate::display_clip;
 use crate::gpu_stats::FrameStats;
 use crate::lazy_resource::{LazyGpuResource, PassPipeline};
 use std::cell::Cell;
-use std::sync::OnceLock;
-
-fn blur_scale_dial() -> u32 {
-    static DIAL: OnceLock<u32> = OnceLock::new();
-    *DIAL.get_or_init(|| {
-        std::env::var("CRANPOSE_BLUR_SCALE")
-            .ok()
-            .and_then(|value| value.trim().parse::<u32>().ok())
-            .map(|value| value.min(8))
-            .unwrap_or(0)
-    })
-}
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,
@@ -38,15 +26,13 @@ pub(crate) fn blur_scratch_size(
     height: u32,
 ) -> (u32, u32) {
     let radius = radius_x.max(radius_y);
-    let by_radius = if radius < 6.0 {
+    let mut scale = if radius < 6.0 {
         1
     } else if radius < 16.0 {
         2
     } else {
         4
     };
-    let dial = blur_scale_dial();
-    let mut scale = if dial == 0 { by_radius } else { dial };
     while scale > 1 && (width / scale < 16 || height / scale < 16) {
         scale /= 2;
     }

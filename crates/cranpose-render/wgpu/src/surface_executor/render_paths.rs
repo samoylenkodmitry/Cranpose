@@ -2660,14 +2660,6 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
 /// the same admission rules and key, decided from the values captured at
 /// collection time. `child.logical_rect` stands in for the memoized estimate
 /// the node-based path re-reads — it is that memoized value.
-/// Measurement dial only: keeps a layer that holds a frosted descendant in the
-/// raster cache, which shows a stale blur inside that descendant. It answers
-/// "what would the cache be worth here" and must never ship on.
-fn stale_backdrop_cache_probe() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("CRANPOSE_STALE_BACKDROP_CACHE").is_some())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
@@ -2691,8 +2683,7 @@ fn child_layer_raster_cache_candidate(
         return None;
     }
     let external_backdrop_input = has_backdrop_underlay && child.contains_descendant_backdrop;
-    if external_backdrop_input && backdrop_underlay_color.is_none() && !stale_backdrop_cache_probe()
-    {
+    if external_backdrop_input && backdrop_underlay_color.is_none() {
         return None;
     }
     // A RuntimeShader produces different output every frame from uniforms no

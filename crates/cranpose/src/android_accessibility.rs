@@ -48,11 +48,6 @@ pub(crate) fn drain_custom_actions() -> Vec<(i32, usize)> {
     )
 }
 
-fn accessibility_dropped() -> bool {
-    static DROPPED: OnceLock<bool> = OnceLock::new();
-    *DROPPED.get_or_init(|| std::env::var_os("CRANPOSE_NO_A11Y").is_some())
-}
-
 pub(crate) fn sync(
     app: &android_activity::AndroidApp,
     shell: &mut AppShell<WgpuRenderer>,
@@ -60,9 +55,6 @@ pub(crate) fn sync(
     previous: &mut Vec<AccessibilityElement>,
     seen_revision: &mut Option<u64>,
 ) -> Result<(), String> {
-    if accessibility_dropped() {
-        return Ok(());
-    }
     let Some(elements) = accessibility::snapshot_if_changed(shell, seen_revision) else {
         return Ok(());
     };
