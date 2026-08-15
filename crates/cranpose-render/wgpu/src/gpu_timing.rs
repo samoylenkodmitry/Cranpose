@@ -22,15 +22,23 @@ pub fn timing_window_frames() -> Option<u32> {
 }
 
 pub fn requested_features(adapter_features: wgpu::Features) -> wgpu::Features {
-    if timing_window_frames().is_none() {
+    let Some(window) = timing_window_frames() else {
+        return wgpu::Features::empty();
+    };
+    log::warn!(
+        "[gpu-pass] window={window} adapter timestamp_query={} inside_encoders={} inside_passes={}",
+        adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY),
+        adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+        adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES),
+    );
+    if !adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY) {
         return wgpu::Features::empty();
     }
-    let wanted = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-    if adapter_features.contains(wanted) {
-        wanted
-    } else {
-        wgpu::Features::empty()
+    let mut asked = wgpu::Features::TIMESTAMP_QUERY;
+    if adapter_features.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+        asked |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
     }
+    asked
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -65,6 +73,22 @@ impl GpuSpanKind {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct GpuSpanId(usize);
+
+pub(crate) struct PassTimestamps {
+    query_set: wgpu::QuerySet,
+    begin: u32,
+    end: u32,
+}
+
+impl PassTimestamps {
+    pub(crate) fn writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.query_set,
+            beginning_of_pass_write_index: Some(self.begin),
+            end_of_pass_write_index: Some(self.end),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SpanRecord {
@@ -145,6 +169,7 @@ struct TimerState {
     dropped_spans: u32,
     period_ns: f32,
     window: u32,
+    inside_encoders: bool,
     report: Report,
 }
 
@@ -179,15 +204,18 @@ impl GpuFrameTimer {
             return;
         };
         if self.state.is_none() {
-            let wanted =
-                wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-            if !device.features().contains(wanted) {
+            if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
                 self.refused = true;
                 log::warn!("[gpu-pass] the device has no timestamp queries, timing stays off");
                 return;
             }
-            self.state = Some(TimerState::new(device, queue, window));
-            log::warn!("[gpu-pass] per pass timing on, window={window} frames");
+            let inside_encoders = device
+                .features()
+                .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+            self.state = Some(TimerState::new(device, queue, window, inside_encoders));
+            log::warn!(
+                "[gpu-pass] per pass timing on, window={window} frames, frame span={inside_encoders}"
+            );
         }
         let Some(state) = self.state.as_mut() else {
             return;
@@ -196,24 +224,20 @@ impl GpuFrameTimer {
         state.spans.clear();
         state.dropped_spans = 0;
         state.filled_slot = None;
-        state.frame_span = state.open(encoder, GpuSpanKind::Frame, 0, 0);
+        state.frame_span = None;
+        if state.inside_encoders {
+            let frame_span = state.open_encoder_span(encoder, GpuSpanKind::Frame, 0, 0);
+            state.frame_span = frame_span;
+        }
     }
 
-    pub(crate) fn begin_span(
+    pub(crate) fn pass_timestamps(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         kind: GpuSpanKind,
         width: u32,
         height: u32,
-    ) -> Option<GpuSpanId> {
-        self.state.as_mut()?.open(encoder, kind, width, height)
-    }
-
-    pub(crate) fn end_span(&mut self, encoder: &mut wgpu::CommandEncoder, span: Option<GpuSpanId>) {
-        let (Some(state), Some(span)) = (self.state.as_mut(), span) else {
-            return;
-        };
-        state.close(encoder, span);
+    ) -> Option<PassTimestamps> {
+        self.state.as_mut()?.open_pass(kind, width, height)
     }
 
     pub(crate) fn end_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
@@ -237,7 +261,12 @@ impl GpuFrameTimer {
 }
 
 impl TimerState {
-    fn new(device: &wgpu::Device, queue: &wgpu::Queue, window: u32) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        window: u32,
+        inside_encoders: bool,
+    ) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("Gpu Pass Timing Query Set"),
             ty: wgpu::QueryType::Timestamp,
@@ -272,11 +301,34 @@ impl TimerState {
             dropped_spans: 0,
             period_ns: queue.get_timestamp_period(),
             window,
+            inside_encoders,
             report: Report::default(),
         }
     }
 
-    fn open(
+    fn open_pass(&mut self, kind: GpuSpanKind, width: u32, height: u32) -> Option<PassTimestamps> {
+        if self.next_query + 2 > MAX_QUERIES {
+            self.dropped_spans += 1;
+            return None;
+        }
+        let begin = self.next_query;
+        let end = begin + 1;
+        self.next_query += 2;
+        self.spans.push(SpanRecord {
+            kind,
+            width,
+            height,
+            begin,
+            end: Some(end),
+        });
+        Some(PassTimestamps {
+            query_set: self.query_set.clone(),
+            begin,
+            end,
+        })
+    }
+
+    fn open_encoder_span(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         kind: GpuSpanKind,

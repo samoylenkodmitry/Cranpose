@@ -1,4 +1,4 @@
-use crate::gpu_timing::{GpuFrameTimer, GpuSpanId, GpuSpanKind};
+use crate::gpu_timing::{GpuFrameTimer, GpuSpanKind, PassTimestamps};
 use crate::offscreen::OffscreenTarget;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
@@ -680,14 +680,12 @@ pub(crate) trait FrameCommandRecorder {
 
     fn recorded_pass_count(&self) -> u32;
 
-    fn begin_gpu_span(
+    fn pass_timestamps(
         &mut self,
         kind: GpuSpanKind,
         width: u32,
         height: u32,
-    ) -> Option<GpuSpanId>;
-
-    fn end_gpu_span(&mut self, span: Option<GpuSpanId>);
+    ) -> Option<PassTimestamps>;
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
@@ -759,12 +757,13 @@ impl FrameCommandRecorder for PassContext<'_> {
         self.pass_count
     }
 
-    fn begin_gpu_span(&mut self, kind: GpuSpanKind, width: u32, height: u32) -> Option<GpuSpanId> {
-        self.gpu_timer.begin_span(self.encoder, kind, width, height)
-    }
-
-    fn end_gpu_span(&mut self, span: Option<GpuSpanId>) {
-        self.gpu_timer.end_span(self.encoder, span);
+    fn pass_timestamps(
+        &mut self,
+        kind: GpuSpanKind,
+        width: u32,
+        height: u32,
+    ) -> Option<PassTimestamps> {
+        self.gpu_timer.pass_timestamps(kind, width, height)
     }
 }
 
@@ -920,13 +919,13 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
         Self::recorded_pass_count(self)
     }
 
-    fn begin_gpu_span(&mut self, kind: GpuSpanKind, width: u32, height: u32) -> Option<GpuSpanId> {
-        self.gpu_timer
-            .begin_span(&mut self.encoder, kind, width, height)
-    }
-
-    fn end_gpu_span(&mut self, span: Option<GpuSpanId>) {
-        self.gpu_timer.end_span(&mut self.encoder, span);
+    fn pass_timestamps(
+        &mut self,
+        kind: GpuSpanKind,
+        width: u32,
+        height: u32,
+    ) -> Option<PassTimestamps> {
+        self.gpu_timer.pass_timestamps(kind, width, height)
     }
 }
 
