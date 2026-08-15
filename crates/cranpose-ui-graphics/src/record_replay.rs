@@ -682,13 +682,23 @@ pub struct CommandSegment {
     pub tape_end: usize,
     /// Loose logical bounds at capture.
     pub bounds: Rect,
+    /// Span-relative record offsets (ascending) this segment's span
+    /// recolored on the PREVIOUS verified frame. The renderer's slot paint
+    /// is a patched mirror, never rebuilt, so a record whose color returns
+    /// EXACTLY to its capture value needs an explicit restore patch — pure
+    /// diff-vs-snapshot emission would leave the mirror stale forever
+    /// (see [`merge_color_restores`]).
+    pub prev_recolors: Vec<u32>,
 }
 
 /// One span of this frame's recording, in tape order.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReplaySpan {
     /// The retained segment moved by `transform`; `recolors` are
-    /// (span-relative record offset, new color) patches.
+    /// (span-relative record offset, new color) patches — including
+    /// explicit restores to the capture color for records recolored on the
+    /// previous frame and clean again on this one, because the renderer's
+    /// slot paint is a patched mirror that never resets on its own.
     Retained {
         /// The capture identity ([`CommandSegment::slot`]).
         slot: u32,
@@ -1066,6 +1076,8 @@ impl CommandReplayState {
                     tape_start: range.0,
                     tape_end: range.1,
                     bounds: range_bounds(&self.snapshot, range),
+                    // A fresh capture IS the snapshot: nothing recolored.
+                    prev_recolors: Vec::new(),
                 }
             })
             .collect();
@@ -1246,7 +1258,7 @@ impl CommandReplayState {
             // out of the owning scratch — the buffer walks into the graph
             // and the scratch re-grows on the next attempt (accepted:
             // emitting spans do real work).
-            let (span_start, t, recolors, span_len) = match located {
+            let (span_start, t, mut recolors, span_len) = match located {
                 Some((start, t)) => (start, t, std::mem::take(&mut self.recolor_scratch), len),
                 None => {
                     let split = best_prefix_len >= MIN_SEGMENT_RECORDS;
@@ -1259,13 +1271,23 @@ impl CommandReplayState {
                         && segment.tape_end - suffix_start >= MIN_SEGMENT_RECORDS
                     {
                         // The suffix addresses the SAME captured content,
-                        // just deeper in: no recapture, only an offset.
+                        // just deeper in: no recapture, only an offset. It
+                        // inherits its share of the previous frame's
+                        // recolor memory re-based to its own start; the
+                        // split record itself leaves retained drawing, so
+                        // its offset needs no restore anywhere.
+                        let rebase = (best_prefix_len + 1) as u32;
+                        let cut = segment.prev_recolors.partition_point(|&p| p < rebase);
                         self.verify_pending.push_front(CommandSegment {
                             slot: segment.slot,
                             slot_offset: segment.slot_offset + (suffix_start - segment.tape_start),
                             tape_start: suffix_start,
                             tape_end: segment.tape_end,
                             bounds: range_bounds(&self.snapshot, (suffix_start, segment.tape_end)),
+                            prev_recolors: segment.prev_recolors[cut..]
+                                .iter()
+                                .map(|&p| p - rebase)
+                                .collect(),
                         });
                     }
                     self.lifetime_splits += 1;
@@ -1277,11 +1299,13 @@ impl CommandReplayState {
                     )
                 }
             };
-            let survivor = if span_len == len {
+            let mut survivor = if span_len == len {
                 segment
             } else {
                 // The prefix keeps its capture identity — it addresses the
-                // same slot content from the same offset, just shorter.
+                // same slot content from the same offset, just shorter. It
+                // carries the whole recolor memory: offsets past the span
+                // are skipped by the merge and cleared by its roll-forward.
                 CommandSegment {
                     slot: segment.slot,
                     slot_offset: segment.slot_offset,
@@ -1291,8 +1315,16 @@ impl CommandReplayState {
                         &self.snapshot,
                         (segment.tape_start, segment.tape_start + span_len),
                     ),
+                    prev_recolors: segment.prev_recolors,
                 }
             };
+            merge_color_restores(
+                &self.snapshot,
+                survivor.tape_start,
+                span_len,
+                &mut survivor.prev_recolors,
+                &mut recolors,
+            );
             if span_start > cursor {
                 spans.push(ReplaySpan::Dynamic {
                     tape_start: cursor,
@@ -1477,15 +1509,25 @@ impl CommandReplayState {
         let mut cursor = 0usize;
         for (segment, (job, result)) in self
             .segments
-            .iter()
+            .iter_mut()
             .zip(jobs.iter().zip(&self.verify_results))
             .take(committed)
         {
             // Committing: each emitted span takes its slot's buffer — the
             // capacity walks into the graph and the slot re-grows next
             // frame (accepted: emitting spans do real work).
-            let recolors =
+            let mut recolors =
                 std::mem::take(&mut result.lock().expect("verify span job lock").recolors);
+            // A committed body matched WHOLE, so this is the same restore
+            // merge the serial walk performs for a whole-span commit —
+            // equality by construction extends to the restore patches.
+            merge_color_restores(
+                &self.snapshot,
+                segment.tape_start,
+                job.len,
+                &mut segment.prev_recolors,
+                &mut recolors,
+            );
             if job.start > cursor {
                 spans.push(ReplaySpan::Dynamic {
                     tape_start: cursor,
@@ -1535,6 +1577,56 @@ struct PooledCommit {
     committed: usize,
     /// Current-tape position after the last committed span.
     cursor: usize,
+}
+
+/// The snapshot's color for one retained record — the value the renderer's
+/// slot paint was seeded with at capture (the snapshot IS the capture
+/// content for as long as the segment lives; splits only re-address it).
+fn snapshot_record_color(snapshot: &CommandRecording, i: usize) -> Option<Color> {
+    match view_at(snapshot, i)? {
+        ReplayView::Arc(index) => Some(snapshot.arcs[index].color),
+        ReplayView::RoundRect(index) => Some(snapshot.round_rects[index].color),
+    }
+}
+
+/// Rolls one emitted span's recolor memory a frame forward and emits the
+/// restore patches the renderer needs: for every span-relative offset in
+/// `prev` (last frame's recolors, ascending) that this frame's `recolors`
+/// (ascending) do NOT patch, appends `(offset, snapshot color)`, then
+/// replaces `prev` with this frame's patched offsets. The renderer's slot
+/// paint is a patched mirror, never rebuilt, so a record whose color
+/// returns EXACTLY to its capture value would otherwise keep the previous
+/// frame's patch indefinitely — pure diff-vs-snapshot emission goes silent
+/// on exactly that frame (the parity scene's mod-11 twinkle wrap). Restores
+/// append after the ordinary patches; every patched offset is distinct and
+/// patches write disjoint records, so order across the two groups cannot
+/// matter. Offsets at or past `span_len` (a split's suffix share) are the
+/// caller's to hand to the suffix segment.
+fn merge_color_restores(
+    snapshot: &CommandRecording,
+    seg_tape_start: usize,
+    span_len: usize,
+    prev: &mut Vec<u32>,
+    recolors: &mut Vec<(u32, Color)>,
+) {
+    let patched = recolors.len();
+    let mut cursor = 0usize;
+    for &offset in prev.iter() {
+        if offset as usize >= span_len {
+            break;
+        }
+        while cursor < patched && recolors[cursor].0 < offset {
+            cursor += 1;
+        }
+        if cursor < patched && recolors[cursor].0 == offset {
+            continue;
+        }
+        if let Some(color) = snapshot_record_color(snapshot, seg_tape_start + offset as usize) {
+            recolors.push((offset, color));
+        }
+    }
+    prev.clear();
+    prev.extend(recolors[..patched].iter().map(|&(offset, _)| offset));
 }
 
 /// The cheap anchor test shared by the serial walk and the pooled fast
