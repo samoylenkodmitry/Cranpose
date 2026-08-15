@@ -6303,9 +6303,11 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
+        backdrop_input_hashes: &[u64],
         z_start: usize,
         z_end: usize,
         excluded_effect_layer: Option<usize>,
@@ -6352,9 +6354,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         images,
                         texts,
                         shadow_draws,
-                        // Windowed scenes never carry retained draws — see
-                        // `build_scene_window`.
-                        &[],
+                        retained_draws,
                         draw_ops,
                         cursor_z,
                         event.z_index,
@@ -6401,7 +6401,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             width,
                             height,
                             root_scale,
-                            None,
+                            backdrop_input_hashes.get(index).copied(),
                         )?;
                     }
                     LayerEventKind::Effect(index) => {
@@ -6439,7 +6439,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     images,
                     texts,
                     shadow_draws,
-                    &[],
+                    retained_draws,
                     draw_ops,
                     cursor_z,
                     z_end,
@@ -7259,9 +7259,11 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
+        backdrop_input_hashes: &[u64],
         z_start: usize,
         z_end: usize,
         excluded_effect_layer: Option<usize>,
@@ -7278,9 +7280,11 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             images,
             texts,
             shadow_draws,
+            retained_draws,
             draw_ops,
             effect_layers,
             backdrop_layers,
+            backdrop_input_hashes,
             z_start,
             z_end,
             excluded_effect_layer,
@@ -8259,6 +8263,7 @@ impl GpuRenderer {
             LayerSurfaceRequest {
                 root_scale,
                 backdrop_underlay: None,
+                backdrop_underlay_color: None,
                 allow_runtime_cache: false,
                 logical_rect_override: Some(viewport_rect),
                 capture_clip_override: None,
@@ -17336,6 +17341,148 @@ mod tests {
         });
 
         assert!(!root_direct_scene_events_are_supported(&scene));
+    }
+
+    fn frosted_layer(bounds: Rect, offset: Point) -> LayerNode {
+        let mut layer = test_layer(
+            bounds,
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: bounds,
+                        brush: Brush::solid(Color::from_rgba_u8(255, 255, 255, 60)),
+                        stroke: None,
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.transform_to_parent = ProjectiveTransform::translation(offset.x, offset.y);
+        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
+        layer
+    }
+
+    #[test]
+    fn a_frosted_layer_keeps_its_own_surface() {
+        let frosted = frosted_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            Point::new(10.0, 6.0),
+        );
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec![RenderNode::Layer(Box::new(frosted))],
+        );
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(
+            collected.scene.backdrop_layers.is_empty(),
+            "a layer that keeps its surface carries its backdrop on the composite"
+        );
+        assert!(collected.child_layers[0].backdrop.is_some());
+    }
+
+    fn row_with_clipped_glass(row_background: Color) -> LayerNode {
+        let mut glass = frosted_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            Point::new(10.0, 6.0),
+        );
+        glass.isolation.shape_clip = true;
+        let row_bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 40.0,
+        };
+        let mut row = test_layer(
+            row_bounds,
+            vec![
+                RenderNode::Primitive(PrimitiveEntry {
+                    phase: PrimitivePhase::BeforeChildren,
+                    node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                        primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                            rect: row_bounds,
+                            brush: Brush::solid(row_background),
+                            stroke: None,
+                        },
+                        clip: None,
+                    }),
+                }),
+                RenderNode::Layer(Box::new(glass)),
+            ],
+        );
+        row.isolation.shape_clip = true;
+        row
+    }
+
+    #[test]
+    fn a_backdrop_covered_by_its_own_row_asks_for_no_underlay() {
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 200.0,
+            },
+            vec![RenderNode::Layer(Box::new(row_with_clipped_glass(
+                Color::WHITE,
+            )))],
+        );
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(collected.child_layers[0].contains_descendant_backdrop);
+        assert!(
+            !collected.child_layers[0].needs_nested_underlay,
+            "an opaque row draw under the glass is all the blur reads, so no picture of the scene behind the row is needed"
+        );
+    }
+
+    #[test]
+    fn a_backdrop_over_a_see_through_row_still_asks_for_an_underlay() {
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 200.0,
+            },
+            vec![RenderNode::Layer(Box::new(row_with_clipped_glass(
+                Color::from_rgba_u8(255, 255, 255, 40),
+            )))],
+        );
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(collected.child_layers[0].needs_nested_underlay);
     }
 
     #[test]

@@ -73,6 +73,10 @@ pub(crate) struct TranslationRenderContext {
 pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) root_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    /// The one colour the underlay holds under this child, when it holds
+    /// only one; the raster cache key carries it so the child keeps its
+    /// raster while it moves over that colour.
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
     pub(crate) capture_clip_override: Option<Rect>,
@@ -83,6 +87,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
 pub(crate) struct LayerSurfaceRenderOptions<'a> {
     pub(crate) target_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) cache_candidate: Option<(
         cranpose_render_common::raster_cache::LayerRasterCacheKey,
@@ -591,6 +596,24 @@ mod tests {
             cache_hashes_valid: false,
             children: Vec::<RenderNode>::new(),
         }
+    }
+
+    #[test]
+    fn a_backdrop_keeps_the_surface_that_holds_the_layer_content() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 60.0,
+            height: 24.0,
+        });
+        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
+        layer.isolation.group_opacity = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::Backdrop));
     }
 
     #[test]
