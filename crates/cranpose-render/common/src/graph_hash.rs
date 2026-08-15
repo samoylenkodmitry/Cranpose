@@ -15,6 +15,26 @@ pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
     recompute_layer_raster_cache_hashes_inner(layer, false);
 }
 
+pub(crate) fn recompute_layer_raster_cache_hashes_under(
+    layer: &mut LayerNode,
+    ancestor_hashed: bool,
+) {
+    recompute_layer_raster_cache_hashes_inner(layer, ancestor_hashed);
+}
+
+pub(crate) fn refresh_layer_own_raster_cache_hashes(layer: &mut LayerNode, ancestor_hashed: bool) {
+    if layer_children_ancestor_hashed(layer, ancestor_hashed) {
+        layer.cache_hashes = layer_raster_cache_hashes(layer);
+        layer.cache_hashes_valid = true;
+    } else {
+        layer.cache_hashes_valid = false;
+    }
+}
+
+pub(crate) fn layer_children_ancestor_hashed(layer: &LayerNode, ancestor_hashed: bool) -> bool {
+    ancestor_hashed || layer_hashes_have_consumers(layer)
+}
+
 /// True when some consumer might read this layer's stored hashes this frame:
 /// the raster-cache candidate checks and the child-surface composite paths all
 /// key off cache policy or an isolating property. A plain content layer (the

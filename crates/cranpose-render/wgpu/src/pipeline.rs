@@ -1978,11 +1978,12 @@ pub(crate) fn render_from_applier(
     scale: f32,
 ) {
     declare_retained_feed();
-    let Some(graph) =
+    let Some(mut graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
     else {
         return;
     };
+    graph.root.recompute_raster_cache_hashes();
     collect_hits_from_graph(
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
