@@ -8830,7 +8830,7 @@ impl GpuRenderer {
 
         self.layer_surface_cache.finish_frame(&self.frame_stats);
         for target in self.layer_surface_cache.take_recycled() {
-            self.effect_renderer.release_offscreen(target);
+            self.defer_offscreen_release(target);
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.retained_bundle_cache.end_frame();
