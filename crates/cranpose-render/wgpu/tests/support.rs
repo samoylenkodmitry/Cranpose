@@ -105,6 +105,11 @@ impl LockedRenderer {
 }
 
 pub fn headless_renderer() -> Result<LockedRenderer, String> {
+    // The segment-surface cache is default-ON since its watch win, and its
+    // in-footprint tolerance would leak into every byte-exact suite built on
+    // this helper. Pin it OFF at construction; suites that test the cache
+    // set "1" per arm after obtaining the renderer, which overrides this.
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
     let lock = lock_gpu_test();
     let mut renderer = create_headless_renderer()?;
     let app_context = AppContext::new();

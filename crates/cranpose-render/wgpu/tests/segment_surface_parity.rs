@@ -5,7 +5,7 @@
 //! a `CommandReplayState` verifies each frame, the resulting replay frame
 //! rides the graph — and both arms render with the command feed ON. The
 //! baseline arm is the retained instanced-quad path the cache REPLACES
-//! (`CRANPOSE_SEGMENT_SURFACE` unset); the cached arm opts in. The delta
+//! (`CRANPOSE_SEGMENT_SURFACE=0` — the compiled default is ON); the cached arm opts in. The delta
 //! between the arms is therefore exactly what the surface cache adds:
 //! nothing on identity frames beyond the 8-bit premultiplied intermediate,
 //! bounded resampling under rotation.
@@ -266,7 +266,7 @@ fn clear_env() {
     std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
     std::env::remove_var("CRANPOSE_ARC_MESH");
-    std::env::remove_var("CRANPOSE_SEGMENT_SURFACE");
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
     std::env::remove_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO");
 }
 
