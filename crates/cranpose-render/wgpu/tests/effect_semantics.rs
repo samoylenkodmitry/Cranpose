@@ -2038,6 +2038,108 @@ fn translated_backdrop_fixture(translation: Point) -> RenderGraph {
     ])
 }
 
+fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
+    let glass_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 24.0,
+        height: 16.0,
+    };
+    let mut glass = layer(
+        glass_bounds,
+        ProjectiveTransform::translation(64.0, 8.0),
+        GraphicsLayer {
+            backdrop_effect: Some(RenderEffect::blur(6.0)),
+            ..GraphicsLayer::default()
+        },
+        vec![solid_rect(glass_bounds, Color::from_rgba_u8(255, 255, 255, 60))],
+    );
+    glass.isolation.shape_clip = true;
+    let row_bounds = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 112.0,
+        height: 32.0,
+    };
+    let mut row = layer(
+        row_bounds,
+        ProjectiveTransform::translation(8.0, 20.0),
+        GraphicsLayer::default(),
+        vec![
+            solid_rect(row_bounds, Color::from_rgb_u8(30, 90, 200)),
+            RenderNode::Layer(Box::new(glass)),
+        ],
+    );
+    row.isolation.shape_clip = true;
+    row.cache_policy = CachePolicy::Auto;
+
+    let mut graph = graph(vec![
+        solid_rect(frame_rect(), Color::BLACK),
+        RenderNode::Layer(Box::new(row)),
+        solid_rect(
+            Rect {
+                x: 8.0,
+                y: 72.0,
+                width: 24.0,
+                height: 16.0,
+            },
+            animated_color,
+        ),
+    ]);
+    graph.root.recompute_raster_cache_hashes();
+    graph
+}
+
+#[test]
+fn a_row_whose_glass_reads_only_its_own_draws_keeps_its_raster() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping opaque row raster assertions because headless WGPU init failed: {err}");
+            return;
+        }
+    };
+
+    renderer.scene_mut().graph = Some(opaque_row_with_glass_fixture(Color::RED));
+    renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("row warmup should succeed");
+    let warm_stats = renderer.last_frame_stats().expect("row warmup frame stats");
+
+    renderer.scene_mut().graph = Some(opaque_row_with_glass_fixture(Color::GREEN));
+    let animated = renderer
+        .capture_frame(FRAME_WIDTH, FRAME_HEIGHT)
+        .expect("row animation frame should succeed");
+    let animated_stats = renderer
+        .last_frame_stats()
+        .expect("row animation frame stats");
+
+    assert!(
+        warm_stats.blur_passes > 0,
+        "the glass must blur the row draw under it: {warm_stats:?}"
+    );
+    assert_eq!(
+        animated_stats.isolated_layer_renders, 0,
+        "a draw outside the row must not re-render the row: {animated_stats:?}"
+    );
+    assert!(
+        animated_stats.layer_cache_hit_pixels >= 112 * 32,
+        "the whole row raster, glass and blur included, must be replayed: {animated_stats:?}"
+    );
+
+    let glass_pixel = rgba(&animated, 76, 30);
+    let row_pixel = rgba(&animated, 20, 30);
+    assert!(
+        glass_pixel[2] > glass_pixel[0] && row_pixel[2] > row_pixel[0],
+        "the row and the glass over it both stay blue: glass={glass_pixel:?} row={row_pixel:?}"
+    );
+    let moved_pixel = rgba(&animated, 20, 80);
+    assert!(
+        moved_pixel[1] > moved_pixel[0],
+        "the animated draw outside the row must still update: {moved_pixel:?}"
+    );
+}
+
 fn graph(children: Vec<RenderNode>) -> RenderGraph {
     RenderGraph::new(layer(
         frame_rect(),
