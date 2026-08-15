@@ -19,6 +19,52 @@ use crate::gpu_stats::FrameStats;
 use crate::lazy_resource::{LazyGpuResource, PassPipeline};
 use std::cell::Cell;
 
+pub(crate) fn blur_scratch_size(
+    radius_x: f32,
+    radius_y: f32,
+    width: u32,
+    height: u32,
+) -> (u32, u32) {
+    let radius = radius_x.max(radius_y);
+    let mut scale = if radius < 6.0 {
+        1
+    } else if radius < 16.0 {
+        2
+    } else {
+        4
+    };
+    while scale > 1 && (width / scale < 16 || height / scale < 16) {
+        scale /= 2;
+    }
+    if scale <= 1 {
+        return (width, height);
+    }
+    (width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
+}
+
+fn scaled_scissor(
+    scissor: Option<(u32, u32, u32, u32)>,
+    scale_x: f32,
+    scale_y: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let (x, y, w, h) = scissor?;
+    if scale_x <= 1.0 && scale_y <= 1.0 {
+        return scissor;
+    }
+    let left = ((x as f32 / scale_x).floor() as u32).min(width);
+    let top = ((y as f32 / scale_y).floor() as u32).min(height);
+    let right = (((x + w) as f32 / scale_x).ceil() as u32).min(width);
+    let bottom = (((y + h) as f32 / scale_y).ceil() as u32).min(height);
+    Some((
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    ))
+}
+
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
@@ -194,10 +240,12 @@ fn acquire_recorded_effect_scratch_textures_into<C: FrameCommandRecorder>(
             radius_x, radius_y, ..
         } => {
             if *radius_x > 0.0 || *radius_y > 0.0 {
+                let (scratch_width, scratch_height) =
+                    blur_scratch_size(*radius_x, *radius_y, width, height);
                 let descriptor = FrameTextureDescriptor::render_attachment(
                     "Render Effect Blur Scratch",
-                    width,
-                    height,
+                    scratch_width,
+                    scratch_height,
                     format,
                 );
                 let target = recorder.acquire_transient_offscreen(device, descriptor);
@@ -1065,6 +1113,7 @@ impl EffectRenderer {
         horizontal: bool,
         load_op: wgpu::LoadOp<wgpu::Color>,
         scissor: Option<(u32, u32, u32, u32)>,
+        dest_size: (u32, u32),
     ) {
         let source_bind_group = source.get_or_create_bind_group(
             device,
@@ -1084,9 +1133,7 @@ impl EffectRenderer {
             bytemuck::bytes_of(&uniforms),
             &self.debug_upload_bytes,
         );
-        // Blur axis passes ping-pong through chain textures sized like the
-        // source (asserted by the ping-pong caller).
-        self.note_offscreen_fill(scissor, None, (source.width, source.height));
+        self.note_offscreen_fill(scissor, None, dest_size);
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1153,8 +1200,8 @@ impl EffectRenderer {
             radius_x > 0.0 || radius_y > 0.0,
             "zero-radius blur should use the composite fast path"
         );
-        debug_assert_eq!(scratch.width, source.width);
-        debug_assert_eq!(scratch.height, source.height);
+        let scale_x = source.width as f32 / scratch.width.max(1) as f32;
+        let scale_y = source.height as f32 / scratch.height.max(1) as f32;
 
         self.encode_blur_axis_pass(
             recorder,
@@ -1163,15 +1210,16 @@ impl EffectRenderer {
             &scratch.view,
             Self::blur_uniforms(
                 true,
-                source.width,
-                source.height,
-                radius_x,
-                radius_y,
+                scratch.width,
+                scratch.height,
+                radius_x / scale_x,
+                radius_y / scale_y,
                 tile_mode,
             ),
             true,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scissor,
+            scaled_scissor(scissor, scale_x, scale_y, scratch.width, scratch.height),
+            (scratch.width, scratch.height),
         );
         self.encode_blur_axis_pass(
             recorder,
@@ -1180,23 +1228,27 @@ impl EffectRenderer {
             dest_view,
             Self::blur_uniforms(
                 false,
-                source.width,
-                source.height,
-                radius_x,
-                radius_y,
+                scratch.width,
+                scratch.height,
+                radius_x / scale_x,
+                radius_y / scale_y,
                 tile_mode,
             ),
             false,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             scissor,
+            (source.width, source.height),
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn rounded_mask_uniforms(
         shader: &RuntimeShader,
         layer_pixel_rect: [f32; 4],
         width: u32,
         height: u32,
+        blur_width: u32,
+        blur_height: u32,
         radius_x: f32,
         radius_y: f32,
         tile_mode: TileMode,
@@ -1212,10 +1264,15 @@ impl EffectRenderer {
                 width as f32,
                 height as f32,
                 tile_mode_uniform_value(tile_mode),
-                0.0,
+                blur_width as f32,
             ],
             effect_rect: layer_pixel_rect,
-            container_and_feather: [get(0).max(1.0), get(1).max(1.0), get(2).max(0.0), 0.0],
+            container_and_feather: [
+                get(0).max(1.0),
+                get(1).max(1.0),
+                get(2).max(0.0),
+                blur_height as f32,
+            ],
             corner_radii: [
                 get(3).max(0.0),
                 get(4).max(0.0),
@@ -1245,19 +1302,21 @@ impl EffectRenderer {
         if dest_viewport.2 <= 0.0 || dest_viewport.3 <= 0.0 {
             return false;
         }
+        let scale_x = source.width as f32 / scratch.width.max(1) as f32;
+        let scale_y = source.height as f32 / scratch.height.max(1) as f32;
         let Some(mask_uniforms) = Self::rounded_mask_uniforms(
             shader,
             layer_pixel_rect,
             source.width,
             source.height,
-            radius_x,
-            radius_y,
+            scratch.width,
+            scratch.height,
+            radius_x / scale_x,
+            radius_y / scale_y,
             tile_mode,
         ) else {
             return false;
         };
-        debug_assert_eq!(scratch.width, source.width);
-        debug_assert_eq!(scratch.height, source.height);
 
         self.encode_blur_axis_pass(
             recorder,
@@ -1266,15 +1325,16 @@ impl EffectRenderer {
             &scratch.view,
             Self::blur_uniforms(
                 true,
-                source.width,
-                source.height,
-                radius_x,
-                radius_y,
+                scratch.width,
+                scratch.height,
+                radius_x / scale_x,
+                radius_y / scale_y,
                 tile_mode,
             ),
             true,
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             None,
+            (scratch.width, scratch.height),
         );
 
         let scratch_bind_group = scratch.get_or_create_bind_group(
@@ -2371,6 +2431,40 @@ mod tests {
             effect_pass_fill_px2(None, Some((0.0, 0.0, 0.0, 0.0)), (10, 10)),
             100.0
         );
+    }
+
+    #[test]
+    fn a_wide_blur_gets_a_smaller_scratch() {
+        use super::blur_scratch_size;
+        assert_eq!(blur_scratch_size(2.0, 2.0, 1080, 400), (1080, 400));
+        assert_eq!(blur_scratch_size(8.0, 8.0, 1080, 400), (540, 200));
+        assert_eq!(blur_scratch_size(30.0, 30.0, 1080, 400), (270, 100));
+        assert_eq!(blur_scratch_size(30.0, 30.0, 1081, 401), (271, 101));
+    }
+
+    #[test]
+    fn a_small_target_keeps_its_full_scratch() {
+        use super::blur_scratch_size;
+        assert_eq!(blur_scratch_size(30.0, 30.0, 40, 40), (20, 20));
+        assert_eq!(blur_scratch_size(30.0, 30.0, 20, 20), (20, 20));
+    }
+
+    #[test]
+    fn a_scissor_shrinks_with_the_scratch() {
+        use super::scaled_scissor;
+        assert_eq!(
+            scaled_scissor(Some((10, 20, 100, 200)), 2.0, 2.0, 540, 200),
+            Some((5, 10, 50, 100))
+        );
+        assert_eq!(
+            scaled_scissor(Some((9, 9, 10, 10)), 4.0, 4.0, 270, 100),
+            Some((2, 2, 3, 3))
+        );
+        assert_eq!(
+            scaled_scissor(Some((0, 0, 4000, 4000)), 4.0, 4.0, 270, 100),
+            Some((0, 0, 270, 100))
+        );
+        assert_eq!(scaled_scissor(None, 4.0, 4.0, 270, 100), None);
     }
 
     #[test]

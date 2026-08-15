@@ -79,6 +79,9 @@ pub(crate) struct RendererFrontend {
     /// addresses and must never survive into a frame with another graph.
     pub(crate) layer_surface_rect_cache: HashMap<usize, Rect>,
     pub(crate) layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
+    pub(crate) overlay_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
+    pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
+    pub(crate) root_target_reads: bool,
 }
 
 impl RendererFrontend {
@@ -96,6 +99,9 @@ impl RendererFrontend {
             frame_sequence: 0,
             layer_surface_rect_cache: HashMap::new(),
             layer_surface_requirements_cache: HashMap::new(),
+            overlay_surface_requirements_cache: HashMap::new(),
+            changed_nodes: Vec::new(),
+            root_target_reads: false,
         }
     }
 
@@ -161,13 +167,15 @@ impl RendererFrontend {
             )
         };
         // Per-frame memo hygiene, mirroring the present backend's
-        // end-of-render clears: the memos key on node addresses, so they
-        // must never survive into a frame with a different graph, and the
-        // requirements map must not keep a worst-case frame's capacity.
+        // end-of-render clears: the rect memo keys on node addresses, so it
+        // must never survive into a frame with a different graph. The
+        // requirements memo keys on layout node ids and is dropped per node
+        // by the scene patch instead.
         self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
-        if self.layer_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY {
-            self.layer_surface_requirements_cache
+        self.overlay_surface_requirements_cache.clear();
+        if self.overlay_surface_requirements_cache.capacity() > RETAINED_LAYER_REQUIREMENTS_CAPACITY
+        {
+            self.overlay_surface_requirements_cache
                 .shrink_to(RETAINED_LAYER_REQUIREMENTS_CAPACITY);
         }
         packet
@@ -186,7 +194,6 @@ impl RendererFrontend {
         let _ = replay_supported;
         let build_start = Instant::now();
         self.layer_surface_rect_cache.clear();
-        self.layer_surface_requirements_cache.clear();
         let graph = self.scene.graph.as_ref()?;
         let direct_root = if root_can_render_directly_cached(
             &graph.root,
@@ -215,8 +222,8 @@ impl RendererFrontend {
                 recycled_scene,
             );
             self.direct_scene_capacity = collected.scene.capacity_hint();
-            if root_direct_scene_events_are_supported(&collected.scene)
-                && direct_root_child_underlays_are_supported(&collected)
+            if root_direct_scene_events_are_supported(&collected.scene, self.root_target_reads)
+                && direct_root_child_underlays_are_supported(&collected, self.root_target_reads)
             {
                 Some(collected)
             } else {
@@ -277,12 +284,12 @@ impl RendererFrontend {
         };
         let after_root_collect = Instant::now();
         let overlay = if let Some(overlay_graph) = self.dev_overlay_graph.as_ref() {
-            // The dev overlay is a different graph: the memos key on node
+            // The dev overlay is a different graph: the rect memo keys on node
             // addresses, so the root graph's entries must not leak into the
             // overlay collect (mirrors the present backend's old per-path
-            // clears).
+            // clears), and the overlay plans into a map of its own.
             self.layer_surface_rect_cache.clear();
-            self.layer_surface_requirements_cache.clear();
+            self.overlay_surface_requirements_cache.clear();
             Some(
                 collect_layer_contents_with_translation_context_and_text_layout(
                     &overlay_graph.root,
@@ -291,7 +298,7 @@ impl RendererFrontend {
                     None,
                     TranslationRenderContext::default(),
                     &mut self.layer_surface_rect_cache,
-                    &mut self.layer_surface_requirements_cache,
+                    &mut self.overlay_surface_requirements_cache,
                 ),
             )
         } else {

@@ -1978,11 +1978,12 @@ pub(crate) fn render_from_applier(
     scale: f32,
 ) {
     declare_retained_feed();
-    let Some(graph) =
+    let Some(mut graph) =
         cranpose_render_common::scene_builder::build_graph_from_applier(applier, root, scale)
     else {
         return;
     };
+    graph.root.recompute_raster_cache_hashes();
     collect_hits_from_graph(
         &graph.root,
         cranpose_render_common::graph::ProjectiveTransform::identity(),
@@ -1992,6 +1993,11 @@ pub(crate) fn render_from_applier(
     scene.replace_graph(graph);
 }
 
+pub(crate) enum SceneUpdateOutcome {
+    Patched,
+    Rebuilt,
+}
+
 pub(crate) fn update_from_applier(
     applier: &mut MemoryApplier,
     root: NodeId,
@@ -1999,28 +2005,31 @@ pub(crate) fn update_from_applier(
     scale: f32,
     dirty_nodes: &[NodeId],
     refresh_hits: bool,
-) {
+    changed_nodes: &mut Vec<NodeId>,
+) -> SceneUpdateOutcome {
     declare_retained_feed();
+    changed_nodes.clear();
     let Some(update_report) = scene.graph.as_mut().map(|graph| {
-        cranpose_render_common::scene_builder::update_graph_from_applier_report(
+        cranpose_render_common::scene_builder::update_graph_from_applier_report_into(
             applier,
             graph,
             dirty_nodes,
             scale,
+            changed_nodes,
         )
     }) else {
         scene.clear();
         render_from_applier(applier, root, scene, scale);
-        return;
+        return SceneUpdateOutcome::Rebuilt;
     };
     if !update_report.applied {
         scene.clear();
         render_from_applier(applier, root, scene, scale);
-        return;
+        return SceneUpdateOutcome::Rebuilt;
     }
 
     if !refresh_hits && !update_report.hit_graph_dirty {
-        return;
+        return SceneUpdateOutcome::Patched;
     }
 
     scene.hits.clear();
@@ -2028,7 +2037,7 @@ pub(crate) fn update_from_applier(
     scene.next_hit_z = 0;
     let Some(graph) = scene.graph.take() else {
         render_from_applier(applier, root, scene, scale);
-        return;
+        return SceneUpdateOutcome::Rebuilt;
     };
     collect_hits_from_graph(
         &graph.root,
@@ -2037,6 +2046,7 @@ pub(crate) fn update_from_applier(
         None,
     );
     scene.replace_graph(graph);
+    SceneUpdateOutcome::Patched
 }
 
 fn collect_hits_from_graph(

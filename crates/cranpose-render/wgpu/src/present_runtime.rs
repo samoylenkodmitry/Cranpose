@@ -514,6 +514,7 @@ impl PresentState {
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &view,
+            None,
             width,
             height,
             packet,
@@ -604,6 +605,7 @@ impl PresentState {
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &view,
+            None,
             width,
             height,
             packet,

@@ -95,6 +95,17 @@ pub fn update_graph_from_applier_report(
     dirty_nodes: &[NodeId],
     scale: f32,
 ) -> GraphUpdateReport {
+    let mut changed_nodes = Vec::new();
+    update_graph_from_applier_report_into(applier, graph, dirty_nodes, scale, &mut changed_nodes)
+}
+
+pub fn update_graph_from_applier_report_into(
+    applier: &mut MemoryApplier,
+    graph: &mut RenderGraph,
+    dirty_nodes: &[NodeId],
+    scale: f32,
+    changed_nodes: &mut Vec<NodeId>,
+) -> GraphUpdateReport {
     if dirty_nodes.is_empty() {
         return GraphUpdateReport {
             applied: true,
@@ -117,8 +128,10 @@ pub fn update_graph_from_applier_report(
                 };
             };
             let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
+            collect_layer_node_ids(&graph.root, changed_nodes);
             graph.root = root;
             graph.root.recompute_raster_cache_hashes();
+            collect_layer_node_ids(&graph.root, changed_nodes);
             return GraphUpdateReport {
                 applied: true,
                 hit_graph_dirty,
@@ -132,6 +145,8 @@ pub fn update_graph_from_applier_report(
         &mut graph.root,
         &mut remaining_dirty_nodes,
         inherited_translated_content_context,
+        false,
+        changed_nodes,
     ) {
         Some(report) => report,
         None => {
@@ -149,9 +164,6 @@ pub fn update_graph_from_applier_report(
         };
     }
 
-    if report.updated {
-        graph.root.recompute_raster_cache_hashes();
-    }
     GraphUpdateReport {
         applied: true,
         hit_graph_dirty: report.hit_graph_dirty,
@@ -169,6 +181,8 @@ fn replace_dirty_layers_from_applier(
     parent: &mut LayerNode,
     dirty_nodes: &mut HashSet<NodeId>,
     inherited_translated_content_context: bool,
+    ancestor_hashed: bool,
+    changed_nodes: &mut Vec<NodeId>,
 ) -> Option<ReplaceDirtyLayersReport> {
     if dirty_nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
@@ -176,6 +190,8 @@ fn replace_dirty_layers_from_applier(
 
     let child_inherited_translated_content_context =
         inherited_translated_content_context || parent.translated_content_context;
+    let child_ancestor_hashed =
+        crate::graph_hash::layer_children_ancestor_hashed(parent, ancestor_hashed);
     let mut report = ReplaceDirtyLayersReport::default();
 
     for child in &mut parent.children {
@@ -215,7 +231,13 @@ fn replace_dirty_layers_from_applier(
             }
             report.hit_graph_dirty |= layer_hit_graph_state_dirty(child_layer, &replacement);
             remove_dirty_descendants(&replacement, dirty_nodes);
+            collect_layer_node_ids(child_layer, changed_nodes);
             **child_layer = replacement;
+            collect_layer_node_ids(child_layer, changed_nodes);
+            crate::graph_hash::recompute_layer_raster_cache_hashes_under(
+                child_layer,
+                child_ancestor_hashed,
+            );
             report.updated = true;
             continue;
         }
@@ -225,6 +247,8 @@ fn replace_dirty_layers_from_applier(
             child_layer,
             dirty_nodes,
             child_inherited_translated_content_context,
+            child_ancestor_hashed,
+            changed_nodes,
         )?;
         report.updated |= child_report.updated;
         report.hit_graph_dirty |= child_report.hit_graph_dirty;
@@ -236,6 +260,10 @@ fn replace_dirty_layers_from_applier(
                 RenderNode::Layer(child_layer) => child_layer.has_hit_targets,
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
+        crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
+        if let Some(node_id) = parent.node_id {
+            changed_nodes.push(node_id);
+        }
     }
 
     Some(report)
@@ -255,6 +283,17 @@ fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) ->
         || previous.transform_to_parent != replacement.transform_to_parent
         || previous.clip_rect() != replacement.clip_rect()
         || previous.graphics_layer.shape != replacement.graphics_layer.shape
+}
+
+fn collect_layer_node_ids(layer: &LayerNode, out: &mut Vec<NodeId>) {
+    if let Some(node_id) = layer.node_id {
+        out.push(node_id);
+    }
+    for child in &layer.children {
+        if let RenderNode::Layer(child_layer) = child {
+            collect_layer_node_ids(child_layer, out);
+        }
+    }
 }
 
 fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
@@ -2224,6 +2263,230 @@ mod tests {
         );
     }
 
+    fn assert_same_cache_hash_state(dirty_road: &LayerNode, full_road: &LayerNode, path: &str) {
+        assert_eq!(
+            dirty_road.node_id, full_road.node_id,
+            "tree shape must match at {path}"
+        );
+        assert_eq!(
+            dirty_road.cache_hashes_valid, full_road.cache_hashes_valid,
+            "hash validity at {path} (node {:?})",
+            dirty_road.node_id
+        );
+        if full_road.cache_hashes_valid {
+            assert_eq!(
+                dirty_road.cache_hashes, full_road.cache_hashes,
+                "stored hashes at {path} (node {:?})",
+                dirty_road.node_id
+            );
+        }
+        assert_eq!(
+            dirty_road.target_content_hash(),
+            full_road.target_content_hash(),
+            "target content hash at {path} (node {:?})",
+            dirty_road.node_id
+        );
+        assert_eq!(
+            dirty_road.children.len(),
+            full_road.children.len(),
+            "child count at {path}"
+        );
+        for (index, (dirty_child, full_child)) in dirty_road
+            .children
+            .iter()
+            .zip(full_road.children.iter())
+            .enumerate()
+        {
+            if let (RenderNode::Layer(dirty_child), RenderNode::Layer(full_child)) =
+                (dirty_child, full_child)
+            {
+                assert_same_cache_hash_state(dirty_child, full_child, &format!("{path}/{index}"));
+            }
+        }
+    }
+
+    fn assert_dirty_hash_road_matches_full_walk(graph: &RenderGraph) {
+        let mut full_road = graph.root.clone();
+        full_road.recompute_raster_cache_hashes();
+        assert_same_cache_hash_state(&graph.root, &full_road, "root");
+    }
+
+    #[test]
+    fn dirty_update_leaves_the_hashes_a_full_walk_leaves() {
+        let label_holder: Rc<RefCell<Option<cranpose_core::MutableState<String>>>> =
+            Rc::new(RefCell::new(None));
+        let child_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let label_holder_for_comp = label_holder.clone();
+        let child_id_holder_for_comp = child_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let label = cranpose_core::useState(|| "before".to_string());
+            *label_holder_for_comp.borrow_mut() = Some(label);
+            let child_id_holder_for_content = child_id_holder_for_comp.clone();
+            Column(
+                Modifier::empty().size_points(240.0, 200.0),
+                ColumnSpec::default(),
+                move || {
+                    cranpose_ui::Box(
+                        Modifier::empty()
+                            .size_points(240.0, 80.0)
+                            .graphics_layer(|| GraphicsLayer {
+                                alpha: 0.5,
+                                ..GraphicsLayer::default()
+                            }),
+                        cranpose_ui::BoxSpec::default(),
+                        {
+                            let child_id_holder_for_box = child_id_holder_for_content.clone();
+                            move || {
+                                let child_id = Text(label, Modifier::empty(), TextStyle::default());
+                                *child_id_holder_for_box.borrow_mut() = Some(child_id);
+                            }
+                        },
+                    );
+                    cranpose_ui::Box(
+                        Modifier::empty()
+                            .size_points(240.0, 80.0)
+                            .graphics_layer(|| GraphicsLayer {
+                                alpha: 0.75,
+                                ..GraphicsLayer::default()
+                            }),
+                        cranpose_ui::BoxSpec::default(),
+                        || {
+                            Text("stable", Modifier::empty(), TextStyle::default());
+                        },
+                    );
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 200.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+        assert_dirty_hash_road_matches_full_walk(&graph);
+
+        let label = label_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("label state should be captured");
+        label.set_value("after".to_string());
+        composition
+            .process_invalid_scopes()
+            .expect("text recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let child_id = child_id_holder
+            .borrow()
+            .expect("text child id should be captured");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[child_id], 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "dirty child update should apply in place");
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    #[test]
+    fn dirty_update_with_a_new_row_leaves_the_hashes_a_full_walk_leaves() {
+        let rows_holder: Rc<RefCell<Option<cranpose_core::MutableState<usize>>>> =
+            Rc::new(RefCell::new(None));
+        let column_id_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let rows_holder_for_comp = rows_holder.clone();
+        let column_id_holder_for_comp = column_id_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let rows = cranpose_core::useState(|| 2usize);
+            *rows_holder_for_comp.borrow_mut() = Some(rows);
+            let column_id_holder_for_content = column_id_holder_for_comp.clone();
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(240.0, 240.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.5,
+                        ..GraphicsLayer::default()
+                    }),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    let column_id = Column(
+                        Modifier::empty().size_points(240.0, 240.0),
+                        ColumnSpec::default(),
+                        move || {
+                            for index in 0..rows.get() {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            }
+                        },
+                    );
+                    *column_id_holder_for_content.borrow_mut() = Some(column_id);
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 240.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let rows = rows_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("row count state should be captured");
+        rows.set_value(3);
+        composition
+            .process_invalid_scopes()
+            .expect("row recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let column_id = column_id_holder.borrow().expect("column id");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &[column_id], 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "structural update should apply in place");
+        let mut labels = Vec::new();
+        collect_text_labels(&graph.root, &mut labels);
+        assert!(
+            labels.iter().any(|label| label == "row 2"),
+            "the new row must be in the patched graph, got {labels:?}"
+        );
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
     /// The per-frame scene build must publish a node's LIVE composited window
     /// rect into its `report_window_rect` sink — even when the layout tree is
     /// NOT built (`build_layout_tree: false`, exactly how the app runtime
@@ -2328,6 +2591,98 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(240.0, 320.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.6,
+                        ..GraphicsLayer::default()
+                    }),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    Column(
+                        Modifier::empty()
+                            .size_points(240.0, 320.0)
+                            .vertical_scroll(scroll_state.clone(), false),
+                        ColumnSpec::default(),
+                        || {
+                            for index in 0..12usize {
+                                cranpose_ui::Box(
+                                    Modifier::empty().size_points(240.0, 60.0).graphics_layer(
+                                        || GraphicsLayer {
+                                            alpha: 0.8,
+                                            ..GraphicsLayer::default()
+                                        },
+                                    ),
+                                    cranpose_ui::BoxSpec::default(),
+                                    move || {
+                                        Text(
+                                            format!("row {index}"),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial scroll layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        assert!(
+            scroll_state.dispatch_raw_delta(96.0) > 0.0,
+            "test scroll must be consumed"
+        );
+        let dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        assert!(
+            !dirty_nodes.is_empty(),
+            "a scroll must schedule a scoped scene update"
+        );
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "scroll update should apply in place");
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    #[test]
     fn update_graph_from_applier_refreshes_scroll_content_offset() {
         let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
         let scroll_holder_for_comp = scroll_holder.clone();
@@ -2364,6 +2719,7 @@ mod tests {
             .compute_layout(root, viewport)
             .expect("initial scroll layout");
         let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
         let initial_target_top =
             find_text_top(&graph.root, "scroll target").expect("initial target text");
         applier.clear_runtime_handle();
@@ -2398,6 +2754,7 @@ mod tests {
             updated_target_top < initial_target_top - consumed_scroll * 0.75,
             "partial graph update must refresh scroll content offset: initial_y={initial_target_top} updated_y={updated_target_top} dirty_nodes={dirty_nodes:?}"
         );
+        assert_dirty_hash_road_matches_full_walk(&graph);
     }
 
     #[test]
