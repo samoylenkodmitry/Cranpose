@@ -95,13 +95,27 @@ impl CollectMemoEntry {
     }
 }
 
+enum CollectMemoSlot {
+    Seen(CollectMemoKey),
+    Held(CollectMemoEntry),
+}
+
+impl CollectMemoSlot {
+    fn item_count(&self) -> usize {
+        match self {
+            CollectMemoSlot::Seen(_) => 0,
+            CollectMemoSlot::Held(entry) => entry.item_count(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CollectMemo {
     armed: bool,
     root_scale: u32,
     items: usize,
     reuses: usize,
-    entries: HashMap<NodeId, CollectMemoEntry>,
+    entries: HashMap<NodeId, CollectMemoSlot>,
 }
 
 impl CollectMemo {
@@ -169,7 +183,7 @@ pub(crate) fn try_reuse(
         if !memo.armed {
             return false;
         }
-        let Some(entry) = memo.entries.get(&node_id) else {
+        let Some(CollectMemoSlot::Held(entry)) = memo.entries.get(&node_id) else {
             return false;
         };
         if entry.key != *key {
@@ -253,10 +267,22 @@ pub(crate) fn capture(
         if !memo.armed {
             return;
         }
-        if let Some(previous) = memo.entries.remove(&node_id) {
-            memo.items = memo.items.saturating_sub(previous.item_count());
+        let seen_the_same_span_before = match memo.entries.remove(&node_id) {
+            Some(previous) => {
+                memo.items = memo.items.saturating_sub(previous.item_count());
+                match previous {
+                    CollectMemoSlot::Seen(seen_key) => seen_key == key,
+                    CollectMemoSlot::Held(entry) => entry.key == key,
+                }
+            }
+            None => false,
+        };
+        if !seen_the_same_span_before {
+            memo.entries.insert(node_id, CollectMemoSlot::Seen(key));
+            return;
         }
         if memo.items + span_items > MEMO_ITEM_LIMIT {
+            memo.entries.insert(node_id, CollectMemoSlot::Seen(key));
             return;
         }
         let brush_base = base.brushes as u32;
@@ -306,7 +332,7 @@ pub(crate) fn capture(
             z_len: scene.next_z - base.next_z,
         };
         memo.items += entry.item_count();
-        memo.entries.insert(node_id, entry);
+        memo.entries.insert(node_id, CollectMemoSlot::Held(entry));
     });
 }
 
@@ -480,7 +506,10 @@ mod tests {
         begin_frame(1.0);
         let _first = collect_scene(&graph);
         end_frame();
-        assert!(entry_count() > 0, "the first collect must fill the memo");
+        assert!(entry_count() > 0, "the first collect must note the spans");
+        begin_frame(1.0);
+        let _second = collect_scene(&graph);
+        end_frame();
         let _ = take_reuse_count();
 
         let scroll_state = scroll_holder
