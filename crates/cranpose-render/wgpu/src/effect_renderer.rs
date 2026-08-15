@@ -1193,7 +1193,6 @@ impl EffectRenderer {
         device: &wgpu::Device,
         source: &OffscreenTarget,
         scratch: &OffscreenTarget,
-        vertical_scratch: Option<&OffscreenTarget>,
         dest_view: &wgpu::TextureView,
         radius_x: f32,
         radius_y: f32,
@@ -1209,13 +1208,6 @@ impl EffectRenderer {
         }
         let scale_x = source.width as f32 / scratch.width.max(1) as f32;
         let scale_y = source.height as f32 / scratch.height.max(1) as f32;
-        let vertical_scratch = vertical_scratch
-            .filter(|target| target.width == scratch.width && target.height == scratch.height);
-        let mask_radius_y = if vertical_scratch.is_some() {
-            0.0
-        } else {
-            radius_y / scale_y
-        };
         let Some(mask_uniforms) = Self::rounded_mask_uniforms(
             shader,
             layer_pixel_rect,
@@ -1224,7 +1216,7 @@ impl EffectRenderer {
             scratch.width,
             scratch.height,
             radius_x / scale_x,
-            mask_radius_y,
+            radius_y / scale_y,
             tile_mode,
         ) else {
             return false;
@@ -1249,32 +1241,7 @@ impl EffectRenderer {
             (scratch.width, scratch.height),
         );
 
-        let masked_source = match vertical_scratch {
-            Some(vertical) => {
-                self.encode_blur_axis_pass(
-                    recorder,
-                    device,
-                    scratch,
-                    &vertical.view,
-                    Self::blur_uniforms(
-                        false,
-                        scratch.width,
-                        scratch.height,
-                        radius_x / scale_x,
-                        radius_y / scale_y,
-                        tile_mode,
-                    ),
-                    false,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    None,
-                    (scratch.width, scratch.height),
-                );
-                vertical
-            }
-            None => scratch,
-        };
-
-        let scratch_bind_group = masked_source.get_or_create_bind_group(
+        let scratch_bind_group = scratch.get_or_create_bind_group(
             device,
             &self.effect_texture_bind_group_layout,
             &self.effect_linear_sampler,
@@ -2211,42 +2178,6 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{projective_dest_bounds_rect, BlurUniforms};
-
-    #[test]
-    fn a_vertical_blur_at_the_scratch_size_leaves_the_mask_pass_one_sample() {
-        use cranpose_ui_graphics::{rounded_alpha_mask_effect, RenderEffect, TileMode};
-        let RenderEffect::Shader { shader } = rounded_alpha_mask_effect(120.0, 40.0, 8.0, 1.0)
-        else {
-            panic!("the rounded alpha mask is a runtime shader effect");
-        };
-        let with_scratch = super::EffectRenderer::rounded_mask_uniforms(
-            &shader,
-            [0.0, 0.0, 120.0, 40.0],
-            480,
-            160,
-            120,
-            40,
-            2.5,
-            0.0,
-            TileMode::Clamp,
-        )
-        .expect("the rounded alpha mask shader carries mask uniforms");
-        assert_eq!(with_scratch.direction_and_radius[3], 0.0);
-
-        let without_scratch = super::EffectRenderer::rounded_mask_uniforms(
-            &shader,
-            [0.0, 0.0, 120.0, 40.0],
-            480,
-            160,
-            120,
-            40,
-            2.5,
-            2.5,
-            TileMode::Clamp,
-        )
-        .expect("the rounded alpha mask shader carries mask uniforms");
-        assert_eq!(without_scratch.direction_and_radius[3], 2.5);
-    }
 
     #[test]
     fn blur_uniforms_use_vec4_packing_for_gl_backends() {
