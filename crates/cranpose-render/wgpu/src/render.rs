@@ -9196,7 +9196,13 @@ impl GpuRenderer {
                 &[],
                 &[surface],
                 |frame_encoder| {
-                    self.render_graph_recorded(surface_view, root_target, packet, returns, frame_encoder)
+                    self.render_graph_recorded(
+                        surface_view,
+                        root_target,
+                        packet,
+                        returns,
+                        frame_encoder,
+                    )
                 },
             );
             let after_build = Instant::now();
@@ -9230,8 +9236,13 @@ impl GpuRenderer {
                 let mut frame_encoder =
                     executor.begin(&device, &queue, Some("Renderer Frame Encoder"));
                 let initial_pass_count = frame_encoder.recorded_pass_count();
-                let result =
-                    self.render_graph_recorded(surface_view, root_target, packet, returns, &mut frame_encoder);
+                let result = self.render_graph_recorded(
+                    surface_view,
+                    root_target,
+                    packet,
+                    returns,
+                    &mut frame_encoder,
+                );
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -19136,7 +19147,9 @@ mod tests {
             ],
         };
 
-        assert!(!direct_root_child_underlays_are_supported(&collected, false));
+        assert!(!direct_root_child_underlays_are_supported(
+            &collected, false
+        ));
     }
 
     #[test]
@@ -19233,7 +19246,9 @@ mod tests {
             )],
         };
 
-        assert!(!direct_root_child_underlays_are_supported(&collected, false));
+        assert!(!direct_root_child_underlays_are_supported(
+            &collected, false
+        ));
     }
 
     #[test]
@@ -19393,7 +19408,9 @@ mod tests {
 
         assert!(collected.child_layers[0].backdrop.is_some());
         assert!(direct_root_child_underlays_are_supported(&collected, true));
-        assert!(!direct_root_child_underlays_are_supported(&collected, false));
+        assert!(!direct_root_child_underlays_are_supported(
+            &collected, false
+        ));
     }
 
     fn frosted_layer(bounds: Rect, offset: Point) -> LayerNode {

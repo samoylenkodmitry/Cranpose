@@ -321,10 +321,9 @@ mod tests {
             bytes < MAX_POOLED_BYTES,
             "twenty control surfaces must fit the pool budget"
         );
-        assert!(
-            20 < MAX_POOLED_TARGETS,
-            "twenty control surfaces must fit the pool count"
-        );
+        // `const_assert`-shaped on purpose: both sides are constants, so this
+        // is a compile-time claim about the budget, not a runtime check.
+        const _: () = assert!(20 < MAX_POOLED_TARGETS);
     }
 
     #[test]
@@ -360,8 +359,9 @@ mod tests {
 
     #[test]
     fn one_read_alone_is_not_enough_for_a_backdrop() {
-        let copy_only =
-            display_surface_usages(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        let copy_only = display_surface_usages(
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
         assert!(copy_only.contains(wgpu::TextureUsages::COPY_SRC));
         assert!(!texture_supports_backdrop_reads(copy_only));
         let sample_only = display_surface_usages(

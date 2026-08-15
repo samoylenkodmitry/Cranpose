@@ -338,7 +338,10 @@ fn rounded_fill_covers_rect(
         .max(radii.top_right)
         .max(radii.bottom_right)
         .max(radii.bottom_left);
-    if !(radius > 0.0) {
+    // `radius <= 0.0` rather than `!(radius > 0.0)`: the negated form reads as
+    // the same thing and is not, since a NaN radius satisfies neither. A NaN
+    // here means no usable corner, which is what the early return says.
+    if radius <= 0.0 || radius.is_nan() {
         return true;
     }
     let clears_corners_vertically =
@@ -1676,10 +1679,9 @@ pub(crate) fn root_direct_scene_events_are_supported(
     if !root_target_reads {
         return false;
     }
-    !scene
-        .effect_layers
-        .iter()
-        .any(|layer| has_backdrop_layer_in_range(&scene.backdrop_layers, layer.z_start, layer.z_end))
+    !scene.effect_layers.iter().any(|layer| {
+        has_backdrop_layer_in_range(&scene.backdrop_layers, layer.z_start, layer.z_end)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1935,7 +1937,6 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target_view: &wgpu::TextureView,
@@ -2011,7 +2012,8 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
             LayerEventKind::Backdrop(index) => {
                 let Some(root_target) = root_target else {
                     return Err(
-                        "root direct path does not support root-local backdrop sampling".to_string(),
+                        "root direct path does not support root-local backdrop sampling"
+                            .to_string(),
                     );
                 };
                 apply_backdrop_layer_to_target(
@@ -2835,7 +2837,7 @@ fn layer_source_cache_key(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct BackdropPrefixChildContribution {
+pub(crate) struct BackdropPrefixChildContribution {
     z_index: usize,
     node_id: Option<NodeId>,
     content_hash: u64,

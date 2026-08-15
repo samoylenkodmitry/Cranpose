@@ -39,10 +39,7 @@ pub(crate) fn blur_scratch_size(
     if scale <= 1 {
         return (width, height);
     }
-    (
-        width.div_ceil(scale).max(1),
-        height.div_ceil(scale).max(1),
-    )
+    (width.div_ceil(scale).max(1), height.div_ceil(scale).max(1))
 }
 
 fn scaled_scissor(
@@ -60,7 +57,12 @@ fn scaled_scissor(
     let top = ((y as f32 / scale_y).floor() as u32).min(height);
     let right = (((x + w) as f32 / scale_x).ceil() as u32).min(width);
     let bottom = (((y + h) as f32 / scale_y).ceil() as u32).min(height);
-    Some((left, top, right.saturating_sub(left), bottom.saturating_sub(top)))
+    Some((
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+    ))
 }
 
 pub(crate) struct EffectRenderer {
