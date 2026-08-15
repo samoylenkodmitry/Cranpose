@@ -294,6 +294,10 @@ pub async fn run(
         Arc::new(queue),
         surface_format,
         adapter_info.backend,
+        // The real capabilities of this adapter, as every other host passes:
+        // the GL path gates vertex storage on them, and WebGL2 is exactly the
+        // backend that does not have it.
+        adapter.get_downlevel_capabilities().flags,
     );
     renderer.set_root_scale(effective_scale as f32);
 

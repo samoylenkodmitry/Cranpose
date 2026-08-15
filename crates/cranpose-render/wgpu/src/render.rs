@@ -13560,6 +13560,12 @@ impl GpuRenderer {
 
     /// Test/diagnostic view of the static leading-span cache: lifetime
     /// (hits, recaptures).
+    ///
+    /// Gated like the cache it reads and like every sibling diagnostic here:
+    /// `static_span` does not exist on wasm, so an ungated accessor compiles
+    /// everywhere except the one target nothing in `cargo test` builds.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
     pub fn static_span_stats(&self) -> (u64, u64) {
         (self.static_span.hits, self.static_span.recaptures)
     }
