@@ -6,6 +6,8 @@ use crate::effect_renderer::{
     EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
     ShaderCompositeBatchItem,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use crate::effect_renderer::{PreparedProjectiveComposite, ProjectiveCompositeItem};
 use crate::frame_graph::{
     FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
 };
@@ -32,6 +34,11 @@ use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
     RetainedDraw, SceneBrush, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::segment_surface::{
+    Affine2, CaptureRect, SegmentSurfaceCache, SegmentSurfaceDecision, SegmentSurfaceKey,
+    SEGMENT_CAPTURE_SLOTS, SEGMENT_CAPTURE_UNIFORM_STRIDE,
 };
 use crate::shaders;
 #[cfg(test)]
@@ -2424,6 +2431,20 @@ struct ReplaySlot {
     /// analytic lit area, opacity class and quad AABB. Empty when the
     /// diagnostic is off.
     fill_diag_shapes: Vec<FillDiagShapeRecord>,
+    /// Per-shape capture-space quad AABBs (`[min_x, min_y, max_x, max_y]`,
+    /// `shape_count` entries) — the segment-surface cache's geometry
+    /// source. Always computed (one min/max pass over corners already in
+    /// cache at capture), so a slot captured while that cache was off still
+    /// serves it after an opt-in flip.
+    shape_aabbs: Vec<[f32; 4]>,
+    /// Running quad-area prefix sum (`shape_count + 1` entries): shape
+    /// range `a..b` submits `area_prefix[b] - area_prefix[a]` device px²
+    /// of quads at capture scale.
+    area_prefix: Vec<f32>,
+    /// Ratio of actually-submitted pixels to plain quad pixels when this
+    /// slot replays its arc mesh (1.0 unmeshed) — the segment-surface
+    /// economics gate prices the direct path by what it truly rasterizes.
+    submitted_area_scale: f32,
 }
 
 /// Band geometry a retained slot replays for its MESHED shapes only: arc
@@ -4442,7 +4463,13 @@ impl ReplaySlotStore {
     fn new(device: &wgpu::Device) -> Self {
         let transform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Replay Transform Buffer"),
-            size: MAX_REPLAY_SLOTS as u64 * REPLAY_TRANSFORM_STRIDE,
+            // The trailing SEGMENT_CAPTURE_SLOTS strides are reserved for
+            // segment-surface capture passes: each capture binds its
+            // similarity (the span's own transform, retained paint
+            // selected) at `(MAX_REPLAY_SLOTS + capture_index) * stride`,
+            // past every per-draw slot, so captures can never clobber a
+            // frame's staged draw transforms.
+            size: (MAX_REPLAY_SLOTS + SEGMENT_CAPTURE_SLOTS) as u64 * REPLAY_TRANSFORM_STRIDE,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -5607,6 +5634,12 @@ pub struct GpuRenderer {
     /// full-target blit.
     #[cfg(not(target_arch = "wasm32"))]
     static_span: StaticSpanCache,
+    /// Retained-segment surface cache (`CRANPOSE_SEGMENT_SURFACE` opt-in,
+    /// see [`crate::segment_surface`]): qualifying retained spans rendered
+    /// once into pooled offscreens and re-drawn per frame as one rotated/
+    /// scaled textured quad each.
+    #[cfg(not(target_arch = "wasm32"))]
+    segment_surfaces: SegmentSurfaceCache,
     /// Display clip region cull (see [`crate::display_clip`]): the
     /// platform-provided visible region plus the per-size occluder/depth
     /// resources. Inert — nothing beyond the enum is ever populated —
@@ -6261,6 +6294,8 @@ impl GpuRenderer {
             fill_area_diag: FillAreaDiag::default(),
             #[cfg(not(target_arch = "wasm32"))]
             static_span: StaticSpanCache::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            segment_surfaces: SegmentSurfaceCache::default(),
             #[cfg(not(target_arch = "wasm32"))]
             display_clip: DisplayClipState::new(),
         };
@@ -8281,6 +8316,9 @@ impl GpuRenderer {
             // One engagement per frame: the first fused partition carrying
             // the frame's opaque clear consumes this.
             self.static_span.armed = true;
+            // Segment-surface frame boundary: config refresh, capture-slot
+            // cursor reset, periodic idle sweep.
+            self.segment_surfaces.begin_frame();
             // The frame's root target, held for the graph walk only: the
             // display clip cull compares fused-pass targets against it so
             // nothing but the real surface pass is ever culled.
@@ -9169,6 +9207,9 @@ impl GpuRenderer {
         // Moved out like the scratch vecs: the span blit borrows the cached
         // texture across the render pass while `self` stays mutably usable.
         let mut span_cache = std::mem::take(&mut self.static_span);
+        // Moved out for the same reason: prepared segment composites borrow
+        // entry textures across the render pass.
+        let mut segment_surfaces = std::mem::take(&mut self.segment_surfaces);
 
         image_vertices.clear();
         image_indices.clear();
@@ -9226,6 +9267,27 @@ impl GpuRenderer {
                 shape_upload_base = upload_base;
             }
             let after_shape_prepare = Instant::now();
+
+            // Segment-surface phase 1 (CRANPOSE_SEGMENT_SURFACE opt-in, see
+            // `crate::segment_surface`): per retained item of this
+            // partition, decide cached-composite vs direct, install/refresh
+            // entries, and stage this frame's capture transforms. Runs
+            // BEFORE the batch-prepare loop because recolor dirtiness is
+            // read from the frame's still-parked patch list, which the
+            // Retained prepare arm drains (`stage_replay_patches`).
+            let mut segment_captures: Vec<SegmentCaptureJob> = Vec::new();
+            let mut segment_composite_plans: Vec<(usize, SegmentCompositePlan)> = Vec::new();
+            if segment_surfaces.enabled() {
+                self.plan_segment_surfaces(
+                    &mut segment_surfaces,
+                    ordered_items,
+                    chunk,
+                    retained_draws,
+                    &mut staged_uploads,
+                    &mut segment_captures,
+                    &mut segment_composite_plans,
+                );
+            }
 
             // Opaque static leading-span cache: decide once per frame, on
             // the partition carrying the frame's opaque clear, whether the
@@ -9627,6 +9689,39 @@ impl GpuRenderer {
                 ),
                 None => Vec::new(),
             };
+            // Segment-surface phase 2: prepared rotated-quad composites for
+            // the cached spans. Each is drawn inside the fused pass at its
+            // span's exact batch position (see the Retained draw arm), so
+            // interleaved z order is preserved by construction.
+            let mut prepared_segment_composites: Vec<(usize, PreparedProjectiveComposite<'_>)> =
+                Vec::with_capacity(segment_composite_plans.len());
+            for (index, plan) in &segment_composite_plans {
+                let Some(entry) = segment_surfaces.entry(&plan.key) else {
+                    continue;
+                };
+                let item = ProjectiveCompositeItem {
+                    source: &entry.texture,
+                    viewport: (width, height),
+                    dest_quad: plan.dest_quad,
+                    inverse: plan.inverse,
+                    alpha: 1.0,
+                    blend_mode: BlendMode::SrcOver,
+                    // An identity effective transform samples through the
+                    // exact textureLoad path; motion samples bilinear.
+                    sample_mode: if plan.identity {
+                        CompositeSampleMode::Nearest
+                    } else {
+                        CompositeSampleMode::Linear
+                    },
+                };
+                let prepared = self.effect_renderer.prepare_projective_composite_draw(
+                    frame_encoder,
+                    &device,
+                    &item,
+                    pass_depth,
+                );
+                prepared_segment_composites.push((*index, prepared));
+            }
             let after_composite_prepare = Instant::now();
 
             if fused_batches.is_empty() && span_blit.is_empty() {
@@ -9649,6 +9744,82 @@ impl GpuRenderer {
                 frame_encoder.allocate_staged_upload_bytes(staged_uploads.bytes.len() as u64);
             self.flush_staged_uploads_at(frame_encoder.encoder(), &staged_uploads, upload_offset);
             let after_upload = Instant::now();
+
+            // Segment-surface phase 3: encode this frame's capture passes —
+            // after the staged flush (their transforms and this frame's
+            // recolor patches ride it), before the fused pass that samples
+            // the surfaces. A recolored span therefore invalidates,
+            // recaptures and composites within ONE frame, and the fused
+            // pass never samples a stale surface. `pass_depth` is not yet
+            // set on the pipeline getters here, so the capture walk fetches
+            // the ordinary flat pipeline variants.
+            let mut segment_capture_passes = 0u32;
+            for job in &segment_captures {
+                let Some(entry) = segment_surfaces.entry(&job.key) else {
+                    continue;
+                };
+                let Some(slot) = self.replay_slots.slots.get(&job.key.slot) else {
+                    continue;
+                };
+                let Some(uniform_group) =
+                    segment_surfaces.capture_uniform_bind_group(job.capture_index)
+                else {
+                    continue;
+                };
+                let mut capture_pass =
+                    frame_encoder
+                        .encoder()
+                        .begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("Segment Surface Capture Pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &entry.texture.view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    // Transparent clear: the surface holds
+                                    // the span's premultiplied flattening
+                                    // and nothing else.
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                            multiview_mask: None,
+                        });
+                let draws = self.encode_retained_op(
+                    slot,
+                    job.first,
+                    job.last,
+                    MAX_REPLAY_SLOTS + job.capture_index,
+                    &mut |cmd| match cmd {
+                        // The capture retargets bind group 0 to its
+                        // sub-viewport uniforms (viewport_offset maps the
+                        // capture rect onto the surface); everything else
+                        // is the IDENTICAL walk the direct draw encodes.
+                        RetainedCmd::Uniforms(_) => {
+                            capture_pass.set_bind_group(0, uniform_group, &[])
+                        }
+                        RetainedCmd::Pipeline(pipeline) => capture_pass.set_pipeline(pipeline),
+                        RetainedCmd::SlotBindings(group, offset) => {
+                            capture_pass.set_bind_group(1, group, &[offset])
+                        }
+                        RetainedCmd::MeshVertices(buffer) => {
+                            capture_pass.set_vertex_buffer(0, buffer.slice(..))
+                        }
+                        RetainedCmd::Index(buffer, format) => {
+                            capture_pass.set_index_buffer(buffer.slice(..), format)
+                        }
+                        RetainedCmd::Draw(vertices) => capture_pass.draw(vertices, 0..1),
+                        RetainedCmd::DrawIndexed(indices, instances) => {
+                            capture_pass.draw_indexed(indices, 0, instances)
+                        }
+                    },
+                );
+                self.frame_stats.add_draw_calls(draws);
+                segment_capture_passes += 1;
+            }
 
             let use_retained_bundles = retained_bundles_enabled();
             let mut retained_encode_ms = 0.0_f64;
@@ -9785,7 +9956,22 @@ impl GpuRenderer {
                             // per arm never flattens across the dynamic
                             // batches interleaved at their z positions.
                             let retained_start = Instant::now();
-                            if use_retained_bundles {
+                            // A render bundle cannot encode a segment-surface
+                            // composite, so a stretch containing one this
+                            // frame takes the per-item walk: order-identical,
+                            // and the walk is a handful of binds exactly when
+                            // the cache is saving the fragment work.
+                            let stretch_has_composites = !prepared_segment_composites.is_empty()
+                                && ordered_items[item_range.clone()].iter().any(|(_, item)| {
+                                    matches!(
+                                        item,
+                                        SegmentDrawItem::Retained(index)
+                                            if prepared_segment_composites
+                                                .iter()
+                                                .any(|(prepared_index, _)| prepared_index == index)
+                                    )
+                                });
+                            if use_retained_bundles && !stretch_has_composites {
                                 self.draw_retained_stretch_bundled(
                                     &mut render_pass,
                                     ordered_items,
@@ -9797,7 +9983,26 @@ impl GpuRenderer {
                             } else {
                                 for (_, item) in &ordered_items[item_range.clone()] {
                                     if let SegmentDrawItem::Retained(index) = item {
-                                        if let Some(retained) = retained_draws.get(*index) {
+                                        if let Some((_, prepared)) = prepared_segment_composites
+                                            .iter()
+                                            .find(|(prepared_index, _)| prepared_index == index)
+                                        {
+                                            // The cached span's surface, at
+                                            // the span's exact z position:
+                                            // SrcOver over premultiplied
+                                            // alpha is associative, so
+                                            // flatten-then-composite blends
+                                            // identically to the inline
+                                            // member draws it replaces.
+                                            self.effect_renderer
+                                                .draw_prepared_projective_composite(
+                                                    &mut render_pass,
+                                                    (width, height),
+                                                    prepared,
+                                                    pass_depth,
+                                                );
+                                            self.frame_stats.add_draw_calls(1);
+                                        } else if let Some(retained) = retained_draws.get(*index) {
                                             self.draw_retained_batch(
                                                 &mut render_pass,
                                                 retained,
@@ -9918,7 +10123,7 @@ impl GpuRenderer {
 
             Ok(SegmentRenderOutcome {
                 rendered_any: true,
-                pass_count: 1 + capture_passes,
+                pass_count: 1 + capture_passes + segment_capture_passes,
             })
         })();
 
@@ -9932,6 +10137,12 @@ impl GpuRenderer {
         self.scratch_glyph_cmds = glyph_cmds;
         self.restore_staged_uploads(staged_uploads);
         self.static_span = span_cache;
+        if result.is_err() {
+            // An aborted partition may have installed entries whose capture
+            // passes never encoded; a later frame must not sample them.
+            segment_surfaces.clear();
+        }
+        self.segment_surfaces = segment_surfaces;
         result
     }
 
@@ -10313,8 +10524,9 @@ impl GpuRenderer {
                         // devices, where fusion always accepts, but the arm
                         // stays a real draw so that assumption is not load-
                         // bearing for correctness. Deliberately direct encode
-                        // — retained bundle caching lives in the fused path
-                        // only; this fallback stays the simple reference.
+                        // — retained bundle caching AND segment-surface
+                        // compositing live in the fused path only; this
+                        // fallback stays the simple reference.
                         #[cfg(target_arch = "wasm32")]
                         {
                             let _ = (start, end);
@@ -11949,6 +12161,7 @@ impl GpuRenderer {
         // the fill-diag records can price those shapes by their true
         // triangle area.
         let mut mesh_fill_records: Option<Vec<FillDiagShapeRecord>> = None;
+        let mut submitted_area_scale = 1.0f32;
         let mesh = if arc_mesh_enabled() {
             match build_arc_mesh_vertices(&shape_data, retained_mesh_min_px2()) {
                 Some(build) => {
@@ -11992,6 +12205,15 @@ impl GpuRenderer {
                         );
                     }
                     let keep_mesh = meshed_shapes > 0 && within_stretch_cap;
+                    if keep_mesh && build.quad_area > 0.0 {
+                        // What this slot's replay actually rasterizes per
+                        // quad pixel, for the segment-surface economics
+                        // gate. Clamped away from zero so a degenerate
+                        // measurement cannot make the direct path look
+                        // free.
+                        submitted_area_scale =
+                            (build.mesh_area / build.quad_area).clamp(0.05, 1.0) as f32;
+                    }
                     if keep_mesh && fill_area_diag_enabled() {
                         mesh_fill_records = Some(fill_diag_capture_records(
                             &shape_data,
@@ -12056,6 +12278,45 @@ impl GpuRenderer {
             Vec::new()
         };
 
+        // Capture-space quad AABBs and the quad-area prefix sum for the
+        // segment-surface cache: the quads are the exact geometry the
+        // replay rasterizes, so a range's surface economics and capture
+        // rect derive from them with no second conversion.
+        let mut shape_aabbs = Vec::with_capacity(shape_count);
+        let mut area_prefix = Vec::with_capacity(shape_count + 1);
+        area_prefix.push(0.0f32);
+        for shape in &shape_data {
+            let corners = [
+                [shape.quad01[0], shape.quad01[1]],
+                [shape.quad01[2], shape.quad01[3]],
+                [shape.quad23[0], shape.quad23[1]],
+                [shape.quad23[2], shape.quad23[3]],
+            ];
+            let mut min_x = f32::INFINITY;
+            let mut min_y = f32::INFINITY;
+            let mut max_x = f32::NEG_INFINITY;
+            let mut max_y = f32::NEG_INFINITY;
+            for corner in corners {
+                min_x = min_x.min(corner[0]);
+                min_y = min_y.min(corner[1]);
+                max_x = max_x.max(corner[0]);
+                max_y = max_y.max(corner[1]);
+            }
+            shape_aabbs.push([min_x, min_y, max_x, max_y]);
+            // Shoelace over the quad's boundary order (corners 0, 1, 3, 2 —
+            // the two triangles share the 1-2 diagonal).
+            let ring = [corners[0], corners[1], corners[3], corners[2]];
+            let mut doubled = 0.0f32;
+            for i in 0..4 {
+                let a = ring[i];
+                let b = ring[(i + 1) % 4];
+                doubled += a[0] * b[1] - b[0] * a[1];
+            }
+            let area = (doubled * 0.5).abs();
+            let running = *area_prefix.last().expect("prefix seeded with 0.0");
+            area_prefix.push(running + area);
+        }
+
         // Seed the mutable paint from the converted colors, so an unpatched
         // replay renders bit-identically to the capture frame.
         let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
@@ -12119,6 +12380,9 @@ impl GpuRenderer {
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
                 fill_diag_shapes,
+                shape_aabbs,
+                area_prefix,
+                submitted_area_scale,
             },
         );
         Some(id)
@@ -12135,7 +12399,26 @@ impl GpuRenderer {
             // the whole cache and free those references now rather than one
             // frame later through eviction.
             self.retained_bundle_cache.clear();
+            // Segment death: every surface captured from this slot dies
+            // with it.
+            self.segment_surfaces.drop_slot(id);
         }
+    }
+
+    /// Test/diagnostic view of the retained-segment surface cache:
+    /// lifetime (captures, composite draws, dirty recaptures, churn
+    /// rejections, economics rejections).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn segment_surface_stats(&self) -> (u64, u64, u64, u64, u64) {
+        let stats = &self.segment_surfaces.stats;
+        (
+            stats.captures,
+            stats.composites,
+            stats.dirty_recaptures,
+            stats.rejected_churn,
+            stats.rejected_economics,
+        )
     }
 
     /// Test/diagnostic view of the latched instanced-quad selection: `true`
@@ -12177,6 +12460,200 @@ impl GpuRenderer {
                     passthrough + mesh.passthrough,
                 )
             })
+    }
+
+    /// Segment-surface phase 1 for one fused partition: walks the chunk's
+    /// retained items, runs [`SegmentSurfaceCache::decide`] per item, and
+    /// for each (re)capture acquires the surface, installs the entry and
+    /// stages the capture similarity at its reserved transform slot. Emits
+    /// the frame's capture jobs and per-item composite plans.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
+    fn plan_segment_surfaces(
+        &mut self,
+        segment_surfaces: &mut SegmentSurfaceCache,
+        ordered_items: &[(usize, SegmentDrawItem)],
+        chunk: &SegmentDrawChunkPlan,
+        retained_draws: &[RetainedDraw],
+        staged_uploads: &mut StagedBufferUploads,
+        captures: &mut Vec<SegmentCaptureJob>,
+        composites: &mut Vec<(usize, SegmentCompositePlan)>,
+    ) {
+        segment_surfaces.ensure_dirty_map(
+            self.replay_color_patches
+                .iter()
+                .map(|patch| (patch.slot, patch.shape_index)),
+        );
+        let max_texture_dim = self.effect_renderer.max_texture_dim();
+        for batch in chunk.iter() {
+            let SegmentBatchPlan::Retained { start, end } = batch else {
+                continue;
+            };
+            for (_, item) in &ordered_items[start..end] {
+                let SegmentDrawItem::Retained(index) = item else {
+                    continue;
+                };
+                // Items past the transform-slot budget stage no transform
+                // and draw nothing on the direct path either; leave them.
+                if (*index as u32) >= MAX_REPLAY_SLOTS {
+                    continue;
+                }
+                let Some(retained) = retained_draws.get(*index) else {
+                    continue;
+                };
+                let transform = retained.transform;
+                let (key, capture_epoch, dirty) = {
+                    let Some(slot) = self.replay_slots.slots.get(&retained.slot) else {
+                        continue;
+                    };
+                    let first = retained.first_shape.min(slot.shape_count);
+                    let last = retained
+                        .first_shape
+                        .saturating_add(retained.shape_count)
+                        .min(slot.shape_count);
+                    if first >= last {
+                        continue;
+                    }
+                    (
+                        SegmentSurfaceKey {
+                            slot: retained.slot,
+                            first_shape: first,
+                            shape_count: last - first,
+                        },
+                        slot.capture_epoch,
+                        segment_surfaces.range_dirty(retained.slot, first, last),
+                    )
+                };
+                let first = key.first_shape;
+                let last = key.first_shape + key.shape_count;
+                let slots = &self.replay_slots.slots;
+                let decision =
+                    segment_surfaces.decide(key, capture_epoch, dirty, transform.scale, || {
+                        let slot = slots.get(&key.slot)?;
+                        plan_segment_capture_geometry(slot, first, last, transform, max_texture_dim)
+                    });
+                let SegmentSurfaceDecision::Composite { capture } = decision else {
+                    continue;
+                };
+                if let Some(plan) = capture {
+                    let texture = segment_surfaces
+                        .take_texture_for_recapture(&key, &plan.rect)
+                        .unwrap_or_else(|| {
+                            let device = self.device.clone();
+                            self.effect_renderer.acquire_offscreen(
+                                &device,
+                                plan.rect.width,
+                                plan.rect.height,
+                                Some(&self.frame_stats),
+                            )
+                        });
+                    segment_surfaces.install_entry(
+                        key,
+                        capture_epoch,
+                        transform.center,
+                        transform.rot,
+                        transform.scale,
+                        plan.rect,
+                        texture,
+                    );
+                    // The capture renders the span under ITS OWN current
+                    // similarity (retained paint selected), staged at the
+                    // reserved slot past every per-draw transform.
+                    staged_uploads.stage_at(
+                        UploadTarget::ReplayTransform,
+                        (MAX_REPLAY_SLOTS + plan.index) as u64 * REPLAY_TRANSFORM_STRIDE,
+                        bytemuck::bytes_of(&transform.with_retained_paint()),
+                    );
+                    // The capture viewport uniforms are written directly:
+                    // the cache is moved out of `self` for the partition,
+                    // so its buffer cannot ride the staged-upload flush
+                    // (which resolves targets on `self`). Queue writes
+                    // execute before any later-submitted command buffer —
+                    // exactly the capture pass's ordering need.
+                    let uniforms = Self::viewport_uniforms(ViewportUniformParams {
+                        width: plan.rect.width,
+                        height: plan.rect.height,
+                        offset: plan.rect.origin,
+                    });
+                    let device = self.device.clone();
+                    let capture_uniforms =
+                        segment_surfaces.capture_uniforms(&device, &self.uniform_bind_group_layout);
+                    let upload_stats = self.frame_graph_executor.upload_buffer(
+                        &self.queue,
+                        &capture_uniforms.buffer,
+                        plan.index as u64 * SEGMENT_CAPTURE_UNIFORM_STRIDE,
+                        bytemuck::bytes_of(&uniforms),
+                    );
+                    self.frame_stats.record_command_stats(upload_stats);
+                    captures.push(SegmentCaptureJob {
+                        key,
+                        first,
+                        last,
+                        capture_index: plan.index,
+                    });
+                    // Fresh capture: the effective transform is identity by
+                    // construction, snapped exact so the composite is a 1:1
+                    // texel mapping.
+                    composites.push((
+                        *index,
+                        SegmentCompositePlan {
+                            key,
+                            dest_quad: segment_identity_quad(&plan.rect),
+                            inverse: segment_identity_inverse(&plan.rect),
+                            identity: true,
+                        },
+                    ));
+                } else {
+                    let Some(entry) = segment_surfaces.entry(&key) else {
+                        continue;
+                    };
+                    let t_now =
+                        Affine2::from_similarity(transform.center, transform.rot, transform.scale);
+                    let t_cap =
+                        Affine2::from_similarity(entry.cap_center, entry.cap_rot, entry.cap_scale);
+                    let Some(cap_inverse) = t_cap.invert() else {
+                        segment_surfaces.remove(&key);
+                        continue;
+                    };
+                    let effective = t_now.compose(&cap_inverse);
+                    let rect = entry.rect;
+                    let plan = if effective.is_identity_for_sampling() {
+                        // Snap away the compose/invert float noise so the
+                        // identity frame is a texel-exact mapping.
+                        SegmentCompositePlan {
+                            key,
+                            dest_quad: segment_identity_quad(&rect),
+                            inverse: segment_identity_inverse(&rect),
+                            identity: true,
+                        }
+                    } else {
+                        let Some(inverse) = effective.invert() else {
+                            segment_surfaces.remove(&key);
+                            continue;
+                        };
+                        SegmentCompositePlan {
+                            key,
+                            dest_quad: segment_identity_quad(&rect).map(|c| effective.apply(c)),
+                            inverse: [
+                                [
+                                    inverse.l[0][0],
+                                    inverse.l[0][1],
+                                    inverse.t[0] - rect.origin[0],
+                                ],
+                                [
+                                    inverse.l[1][0],
+                                    inverse.l[1][1],
+                                    inverse.t[1] - rect.origin[1],
+                                ],
+                                [0.0, 0.0, 1.0],
+                            ],
+                            identity: false,
+                        }
+                    };
+                    composites.push((*index, plan));
+                }
+            }
+        }
     }
 
     /// Draws one retained replay batch — `retained`'s shape range of its
@@ -14890,6 +15367,95 @@ enum FusedSegmentBatch {
 struct ShadowSourceRenderOutcome {
     rendered_any: bool,
     pass_count: u32,
+}
+
+/// One segment-surface capture this frame must encode: the entry's key,
+/// the slot shape range, and the claimed per-frame capture slot (transform
+/// stride + viewport-uniform slot index).
+#[cfg(not(target_arch = "wasm32"))]
+struct SegmentCaptureJob {
+    key: SegmentSurfaceKey,
+    first: u32,
+    last: u32,
+    capture_index: u32,
+}
+
+/// One retained item's cached-composite plan: the dest quad (device px,
+/// strip order TL TR BL BR) and the dest-px → source-texel inverse under
+/// this frame's effective transform.
+#[cfg(not(target_arch = "wasm32"))]
+struct SegmentCompositePlan {
+    key: SegmentSurfaceKey,
+    dest_quad: [[f32; 2]; 4],
+    inverse: [[f32; 3]; 3],
+    identity: bool,
+}
+
+/// The capture rect's corners in capture space — also the dest quad under
+/// an identity effective transform.
+#[cfg(not(target_arch = "wasm32"))]
+fn segment_identity_quad(rect: &CaptureRect) -> [[f32; 2]; 4] {
+    let [x, y] = rect.origin;
+    let width = rect.width as f32;
+    let height = rect.height as f32;
+    [
+        [x, y],
+        [x + width, y],
+        [x, y + height],
+        [x + width, y + height],
+    ]
+}
+
+/// Dest px → source texel for the identity case: a pure integer translate,
+/// so `textureLoad` sampling is texel-exact.
+#[cfg(not(target_arch = "wasm32"))]
+fn segment_identity_inverse(rect: &CaptureRect) -> [[f32; 3]; 3] {
+    [
+        [1.0, 0.0, -rect.origin[0]],
+        [0.0, 1.0, -rect.origin[1]],
+        [0.0, 0.0, 1.0],
+    ]
+}
+
+/// Measures a shape range's capture geometry under `transform`: the padded
+/// integer capture rect (None when degenerate or larger than the device
+/// allows) and the member-quad pixel sum the economics gate prices the
+/// direct path at (submitted-area scaled for arc-meshed slots).
+#[cfg(not(target_arch = "wasm32"))]
+fn plan_segment_capture_geometry(
+    slot: &ReplaySlot,
+    first: u32,
+    last: u32,
+    transform: SimilarityTransform,
+    max_texture_dim: u32,
+) -> Option<(CaptureRect, f32)> {
+    let range = first as usize..last as usize;
+    let aabbs = slot.shape_aabbs.get(range)?;
+    if aabbs.is_empty() {
+        return None;
+    }
+    let affine = Affine2::from_similarity(transform.center, transform.rot, transform.scale);
+    let mut min = [f32::INFINITY; 2];
+    let mut max = [f32::NEG_INFINITY; 2];
+    for aabb in aabbs {
+        for corner in [
+            [aabb[0], aabb[1]],
+            [aabb[2], aabb[1]],
+            [aabb[0], aabb[3]],
+            [aabb[2], aabb[3]],
+        ] {
+            let p = affine.apply(corner);
+            min[0] = min[0].min(p[0]);
+            min[1] = min[1].min(p[1]);
+            max[0] = max[0].max(p[0]);
+            max[1] = max[1].max(p[1]);
+        }
+    }
+    let rect = crate::segment_surface::snap_capture_rect(min, max, max_texture_dim)?;
+    let base_area = slot.area_prefix.get(last as usize).copied()?
+        - slot.area_prefix.get(first as usize).copied()?;
+    let member_px = base_area * transform.scale * transform.scale * slot.submitted_area_scale;
+    Some((rect, member_px))
 }
 
 impl SegmentDrawChunkPlan {

@@ -73,7 +73,7 @@ fn property_flag(name: &str) -> bool {
 /// any length — so a name may run right up to or past that pre-O limit, as
 /// `debug.cranpose.retained_mesh_px2` does; every deployment target is far
 /// past O.)
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 24] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 28] = [
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
     ("debug.cranpose.present_thread", "CRANPOSE_PRESENT_THREAD"),
     ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
@@ -128,6 +128,19 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 24] = [
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),
     ("debug.cranpose.fill_diag", "CRANPOSE_FILL_DIAG"),
     ("debug.cranpose.static_span", "CRANPOSE_STATIC_SPAN"),
+    ("debug.cranpose.segment_surface", "CRANPOSE_SEGMENT_SURFACE"),
+    (
+        "debug.cranpose.seg_surface_ratio",
+        "CRANPOSE_SEGMENT_SURFACE_COST_RATIO",
+    ),
+    (
+        "debug.cranpose.seg_surface_recolor",
+        "CRANPOSE_SEGMENT_SURFACE_RECOLOR_RATE",
+    ),
+    (
+        "debug.cranpose.seg_surface_scale",
+        "CRANPOSE_SEGMENT_SURFACE_SCALE_EPS",
+    ),
 ];
 
 /// Copies the [`PROPERTY_BACKED_ENV_VARS`] properties that are set into the

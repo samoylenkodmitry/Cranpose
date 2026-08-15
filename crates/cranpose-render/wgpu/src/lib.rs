@@ -24,6 +24,8 @@ mod present_runtime;
 mod render;
 mod run_entry;
 mod scene;
+#[cfg(not(target_arch = "wasm32"))]
+mod segment_surface;
 mod shader_cache;
 mod shaders;
 #[cfg(not(target_arch = "wasm32"))]
@@ -1100,6 +1102,17 @@ impl WgpuRenderer {
         self.sync_gpu_renderer()
             .map(GpuRenderer::static_span_stats)
             .unwrap_or((0, 0))
+    }
+
+    /// Test/diagnostic view of the retained-segment surface cache
+    /// (`CRANPOSE_SEGMENT_SURFACE` opt-in): lifetime (captures, composite
+    /// draws, dirty recaptures, churn rejections, economics rejections).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
+    pub fn segment_surface_stats(&self) -> (u64, u64, u64, u64, u64) {
+        self.sync_gpu_renderer()
+            .map(GpuRenderer::segment_surface_stats)
+            .unwrap_or((0, 0, 0, 0, 0))
     }
 
     /// Test/diagnostic view of the present store's lifetime count of

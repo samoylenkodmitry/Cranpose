@@ -46,8 +46,8 @@ pub(crate) struct EffectRenderer {
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
-    projective_blit_pipeline: LazyGpuResource<wgpu::RenderPipeline>,
-    projective_blit_pipeline_dst_out: LazyGpuResource<wgpu::RenderPipeline>,
+    projective_blit_pipeline: PassPipeline,
+    projective_blit_pipeline_dst_out: PassPipeline,
 
     // Shared bind group layouts for effect texture + uniform access
     pub effect_texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -407,6 +407,27 @@ pub(crate) struct PreparedShaderDraw<'a> {
     dest_viewport: (f32, f32, f32, f32),
 }
 
+/// One rotated/scaled textured-quad composite for the fused pass — the
+/// segment-surface cache's draw-back. `dest_quad` is in destination pixels,
+/// strip order TL, TR, BL, BR; `inverse` maps destination pixels to SOURCE
+/// TEXEL coordinates (not normalized).
+pub(crate) struct ProjectiveCompositeItem<'a> {
+    pub source: &'a OffscreenTarget,
+    pub viewport: (u32, u32),
+    pub dest_quad: [[f32; 2]; 4],
+    pub inverse: [[f32; 3]; 3],
+    pub alpha: f32,
+    pub blend_mode: BlendMode,
+    pub sample_mode: CompositeSampleMode,
+}
+
+pub(crate) struct PreparedProjectiveComposite<'a> {
+    texture_bind_group: &'a wgpu::BindGroup,
+    uniform_bind_group: wgpu::BindGroup,
+    vertex_buffer: wgpu::Buffer,
+    blend_mode: BlendMode,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CompositeSampleMode {
     Linear,
@@ -477,6 +498,7 @@ fn create_projective_pipeline(
     shader: &wgpu::ShaderModule,
     surface_format: wgpu::TextureFormat,
     blend: wgpu::BlendState,
+    depth: bool,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -512,7 +534,7 @@ fn create_projective_pipeline(
             cull_mode: None,
             ..Default::default()
         },
-        depth_stencil: None,
+        depth_stencil: display_clip::content_depth_state(depth),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
         cache: None,
@@ -651,8 +673,14 @@ impl EffectRenderer {
                 ],
                 immediate_size: 0,
             });
-        let projective_blit_pipeline = LazyGpuResource::new("effect/projective-src-over");
-        let projective_blit_pipeline_dst_out = LazyGpuResource::new("effect/projective-dst-out");
+        let projective_blit_pipeline = PassPipeline::new(
+            "effect/projective-src-over",
+            "effect/projective-src-over-depth",
+        );
+        let projective_blit_pipeline_dst_out = PassPipeline::new(
+            "effect/projective-dst-out",
+            "effect/projective-dst-out-depth",
+        );
 
         let effect_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Effect Linear Sampler"),
@@ -860,10 +888,16 @@ impl EffectRenderer {
             .expect("prepared composite must initialize its blit pipeline")
     }
 
+    /// The projective blit in its two pass flavors, mirroring
+    /// [`Self::blit_pipeline`]: `depth` is true exactly when the caller is
+    /// encoding into the display-clip culled fused pass, whose variant
+    /// compiles the shader with the content z rewritten and depth-tests
+    /// against the visible-region occluder.
     fn projective_blit_pipeline(
         &self,
         device: &wgpu::Device,
         blend_mode: BlendMode,
+        depth: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
             BlendMode::DstOut => (
@@ -877,16 +911,42 @@ impl EffectRenderer {
                 wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING,
             ),
         };
-        resource.get_or_init(self.adapter_backend, || {
+        resource.get_or_init(self.adapter_backend, depth, |depth| {
+            let depth_shader = depth.then(|| {
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Projective Blit Shader (display clip)"),
+                    source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
+                        shaders::projective_blit_shader().into(),
+                        true,
+                    )),
+                })
+            });
             create_projective_pipeline(
                 device,
                 label,
                 &self.projective_blit_pipeline_layout,
-                &self.projective_blit_shader,
+                depth_shader
+                    .as_ref()
+                    .unwrap_or(&self.projective_blit_shader),
                 self.surface_format,
                 blend,
+                depth,
             )
         })
+    }
+
+    fn initialized_projective_blit_pipeline(
+        &self,
+        blend_mode: BlendMode,
+        depth: bool,
+    ) -> &wgpu::RenderPipeline {
+        let resource = match blend_mode {
+            BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
+            _ => &self.projective_blit_pipeline,
+        };
+        resource
+            .get(depth)
+            .expect("prepared projective composite must initialize its pipeline")
     }
 
     fn sampler_for_mode(&self, _sample_mode: CompositeSampleMode) -> &wgpu::Sampler {
@@ -1928,6 +1988,125 @@ impl EffectRenderer {
         pass.draw(0..4, 0..1);
     }
 
+    /// Prepares one projective composite for later drawing INSIDE an
+    /// existing render pass (the fused segment pass), mirroring
+    /// [`Self::prepare_composite_batch_draws`] for the rotated-quad case.
+    /// Unlike [`Self::encode_composite_to_view_projective`], the four
+    /// uploaded vertices are the item's dest quad corners themselves (strip
+    /// order TL, TR, BL, BR), not their AABB — the rasterized area is then
+    /// exactly the transformed quad, which is what the segment-surface
+    /// economics gate prices. The fragment shader's out-of-source discard
+    /// stays as the safety net at the quad edges.
+    pub(crate) fn prepare_projective_composite_draw<'a, C: FrameCommandRecorder>(
+        &mut self,
+        recorder: &mut C,
+        device: &wgpu::Device,
+        item: &ProjectiveCompositeItem<'a>,
+        pass_depth: bool,
+    ) -> PreparedProjectiveComposite<'a> {
+        self.projective_blit_pipeline(device, item.blend_mode, pass_depth);
+        let vertices = [
+            ProjectiveBlitVertex {
+                position: item.dest_quad[0],
+            },
+            ProjectiveBlitVertex {
+                position: item.dest_quad[1],
+            },
+            ProjectiveBlitVertex {
+                position: item.dest_quad[2],
+            },
+            ProjectiveBlitVertex {
+                position: item.dest_quad[3],
+            },
+        ];
+        let uniforms = ProjectiveBlitUniforms {
+            viewport: [item.viewport.0 as f32, item.viewport.1 as f32],
+            source_size: [item.source.width as f32, item.source.height as f32],
+            inverse_row0: [
+                item.inverse[0][0],
+                item.inverse[0][1],
+                item.inverse[0][2],
+                0.0,
+            ],
+            inverse_row1: [
+                item.inverse[1][0],
+                item.inverse[1][1],
+                item.inverse[1][2],
+                0.0,
+            ],
+            inverse_row2: [
+                item.inverse[2][0],
+                item.inverse[2][1],
+                item.inverse[2][2],
+                0.0,
+            ],
+            alpha: [item.alpha.clamp(0.0, 1.0), 0.0, 0.0, 0.0],
+            sampling: [
+                composite_sampling_mode_value(item.sample_mode),
+                0.0,
+                0.0,
+                0.0,
+            ],
+        };
+        let sampler = self.sampler_for_mode(item.sample_mode);
+        let texture_bind_group = item.source.get_or_create_bind_group(
+            device,
+            &self.effect_texture_bind_group_layout,
+            sampler,
+        );
+        let vertex_buffer = recorder.upload_vertex(
+            UploadAllocatorId::ProjectiveBlitVertex,
+            projective_blit_vertex_spec(),
+            device,
+            bytemuck::cast_slice(&vertices),
+            &self.debug_upload_bytes,
+        );
+        let uniform_bind_group = recorder.upload_uniform(
+            UploadAllocatorId::ProjectiveBlitUniform,
+            projective_blit_uniform_spec(),
+            device,
+            &self.blit_uniform_bind_group_layout,
+            bytemuck::bytes_of(&uniforms),
+            &self.debug_upload_bytes,
+        );
+        let quad = item.dest_quad;
+        let min_x = quad.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        let min_y = quad.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
+        let max_x = quad.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max);
+        let max_y = quad.iter().map(|p| p[1]).fold(f32::NEG_INFINITY, f32::max);
+        if min_x.is_finite() && min_y.is_finite() && max_x > min_x && max_y > min_y {
+            self.note_composite_fill(
+                None,
+                Some((min_x, min_y, max_x - min_x, max_y - min_y)),
+                item.viewport,
+            );
+        }
+        PreparedProjectiveComposite {
+            texture_bind_group,
+            uniform_bind_group,
+            vertex_buffer,
+            blend_mode: item.blend_mode,
+        }
+    }
+
+    /// Draws a prepared projective composite inside an existing pass. The
+    /// scissor is reset to the full viewport, matching what the retained
+    /// draws around it do.
+    pub(crate) fn draw_prepared_projective_composite(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        viewport: (u32, u32),
+        draw: &PreparedProjectiveComposite<'_>,
+        pass_depth: bool,
+    ) {
+        pass.set_pipeline(self.initialized_projective_blit_pipeline(draw.blend_mode, pass_depth));
+        pass.set_bind_group(0, draw.texture_bind_group, &[]);
+        pass.set_bind_group(1, &draw.uniform_bind_group, &[]);
+        pass.set_vertex_buffer(0, draw.vertex_buffer.slice(..));
+        pass.set_scissor_rect(0, 0, viewport.0, viewport.1);
+        pass.draw(0..4, 0..1);
+    }
+
     /// Encode an offscreen composite pass into an existing command buffer.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode<
@@ -2067,7 +2246,7 @@ impl EffectRenderer {
                 depth_stencil_attachment: None,
                 ..Default::default()
             });
-        pass.set_pipeline(self.projective_blit_pipeline(device, blend_mode));
+        pass.set_pipeline(self.projective_blit_pipeline(device, blend_mode, false));
         pass.set_bind_group(0, texture_bind_group, &[]);
         pass.set_bind_group(1, &uniform_bind_group, &[]);
         pass.set_vertex_buffer(0, vertex_buffer.slice(..));
