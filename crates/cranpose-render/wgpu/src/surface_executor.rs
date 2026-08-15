@@ -17,6 +17,7 @@ pub(crate) use geometry::{
 };
 pub(crate) use render_paths::{
     apply_backdrop_layer_to_target, backdrop_underlay_is_covered_by_local_content,
-    composite_surface_to_view, layer_surface_translation_context, render_effect_layer_to_target,
+    composite_surface_to_view, layer_source_uses_external_backdrop_underlay,
+    layer_surface_translation_context, render_effect_layer_to_target,
     render_layer_surface, render_root_direct, root_direct_scene_events_are_supported,
 };

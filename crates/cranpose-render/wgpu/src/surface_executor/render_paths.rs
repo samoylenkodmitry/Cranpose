@@ -522,13 +522,29 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
     covered
 }
 
-fn layer_source_uses_external_backdrop_underlay(
+pub(crate) fn layer_source_uses_external_backdrop_underlay(
     local_scene: &CompositorScene,
     child_layers: &[ChildLayerComposite],
     has_backdrop_underlay: bool,
 ) -> bool {
     if !has_backdrop_underlay {
         return false;
+    }
+
+    let scene_backdrop_reads_outside = local_scene.backdrop_layers.iter().any(|backdrop_layer| {
+        !backdrop_underlay_is_covered_by_local_content(
+            &local_scene.shapes,
+            &local_scene.brushes,
+            &local_scene.images,
+            &local_scene.shadow_draws,
+            &local_scene.draw_ops,
+            &local_scene.effect_layers,
+            &local_scene.backdrop_layers,
+            backdrop_layer,
+        )
+    });
+    if scene_backdrop_reads_outside {
+        return true;
     }
 
     child_layers.iter().any(|child| {

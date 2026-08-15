@@ -421,9 +421,6 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::RenderEffect);
     }
     let has_backdrop = layer.isolation.backdrop || layer.backdrop().is_some();
-    if layer.isolation.backdrop {
-        surface_requirements.insert(SurfaceRequirement::Backdrop);
-    }
     if layer.isolation.group_opacity
         || matches!(
             layer.graphics_layer.compositing_strategy,
