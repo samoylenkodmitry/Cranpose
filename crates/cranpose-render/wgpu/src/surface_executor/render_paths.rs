@@ -1651,8 +1651,20 @@ fn create_direct_root_child_underlay<B: SurfaceExecutionBackend>(
     Ok(underlay)
 }
 
-pub(crate) fn root_direct_scene_events_are_supported(scene: &CompositorScene) -> bool {
-    scene.backdrop_layers.is_empty()
+pub(crate) fn root_direct_scene_events_are_supported(
+    scene: &CompositorScene,
+    root_target_reads: bool,
+) -> bool {
+    if scene.backdrop_layers.is_empty() {
+        return true;
+    }
+    if !root_target_reads {
+        return false;
+    }
+    !scene
+        .effect_layers
+        .iter()
+        .any(|layer| has_backdrop_layer_in_range(&scene.backdrop_layers, layer.z_start, layer.z_end))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1908,9 +1920,12 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
     backend: &mut B,
     target_view: &wgpu::TextureView,
+    root_target: Option<&OffscreenTarget>,
+    backdrop_input_hashes: &[u64],
     scene: &CompositorScene,
     z_start: usize,
     z_end: usize,
@@ -1978,10 +1993,22 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
         }
 
         match event.kind {
-            LayerEventKind::Backdrop(_) => {
-                return Err(
-                    "root direct path does not support root-local backdrop sampling".to_string(),
-                );
+            LayerEventKind::Backdrop(index) => {
+                let Some(root_target) = root_target else {
+                    return Err(
+                        "root direct path does not support root-local backdrop sampling".to_string(),
+                    );
+                };
+                apply_backdrop_layer_to_target(
+                    backend,
+                    root_target,
+                    &scene.backdrop_layers[index],
+                    None,
+                    width,
+                    height,
+                    root_scale,
+                    backdrop_input_hashes.get(index).copied(),
+                )?;
             }
             LayerEventKind::Effect(index) => {
                 let layer = &scene.effect_layers[index];
@@ -2042,6 +2069,7 @@ fn render_range_with_layer_events_to_view<B: SurfaceExecutionBackend>(
 pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
     backend: &mut B,
     surface_view: &wgpu::TextureView,
+    root_target: Option<&OffscreenTarget>,
     collected: CollectedLayer,
     width: u32,
     height: u32,
@@ -2052,6 +2080,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         scene: local_scene,
         child_layers,
     } = collected;
+    let surface_view = root_target.map_or(surface_view, |target| &target.view);
     let result = (|| -> Result<(), String> {
         let mut cursor_z = 0usize;
         let mut next_load_op = initial_load_op;
@@ -2059,6 +2088,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
         let mut pending_composite_load_op = None;
         let mut pending_shader_composites = Vec::new();
         let mut pending_shader_load_op = None;
+        let mut prior_child_contributions = Vec::new();
         for mut child in child_layers {
             if cursor_z < child.z_index {
                 let range_has_events = range_contains_layer_events(
@@ -2083,9 +2113,17 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                         &mut pending_shader_load_op,
                         &mut next_load_op,
                     )?;
+                    let backdrop_input_hashes = scene_backdrop_input_hashes(
+                        &local_scene,
+                        &prior_child_contributions,
+                        (width, height),
+                        root_scale,
+                    );
                     render_range_with_layer_events_to_view(
                         backend,
                         surface_view,
+                        root_target,
+                        &backdrop_input_hashes,
                         &local_scene,
                         cursor_z,
                         child.z_index,
@@ -2137,7 +2175,8 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 continue;
             }
 
-            if !resolved_child.shadow_draws.is_empty() {
+            let child_backdrop_reads_target = child.backdrop.is_some() && root_target.is_some();
+            if !resolved_child.shadow_draws.is_empty() && !child_backdrop_reads_target {
                 render_non_effect_range_with_pending_composites(
                     backend,
                     surface_view,
@@ -2154,9 +2193,9 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     &mut next_load_op,
                 )?;
                 flush_pending_clear(backend, surface_view, &mut next_load_op);
-            }
-            for shadow in &resolved_child.shadow_draws {
-                backend.render_shadow_draw(surface_view, shadow, width, height, root_scale);
+                for shadow in &resolved_child.shadow_draws {
+                    backend.render_shadow_draw(surface_view, shadow, width, height, root_scale);
+                }
             }
 
             if child.needs_nested_underlay {
@@ -2202,9 +2241,110 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 backend.release_frame_surface(underlay);
             }
             let child_surface = child_surface_result?;
-            if child_surface.backdrop.is_some() {
-                backend.release_layer_surface_target(child_surface.target);
-                return Err("root direct path does not support backdrop child surfaces".to_string());
+            if let Some(backdrop) = child_surface.backdrop.clone() {
+                let Some(root_target) = root_target else {
+                    backend.release_layer_surface_target(child_surface.target);
+                    return Err(
+                        "root direct path does not support backdrop child surfaces".to_string()
+                    );
+                };
+                flush_pending_shader_layer_composites(
+                    backend,
+                    &mut pending_shader_composites,
+                    surface_view,
+                    (width, height),
+                    &mut pending_shader_load_op,
+                    &mut next_load_op,
+                )?;
+                flush_pending_layer_composites(
+                    backend,
+                    &mut pending_composites,
+                    surface_view,
+                    (width, height),
+                    &mut pending_composite_load_op,
+                    &mut next_load_op,
+                );
+                flush_pending_clear(backend, surface_view, &mut next_load_op);
+                let backdrop_layer = BackdropLayer {
+                    node_id: child.node_id,
+                    rect: resolved_child.backdrop_rect,
+                    clip: child.visual_clip,
+                    snap_anchor: resolved_child.snap_anchor,
+                    effect: backdrop,
+                    z_index: child.z_index,
+                };
+                let child_backdrop_capture_rect = visible_backdrop_capture_rect(
+                    resolved_child.backdrop_rect,
+                    child.visual_clip,
+                    &backdrop_layer.effect,
+                    root_scale,
+                    (width, height),
+                );
+                let backdrop_input_hash = backdrop_scene_prefix_hash(
+                    &local_scene,
+                    &prior_child_contributions,
+                    child.z_index,
+                    child_backdrop_capture_rect.unwrap_or(backdrop_layer.rect),
+                    (width, height),
+                    root_scale,
+                );
+                if let Some(prepared) = prepare_cached_backdrop_layer_composite(
+                    backend,
+                    root_target,
+                    &backdrop_layer,
+                    None,
+                    width,
+                    height,
+                    root_scale,
+                    Some(backdrop_input_hash),
+                )? {
+                    if pending_composites.is_empty() {
+                        pending_composite_load_op = Some(next_load_op);
+                    }
+                    pending_composites.push(PendingLayerComposite {
+                        z_index: child.z_index,
+                        surface: prepared.surface,
+                        dest_quad: prepared.dest_quad,
+                        scissor: prepared.scissor,
+                    });
+                    next_load_op = wgpu::LoadOp::Load;
+                } else {
+                    apply_backdrop_layer_to_target(
+                        backend,
+                        root_target,
+                        &backdrop_layer,
+                        None,
+                        width,
+                        height,
+                        root_scale,
+                        Some(backdrop_input_hash),
+                    )?;
+                    if !pending_composites.is_empty() {
+                        pending_composite_load_op = Some(wgpu::LoadOp::Load);
+                    }
+                }
+            }
+            if child_backdrop_reads_target && !resolved_child.shadow_draws.is_empty() {
+                flush_pending_shader_layer_composites(
+                    backend,
+                    &mut pending_shader_composites,
+                    surface_view,
+                    (width, height),
+                    &mut pending_shader_load_op,
+                    &mut next_load_op,
+                )?;
+                flush_pending_layer_composites(
+                    backend,
+                    &mut pending_composites,
+                    surface_view,
+                    (width, height),
+                    &mut pending_composite_load_op,
+                    &mut next_load_op,
+                );
+                flush_pending_clear(backend, surface_view, &mut next_load_op);
+                for shadow in &resolved_child.shadow_draws {
+                    backend.render_shadow_draw(surface_view, shadow, width, height, root_scale);
+                }
             }
 
             let dest_quad = layer_surface_dest_quad(
@@ -2222,6 +2362,8 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
             let scissor = child
                 .visual_clip
                 .and_then(|clip| scissor_rect_for_rect(clip, root_scale, width, height));
+            let child_prefix_contribution =
+                backdrop_prefix_child_contribution(&child, &child_surface, dest_quad, scissor);
             if child_surface.deferred_effect.is_none()
                 && axis_aligned_quad_rect(dest_quad).is_some()
             {
@@ -2280,6 +2422,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     }
                 }
             }
+            prior_child_contributions.push(child_prefix_contribution);
             cursor_z = child.z_index.saturating_add(1);
         }
 
@@ -2306,9 +2449,17 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                     &mut pending_shader_load_op,
                     &mut next_load_op,
                 )?;
+                let backdrop_input_hashes = scene_backdrop_input_hashes(
+                    &local_scene,
+                    &prior_child_contributions,
+                    (width, height),
+                    root_scale,
+                );
                 render_range_with_layer_events_to_view(
                     backend,
                     surface_view,
+                    root_target,
+                    &backdrop_input_hashes,
                     &local_scene,
                     cursor_z,
                     local_scene.next_z,

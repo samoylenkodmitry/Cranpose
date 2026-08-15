@@ -24,7 +24,7 @@ use crate::normalized_scene::{
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
 use crate::normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer};
-use crate::offscreen::OffscreenTarget;
+use crate::offscreen::{capture_root_target_reads, OffscreenTarget};
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
@@ -403,9 +403,12 @@ fn rects_overlap(a: Rect, b: Rect) -> bool {
     a.x < b_right && b.x < a_right && a.y < b_bottom && b.y < a_bottom
 }
 
-pub(crate) fn direct_root_child_underlays_are_supported(collected: &CollectedLayer) -> bool {
+pub(crate) fn direct_root_child_underlays_are_supported(
+    collected: &CollectedLayer,
+    root_target_reads: bool,
+) -> bool {
     for (child_index, child) in collected.child_layers.iter().enumerate() {
-        if child.backdrop.is_some() {
+        if child.backdrop.is_some() && !root_target_reads {
             if root_direct_diag_enabled() {
                 log::warn!(
                     "[root-direct-diag] reject self-backdrop child node={:?}",
@@ -7691,9 +7694,11 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
 }
 
 impl GpuRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
+        root_target: Option<&OffscreenTarget>,
         width: u32,
         height: u32,
         packet: FramePacket,
@@ -7750,7 +7755,7 @@ impl GpuRenderer {
         // present call tree holds no text layout state, and no layout runs
         // between packet build and the stats block below.
         let text_cache_len = packet.text_cache_len;
-        let result = self.render_graph(view, packet, returns);
+        let result = self.render_graph(view, root_target, packet, returns);
         let after_graph = Instant::now();
         self.flush_deferred_offscreen_releases();
         #[cfg(not(target_arch = "wasm32"))]
@@ -7960,12 +7965,27 @@ impl GpuRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: if capture_root_target_reads() {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            },
             view_formats: &[],
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let root_target = OffscreenTarget::from_readable_texture(&output_texture, &output_view);
 
-        self.render(&output_view, width, height, packet, surface_epoch, returns)?;
+        self.render(
+            &output_view,
+            root_target.as_ref(),
+            width,
+            height,
+            packet,
+            surface_epoch,
+            returns,
+        )?;
 
         let bytes_per_pixel = 4u32;
         let unpadded_bytes_per_row = width
@@ -8057,6 +8077,7 @@ impl GpuRenderer {
     fn render_graph(
         &mut self,
         surface_view: &wgpu::TextureView,
+        root_target: Option<&OffscreenTarget>,
         packet: FramePacket,
         returns: &mut RenderReturns,
     ) -> Result<(), String> {
@@ -8074,7 +8095,7 @@ impl GpuRenderer {
                 &[],
                 &[surface],
                 |frame_encoder| {
-                    self.render_graph_recorded(surface_view, packet, returns, frame_encoder)
+                    self.render_graph_recorded(surface_view, root_target, packet, returns, frame_encoder)
                 },
             );
             let after_build = Instant::now();
@@ -8109,7 +8130,7 @@ impl GpuRenderer {
                     executor.begin(&device, &queue, Some("Renderer Frame Encoder"));
                 let initial_pass_count = frame_encoder.recorded_pass_count();
                 let result =
-                    self.render_graph_recorded(surface_view, packet, returns, &mut frame_encoder);
+                    self.render_graph_recorded(surface_view, root_target, packet, returns, &mut frame_encoder);
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -8133,6 +8154,7 @@ impl GpuRenderer {
     fn render_graph_recorded<C: FrameCommandRecorder>(
         &mut self,
         surface_view: &wgpu::TextureView,
+        root_target: Option<&OffscreenTarget>,
         packet: FramePacket,
         returns: &mut RenderReturns,
         frame_encoder: &mut C,
@@ -8187,6 +8209,7 @@ impl GpuRenderer {
                 let result = match execute_render_root_direct(
                     &mut backend,
                     surface_view,
+                    root_target,
                     *root,
                     width,
                     height,
@@ -8400,14 +8423,15 @@ impl GpuRenderer {
         root_scale: f32,
     ) -> Result<(), String> {
         if !overlay.child_layers.is_empty()
-            || !root_direct_scene_events_are_supported(&overlay.scene)
-            || !direct_root_child_underlays_are_supported(&overlay)
+            || !root_direct_scene_events_are_supported(&overlay.scene, false)
+            || !direct_root_child_underlays_are_supported(&overlay, false)
         {
             return Err("dev overlay graph must stay directly renderable".to_string());
         }
         execute_render_root_direct(
             backend,
             surface_view,
+            None,
             overlay,
             width,
             height,
@@ -17062,7 +17086,7 @@ mod tests {
             )],
         };
 
-        assert!(direct_root_child_underlays_are_supported(&collected));
+        assert!(direct_root_child_underlays_are_supported(&collected, false));
     }
 
     #[test]
@@ -17113,7 +17137,7 @@ mod tests {
             ],
         };
 
-        assert!(direct_root_child_underlays_are_supported(&collected));
+        assert!(direct_root_child_underlays_are_supported(&collected, false));
     }
 
     #[test]
@@ -17165,7 +17189,7 @@ mod tests {
             ],
         };
 
-        assert!(!direct_root_child_underlays_are_supported(&collected));
+        assert!(!direct_root_child_underlays_are_supported(&collected, false));
     }
 
     #[test]
@@ -17217,7 +17241,7 @@ mod tests {
             ],
         };
 
-        assert!(direct_root_child_underlays_are_supported(&collected));
+        assert!(direct_root_child_underlays_are_supported(&collected, false));
     }
 
     #[test]
@@ -17262,7 +17286,7 @@ mod tests {
             )],
         };
 
-        assert!(!direct_root_child_underlays_are_supported(&collected));
+        assert!(!direct_root_child_underlays_are_supported(&collected, false));
     }
 
     #[test]
@@ -17320,7 +17344,7 @@ mod tests {
             requirements: SurfaceRequirementSet::default().with(SurfaceRequirement::RenderEffect),
         });
 
-        assert!(root_direct_scene_events_are_supported(&scene));
+        assert!(root_direct_scene_events_are_supported(&scene, false));
     }
 
     #[test]
@@ -17340,7 +17364,89 @@ mod tests {
             z_index: 1,
         });
 
-        assert!(!root_direct_scene_events_are_supported(&scene));
+        assert!(!root_direct_scene_events_are_supported(&scene, false));
+    }
+
+    fn scene_with_root_local_backdrop(z_index: usize) -> CompositorScene {
+        let mut scene = CompositorScene::new();
+        scene.next_z = z_index + 1;
+        scene.backdrop_layers.push(BackdropLayer {
+            node_id: Some(99),
+            rect: Rect {
+                x: 20.0,
+                y: 30.0,
+                width: 120.0,
+                height: 80.0,
+            },
+            clip: None,
+            snap_anchor: None,
+            effect: RenderEffect::blur(6.0),
+            z_index,
+        });
+        scene
+    }
+
+    #[test]
+    fn a_root_local_backdrop_takes_the_direct_road_when_the_target_reads() {
+        let scene = scene_with_root_local_backdrop(1);
+        assert!(root_direct_scene_events_are_supported(&scene, true));
+    }
+
+    #[test]
+    fn a_backdrop_inside_an_effect_layer_stays_off_the_direct_road() {
+        let mut scene = scene_with_root_local_backdrop(1);
+        scene.next_z = 3;
+        scene.effect_layers.push(EffectLayer {
+            rect: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 200.0,
+            },
+            clip: None,
+            snap_anchor: None,
+            effect: Some(RenderEffect::blur(6.0)),
+            blend_mode: BlendMode::SrcOver,
+            composite_alpha: 1.0,
+            z_start: 0,
+            z_end: 3,
+            requirements: SurfaceRequirementSet::default().with(SurfaceRequirement::RenderEffect),
+        });
+
+        assert!(!root_direct_scene_events_are_supported(&scene, true));
+        assert!(!root_direct_scene_events_are_supported(&scene, false));
+    }
+
+    #[test]
+    fn a_child_that_carries_a_backdrop_takes_the_direct_road_when_the_target_reads() {
+        let mut backdrop_child = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 280.0,
+            },
+            vec![],
+        );
+        backdrop_child.graphics_layer.backdrop_effect = Some(RenderEffect::blur(4.0));
+        let collected = CollectedLayer {
+            scene: CompositorScene::new(),
+            child_layers: vec![child_layer_composite(
+                &backdrop_child,
+                1,
+                Rect {
+                    x: 48.0,
+                    y: 96.0,
+                    width: 400.0,
+                    height: 280.0,
+                },
+                false,
+            )],
+        };
+
+        assert!(collected.child_layers[0].backdrop.is_some());
+        assert!(direct_root_child_underlays_are_supported(&collected, true));
+        assert!(!direct_root_child_underlays_are_supported(&collected, false));
     }
 
     fn frosted_layer(bounds: Rect, offset: Point) -> LayerNode {
