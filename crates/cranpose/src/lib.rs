@@ -57,6 +57,8 @@ mod android_keyboard;
 mod android_launch_args;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
+#[cfg(all(feature = "android", target_os = "android"))]
+mod android_perf_hint;
 /// The Play Billing wire format behind `cranpose_services::purchases`. Built on
 /// the host as well so its decoding tests run everywhere.
 #[cfg(any(
