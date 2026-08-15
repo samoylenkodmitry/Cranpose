@@ -2170,27 +2170,6 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
             }
 
-            let child_underlay_color = if child.needs_nested_underlay {
-                let dest_rect = quad_bounds(resolved_child.dest_quad);
-                let covered_by_sibling = pending_layer_composites_intersect_rect(
-                    &pending_composites,
-                    surface_pixel_rect(dest_rect, root_scale),
-                );
-                if covered_by_sibling {
-                    None
-                } else {
-                    uniform_underlay_color_before(
-                        &local_scene,
-                        &[],
-                        child.z_index,
-                        dest_rect,
-                        root_scale,
-                        None,
-                    )
-                }
-            } else {
-                None
-            };
             let child_underlay = if child.needs_nested_underlay {
                 Some(create_direct_root_child_underlay(
                     backend,
@@ -2211,7 +2190,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 LayerSurfaceRequest {
                     root_scale,
                     backdrop_underlay: child_underlay.as_ref(),
-                    backdrop_underlay_color: child_underlay_color,
+                    backdrop_underlay_color: None,
                     allow_runtime_cache: true,
                     logical_rect_override: Some(resolved_child.logical_rect),
                     capture_clip_override: resolved_child.surface_clip,
