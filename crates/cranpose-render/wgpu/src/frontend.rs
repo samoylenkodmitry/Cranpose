@@ -580,9 +580,7 @@ mod tests {
             "the surface lowering must carry the descendant backdrop the direct path rejected"
         );
         assert!(
-            !surface.source.scene.shapes.is_empty()
-                || !surface.source.children.is_empty()
-                || !surface.source.scene.backdrop_layers.is_empty(),
+            !surface.source.scene.shapes.is_empty() || !surface.source.children.is_empty(),
             "the surface source must carry the collected root content"
         );
         assert!(

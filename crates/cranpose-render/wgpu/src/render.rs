@@ -17360,57 +17360,7 @@ mod tests {
     }
 
     #[test]
-    fn a_frosted_layer_draws_inline_and_leaves_a_backdrop_event_behind_it() {
-        let frosted = frosted_layer(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 40.0,
-                height: 20.0,
-            },
-            Point::new(10.0, 6.0),
-        );
-        let root = test_layer(
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: 200.0,
-                height: 100.0,
-            },
-            vec![RenderNode::Layer(Box::new(frosted))],
-        );
-        let mut rect_cache = HashMap::new();
-        let mut requirements_cache = HashMap::new();
-
-        let collected =
-            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
-
-        assert!(
-            collected.child_layers.is_empty(),
-            "a backdrop alone must not force the layer onto its own surface"
-        );
-        assert_eq!(collected.scene.backdrop_layers.len(), 1);
-        let backdrop = &collected.scene.backdrop_layers[0];
-        assert_eq!(
-            backdrop.rect,
-            Rect {
-                x: 10.0,
-                y: 6.0,
-                width: 40.0,
-                height: 20.0,
-            }
-        );
-        assert_eq!(collected.scene.shapes.len(), 1);
-        assert!(
-            backdrop.z_index < collected.scene.shapes[0].z_index,
-            "the blur reads the target before the layer draws over it: backdrop z={} shape z={}",
-            backdrop.z_index,
-            collected.scene.shapes[0].z_index
-        );
-    }
-
-    #[test]
-    fn a_frosted_layer_that_needs_isolation_keeps_its_own_surface() {
+    fn a_frosted_layer_keeps_its_own_surface() {
         let mut frosted = frosted_layer(
             Rect {
                 x: 0.0,

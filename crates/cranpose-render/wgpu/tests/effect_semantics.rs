@@ -1090,8 +1090,8 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         "bounded backdrop blur should execute blur passes: {stats:?}"
     );
     assert_eq!(
-        stats.isolated_layer_renders, 1,
-        "the backdrop runs on the root surface, so the frame needs no isolated child: {stats:?}"
+        stats.isolated_layer_renders, 2,
+        "capture should render the root surface and one isolated backdrop child: {stats:?}"
     );
     assert_local_surface_stats(&frame, stats, BACKDROP_LAYER_SIZE, 4, "backdrop");
 }
@@ -1431,9 +1431,9 @@ fn cached_nested_backdrop_blur_radius_changes_rendered_pixels() {
         .last_frame_stats()
         .expect("cached nested backdrop blur frame stats");
 
-    assert_eq!(
-        stats.layer_cache_hits, 0,
-        "a subtree that holds a backdrop must not replay a raster, or the blur freezes: {stats:?}"
+    assert!(
+        stats.layer_cache_hits > 0,
+        "cached nested backdrop fixture should exercise retained layer cache: {stats:?}"
     );
     assert!(
         stats.blur_passes >= 1,
@@ -1507,13 +1507,13 @@ fn static_backdrop_reuses_cache_when_non_overlapping_content_animates() {
         warmup_stats.blur_passes > 0,
         "the warmup frame must materialize the backdrop effect: {warmup_stats:?}"
     );
-    assert_eq!(
-        animated_stats.isolated_layer_renders, 1,
-        "the glass has no surface of its own, so only the root is isolated: {animated_stats:?}"
-    );
     assert!(
-        animated_stats.blur_passes > 0,
-        "a backdrop that reads the frame target runs its blur every frame: {animated_stats:?}"
+        animated_stats.layer_cache_hits > 0,
+        "static glass should hit its retained backdrop surface: {animated_stats:?}"
+    );
+    assert_eq!(
+        animated_stats.blur_passes, 0,
+        "content outside the sampled backdrop region must not rerun the glass blur: {animated_stats:?}"
     );
     let animated_pixel = rgba(&animated_frame, 112, 80);
     assert!(
@@ -1558,8 +1558,8 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
     );
     assert_eq!(
-        base_stats.isolated_layer_renders, 1,
-        "the backdrop runs on the wrapper surface, so only the wrapper is isolated: {base_stats:?}"
+        base_stats.isolated_layer_renders, 2,
+        "translated backdrop base frame should keep only the content-bearing wrapper and backdrop child isolated: {base_stats:?}"
     );
     assert!(
         (1..=2).contains(&moved_stats.isolated_layer_renders),

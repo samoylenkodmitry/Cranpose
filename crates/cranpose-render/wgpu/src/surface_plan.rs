@@ -420,7 +420,9 @@ pub(crate) fn layer_surface_requirements_cached(
     if layer.isolation.effect || layer.effect().is_some() {
         surface_requirements.insert(SurfaceRequirement::RenderEffect);
     }
-    let has_backdrop = layer.isolation.backdrop || layer.backdrop().is_some();
+    if layer.isolation.backdrop || layer.backdrop().is_some() {
+        surface_requirements.insert(SurfaceRequirement::Backdrop);
+    }
     if layer.isolation.group_opacity
         || matches!(
             layer.graphics_layer.compositing_strategy,
@@ -529,10 +531,6 @@ pub(crate) fn layer_surface_requirements_cached(
         surface_requirements.insert(SurfaceRequirement::PixelStableComposite);
     }
 
-    if has_backdrop && surface_requirements.has_isolating_requirement() {
-        surface_requirements.insert(SurfaceRequirement::Backdrop);
-    }
-
     let requirements = LayerSurfaceRequirements {
         direct_translation,
         surface_requirements,
@@ -590,26 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backdrop_on_its_own_does_not_force_a_surface() {
-        let mut layer = test_layer(Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 60.0,
-            height: 24.0,
-        });
-        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
-
-        let requirements = layer_surface_requirements(&layer);
-
-        assert!(!requirements.has_isolating_requirement());
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::Backdrop));
-        assert!(requirements.contains_backdrop_content);
-    }
-
-    #[test]
-    fn a_backdrop_next_to_another_isolating_reason_keeps_the_surface() {
+    fn a_backdrop_keeps_the_surface_that_holds_the_layer_content() {
         let mut layer = test_layer(Rect {
             x: 0.0,
             y: 0.0,
