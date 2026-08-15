@@ -37,7 +37,7 @@ use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use cranpose_core::collections::map::HashMap;
 use cranpose_core::NodeId;
 use cranpose_render_common::geometry::union_rect;
-use cranpose_render_common::graph::{CachePolicy, ProjectiveTransform};
+use cranpose_render_common::graph::{quad_bounds, CachePolicy, ProjectiveTransform};
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkKey;
 use cranpose_ui_graphics::{
@@ -608,6 +608,16 @@ fn source_pixel_region_batch_item<'a>(
     }
 }
 
+fn scissored_batch_item<'a>(
+    mut item: CompositeBatchItem<'a>,
+    scissor: Option<(u32, u32, u32, u32)>,
+) -> CompositeBatchItem<'a> {
+    if scissor.is_some() {
+        item.scissor = scissor;
+    }
+    item
+}
+
 fn source_region_batch_item<'a>(
     source: &'a OffscreenTarget,
     source_rect: Rect,
@@ -888,6 +898,71 @@ fn child_surface_target_scale(
 /// one scale looked correct until a glass surface grew a press transform: the
 /// backdrop then showed the world at `1 / child_scale * parent_scale` of its
 /// true size, anchored at the surface origin.
+/// Every rect the child's own render will read back out of the underlay,
+/// in the child's local coordinates: each backdrop it holds, grown by the
+/// reach of its effect, and the whole quad of any child that carries a
+/// backdrop deeper down, since that child builds its own underlay out of
+/// this one.
+fn underlay_sample_rect(source: &LoweredChildSource) -> Option<Rect> {
+    let mut bounds: Option<Rect> = None;
+    for layer in &source.scene.backdrop_layers {
+        let rect = padded_backdrop_rect(layer.rect, &layer.effect);
+        let rect = layer.clip.and_then(|clip| rect.intersect(clip)).unwrap_or(rect);
+        bounds = union_rect(bounds, rect);
+    }
+    for layer in &source.scene.effect_layers {
+        let rect = layer
+            .clip
+            .and_then(|clip| layer.rect.intersect(clip))
+            .unwrap_or(layer.rect);
+        bounds = union_rect(bounds, rect);
+    }
+    for child in &source.children {
+        if let Some(effect) = child.backdrop.as_ref() {
+            let rect = padded_backdrop_rect(child.backdrop_rect, effect);
+            let rect = child
+                .visual_clip
+                .and_then(|clip| rect.intersect(clip))
+                .unwrap_or(rect);
+            bounds = union_rect(bounds, rect);
+        }
+        if child.contains_descendant_backdrop {
+            let rect = quad_bounds(child.dest_quad);
+            let rect = child
+                .visual_clip
+                .and_then(|clip| rect.intersect(clip))
+                .unwrap_or(rect);
+            bounds = union_rect(bounds, rect);
+        }
+    }
+    bounds
+}
+
+fn padded_backdrop_rect(rect: Rect, effect: &RenderEffect) -> Rect {
+    let padding = effect.input_padding().max(effect.output_padding());
+    if !padding.is_finite() || padding <= 0.0 {
+        return rect;
+    }
+    Rect {
+        x: rect.x - padding,
+        y: rect.y - padding,
+        width: rect.width + padding * 2.0,
+        height: rect.height + padding * 2.0,
+    }
+}
+
+fn underlay_fill_scissor(
+    sample_rect: Option<Rect>,
+    child_logical_rect: Rect,
+    child_scale: f32,
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let rect = sample_rect?.translate(-child_logical_rect.x, -child_logical_rect.y);
+    crate::render::scissor_rect_for_rect(rect, child_scale, width, height)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
     backend: &mut B,
     parent_target: &OffscreenTarget,
@@ -896,10 +971,13 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
     child_dest_quad: [[f32; 2]; 4],
     parent_scale: f32,
     child_scale: f32,
+    sample_rect: Option<Rect>,
 ) -> OffscreenTarget {
     let (width, height) =
         surface_target_size(child_logical_rect, child_scale, backend.max_texture_dim());
     let underlay = backend.acquire_frame_surface(width, height);
+    let fill_scissor =
+        underlay_fill_scissor(sample_rect, child_logical_rect, child_scale, width, height);
     let child_source_rect = Rect {
         x: 0.0,
         y: 0.0,
@@ -911,12 +989,22 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
     {
         if let Some(ancestor_underlay) = parent_underlay {
             let composites = [
-                source_pixel_region_batch_item(
-                    ancestor_underlay,
-                    source_pixel_rect,
-                    (width, height),
+                scissored_batch_item(
+                    source_pixel_region_batch_item(
+                        ancestor_underlay,
+                        source_pixel_rect,
+                        (width, height),
+                    ),
+                    fill_scissor,
                 ),
-                source_pixel_region_batch_item(parent_target, source_pixel_rect, (width, height)),
+                scissored_batch_item(
+                    source_pixel_region_batch_item(
+                        parent_target,
+                        source_pixel_rect,
+                        (width, height),
+                    ),
+                    fill_scissor,
+                ),
             ];
             backend.composite_surface_batch_to_view(
                 &underlay.view,
@@ -925,10 +1013,9 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
                 &composites,
             );
         } else {
-            let composites = [source_pixel_region_batch_item(
-                parent_target,
-                source_pixel_rect,
-                (width, height),
+            let composites = [scissored_batch_item(
+                source_pixel_region_batch_item(parent_target, source_pixel_rect, (width, height)),
+                fill_scissor,
             )];
             backend.composite_surface_batch_to_view(
                 &underlay.view,
@@ -955,7 +1042,7 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
         } else {
             wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
         },
-        scissor: None,
+        scissor: fill_scissor,
         blend_mode: BlendMode::SrcOver,
         sample_mode: CompositeSampleMode::Linear,
     };
@@ -971,7 +1058,7 @@ fn create_projected_child_underlay<B: SurfaceExecutionBackend>(
             dest_bounds: dest_quad,
             alpha: 1.0,
             load_op: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-            scissor: None,
+            scissor: fill_scissor,
             blend_mode: BlendMode::SrcOver,
             sample_mode: CompositeSampleMode::Linear,
         };
@@ -3984,6 +4071,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             local_picture_capture_active: translation_context.local_picture_capture_active,
         };
         let child_underlay = child.needs_nested_underlay.then(|| {
+            let sample_rect = underlay_sample_rect(&child.source);
             create_projected_child_underlay(
                 backend,
                 &target,
@@ -3992,6 +4080,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 child_dest_quad,
                 target_scale,
                 child_surface_target_scale(&child, target_scale, child_translation_context),
+                sample_rect,
             )
         });
         let child_surface = render_layer_surface(
@@ -5532,6 +5621,7 @@ mod tests {
         direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
         layer_surface_dest_quad, layer_surface_translation_context, rounded_fill_covers_rect,
+        underlay_fill_scissor, underlay_sample_rect,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
         render_string_scene_hash, retained_render_effect_hash, snapped_backdrop_geometry,
         surface_target_size, visible_backdrop_capture_rect, BackdropPrefixChildContribution,
@@ -5913,6 +6003,89 @@ mod tests {
             needs_nested_underlay: false,
             ..lower_test_layer(layer)
         }
+    }
+
+    #[test]
+    fn the_underlay_fill_covers_only_what_the_glass_reads_back() {
+        let row = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 140.0,
+        };
+        let glass = Rect {
+            x: 300.0,
+            y: 48.0,
+            width: 44.0,
+            height: 44.0,
+        };
+        let layer = crate::test_support::layer_node(
+            glass,
+            ProjectiveTransform::identity(),
+            cranpose_ui_graphics::GraphicsLayer::default(),
+            Vec::new(),
+        );
+        let mut child = child_layer_composite(&layer, 4, glass);
+        child.backdrop = Some(RenderEffect::blur(6.0));
+        let source = crate::normalized_scene::LoweredChildSource {
+            scene: CompositorScene::new(),
+            children: vec![child],
+        };
+
+        let sample_rect = underlay_sample_rect(&source).expect("the glass reads back a rect");
+        let full = surface_target_size(row, 3.0, 4096);
+        let scissor = underlay_fill_scissor(Some(sample_rect), row, 3.0, full.0, full.1)
+            .expect("the fill must be scissored to that rect");
+
+        let filled = (scissor.2 as u64) * (scissor.3 as u64);
+        let whole = (full.0 as u64) * (full.1 as u64);
+        assert_eq!(whole, 504_000, "a 1200x420 row underlay");
+        assert_eq!(filled, 28_224, "only the glass and the reach of its blur");
+        assert!(
+            sample_rect.x <= glass.x && sample_rect.y <= glass.y,
+            "the blur reach must widen the rect: sample={sample_rect:?} glass={glass:?}"
+        );
+    }
+
+    #[test]
+    fn a_deeper_backdrop_keeps_the_whole_child_quad_filled() {
+        let row = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 140.0,
+        };
+        let panel = Rect {
+            x: 20.0,
+            y: 10.0,
+            width: 360.0,
+            height: 120.0,
+        };
+        let layer = crate::test_support::layer_node(
+            panel,
+            ProjectiveTransform::identity(),
+            cranpose_ui_graphics::GraphicsLayer::default(),
+            Vec::new(),
+        );
+        let mut child = child_layer_composite(&layer, 4, panel);
+        child.backdrop = None;
+        child.contains_descendant_backdrop = true;
+        let source = crate::normalized_scene::LoweredChildSource {
+            scene: CompositorScene::new(),
+            children: vec![child],
+        };
+
+        let sample_rect = underlay_sample_rect(&source).expect("the nested underlay reads it back");
+
+        assert_eq!(
+            sample_rect, panel,
+            "a child that builds its own underlay out of this one reads its whole quad"
+        );
+        let full = surface_target_size(row, 3.0, 4096);
+        assert!(
+            underlay_fill_scissor(Some(sample_rect), row, 3.0, full.0, full.1).is_some(),
+            "the fill still runs, just bounded"
+        );
     }
 
     #[test]
