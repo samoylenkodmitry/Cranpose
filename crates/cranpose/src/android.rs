@@ -1073,6 +1073,7 @@ fn init_gpu_threaded_for_android(
             resources.queue.clone(),
             resources.surface_format,
             resources.backend,
+            resources.adapter.get_downlevel_capabilities().flags,
             Arc::new(frame_driver.frame_waker()),
             Some(Arc::new(crate::android_frame_telemetry::monotonic_nanos)),
         )
@@ -1143,6 +1144,7 @@ where
                 setup.resources.queue.clone(),
                 setup.resources.surface_format,
                 setup.resources.backend,
+                setup.resources.adapter.get_downlevel_capabilities().flags,
             );
         }
 
@@ -1181,6 +1183,7 @@ where
                     setup.resources.queue.clone(),
                     setup.resources.surface_format,
                     setup.resources.backend,
+                    setup.resources.adapter.get_downlevel_capabilities().flags,
                 );
             }
             log::info!("Renderer reinitialized with new Android GPU pipeline resources");
@@ -1849,6 +1852,11 @@ pub fn run(
 
     let android_frame_driver = AndroidFrameDriver::new(app.create_waker());
     let mut frame_rate_voter = crate::android_frame_rate::FrameRateVoter::default();
+    // The ADPF hint session opens lazily on the first presented frame — the
+    // vsync period is a live estimate by then, and `open` must run on this
+    // loop thread (the session names the calling thread). `Some(None)`
+    // remembers an absent/refused ADPF so it is probed exactly once.
+    let mut perf_hint: Option<Option<crate::android_perf_hint::PerfHintSession>> = None;
     // How long after the last input event the Auto frame-rate vote keeps the
     // panel's fast rate. SurfaceFlinger's own touch boost holds for seconds,
     // and a shorter hold-off measurably hurts: at 1 s the display mode
@@ -2742,11 +2750,14 @@ pub fn run(
         // the expensive update/lowering work, and the present thread's
         // completion wakes the looper through the frame waker. In sync mode
         // `has_frame_credit` is constant `true` and this is today's block.
+        let mut adpf_work_started: Option<web_time::Instant> = None;
+        let mut adpf_sync_presented = false;
         if let (Some(resources), Some(shell)) = (&mut gpu_resources, &mut app_shell) {
             if resources.has_surface()
                 && shell.needs_update()
                 && shell.renderer().has_frame_credit()
             {
+                adpf_work_started = Some(web_time::Instant::now());
                 let update_result = android_host_window::with_android_host_window_registry(
                     &host_window_registry,
                     || shell.update(),
@@ -2798,6 +2809,12 @@ pub fn run(
                         &mut frame_timings,
                     ) {
                         break; // Out of memory, exit
+                    } else {
+                        // Presented exactly when the render arm cleared the
+                        // dirty flag — Reconfigure and Skip both re-set it.
+                        // The telemetry stamps cannot carry this signal:
+                        // they are property-gated zeros in production.
+                        adpf_sync_presented = !resources.surface_dirty;
                     }
                 } else {
                     frame_telemetry.note_idle_iteration();
@@ -2822,6 +2839,26 @@ pub fn run(
         } else {
             drained_present_at
         };
+        // The frame's declared work for the ADPF session: update through
+        // present returning, measured with the loop's own clock — the
+        // telemetry stamps are property-gated and read zero in production.
+        // Threaded-present frames complete elsewhere and report nothing
+        // rather than a made-up number.
+        if adpf_sync_presented {
+            if let Some(started) = adpf_work_started {
+                let reported = crate::android_frame_telemetry::vsync_period_ns();
+                let period = if reported > 0 {
+                    reported
+                } else {
+                    crate::android_vsync::observed_vsync_period_ns().unwrap_or(16_666_667)
+                };
+                let session = perf_hint
+                    .get_or_insert_with(|| crate::android_perf_hint::PerfHintSession::open(period));
+                if let Some(session) = session.as_mut() {
+                    session.report(started.elapsed().as_nanos() as i64, period);
+                }
+            }
+        }
         if let Some(now) = presented_at {
             behind_deadline = catchup_pacing
                 && last_present_at.is_some_and(|previous| {

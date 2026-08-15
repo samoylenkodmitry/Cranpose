@@ -800,6 +800,158 @@ struct RecorderSlot {
     /// The feed epoch `replay` was built under; `None` before the first
     /// verified recording. See [`set_retained_feed_epoch`].
     replay_epoch: Option<u64>,
+    /// The previous build's emission in re-emittable form, for the
+    /// stale-transition serve (see [`SavedReplayEmission`]). `None` unless
+    /// the flag is on and the last build emitted a replay frame.
+    saved_emission: Option<SavedReplayEmission>,
+}
+
+/// One command's emitted frame, saved so the NEXT build can re-emit it
+/// byte-for-byte if its verification collapses — the stale-transition
+/// serve. A collapse frame otherwise re-materializes and re-encodes the
+/// whole tape at once (22-75 ms against a ~17k-record scene on a
+/// watch-class core); re-emitting the previous frame's output costs one
+/// frame of lag on the collapsing command instead. Valid only when exactly
+/// one build has passed since the save (`generation`) under the same
+/// renderer slot universe (`epoch`); the serve TAKES the emission, so two
+/// consecutive stale frames are unconstructible — the one-frame cap is
+/// structural, not a counter.
+///
+/// In the steady state the `Rc`s alias the registry's live handles, so a
+/// save is two refcount bumps plus one small sanitized span vector — never
+/// a copy of the primitives or the tape.
+struct SavedReplayEmission {
+    /// The frame's primitive-space spans, sanitized for re-emission by
+    /// [`sanitized_replay_spans`]: recolors emptied, capture spans
+    /// downgraded to dynamic draws.
+    spans: Vec<cranpose_ui_graphics::FrameSpan>,
+    /// The similarity pivot the spans' transforms rotate and scale about.
+    center: cranpose_ui_graphics::Point,
+    /// The emission's materialized primitives — the exact vector the
+    /// spans' `range`s address.
+    primitives: Rc<Vec<cranpose_ui_graphics::DrawPrimitive>>,
+    /// The emission's published recording — the exact tape the spans'
+    /// `tape_range`s address, re-attached as the re-emitted frame's
+    /// `fallback` so bypassed spans keep their rematerialization source.
+    recording: Rc<cranpose_ui_graphics::CommandRecording>,
+    /// Retained feed epoch at save: a different epoch means the renderer's
+    /// slot universe died, and the spans' slot references with it.
+    epoch: u64,
+    /// [`RECORDING_GENERATION`] at save. Serving requires
+    /// `generation + 1 == current`: only the immediately following build
+    /// may re-emit, so a served frame is never more than one frame stale.
+    generation: u64,
+}
+
+/// Kill switch for the stale-transition serve, default OFF: set
+/// `CRANPOSE_STALE_TRANSITION` (to anything but `0` or empty) to let a
+/// command's replay collapse frame re-emit the previous build's emission
+/// instead of re-materializing its whole tape. Gates BOTH the save and the
+/// serve, so OFF is today's behavior byte-for-byte with zero saved-state
+/// cost. Read fresh (not cached) so an A/B comparison can flip it
+/// mid-process, exactly like the renderer's `CRANPOSE_COMMAND_FEED`; one
+/// environment lookup per build is noise against the multi-vsync frame
+/// this exists to remove.
+fn stale_transition_enabled() -> bool {
+    matches!(
+        std::env::var("CRANPOSE_STALE_TRANSITION").as_deref(),
+        Ok(value) if !value.is_empty() && value != "0"
+    )
+}
+
+/// Frame spans prepared for re-emission on a later build. Two rewrites,
+/// both required for the re-emitted frame to redraw the previous frame's
+/// pixels exactly:
+///
+/// - Recolors are emptied. The renderer's slot paint is a patched mirror
+///   of absolute color writes, so the previous frame's recolors still
+///   stand; re-sending them would be redundant patch traffic, and a
+///   re-emission with them emptied redraws the same colors by
+///   construction.
+/// - Capture spans (`capture: true`) become plain dynamic draws over the
+///   same materialized range. Their content was already offered for
+///   capture when the frame first rendered; a re-emission must draw the
+///   same pixels — capture frames render their content ordinarily, so a
+///   dynamic draw of the same primitives is byte-identical — without
+///   re-queuing a capture under a recorder state that has since moved on.
+fn sanitized_replay_spans(
+    spans: &[cranpose_ui_graphics::FrameSpan],
+) -> Vec<cranpose_ui_graphics::FrameSpan> {
+    use cranpose_ui_graphics::FrameSpan;
+    spans
+        .iter()
+        .map(|span| match span {
+            FrameSpan::Retained {
+                capture: true,
+                range,
+                ..
+            } => FrameSpan::Dynamic { range: *range },
+            FrameSpan::Retained {
+                slot,
+                capture: false,
+                slot_offset,
+                range,
+                tape_range,
+                transform,
+                recolors: _,
+                bounds,
+            } => FrameSpan::Retained {
+                slot: *slot,
+                capture: false,
+                slot_offset: *slot_offset,
+                range: *range,
+                tape_range: *tape_range,
+                transform: *transform,
+                recolors: Vec::new(),
+                bounds: *bounds,
+            },
+            FrameSpan::Dynamic { range } => FrameSpan::Dynamic { range: *range },
+        })
+        .collect()
+}
+
+/// Whether `id` holds a saved emission the CURRENT build may serve: saved
+/// exactly one recording generation ago, under the currently declared feed
+/// epoch. Anything else — older, consumed by a previous serve, from a dead
+/// slot universe, or no feed at all — is not servable, which is what caps
+/// staleness at one frame structurally.
+fn saved_emission_available(id: DrawCommandId) -> bool {
+    let Some(epoch) = RETAINED_FEED_EPOCH.with(std::cell::Cell::get) else {
+        return false;
+    };
+    let generation = RECORDING_GENERATION.with(std::cell::Cell::get);
+    COMMAND_RECORDINGS.with(|map| {
+        map.borrow()
+            .get(&id)
+            .and_then(|slot| slot.saved_emission.as_ref())
+            .is_some_and(|saved| {
+                saved.generation.wrapping_add(1) == generation && saved.epoch == epoch
+            })
+    })
+}
+
+/// Takes `id`'s saved emission for serving. Consuming it (rather than
+/// cloning) is deliberate: with the emission gone, a second collapse on
+/// the very next build finds nothing to serve and pays the ordinary
+/// collapse — the one-frame staleness cap needs no counter.
+fn take_saved_emission(id: DrawCommandId) -> Option<SavedReplayEmission> {
+    COMMAND_RECORDINGS.with(|map| {
+        map.borrow_mut()
+            .get_mut(&id)
+            .and_then(|slot| slot.saved_emission.take())
+    })
+}
+
+/// Stores (or clears, with `None`) `id`'s saved emission. Clearing on
+/// frame-less builds matters: without it a command that stops emitting
+/// replay frames would pin its last emission's primitives and tape
+/// indefinitely.
+fn store_saved_emission(id: DrawCommandId, saved: Option<SavedReplayEmission>) {
+    COMMAND_RECORDINGS.with(|map| {
+        if let Some(slot) = map.borrow_mut().get_mut(&id) {
+            slot.saved_emission = saved;
+        }
+    });
 }
 
 thread_local! {
@@ -1000,6 +1152,7 @@ fn publish_recording(
             recordings: [None, None],
             replay: cranpose_ui_graphics::CommandReplayState::default(),
             replay_epoch: None,
+            saved_emission: None,
         });
         slot.generation = generation;
         if let Some(replay) = replay {
@@ -1024,6 +1177,7 @@ fn draw_nodes(
     phase: PrimitivePhase,
 ) -> Vec<RenderNode> {
     let mut nodes = Vec::new();
+    let stale_transition = stale_transition_enabled();
     for (command_index, command) in commands.iter().enumerate() {
         let id = DrawCommandId {
             node_id,
@@ -1031,16 +1185,54 @@ fn draw_nodes(
             placement,
         };
         let (recording, storage, mut replay) = acquire_recording(id);
-        let mut replay_ref = replay.as_mut();
+        let stale_available = stale_transition && replay.is_some() && saved_emission_available(id);
+        let mut ctx = replay
+            .as_mut()
+            .map(|state| crate::style_shared::CommandReplayContext {
+                state,
+                stale_available,
+                serve_stale: false,
+            });
         let (primitives, recording, frame) = primitives_for_placement_verified(
             command,
             placement,
             size,
             recording,
             storage,
-            &mut replay_ref,
+            &mut ctx,
             Some(id),
         );
+        if ctx.is_some_and(|ctx| ctx.serve_stale) {
+            // The stale-transition serve: verification collapsed out of its
+            // capture, nothing was materialized, and the node re-emits the
+            // PREVIOUS build's emission byte-for-byte — same primitives,
+            // same sanitized spans, same fallback recording. Publishing
+            // still happens first: the (empty) recording and storage
+            // buffers return to the registry for the command's steady-state
+            // ping-pong, and the advanced replay state is stored back so
+            // re-convergence proceeds on the next builds.
+            publish_recording(id, recording, primitives, replay);
+            if let Some(saved) = take_saved_emission(id) {
+                let frame = cranpose_ui_graphics::CommandReplayFrame {
+                    center: saved.center,
+                    spans: saved.spans,
+                    fallback: Some(saved.recording),
+                };
+                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command_replayed(
+                    phase,
+                    Some(id),
+                    saved.primitives,
+                    Some(Box::new(frame)),
+                )));
+            } else {
+                // Unreachable: `stale_available` was read from this same
+                // thread-local slot within this build and nothing between
+                // consumes it. Fail soft — one frame without this command —
+                // rather than panic in a renderer.
+                debug_assert!(false, "serve_stale without a saved emission");
+            }
+            continue;
+        }
         // A bypassed span leaves no primitives behind, so emptiness alone no
         // longer means the command drew nothing in this placement.
         let has_replay_spans = frame.as_ref().is_some_and(|frame| !frame.spans.is_empty());
@@ -1053,6 +1245,28 @@ fn draw_nodes(
             continue;
         }
         let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
+        if stale_transition {
+            // Save this build's emission in re-emittable form — or clear a
+            // previous save when this build emitted no replay frame, so a
+            // command that stops emitting does not pin its last frame's
+            // buffers. The save is what the NEXT build's collapse frame
+            // may serve; a build where the emission was itself served
+            // stale never reaches this point, which is the other half of
+            // the one-frame staleness cap.
+            let saved = frame.as_ref().and_then(|frame| {
+                RETAINED_FEED_EPOCH
+                    .with(std::cell::Cell::get)
+                    .map(|epoch| SavedReplayEmission {
+                        spans: sanitized_replay_spans(&frame.spans),
+                        center: frame.center,
+                        primitives: shared.clone(),
+                        recording: published_recording.clone(),
+                        epoch,
+                        generation: RECORDING_GENERATION.with(std::cell::Cell::get),
+                    })
+            });
+            store_saved_emission(id, saved);
+        }
         if shared.is_empty() && !has_replay_spans {
             continue;
         }
@@ -1075,6 +1289,23 @@ fn draw_nodes(
         )));
     }
     nodes
+}
+
+/// The real [`draw_nodes`] path — acquire, record, verify, publish, and
+/// the stale-transition save/serve — exposed so integration tests can
+/// drive a command through the production seam build by build. Each call
+/// is one build: the recording generation advances exactly as
+/// [`build_graph_from_layout_tree`] and friends advance it.
+#[doc(hidden)]
+pub fn draw_command_nodes_for_tests(
+    node_id: NodeId,
+    commands: &[DrawCommand],
+    placement: DrawPlacement,
+    size: Size,
+    phase: PrimitivePhase,
+) -> Vec<RenderNode> {
+    bump_recording_generation();
+    draw_nodes(node_id, commands, placement, size, phase)
 }
 
 struct TextNodeParts<'a> {
@@ -4351,5 +4582,135 @@ mod tests {
             ptrs[6], ptrs[7],
             "a recording a live frame still shares must never be recorded into"
         );
+    }
+
+    #[test]
+    fn sanitized_spans_drop_recolors_and_downgrade_captures() {
+        use cranpose_ui_graphics::{FrameSpan, RecordTransform};
+        let bounds = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        };
+        let spans = vec![
+            FrameSpan::Dynamic { range: (0, 5) },
+            FrameSpan::Retained {
+                slot: 7,
+                capture: true,
+                slot_offset: 0,
+                range: (5, 105),
+                tape_range: (5, 105),
+                transform: RecordTransform::IDENTITY,
+                recolors: Vec::new(),
+                bounds,
+            },
+            FrameSpan::Retained {
+                slot: 8,
+                capture: false,
+                slot_offset: 3,
+                range: (105, 205),
+                tape_range: (110, 210),
+                transform: RecordTransform {
+                    scale: 0.999,
+                    angle: 0.05,
+                },
+                recolors: vec![(4, cranpose_ui_graphics::Color(1.0, 0.5, 0.2, 1.0))],
+                bounds,
+            },
+        ];
+        let sanitized = sanitized_replay_spans(&spans);
+        // The dynamic span passes through untouched.
+        assert_eq!(sanitized[0], FrameSpan::Dynamic { range: (0, 5) });
+        // The capture span becomes a plain dynamic draw of the SAME
+        // materialized range: re-emitting it must redraw its pixels
+        // without re-queuing a capture.
+        assert_eq!(sanitized[1], FrameSpan::Dynamic { range: (5, 105) });
+        // The retained span keeps its identity and transform but sheds its
+        // recolors: the renderer's slot paint is persistent, so the
+        // previous frame's absolute writes already show them.
+        match &sanitized[2] {
+            FrameSpan::Retained {
+                slot,
+                capture,
+                slot_offset,
+                range,
+                tape_range,
+                transform,
+                recolors,
+                bounds: sanitized_bounds,
+            } => {
+                assert_eq!((*slot, *capture, *slot_offset), (8, false, 3));
+                assert_eq!((*range, *tape_range), ((105, 205), (110, 210)));
+                assert_eq!(transform.angle, 0.05);
+                assert!(recolors.is_empty(), "recolors must be emptied");
+                assert_eq!(*sanitized_bounds, bounds);
+            }
+            other => panic!("expected a retained span, got {other:?}"),
+        }
+    }
+
+    /// The one-frame staleness cap, at the registry seam it lives on: a
+    /// saved emission serves on the IMMEDIATELY following build only, and
+    /// serving consumes it — so two consecutive collapses can produce at
+    /// most one stale frame, with no counter anywhere.
+    #[test]
+    fn a_saved_emission_serves_the_next_build_once() {
+        let command = DrawCommandId {
+            node_id: 990_303,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        set_retained_feed_epoch(Some(77));
+        // Materialize the slot the save writes into.
+        publish_recording(
+            command,
+            cranpose_ui_graphics::CommandRecording::default(),
+            Vec::new(),
+            None,
+        );
+        let saved = || SavedReplayEmission {
+            spans: vec![cranpose_ui_graphics::FrameSpan::Dynamic { range: (0, 3) }],
+            center: cranpose_ui_graphics::Point::new(204.0, 204.0),
+            primitives: Rc::new(Vec::new()),
+            recording: Rc::new(cranpose_ui_graphics::CommandRecording::default()),
+            epoch: 77,
+            generation: RECORDING_GENERATION.with(std::cell::Cell::get),
+        };
+
+        // Saved this build: not servable within the SAME build...
+        store_saved_emission(command, Some(saved()));
+        assert!(!saved_emission_available(command));
+        // ...servable on the next...
+        bump_recording_generation();
+        assert!(saved_emission_available(command));
+        // ...and expired one build later: only the immediately following
+        // build may re-emit, so a served frame is never more than one
+        // frame stale.
+        bump_recording_generation();
+        assert!(!saved_emission_available(command));
+
+        // A fresh save served on time is CONSUMED by the take: the second
+        // of two consecutive collapse builds finds nothing to serve.
+        store_saved_emission(command, Some(saved()));
+        bump_recording_generation();
+        assert!(saved_emission_available(command));
+        assert!(take_saved_emission(command).is_some());
+        assert!(
+            !saved_emission_available(command),
+            "a second serve of one emission must be unconstructible"
+        );
+        assert!(take_saved_emission(command).is_none());
+
+        // A dead slot universe invalidates the save wholesale.
+        store_saved_emission(command, Some(saved()));
+        bump_recording_generation();
+        set_retained_feed_epoch(Some(78));
+        assert!(!saved_emission_available(command));
+        set_retained_feed_epoch(None);
+        assert!(!saved_emission_available(command));
+        set_retained_feed_epoch(Some(77));
+        assert!(saved_emission_available(command));
+        set_retained_feed_epoch(None);
     }
 }

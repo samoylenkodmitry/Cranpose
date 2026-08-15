@@ -365,6 +365,26 @@ pub fn primitives_for_placement_retained(
     (primitives, recording)
 }
 
+/// The replay half of [`primitives_for_placement_verified`]'s contract: the
+/// command's verification state plus the stale-transition seam. The caller
+/// (the scene builder, which owns the per-command registry) says whether a
+/// valid previous-frame emission is on hand; verification answers whether
+/// this frame collapsed out of its capture and was therefore NOT emitted —
+/// nothing materialized, the caller must re-emit its saved emission.
+pub struct CommandReplayContext<'a> {
+    pub state: &'a mut cranpose_ui_graphics::CommandReplayState,
+    /// In: the previous build emitted a replay frame the caller saved,
+    /// still valid under the current recording generation and retained
+    /// feed epoch, and the stale-transition flag is on.
+    pub stale_available: bool,
+    /// Out: verification collapsed out of an established capture while
+    /// `stale_available` held, so the recording was finished via
+    /// [`cranpose_ui_graphics::DrawScopeDefault::finish_recording_only`]
+    /// — no primitives, no frame — and the caller re-emits its saved
+    /// emission in place of this frame's.
+    pub serve_stale: bool,
+}
+
 /// [`primitives_for_placement_retained`] with per-command similarity
 /// verification: when `replay` carries the command's state, the freshly
 /// recorded compact form advances it BEFORE materialization, yielding the
@@ -380,7 +400,7 @@ pub fn primitives_for_placement_verified(
     size: Size,
     recording: CommandRecording,
     storage: Vec<DrawPrimitive>,
-    replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
+    replay: &mut Option<CommandReplayContext<'_>>,
     command_id: Option<crate::graph::DrawCommandId>,
 ) -> (
     Vec<DrawPrimitive>,
@@ -454,7 +474,7 @@ pub fn primitives_for_placement_verified(
         size: Size,
         recording: CommandRecording,
         storage: Vec<DrawPrimitive>,
-        replay: &mut Option<&mut cranpose_ui_graphics::CommandReplayState>,
+        replay: &mut Option<CommandReplayContext<'_>>,
         command: Option<crate::graph::DrawCommandId>,
     ) -> (
         FinishedRecording,
@@ -462,9 +482,10 @@ pub fn primitives_for_placement_verified(
     ) {
         let mut scope = cranpose_ui::command_draw_scope_retained(size, recording, storage);
         func(&mut scope);
-        let Some(state) = replay.as_mut() else {
+        let Some(ctx) = replay.as_mut() else {
             return (scope.finish(), None);
         };
+        let state = &mut *ctx.state;
         let outcome =
             state.advance_pooled(scope.recorded(), crate::scene_builder::verify_executor());
         // Span counts are taken before `finish_replay` consumes the outcome
@@ -530,6 +551,28 @@ pub fn primitives_for_placement_verified(
         // for this frame's ordinary path. A marker-bearing recording drops
         // its frame after the split, so it must materialize whole.
         let markers = scope.content_marker_count();
+        if ctx.stale_available && markers == 0 && state.collapsed_from_captured() {
+            // The transition frame: verification collapsed out of an
+            // established capture, so emitting `outcome` would materialize
+            // and re-encode the ENTIRE tape in one frame — 22-75 ms on a
+            // watch-class core against a ~17k-record scene, two to four
+            // missed vsyncs. The caller holds the previous frame's
+            // emission; serve that instead. Nothing materializes here, and
+            // the advance above already re-snapshotted, so re-convergence
+            // proceeds on the next frames exactly as if this frame had
+            // emitted its collapse. A marker-bearing recording never
+            // qualifies: its frame would have been dropped anyway, so
+            // there is no saved emission shape that matches it.
+            ctx.serve_stale = true;
+            if cranpose_core::env_flag!("CRANPOSE_COMMAND_REPLAY_DIAG") {
+                log::warn!(
+                    "[command-replay] stale transition: collapse frame of {} records \
+                     re-serves the previous emission",
+                    scope.recorded().len(),
+                );
+            }
+            return (scope.finish_recording_only(), None);
+        }
         let mut bypass = |slot: u32| {
             markers == 0
                 && command.is_some_and(|id| crate::scene_builder::retained_slot_confirmed(id, slot))

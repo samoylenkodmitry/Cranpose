@@ -140,6 +140,7 @@ fn threaded_parts() -> Result<
         Arc<wgpu::Device>,
         Arc<wgpu::Queue>,
         wgpu::Backend,
+        wgpu::DownlevelFlags,
     ),
     String,
 > {
@@ -168,6 +169,7 @@ fn threaded_parts() -> Result<
         Arc::new(device),
         Arc::new(queue),
         adapter.get_info().backend,
+        adapter.get_downlevel_capabilities().flags,
     ))
 }
 
@@ -199,12 +201,14 @@ fn drain_outcomes(renderer: &mut WgpuRenderer) -> Vec<(u64, PresentOutcome)> {
 /// a packet, and credit returns as frames drain.
 #[test]
 fn depth_one_credit_gates_publish_before_lowering() {
-    let (_lock, mut renderer, device, queue, backend) = inline_runtime_or_skip!("depth-one credit");
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("depth-one credit");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -272,13 +276,14 @@ fn depth_one_credit_gates_publish_before_lowering() {
 /// fires — and a packet published under the new epoch renders.
 #[test]
 fn reconfigure_cancels_waiting_packet_before_ack() {
-    let (_lock, mut renderer, device, queue, backend) =
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("invalidation-before-ack");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -341,13 +346,14 @@ fn reconfigure_cancels_waiting_packet_before_ack() {
 /// epoch — never updates).
 #[test]
 fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
-    let (_lock, mut renderer, device, queue, backend) =
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("drop-surface cancel");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -416,13 +422,14 @@ fn drop_surface_cancels_waiting_packet_with_buffers_returned() {
 /// ack backing buffer — capacity preserved, no per-frame allocation.
 #[test]
 fn confirmations_capacity_rides_next_packet_back_to_store() {
-    let (_lock, mut renderer, device, queue, backend) =
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("confirmations round-trip");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -495,12 +502,14 @@ fn confirmations_capacity_rides_next_packet_back_to_store() {
 /// an ack to double-apply.
 #[test]
 fn early_replay_ack_precedes_returns() {
-    let (_lock, mut renderer, device, queue, backend) = inline_runtime_or_skip!("early replay ack");
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("early replay ack");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -553,12 +562,14 @@ fn early_replay_ack_precedes_returns() {
 /// atomic — there is no `GpuRenderer` on the producer side to consult.
 #[test]
 fn needs_frame_warmup_reads_present_thread_atomic() {
-    let (_lock, mut renderer, device, queue, backend) = inline_runtime_or_skip!("warmup atomic");
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
+        inline_runtime_or_skip!("warmup atomic");
     let mut runtime = renderer.init_gpu_inline_for_tests(
         device,
         queue,
         wgpu::TextureFormat::Bgra8UnormSrgb,
         backend,
+        downlevel,
     );
     let ack = renderer
         .send_attach_offscreen_unacked_for_tests(WIDTH, HEIGHT)
@@ -624,7 +635,7 @@ fn needs_frame_warmup_reads_present_thread_atomic() {
 /// and shuts down joinable.
 #[test]
 fn real_thread_runtime_smoke() {
-    let (_lock, mut renderer, device, queue, backend) =
+    let (_lock, mut renderer, device, queue, backend, downlevel) =
         inline_runtime_or_skip!("real-thread smoke");
     let (wake_tx, wake_rx) = std::sync::mpsc::channel::<()>();
     renderer
@@ -633,6 +644,7 @@ fn real_thread_runtime_smoke() {
             queue,
             wgpu::TextureFormat::Bgra8UnormSrgb,
             backend,
+            downlevel,
             Arc::new(move || {
                 let _ = wake_tx.send(());
             }),

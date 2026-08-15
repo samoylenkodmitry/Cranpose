@@ -164,10 +164,40 @@ struct ShapeBatchLimits {
 }
 
 impl ShapeBatchLimits {
-    fn for_device(device: &wgpu::Device) -> Self {
-        let limits = device.limits();
+    fn for_device(device: &wgpu::Device, downlevel: wgpu::DownlevelFlags) -> Self {
+        Self::select(&device.limits(), downlevel)
+    }
+
+    /// Storage mode or uniform mode, from the two things that decide it.
+    ///
+    /// Split out from `for_device` because the interesting case cannot be
+    /// reached with a device in hand: it needs an adapter that reports storage
+    /// buffers and no vertex-stage access, which is every ARM Mali GLES driver
+    /// and no desktop.
+    fn select(limits: &wgpu::Limits, downlevel: wgpu::DownlevelFlags) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        if limits.max_storage_buffers_per_shader_stage >= 2 {
+        if limits.max_storage_buffers_per_shader_stage >= 2
+            // `max_storage_buffers_per_shader_stage` alone is NOT the question,
+            // even though its name reads like a per-stage minimum. On ARM's
+            // GLES driver it comes back non-zero off the fragment stage while
+            // the vertex stage has no storage at all, so the check passed, the
+            // storage layout was built, and binding 0 -- the shape array, which
+            // is VERTEX_FRAGMENT because `vs_main` pulls quad corners out of it
+            // -- failed validation the moment the layout was created:
+            //
+            //   In Device::create_bind_group_layout, label = 'Shape Bind Group
+            //   Layout'; Binding 0 entry is invalid; Downlevel flags
+            //   DownlevelFlags(VERTEX_STORAGE) are required but not supported
+            //   on the device.
+            //
+            // wgpu treats that as fatal, so the renderer thread panicked and
+            // the app dropped back to the launcher on Mali-G76 (r18p0, 2019)
+            // and Mali-G715 (r54p3, 2024) alike -- driver age is not the
+            // variable. Adreno 650 and Adreno 702 have the flag and are
+            // unaffected. `VERTEX_STORAGE` is the flag that actually answers
+            // the question the layout asks, so ask it.
+            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        {
             return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
         }
         Self::for_uniform_binding_size(limits.max_uniform_buffer_binding_size)
@@ -5898,6 +5928,16 @@ pub struct GpuRenderer {
     /// high-water capacity across frames. Always empty between drains.
     #[cfg(not(target_arch = "wasm32"))]
     color_patch_scratch: Vec<crate::scene::ColorPatch>,
+    /// Capture staging scratch for `capture_replay_slot`: the converted
+    /// `ShapeData` records and gradient stops are built here, copied into
+    /// the slot's fresh GPU buffers, and the allocations survive to the
+    /// next capture — a re-partition frame captures one slot per segment
+    /// and used to allocate both vectors per slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_capture_shape_scratch: Vec<ShapeData>,
+    /// The gradient-stop half of the capture staging scratch.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_capture_gradient_scratch: Vec<GradientStop>,
     /// Recycled confirmations buffer for the next [`crate::frame_packet::ReplayAck`]:
     /// `consume_replay_ops` fills it, the planner drains it in `apply_ack`,
     /// and the render loop hands the emptied vec (capacity intact) back
@@ -6190,11 +6230,18 @@ fn layer_raster_cache_candidate(
 }
 
 impl GpuRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        // Beside the backend because it is the same kind of fact: something
+        // only the ADAPTER can answer, which the device cannot be asked for
+        // (wgpu 29 has `Adapter::get_downlevel_capabilities` and no device
+        // equivalent) and which decides whether the shape arrays can be
+        // storage buffers at all.
+        adapter_downlevel: wgpu::DownlevelFlags,
         text_fonts: SoftwareTextFontSet,
         renderer_epoch: u64,
         store_feed_generation: u64,
@@ -6219,7 +6266,7 @@ impl GpuRenderer {
             let sentry = Arc::clone(&device_errors);
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
-        let shape_batch_limits = ShapeBatchLimits::for_device(&device);
+        let shape_batch_limits = ShapeBatchLimits::for_device(&device, adapter_downlevel);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Uniform Bind Group Layout"),
@@ -6256,10 +6303,11 @@ impl GpuRenderer {
         // scene fits one batch); uniform arrays on WebGL-class devices, which
         // have no storage buffers in fragment shaders. The shape array is
         // visible to the vertex stage as well: the pipeline has no vertex
-        // buffer and `vs_main` pulls quad corners from ShapeData. (Storage
-        // mode is gated on `max_storage_buffers_per_shader_stage`, which GL
-        // backends report as the minimum across stages, so a device that
-        // cannot read storage from the vertex stage falls back to uniforms.)
+        // buffer and `vs_main` pulls quad corners from ShapeData. Storage mode
+        // is gated on `DownlevelFlags::VERTEX_STORAGE` as well as on the
+        // limit -- see `ShapeBatchLimits::select`, where the comment this
+        // replaces claimed GL reports the limit as the minimum across stages
+        // and Mali proved otherwise.
         let mut shape_bind_group_layout_entries = vec![
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -6671,6 +6719,10 @@ impl GpuRenderer {
             replay_color_patches: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             color_patch_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_capture_shape_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_capture_gradient_scratch: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_ack_confirmations: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -12424,6 +12476,10 @@ impl GpuRenderer {
         // loop restores the vec after the planner drains the ack.
         let mut confirmations = std::mem::take(&mut self.replay_ack_confirmations);
         debug_assert!(confirmations.is_empty());
+        // One refs buffer for the whole batch: a re-partition frame carries
+        // one capture per segment, and `shapes` outlives the loop, so each
+        // capture's collect reuses a single allocation.
+        let mut refs: Vec<&DrawShape> = Vec::new();
         for capture in ops.captures.drain(..) {
             if capture.frame != ops.frame {
                 // Defensive: a capture that outlived its frame references
@@ -12446,7 +12502,8 @@ impl GpuRenderer {
             let Some(slice) = shapes.get(capture.shape_start..end) else {
                 continue;
             };
-            let refs: Vec<&DrawShape> = slice.iter().collect();
+            refs.clear();
+            refs.extend(slice.iter());
             let Some(gpu_slot) = self.capture_replay_slot(&refs, brushes, root_scale) else {
                 continue;
             };
@@ -12623,8 +12680,17 @@ impl GpuRenderer {
             gradient_offsets.push(total_gradient_stops);
         }
 
-        let mut shape_data = vec![ShapeData::zeroed(); shape_count];
-        let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
+        // Staging scratch, not fresh vectors: cleared and re-zeroed to this
+        // capture's exact sizes, capacity kept across captures.
+        let mut shape_data = std::mem::take(&mut self.replay_capture_shape_scratch);
+        shape_data.clear();
+        shape_data.resize(shape_count, ShapeData::zeroed());
+        let mut gradients = std::mem::take(&mut self.replay_capture_gradient_scratch);
+        gradients.clear();
+        gradients.resize(
+            (total_gradient_stops as usize).max(1),
+            GradientStop::zeroed(),
+        );
         convert_shapes_into_outputs(
             shape_refs,
             brushes,
@@ -12886,6 +12952,10 @@ impl GpuRenderer {
                 submitted_area_scale,
             },
         );
+        // The staging buffers return to their scratch slots, contents
+        // spent, capacity kept for the next capture.
+        self.replay_capture_shape_scratch = shape_data;
+        self.replay_capture_gradient_scratch = gradients;
         Some(id)
     }
 
@@ -13540,6 +13610,12 @@ impl GpuRenderer {
 
     /// Test/diagnostic view of the static leading-span cache: lifetime
     /// (hits, recaptures).
+    ///
+    /// Gated like the cache it reads and like every sibling diagnostic here:
+    /// `static_span` does not exist on wasm, so an ungated accessor compiles
+    /// everywhere except the one target nothing in `cargo test` builds.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[doc(hidden)]
     pub fn static_span_stats(&self) -> (u64, u64) {
         (self.static_span.hits, self.static_span.recaptures)
     }
@@ -16777,6 +16853,53 @@ fn inner_shadow_composite_mask(
         ],
         radii,
     })
+}
+
+#[cfg(test)]
+mod shape_batch_limits_tests {
+    use super::*;
+
+    /// A device that reports plenty of storage buffers, as ARM's GLES driver
+    /// does off the fragment stage.
+    fn generous_limits() -> wgpu::Limits {
+        wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 8,
+            max_storage_buffer_binding_size: 128 << 20,
+            max_uniform_buffer_binding_size: 16 << 10,
+            ..wgpu::Limits::default()
+        }
+    }
+
+    #[test]
+    fn a_device_without_vertex_storage_takes_the_uniform_path() {
+        // The shape array is bound VERTEX_FRAGMENT because `vs_main` reads
+        // quad corners out of it, so a device that cannot read storage from
+        // the vertex stage cannot host the storage layout AT ALL -- creating
+        // it is a validation error and wgpu makes that fatal. The limit alone
+        // says nothing about it: Mali reports 8 here and zero vertex storage.
+        let limits = ShapeBatchLimits::select(&generous_limits(), wgpu::DownlevelFlags::empty());
+        assert!(
+            !limits.storage,
+            "no VERTEX_STORAGE must mean uniform mode, whatever the limit says"
+        );
+    }
+
+    #[test]
+    fn a_device_with_vertex_storage_still_takes_the_storage_path() {
+        let limits = ShapeBatchLimits::select(&generous_limits(), wgpu::DownlevelFlags::all());
+        assert!(
+            limits.storage,
+            "the flag must not cost storage mode on a device that has it"
+        );
+    }
+
+    #[test]
+    fn the_limit_still_gates_storage_when_the_flag_is_present() {
+        let mut limits = generous_limits();
+        limits.max_storage_buffers_per_shader_stage = 1;
+        let limits = ShapeBatchLimits::select(&limits, wgpu::DownlevelFlags::all());
+        assert!(!limits.storage, "two bindings are needed, not one");
+    }
 }
 
 #[cfg(test)]

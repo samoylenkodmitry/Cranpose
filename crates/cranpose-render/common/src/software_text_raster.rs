@@ -6725,6 +6725,47 @@ mod line_alignment_tests {
     }
 
     #[test]
+    fn a_wrapped_list_header_centres_both_its_lines() {
+        // The style an app actually gets, not one assembled for the test:
+        // `ListHeader` owns its text style, so if the alignment is not on the
+        // spec then nothing downstream can put it back. Compose provides
+        // `LocalTextConfiguration(TextAlign.Center)` around the header's
+        // content -- `ListHeaderKt` in compose-material3-1.6.2.aar -- and the
+        // Credits screen is where that shows: `ORBIT BREAKER` wraps, and with
+        // a block-only centring `ORBIT` sat 25 px left of the `BREAKER` under
+        // it.
+        let font = default_software_text_font().expect("bundled default font");
+        let style = cranpose_ui::widgets::wear::list_header::ListHeaderSpec::default()
+            .text_style
+            .resolve(Color(1.0, 1.0, 1.0, 1.0));
+        let rect = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 400.0,
+            height: 80.0,
+        };
+        let image = rasterize_text_to_image(
+            "wwwwwwwwwwww\nww",
+            rect,
+            &style,
+            Color(1.0, 1.0, 1.0, 1.0),
+            20.0,
+            1.0,
+            &font,
+        )
+        .expect("header image");
+        let long = ink_columns(&image, 0..(image.height() / 2)).expect("first line ink");
+        let short =
+            ink_columns(&image, (image.height() / 2)..image.height()).expect("second line ink");
+        let long_centre = (long.0 + long.1) as f32 * 0.5;
+        let short_centre = (short.0 + short.1) as f32 * 0.5;
+        assert!(
+            (long_centre - short_centre).abs() <= 2.0,
+            "a wrapped header's lines must share a centre: {long:?} vs {short:?}"
+        );
+    }
+
+    #[test]
     fn a_wrapped_line_is_centred_under_the_one_above_it_not_left_under_it() {
         // `TextAlign` is a paragraph property and Compose applies it to every
         // line. The scene builder centres the block; without a per-line offset

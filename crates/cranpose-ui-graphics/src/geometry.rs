@@ -1116,6 +1116,19 @@ impl CommandRecording {
         self.arcs.clear();
         self.others.clear();
     }
+
+    /// A buffer-reusing deep copy: `clone_from` on every store, so
+    /// refreshing a long-lived recording (the replay snapshot, twice per
+    /// convergence cycle on a heavy scene's ~17k-record tape) truncates and
+    /// copies into the existing allocations instead of cloning five fresh
+    /// buffers. Semantically identical to `*self = source.clone()`.
+    pub(crate) fn clone_records_from(&mut self, source: &Self) {
+        self.tape.clone_from(&source.tape);
+        self.rects.clone_from(&source.rects);
+        self.round_rects.clone_from(&source.round_rects);
+        self.arcs.clone_from(&source.arcs);
+        self.others.clone_from(&source.others);
+    }
 }
 
 /// What [`DrawScopeDefault::finish`] hands back: the materialized primitives,
@@ -1336,6 +1349,27 @@ impl DrawScopeDefault {
             content_markers: self.content_markers,
             recording: self.rec,
             dropped,
+        }
+    }
+
+    /// Like [`Self::finish`], but materializing nothing: the consumer is
+    /// about to re-emit a PREVIOUS frame's saved emission in place of this
+    /// recording (the stale-transition serve on a replay collapse frame),
+    /// so building this frame's primitives — the very cost the serve
+    /// exists to skip — would be pure waste. The recording and
+    /// materialization buffers still return, cleared exactly as
+    /// [`Self::finish`] leaves them, so the command's steady-state
+    /// ping-pong keeps its earned capacity.
+    pub fn finish_recording_only(mut self) -> FinishedRecording {
+        let mut out = std::mem::take(&mut self.out);
+        out.clear();
+        note_recorded_primitive_count(self.size, self.rec.tape.len());
+        self.rec.clear();
+        FinishedRecording {
+            primitives: out,
+            content_markers: self.content_markers,
+            recording: self.rec,
+            dropped: Vec::new(),
         }
     }
 

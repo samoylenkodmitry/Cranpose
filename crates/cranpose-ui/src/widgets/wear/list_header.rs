@@ -9,11 +9,23 @@
 //! comes to 47dp, which the floor rounds up to 48dp, and the surplus is split
 //! by re-centring the padded content in the taller box rather than being added
 //! below it. That is a one-pixel difference and it is on every header.
+//!
+//! The third is the alignment, and it only shows on a header long enough to
+//! wrap. `ListHeader` provides `LocalTextConfiguration` with
+//! `TextAlign.Center` alongside its `Arrangement.Center` — read out of
+//! `ListHeaderKt` in `compose-material3-1.6.2.aar`, where the neighbouring
+//! `ListSubHeader` provides `TextAlign.Start` — so **every** line of a wrapped
+//! header is centred in the block, not just placed under the start of the
+//! first. Centring the block alone is invisible on a one-line header and wrong
+//! on a two-line one: on a 384 px Credits screen, `ORBIT BREAKER` wraps after
+//! `ORBIT` and Compose puts that line at x 147, while a block-only centring
+//! puts it at x 121, 25 px to the left of the `BREAKER` under it.
 
 #![allow(non_snake_case)]
 
 use crate::composable;
 use crate::modifier::Modifier;
+use crate::text::paragraph::TextAlign;
 use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
@@ -38,7 +50,12 @@ impl Default for ListHeaderSpec {
     fn default() -> Self {
         Self {
             colors: WearColors::default(),
-            text_style: WearTextStyle::TITLE_MEDIUM,
+            // `TITLE_MEDIUM` is `ListHeaderTokens`; the alignment is the
+            // `LocalTextConfiguration` the widget provides around it. It lives
+            // on the spec rather than being forced at the call site so a
+            // caller who overrides `text_style` overrides the alignment too,
+            // the way overriding `LocalTextConfiguration` does in Compose.
+            text_style: WearTextStyle::TITLE_MEDIUM.aligned(TextAlign::Center),
             min_height: 48.0,
             padding_start: 14.0,
             padding_top: 16.0,
@@ -203,6 +220,14 @@ mod tests {
         assert_eq!(spec.padding_end, 14.0);
         assert_eq!(spec.padding_top, 16.0);
         assert_eq!(spec.padding_bottom, 12.0);
-        assert_eq!(spec.text_style, WearTextStyle::TITLE_MEDIUM);
+        // The type token, plus the alignment the widget provides around it:
+        // Compose's ListHeader wraps its content in LocalTextConfiguration
+        // with TextAlign.Center, so the style an app actually gets is the
+        // centred one. Asserting the bare token here would pass while every
+        // real header wrapped its second line to the left.
+        assert_eq!(
+            spec.text_style,
+            WearTextStyle::TITLE_MEDIUM.aligned(TextAlign::Center)
+        );
     }
 }
