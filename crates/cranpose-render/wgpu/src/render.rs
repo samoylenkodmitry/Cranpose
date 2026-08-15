@@ -6303,6 +6303,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
@@ -6352,9 +6353,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                         images,
                         texts,
                         shadow_draws,
-                        // Windowed scenes never carry retained draws — see
-                        // `build_scene_window`.
-                        &[],
+                        retained_draws,
                         draw_ops,
                         cursor_z,
                         event.z_index,
@@ -6439,7 +6438,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     images,
                     texts,
                     shadow_draws,
-                    &[],
+                    retained_draws,
                     draw_ops,
                     cursor_z,
                     z_end,
@@ -7259,6 +7258,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
@@ -7278,6 +7278,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             images,
             texts,
             shadow_draws,
+            retained_draws,
             draw_ops,
             effect_layers,
             backdrop_layers,
@@ -17336,6 +17337,112 @@ mod tests {
         });
 
         assert!(!root_direct_scene_events_are_supported(&scene));
+    }
+
+    fn frosted_layer(bounds: Rect, offset: Point) -> LayerNode {
+        let mut layer = test_layer(
+            bounds,
+            vec![RenderNode::Primitive(PrimitiveEntry {
+                phase: PrimitivePhase::BeforeChildren,
+                node: PrimitiveNode::Draw(DrawPrimitiveNode {
+                    primitive: cranpose_ui_graphics::DrawPrimitive::Rect {
+                        rect: bounds,
+                        brush: Brush::solid(Color::from_rgba_u8(255, 255, 255, 60)),
+                        stroke: None,
+                    },
+                    clip: None,
+                }),
+            })],
+        );
+        layer.transform_to_parent = ProjectiveTransform::translation(offset.x, offset.y);
+        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
+        layer
+    }
+
+    #[test]
+    fn a_frosted_layer_draws_inline_and_leaves_a_backdrop_event_behind_it() {
+        let frosted = frosted_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            Point::new(10.0, 6.0),
+        );
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec![RenderNode::Layer(Box::new(frosted))],
+        );
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert!(
+            collected.child_layers.is_empty(),
+            "a backdrop alone must not force the layer onto its own surface"
+        );
+        assert_eq!(collected.scene.backdrop_layers.len(), 1);
+        let backdrop = &collected.scene.backdrop_layers[0];
+        assert_eq!(
+            backdrop.rect,
+            Rect {
+                x: 10.0,
+                y: 6.0,
+                width: 40.0,
+                height: 20.0,
+            }
+        );
+        assert_eq!(collected.scene.shapes.len(), 1);
+        assert!(
+            backdrop.z_index < collected.scene.shapes[0].z_index,
+            "the blur reads the target before the layer draws over it: backdrop z={} shape z={}",
+            backdrop.z_index,
+            collected.scene.shapes[0].z_index
+        );
+    }
+
+    #[test]
+    fn a_frosted_layer_that_needs_isolation_keeps_its_own_surface() {
+        let mut frosted = frosted_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            Point::new(10.0, 6.0),
+        );
+        frosted.graphics_layer.alpha = 0.5;
+        frosted.isolation.group_opacity = true;
+        let root = test_layer(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 100.0,
+            },
+            vec![RenderNode::Layer(Box::new(frosted))],
+        );
+        let mut rect_cache = HashMap::new();
+        let mut requirements_cache = HashMap::new();
+
+        let collected =
+            collect_layer_contents(&root, None, None, &mut rect_cache, &mut requirements_cache);
+
+        assert_eq!(collected.child_layers.len(), 1);
+        assert!(
+            collected.scene.backdrop_layers.is_empty(),
+            "a layer that keeps its surface carries its backdrop on the composite"
+        );
+        assert!(collected.child_layers[0].backdrop.is_some());
     }
 
     #[test]

@@ -1721,6 +1721,17 @@ fn collect_layer_contents_into(
                                 None
                             }
                         });
+                        if let Some(effect) = child_layer.backdrop() {
+                            local_scene.backdrop_layers.push(BackdropLayer {
+                                node_id: child_layer.node_id,
+                                rect: child_bounds,
+                                clip: visual_clip,
+                                snap_anchor: child_translated_snap_anchor,
+                                effect: effect.clone(),
+                                z_index: local_scene.next_z,
+                            });
+                            local_scene.next_z += 1;
+                        }
                         let child_shadow_clip = resolve_clip(
                             visual_clip,
                             child_layer

@@ -193,6 +193,7 @@ pub(crate) trait SurfaceExecutionBackend {
         images: &[ImageDraw],
         texts: &[TextDraw],
         shadow_draws: &[ShadowDraw],
+        retained_draws: &[RetainedDraw],
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
