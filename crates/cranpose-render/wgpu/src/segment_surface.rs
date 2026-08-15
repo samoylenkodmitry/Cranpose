@@ -376,6 +376,12 @@ pub(crate) struct SegmentSurfaceEntry {
     last_seen_frame: u64,
 }
 
+/// The per-frame lookup maps are keyed by small POD keys and hit on every
+/// retained item every frame; std's SipHash showed up at ~0.2 ms/frame on
+/// the watch profile. FxHasher is the crate's convention for exactly this.
+type FxMap<K, V> =
+    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<cranpose_ui_graphics::FxHasher>>;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SegmentSurfaceStats {
     pub captures: u64,
@@ -413,8 +419,8 @@ pub(crate) enum SegmentSurfaceDecision {
 /// [`SEGMENT_CAPTURE_SLOTS`] extra strides.
 #[derive(Default)]
 pub(crate) struct SegmentSurfaceCache {
-    entries: std::collections::HashMap<SegmentSurfaceKey, SegmentSurfaceEntry>,
-    admission: std::collections::HashMap<SegmentSurfaceKey, AdmissionTrack>,
+    entries: FxMap<SegmentSurfaceKey, SegmentSurfaceEntry>,
+    admission: FxMap<SegmentSurfaceKey, AdmissionTrack>,
     bytes: u64,
     frame: u64,
     config: Option<SegmentSurfaceConfig>,
@@ -424,7 +430,7 @@ pub(crate) struct SegmentSurfaceCache {
     /// This frame's recolor-patched shape indices per slot, memoized on the
     /// FIRST partition that plans (the prepare arms drain the renderer's
     /// parked patch list, so later partitions could no longer read it).
-    dirty_by_slot: std::collections::HashMap<u32, Vec<u32>>,
+    dirty_by_slot: FxMap<u32, Vec<u32>>,
     dirty_ready: bool,
     pub(crate) stats: SegmentSurfaceStats,
 }
