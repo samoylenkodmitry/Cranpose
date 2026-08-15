@@ -160,6 +160,7 @@ pub(crate) fn encode_present_outcome(outcome: PresentOutcome, frame_id: u64) -> 
         PresentOutcome::Cancelled(CancelReason::SurfaceEpoch) => 3,
         PresentOutcome::Cancelled(CancelReason::Viewport) => 4,
         PresentOutcome::Cancelled(CancelReason::SurfaceUnavailable) => 5,
+        PresentOutcome::Cancelled(CancelReason::DeviceError) => 6,
     };
     (frame_id << 8) | code
 }

@@ -1039,6 +1039,16 @@ impl WgpuRenderer {
         self.sync_gpu_renderer().map(|r| &*r.device)
     }
 
+    /// Test/diagnostic view of the device-error sentry: lifetime
+    /// uncaptured wgpu errors recorded on the sync renderer's device
+    /// (`CRANPOSE_SURVIVE_GPU_ERRORS` kill switch).
+    #[doc(hidden)]
+    pub fn device_error_count_for_tests(&self) -> u64 {
+        self.sync_gpu_renderer()
+            .map(GpuRenderer::device_error_count)
+            .unwrap_or(0)
+    }
+
     /// Test/diagnostic view of the latched instanced-quad selection: `true`
     /// when the live GPU renderer's ordinary shape draws ride
     /// `vs_shape_instanced` (storage mode && `CRANPOSE_INSTANCED_QUADS` != 0

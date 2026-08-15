@@ -596,6 +596,56 @@ struct ShapeShadowSurfacePlan {
     pixel_radius: f32,
 }
 
+/// Shared record of the device's uncaptured errors (validation, OOM,
+/// internal), written by the handler [`GpuRenderer::new`] installs via
+/// `Device::on_uncaptured_error` and read at the head of every
+/// [`GpuRenderer::render`].
+///
+/// wgpu's default handler panics on the reporting thread. Mid-encode that
+/// unwind runs the drop glue of live pass/encoder objects, whose own error
+/// reports re-enter the same panicking handler — a second panic inside the
+/// first's unwind aborts the process, and the tombstone carries neither
+/// message (a real device's validation failure was lost exactly this way).
+/// This handler never panics: it counts, logs the full error, and poisons;
+/// the render path answers with one cancelled packet per poisoning — the
+/// acquire path's give-up-this-frame semantics, not a latch.
+/// `CRANPOSE_SURVIVE_GPU_ERRORS=0` restores the fatal default
+/// ([`survive_gpu_errors_enabled`]).
+#[derive(Default)]
+struct DeviceErrorSentry {
+    /// Lifetime uncaptured errors on this device.
+    errors: std::sync::atomic::AtomicU64,
+    /// Set by the handler, taken (cleared) by the next frame's gate.
+    poisoned: std::sync::atomic::AtomicBool,
+}
+
+impl DeviceErrorSentry {
+    /// Never panics: this runs where the default handler would have
+    /// aborted the process (see the type doc).
+    fn record(&self, error: &wgpu::Error) {
+        use std::sync::atomic::Ordering;
+        self.poisoned.store(true, Ordering::Release);
+        let count = self.errors.fetch_add(1, Ordering::Relaxed) + 1;
+        // The full error every time it prints; rate-limited by count
+        // because one broken frame reports a follow-up error per
+        // subsequent encoder call. Power-of-two occurrences (1, 2, 4,
+        // 8, …) keep the first reports verbatim and decay the repeats
+        // without a clock; the count carries the volume.
+        if count.is_power_of_two() {
+            log::error!("[gpu-device] uncaptured wgpu error #{count}: {error}");
+        }
+    }
+
+    fn take_poison(&self) -> bool {
+        self.poisoned
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+    }
+
+    fn error_count(&self) -> u64 {
+        self.errors.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 #[derive(Default)]
 struct RendererWarningState {
     unsupported_effect_reported: Cell<bool>,
@@ -4546,6 +4596,18 @@ fn solid_trim_varyings_enabled() -> bool {
     std::env::var("CRANPOSE_SOLID_TRIM_VARYINGS").as_deref() == Ok("1")
 }
 
+/// Kill switch for surviving uncaptured device errors: default ON,
+/// `CRANPOSE_SURVIVE_GPU_ERRORS=0` (or the
+/// `debug.cranpose.survive_gpu_errors` property on Android) restores
+/// wgpu's fatal default handler, which panics with the error message on
+/// the reporting thread — the pre-fix behavior, kept reachable so a
+/// debugging session can die loudly at the first error instead of
+/// logging past it. Read once, at [`GpuRenderer`] construction, where the
+/// handler is installed; it changes nothing off the error path.
+fn survive_gpu_errors_enabled() -> bool {
+    std::env::var("CRANPOSE_SURVIVE_GPU_ERRORS").as_deref() != Ok("0")
+}
+
 /// Kill switch for the display clip region cull: default ON wherever the
 /// platform reports a cullable visible region
 /// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL` (or the
@@ -5486,6 +5548,12 @@ impl ImageBatchBuffers {
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
+    /// Uncaptured-error record shared with the handler installed on
+    /// `device` at construction ([`DeviceErrorSentry`];
+    /// `CRANPOSE_SURVIVE_GPU_ERRORS` kill switch). Poisoned by any
+    /// uncaptured error; the head of [`Self::render`] answers each
+    /// poisoning with one cancelled packet.
+    device_errors: Arc<DeviceErrorSentry>,
     /// This instance's renderer epoch, stamped by `init_gpu` at
     /// construction. A packet whose `renderer_epoch` differs was built
     /// against another instance and is cancelled at the head of
@@ -5894,6 +5962,16 @@ impl GpuRenderer {
         // and the per-pipeline `[gpu-pipeline]` lines cannot say what the
         // renderer costs to build when it builds no pipelines at all.
         let construction_started = Instant::now();
+        // Installed before this renderer's first device call, so even a
+        // construction-time validation error is survived. Replaces wgpu's
+        // fatal default handler — see [`DeviceErrorSentry`] for the
+        // double-panic abort this prevents and
+        // [`survive_gpu_errors_enabled`] for the kill switch.
+        let device_errors = Arc::new(DeviceErrorSentry::default());
+        if survive_gpu_errors_enabled() {
+            let sentry = Arc::clone(&device_errors);
+            device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
+        }
         let shape_batch_limits = ShapeBatchLimits::for_device(&device);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -6193,6 +6271,7 @@ impl GpuRenderer {
         let renderer = Self {
             device,
             queue,
+            device_errors,
             renderer_epoch,
             #[cfg(not(target_arch = "wasm32"))]
             store_feed_generation,
@@ -8356,6 +8435,15 @@ impl GpuRenderer {
         };
         if let Some(reason) = cancel_reason {
             return Self::cancel_packet(packet, reason, returns);
+        }
+        // Device-error gate — same protocol as the validity gate above: an
+        // uncaptured error recorded since the last frame cancels this
+        // packet whole, so nothing is encoded on the suspect device. The
+        // take clears the poison, so the NEXT packet renders — one skipped
+        // frame per poisoning, the acquire path's give-up-this-frame
+        // semantics ([`DeviceErrorSentry`]).
+        if self.device_errors.take_poison() {
+            return Self::cancel_packet(packet, CancelReason::DeviceError, returns);
         }
         returns.frame_id = packet.frame_id;
         log::trace!("🎨 Rendering graph to {}x{}", width, height);
@@ -13095,6 +13183,14 @@ impl GpuRenderer {
     #[doc(hidden)]
     pub fn rim_meshes_emitted(&self) -> u64 {
         self.rim_meshes_emitted
+    }
+
+    /// Test/diagnostic view of the device-error sentry: lifetime
+    /// uncaptured wgpu errors recorded on this renderer's device
+    /// (`CRANPOSE_SURVIVE_GPU_ERRORS` kill switch).
+    #[doc(hidden)]
+    pub fn device_error_count(&self) -> u64 {
+        self.device_errors.error_count()
     }
 
     /// Test/diagnostic view of the static leading-span cache: lifetime

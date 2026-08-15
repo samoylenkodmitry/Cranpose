@@ -420,8 +420,17 @@ struct SceneBuffers {
 
 impl Drop for CompositorScene {
     fn drop(&mut self) {
-        SCENE_BUFFER_POOL.with(|pool| {
-            let mut pool = pool.borrow_mut();
+        // Pooling only — correctness never depends on it, so both
+        // fallible steps stay fallible. This drop also runs during unwind
+        // (a panicking frame drops its scene), where `with` on a
+        // torn-down TLS or `borrow_mut` on a pool the panicking frame
+        // still holds would panic a second time — and a panic inside an
+        // unwind aborts the process, eating the original message. An
+        // unavailable pool just lets the buffers deallocate.
+        let _ = SCENE_BUFFER_POOL.try_with(|pool| {
+            let Ok(mut pool) = pool.try_borrow_mut() else {
+                return;
+            };
             if pool.len() >= SCENE_BUFFER_POOL_LIMIT {
                 return;
             }
@@ -769,3 +778,27 @@ impl Default for CompositorScene {
 }
 
 use crate::rect_to_quad;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The double-panic half of the survive-GPU-errors work: a
+    /// `CompositorScene` dropped while the buffer pool is unavailable —
+    /// here, mutably borrowed, as it is when the borrowing frame itself
+    /// panics and unwinds — must skip pooling, not panic. A panic in
+    /// this drop during a real unwind aborts the process and eats the
+    /// original error.
+    #[test]
+    fn scene_drop_skips_pooling_when_the_pool_is_held() {
+        let scene = CompositorScene::new();
+        SCENE_BUFFER_POOL.with(|pool| {
+            let _held = pool.borrow_mut();
+            let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(scene)));
+            assert!(
+                dropped.is_ok(),
+                "dropping a scene under a held pool borrow must not panic"
+            );
+        });
+    }
+}
