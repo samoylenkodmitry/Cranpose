@@ -8263,6 +8263,7 @@ impl GpuRenderer {
             LayerSurfaceRequest {
                 root_scale,
                 backdrop_underlay: None,
+                backdrop_underlay_color: None,
                 allow_runtime_cache: false,
                 logical_rect_override: Some(viewport_rect),
                 capture_clip_override: None,

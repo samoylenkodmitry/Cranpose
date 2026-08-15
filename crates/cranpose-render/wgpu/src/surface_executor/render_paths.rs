@@ -41,7 +41,7 @@ use cranpose_render_common::graph::{quad_bounds, CachePolicy, ProjectiveTransfor
 use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkKey;
 use cranpose_ui_graphics::{
-    BlendMode, Brush, FxHasher, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
+    BlendMode, Brush, Color, FxHasher, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
 };
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -520,6 +520,72 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
         }
     }
     covered
+}
+
+/// The one colour the underlay under `rect` holds, when it holds only one.
+///
+/// A child whose glass reads a flat colour reads the same colour wherever the
+/// child sits, so its raster stays good while it moves. That needs the whole
+/// rect covered by a single opaque solid fill with nothing over it: any other
+/// draw that reaches into the rect, any layer event below it, and any sibling
+/// already composited into the target all end it. When nothing at all reaches
+/// the rect the answer is whatever the parent's own underlay holds.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn uniform_underlay_color_before(
+    scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    z_end: usize,
+    rect: Rect,
+    root_scale: f32,
+    inherited: Option<u32>,
+) -> Option<u32> {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    if prior_layer_event_intersects_rect(&scene.effect_layers, &scene.backdrop_layers, z_end, rect)
+    {
+        return None;
+    }
+    let rect_pixels = surface_pixel_rect(rect, root_scale);
+    let sibling_over_rect = prior_child_contributions.iter().any(|child| {
+        child.z_index < z_end && dest_quad_intersects_rect(child.dest_quad, rect_pixels)
+    });
+    if sibling_over_rect {
+        return None;
+    }
+
+    for op in scene_range_draw_ops(&scene.draw_ops, 0, z_end)
+        .iter()
+        .rev()
+        .copied()
+    {
+        let touches =
+            draw_op_visible_bounds(scene, op).is_none_or(|bounds| rects_intersect(bounds, rect));
+        if !touches {
+            continue;
+        }
+        let DrawOpKind::Shape(index) = op.kind else {
+            return None;
+        };
+        let shape = scene.shapes.get(index)?;
+        if !shape_opaque_covers_rect(shape, &scene.brushes, rect) {
+            return None;
+        }
+        let SceneBrush::Solid(color) = shape.brush else {
+            return None;
+        };
+        return Some(solid_color_bits(color));
+    }
+
+    inherited
+}
+
+fn solid_color_bits(color: Color) -> u32 {
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (channel(color.r()) << 24)
+        | (channel(color.g()) << 16)
+        | (channel(color.b()) << 8)
+        | channel(color.a())
 }
 
 pub(crate) fn layer_source_uses_external_backdrop_underlay(
@@ -2104,6 +2170,27 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 )?;
             }
 
+            let child_underlay_color = if child.needs_nested_underlay {
+                let dest_rect = quad_bounds(resolved_child.dest_quad);
+                let covered_by_sibling = pending_layer_composites_intersect_rect(
+                    &pending_composites,
+                    surface_pixel_rect(dest_rect, root_scale),
+                );
+                if covered_by_sibling {
+                    None
+                } else {
+                    uniform_underlay_color_before(
+                        &local_scene,
+                        &[],
+                        child.z_index,
+                        dest_rect,
+                        root_scale,
+                        None,
+                    )
+                }
+            } else {
+                None
+            };
             let child_underlay = if child.needs_nested_underlay {
                 Some(create_direct_root_child_underlay(
                     backend,
@@ -2124,6 +2211,7 @@ pub(crate) fn render_root_direct<B: SurfaceExecutionBackend>(
                 LayerSurfaceRequest {
                     root_scale,
                     backdrop_underlay: child_underlay.as_ref(),
+                    backdrop_underlay_color: child_underlay_color,
                     allow_runtime_cache: true,
                     logical_rect_override: Some(resolved_child.logical_rect),
                     capture_clip_override: resolved_child.surface_clip,
@@ -2326,6 +2414,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
     let LayerSurfaceRequest {
         root_scale,
         backdrop_underlay,
+        backdrop_underlay_color,
         allow_runtime_cache,
         logical_rect_override,
         capture_clip_override,
@@ -2360,6 +2449,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         child,
         target_scale,
         backdrop_underlay.is_some(),
+        backdrop_underlay_color,
         allow_runtime_cache,
         logical_rect_override,
         backend.max_texture_dim(),
@@ -2392,6 +2482,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             LayerSurfaceRenderOptions {
                 target_scale,
                 backdrop_underlay,
+                backdrop_underlay_color,
                 allow_runtime_cache,
                 cache_candidate: Some((cache_key, logical_rect)),
                 logical_rect_override,
@@ -2409,6 +2500,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         LayerSurfaceRenderOptions {
             target_scale,
             backdrop_underlay,
+            backdrop_underlay_color,
             allow_runtime_cache,
             cache_candidate: None,
             logical_rect_override,
@@ -2431,10 +2523,12 @@ fn stale_backdrop_cache_probe() -> bool {
     *ON.get_or_init(|| std::env::var_os("CRANPOSE_STALE_BACKDROP_CACHE").is_some())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
     root_scale: f32,
     has_backdrop_underlay: bool,
+    backdrop_underlay_color: Option<u32>,
     allow_runtime_cache: bool,
     logical_rect_override: Option<Rect>,
     max_texture_dim: u32,
@@ -2451,7 +2545,8 @@ fn child_layer_raster_cache_candidate(
     if !cache_is_allowed {
         return None;
     }
-    if has_backdrop_underlay && child.contains_descendant_backdrop && !stale_backdrop_cache_probe()
+    let external_backdrop_input = has_backdrop_underlay && child.contains_descendant_backdrop;
+    if external_backdrop_input && backdrop_underlay_color.is_none() && !stale_backdrop_cache_probe()
     {
         return None;
     }
@@ -2467,10 +2562,19 @@ fn child_layer_raster_cache_candidate(
 
     let logical_rect = logical_rect_override.unwrap_or(child.logical_rect);
     let pixel_size = surface_target_size(logical_rect, root_scale, max_texture_dim);
+    let content_hash = if external_backdrop_input {
+        let mut hasher = FxHasher::default();
+        0xF1A7_C010u64.hash(&mut hasher);
+        child.target_content_hash.hash(&mut hasher);
+        backdrop_underlay_color.hash(&mut hasher);
+        hasher.finish()
+    } else {
+        child.target_content_hash
+    };
     Some((
         LayerRasterCacheKey::new(
             child.node_id,
-            child.target_content_hash,
+            content_hash,
             child.effect_hash,
             logical_rect,
             pixel_size,
@@ -3993,6 +4097,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
     child_layers: Vec<ChildLayerComposite>,
     target_scale: f32,
     backdrop_underlay: Option<&OffscreenTarget>,
+    underlay_color: Option<u32>,
     width: u32,
     height: u32,
     effective_translated_content_context: bool,
@@ -4133,6 +4238,16 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             surface_capture_active: translation_context.surface_capture_active,
             local_picture_capture_active: translation_context.local_picture_capture_active,
         };
+        let child_underlay_color = child.needs_nested_underlay.then(|| {
+            uniform_underlay_color_before(
+                local_scene,
+                &prior_child_contributions,
+                child.z_index,
+                quad_bounds(child_dest_quad),
+                target_scale,
+                underlay_color,
+            )
+        });
         let child_underlay = child.needs_nested_underlay.then(|| {
             let sample_rect = underlay_sample_rect(&child.source);
             create_projected_child_underlay(
@@ -4152,6 +4267,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
             LayerSurfaceRequest {
                 root_scale: target_scale,
                 backdrop_underlay: child_underlay.as_ref(),
+                backdrop_underlay_color: child_underlay_color.flatten(),
                 allow_runtime_cache: true,
                 logical_rect_override: Some(resolved_child.logical_rect),
                 capture_clip_override: resolved_child.surface_clip,
@@ -4483,6 +4599,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
     let LayerSurfaceRenderOptions {
         target_scale,
         backdrop_underlay,
+        backdrop_underlay_color,
         allow_runtime_cache,
         mut cache_candidate,
         logical_rect_override,
@@ -4666,6 +4783,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                     child_layers,
                     target_scale,
                     backdrop_underlay,
+                    backdrop_underlay_color,
                     width,
                     height,
                     effective_translated_content_context,
@@ -4689,6 +4807,7 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
                 child_layers,
                 target_scale,
                 backdrop_underlay,
+                backdrop_underlay_color,
                 width,
                 height,
                 effective_translated_content_context,
@@ -6111,7 +6230,10 @@ mod tests {
         let filled = (scissor.2 as u64) * (scissor.3 as u64);
         let whole = (full.0 as u64) * (full.1 as u64);
         assert_eq!(whole, 504_000, "a 1200x420 row underlay");
-        assert_eq!(filled, 29_584, "only the glass, the reach of its blur and a snap margin");
+        assert_eq!(
+            filled, 29_584,
+            "only the glass, the reach of its blur and a snap margin"
+        );
         assert!(
             sample_rect.x <= glass.x && sample_rect.y <= glass.y,
             "the blur reach must widen the rect: sample={sample_rect:?} glass={glass:?}"

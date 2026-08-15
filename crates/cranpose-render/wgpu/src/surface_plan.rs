@@ -73,6 +73,10 @@ pub(crate) struct TranslationRenderContext {
 pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) root_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    /// The one colour the underlay holds under this child, when it holds
+    /// only one; the raster cache key carries it so the child keeps its
+    /// raster while it moves over that colour.
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
     pub(crate) capture_clip_override: Option<Rect>,
@@ -83,6 +87,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
 pub(crate) struct LayerSurfaceRenderOptions<'a> {
     pub(crate) target_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) cache_candidate: Option<(
         cranpose_render_common::raster_cache::LayerRasterCacheKey,
