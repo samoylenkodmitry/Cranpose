@@ -6227,6 +6227,7 @@ fn layer_raster_cache_candidate(
 }
 
 impl GpuRenderer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,

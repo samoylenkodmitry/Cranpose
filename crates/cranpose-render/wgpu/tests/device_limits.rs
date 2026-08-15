@@ -57,6 +57,7 @@ fn downlevel_uniform_renderer() -> Result<(WgpuRenderer, Arc<wgpu::Device>), Str
         Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
         adapter.get_info().backend,
+        adapter.get_downlevel_capabilities().flags,
     );
     Ok((renderer, device))
 }

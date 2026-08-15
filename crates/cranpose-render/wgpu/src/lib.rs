@@ -516,6 +516,7 @@ impl WgpuRenderer {
     ///   [`PresentTimings`] share the producer telemetry's clock domain;
     ///   `None` leaves timings at zero.
     #[cfg(not(target_arch = "wasm32"))]
+    #[allow(clippy::too_many_arguments)]
     pub fn init_gpu_threaded(
         &mut self,
         device: Arc<wgpu::Device>,
