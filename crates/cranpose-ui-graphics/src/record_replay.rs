@@ -162,6 +162,23 @@ pub struct RecordTransform {
     pub angle: f32,
 }
 
+/// [`RecordTransform::apply`]'s arithmetic with the rotation's sin/cos
+/// supplied by the caller. The contiguous round-rect run loop hoists
+/// `sin_cos` — a libm call — out of its per-record body through this seam,
+/// one call per run instead of one per record, while `apply` stays the one
+/// expression of the motion: both forms run this exact arithmetic on the
+/// same values, so the hoist is pure common-subexpression reuse and cannot
+/// move a float.
+#[inline(always)]
+fn apply_parts(scale: f32, sin: f32, cos: f32, center: Point, p: Point) -> Point {
+    let dx = p.x - center.x;
+    let dy = p.y - center.y;
+    Point::new(
+        center.x + (dx * cos - dy * sin) * scale,
+        center.y + (dx * sin + dy * cos) * scale,
+    )
+}
+
 impl RecordTransform {
     pub const IDENTITY: Self = Self {
         scale: 1.0,
@@ -170,12 +187,7 @@ impl RecordTransform {
 
     pub fn apply(&self, center: Point, p: Point) -> Point {
         let (sin, cos) = self.angle.sin_cos();
-        let dx = p.x - center.x;
-        let dy = p.y - center.y;
-        Point::new(
-            center.x + (dx * cos - dy * sin) * self.scale,
-            center.y + (dx * sin + dy * cos) * self.scale,
-        )
+        apply_parts(self.scale, sin, cos, center, p)
     }
 
     /// Axis-aligned bounds of `bounds` after the transform: the four
@@ -331,13 +343,16 @@ pub fn circle_anchor_transform_pinned(
 /// centers must sit on the shared pivot — that is what makes rotation a
 /// value change instead of a position change.
 ///
-/// This is THE arc comparison — the serial per-pair path and the contiguous
-/// run loop both call it, so the tolerance semantics cannot drift between
-/// them. The tolerance terms combine with `&`, not `&&`: each `close_*` is a
-/// pure comparison, so evaluating all of them unconditionally is
-/// result-identical to the short-circuit form (a NaN in any field makes its
-/// own comparison false regardless of order) while the common all-match case
-/// takes one branch per record instead of seven.
+/// This is the semantically AUTHORITATIVE arc comparison. The serial
+/// per-pair path (probes, partition, alignment) calls it directly; the
+/// contiguous run loop runs [`match_arc_lanes`], its lane-shaped twin,
+/// which is pinned to this function verdict-for-verdict by the exhaustive
+/// `lane_kernel_equivalence` corpus — so the tolerance semantics cannot
+/// drift between them. The tolerance terms combine with `&`, not `&&`: each
+/// `close_*` is a pure comparison, so evaluating all of them unconditionally
+/// is result-identical to the short-circuit form (a NaN in any field makes
+/// its own comparison false regardless of order) while the common all-match
+/// case takes one branch per record instead of seven.
 pub fn match_arc(
     current: &SolidArcRecord,
     retained: &SolidArcRecord,
@@ -370,11 +385,12 @@ pub fn match_arc(
 /// Non-circular round rects never match — they do not survive rotation
 /// about an external pivot.
 ///
-/// Like [`match_arc`], this is the one round-rect comparison both the serial
-/// per-pair path and the contiguous run loop use; the tolerance terms
-/// combine with `&` because each is pure, so unconditional evaluation is
-/// result-identical (NaN included) and the all-match case stays
-/// branch-light.
+/// Like [`match_arc`], this is the semantically authoritative round-rect
+/// comparison, called directly by the serial per-pair path; the contiguous
+/// run loop runs [`match_round_rect_lanes`], its equivalence-pinned
+/// lane-shaped twin. The tolerance terms combine with `&` because each is
+/// pure, so unconditional evaluation is result-identical (NaN included) and
+/// the all-match case stays branch-light.
 pub fn match_round_rect(
     current: &SolidRoundRectRecord,
     retained: &SolidRoundRectRecord,
@@ -1603,12 +1619,211 @@ fn typed_run_len(tape: &[TapeRef], at: usize) -> usize {
     lo
 }
 
+// ---------------------------------------------------------------------------
+// Lane-shaped verify kernels for the contiguous run loops.
+//
+// [`match_arc`] and [`match_round_rect`] stay the semantically authoritative
+// comparisons — probes, partition, and alignment call them per pair. The run
+// loops below run these lane-shaped twins instead, pinned to the scalar
+// authorities verdict-for-verdict and recolor-for-recolor by the exhaustive
+// `lane_kernel_equivalence` corpus at the bottom of this file (tolerance
+// edges both directions per field, stroke shape mismatches, NaN in every
+// field, infinities, denormals, cross-paired records, degenerate
+// transforms).
+//
+// The shaping argument, in lieu of inspecting generated code: each kernel
+// gathers its independent tolerance checks into FIXED-SIZE arrays and folds
+// them with `&` — constant trip count, no early exit inside the lane block,
+// no cross-lane data flow — which is the shape LLVM's SLP vectorizer can
+// lift onto 4-wide SIMD as-is: the per-lane chains (sub, abs, abs, abs,
+// max, mul, add, cmp) are isomorphic across lanes and need no
+// reassociation and no fast-math relaxation to run 4-wide. Every lane IS a
+// [`close_rel`] call — the exact scalar expression
+// `(a - b).abs() <= ABS_EPS + REL_EPS * a.abs().max(b.abs())` — so any
+// speedup comes from lane-parallelism, never from rewriting a float
+// expression, and the verdict cannot depend on whether the vectorizer
+// fires (the on-device A/B is what judges that). [`close_angle`] stays
+// scalar: its bounded-wrap branch does not lane-parallelize.
+//
+// Where the lanes can actually widen, measured against the target specs,
+// not assumed: `armv7-linux-androideabi` — the Wear armeabi-v7a slice —
+// carries `-neon` in its rustc feature string (the ABI's floor is
+// VFPv3-D16), so THERE the lanes compile to scalar VFP either way; the
+// shape costs nothing scalar (the checks were unconditional and
+// independent before) and hands the in-order pipeline deeper independent
+// chains, but 4-wide needs the app to build the `thumbv7neon` triple.
+// aarch64 (`arm64-v8a`, ASIMD always on) and the x86_64 hosts vectorize
+// as-is. Where NEON does apply on 32-bit ARM it flushes single-precision
+// denormals to zero while scalar VFP keeps them; that cannot flip a lane
+// here — a denormal `|a - b|` sits below ABS_EPS (2e-2) whether flushed or
+// not, and a denormal `REL_EPS * max` term vanishes into the `ABS_EPS + x`
+// rounding either way — the boolean is identical under either denormal
+// mode.
+// ---------------------------------------------------------------------------
+
+/// The exact [`close_rel`] verdict for `N` independent lane pairs, folded
+/// with `&`. Fixed-size arrays, a constant trip count, and a branch-free
+/// fold are the SLP-friendly shape (see the section comment above); each
+/// lane delegates to [`close_rel`] itself, so the per-lane float expression
+/// is the scalar one verbatim.
+#[inline(always)]
+fn close_rel_all<const N: usize>(a: [f32; N], b: [f32; N]) -> bool {
+    let mut ok = [false; N];
+    for ((lane, &a), &b) in ok.iter_mut().zip(&a).zip(&b) {
+        *lane = close_rel(a, b);
+    }
+    ok.into_iter().fold(true, |all, lane| all & lane)
+}
+
+/// The stroke comparison's lane inputs: the width pair the lane compares
+/// and whether the `Option` shapes agree. Both-`None` yields `(0.0, 0.0)` —
+/// a trivially true lane, exactly the scalar arm's `true` — both-`Some`
+/// yields the scalar arm's exact operands, and a shape mismatch fails on
+/// the flag with the lane value unused.
+#[inline(always)]
+fn stroke_lane(
+    current: Option<crate::Stroke>,
+    retained: Option<crate::Stroke>,
+    scale: f32,
+) -> (f32, f32, bool) {
+    match (current, retained) {
+        (None, None) => (0.0, 0.0, true),
+        (Some(now), Some(then)) => (now.width, then.width * scale, true),
+        _ => (0.0, 0.0, false),
+    }
+}
+
+/// [`match_arc`]'s lane-shaped twin for the contiguous run loop: the same
+/// seven `close_rel` checks plus the stroke lane, shaped as two
+/// f32x4-sized groups for [`close_rel_all`], with the scalar
+/// [`close_angle`] alongside. Equal by construction — every lane evaluates
+/// the identical float expression on the identical values, and `&` over
+/// pure booleans is order-free — and pinned by `lane_kernel_equivalence`.
+#[inline(always)]
+fn match_arc_lanes(
+    current: &SolidArcRecord,
+    retained: &SolidArcRecord,
+    center: Point,
+    scale: f32,
+    angle: f32,
+) -> RecordMatch {
+    let (stroke_now, stroke_then, stroke_shape_ok) =
+        stroke_lane(current.stroke, retained.stroke, scale);
+    let a = [
+        current.center.x,
+        current.center.y,
+        current.center.x,
+        current.center.y,
+        current.radius,
+        current.inner_radius,
+        current.sweep_angle,
+        stroke_now,
+    ];
+    let b = [
+        retained.center.x,
+        retained.center.y,
+        center.x,
+        center.y,
+        retained.radius * scale,
+        retained.inner_radius * scale,
+        retained.sweep_angle,
+        stroke_then,
+    ];
+    let geometry_ok = close_rel_all(a, b)
+        & stroke_shape_ok
+        & close_angle(current.start_angle, retained.start_angle + angle);
+    if !geometry_ok {
+        return RecordMatch::Mismatch;
+    }
+    if current.color == retained.color {
+        RecordMatch::Exact
+    } else {
+        RecordMatch::Recolor
+    }
+}
+
+/// [`match_round_rect`]'s lane-shaped twin. Both sides' [`circle_view`]
+/// derivations run unconditionally — centers and halves are plain
+/// arithmetic on any input, and a non-circle fails its `is_circle` lanes
+/// below, the same Mismatch the scalar `let ... else` takes, decided
+/// without a branch. The caller supplies the transform's parts (`sin_cos`
+/// hoisted per run — see [`apply_parts`]). Fourteen `close_rel` lanes:
+/// three clean f32x4 quads (current radii vs half, retained radii vs half,
+/// then extents and the moved center) and a two-lane tail (diameter,
+/// stroke).
+#[inline(always)]
+fn match_round_rect_lanes(
+    current: &SolidRoundRectRecord,
+    retained: &SolidRoundRectRecord,
+    center: Point,
+    scale: f32,
+    sin: f32,
+    cos: f32,
+) -> RecordMatch {
+    // circle_view(current) / circle_view(retained), exactly: half from the
+    // width, center from rect origin + half extents, diameter = width.
+    let half_now = current.rect.width * 0.5;
+    let half_then = retained.rect.width * 0.5;
+    let c_now = Point::new(
+        current.rect.x + current.rect.width * 0.5,
+        current.rect.y + current.rect.height * 0.5,
+    );
+    let c_then = Point::new(
+        retained.rect.x + retained.rect.width * 0.5,
+        retained.rect.y + retained.rect.height * 0.5,
+    );
+    let moved = apply_parts(scale, sin, cos, center, c_then);
+    let (stroke_now, stroke_then, stroke_shape_ok) =
+        stroke_lane(current.stroke, retained.stroke, scale);
+    let a = [
+        current.radii.top_left,
+        current.radii.top_right,
+        current.radii.bottom_right,
+        current.radii.bottom_left,
+        retained.radii.top_left,
+        retained.radii.top_right,
+        retained.radii.bottom_right,
+        retained.radii.bottom_left,
+        current.rect.width,
+        retained.rect.width,
+        c_now.x,
+        c_now.y,
+        current.rect.width,
+        stroke_now,
+    ];
+    let b = [
+        half_now,
+        half_now,
+        half_now,
+        half_now,
+        half_then,
+        half_then,
+        half_then,
+        half_then,
+        current.rect.height,
+        retained.rect.height,
+        moved.x,
+        moved.y,
+        retained.rect.width * scale,
+        stroke_then,
+    ];
+    let geometry_ok = close_rel_all(a, b) & stroke_shape_ok;
+    if !geometry_ok {
+        return RecordMatch::Mismatch;
+    }
+    if current.color == retained.color {
+        RecordMatch::Exact
+    } else {
+        RecordMatch::Recolor
+    }
+}
+
 /// The tight arc loop over one contiguous run pair: no tape decode, no kind
-/// dispatch — direct slice indexing with [`match_arc`] (the same function
-/// the serial per-pair path uses, so tolerance semantics cannot drift).
-/// Returns the cleanly matched length; recolors are pushed as
-/// (`span_offset` + run-relative index, color), exactly the entries the
-/// per-entry walk would have produced.
+/// dispatch — direct slice indexing with [`match_arc_lanes`],
+/// [`match_arc`]'s equivalence-pinned lane-shaped twin, the transform's
+/// parts hoisted once per run. Returns the cleanly matched length; recolors
+/// are pushed as (`span_offset` + run-relative index, color), exactly the
+/// entries the per-entry walk would have produced.
 fn match_arc_run(
     current: &[SolidArcRecord],
     snapshot: &[SolidArcRecord],
@@ -1617,8 +1832,9 @@ fn match_arc_run(
     span_offset: usize,
     recolors: &mut Vec<(u32, Color)>,
 ) -> usize {
+    let (scale, angle) = (t.scale, t.angle);
     for (i, (now, then)) in current.iter().zip(snapshot).enumerate() {
-        match match_arc(now, then, center, t) {
+        match match_arc_lanes(now, then, center, scale, angle) {
             RecordMatch::Exact => {}
             RecordMatch::Recolor => recolors.push(((span_offset + i) as u32, now.color)),
             RecordMatch::Mismatch => return i,
@@ -1627,11 +1843,13 @@ fn match_arc_run(
     current.len()
 }
 
-/// [`match_arc_run`]'s round-rect twin. [`match_round_rect`] itself rejects
-/// non-circular round rects, which is the same verdict the per-entry walk's
-/// eligibility check produced for them (`view_at` maps a non-circle to
-/// `None`, and any `None` pairing is a mismatch), so no separate
-/// eligibility pass is needed here.
+/// [`match_arc_run`]'s round-rect twin, on [`match_round_rect_lanes`]. The
+/// lane kernel rejects non-circular round rects through its `is_circle`
+/// lanes, which is the same verdict the per-entry walk's eligibility check
+/// produced for them (`view_at` maps a non-circle to `None`, and any `None`
+/// pairing is a mismatch), so no separate eligibility pass is needed here.
+/// The rotation's `sin_cos` — a libm call the scalar path pays per record
+/// inside [`RecordTransform::apply`] — is hoisted to once per run.
 fn match_round_rect_run(
     current: &[SolidRoundRectRecord],
     snapshot: &[SolidRoundRectRecord],
@@ -1640,8 +1858,10 @@ fn match_round_rect_run(
     span_offset: usize,
     recolors: &mut Vec<(u32, Color)>,
 ) -> usize {
+    let scale = t.scale;
+    let (sin, cos) = t.angle.sin_cos();
     for (i, (now, then)) in current.iter().zip(snapshot).enumerate() {
-        match match_round_rect(now, then, center, t) {
+        match match_round_rect_lanes(now, then, center, scale, sin, cos) {
             RecordMatch::Exact => {}
             RecordMatch::Recolor => recolors.push(((span_offset + i) as u32, now.color)),
             RecordMatch::Mismatch => return i,
@@ -2628,6 +2848,824 @@ mod tests {
             let p = t.apply(CENTER, corner);
             assert!(p.x >= moved.x - 1e-3 && p.x <= moved.x + moved.width + 1e-3);
             assert!(p.y >= moved.y - 1e-3 && p.y <= moved.y + moved.height + 1e-3);
+        }
+    }
+}
+
+/// The lane kernels ([`match_arc_lanes`], [`match_round_rect_lanes`]) and
+/// the run loops built on them, checked against the scalar authorities
+/// ([`match_arc`], [`match_round_rect`]) record-for-record. The corpus
+/// pushes every field just inside and just outside its tolerance in both
+/// directions — at 10% margins whose side is asserted, and at knife-edge
+/// deltas bracketing the exact f32 threshold, which keep the equivalence
+/// assertion sensitive to sub-tolerance arithmetic drift the asserted
+/// margins would forgive — mismatches the stroke shapes both ways, wraps
+/// the angle through full turns, and poisons every field with NaN, both
+/// infinities, and a denormal on either and both sides. Then every corpus
+/// record is cross-paired with every other under several transforms
+/// (identity, the nominal motion, a large rotation, a NaN transform, an
+/// infinite scale), and the run loops are replayed from every start offset
+/// with recolor lists compared BIT-FOR-BIT (a NaN color both paths
+/// produced identically must not fail the comparison, and no color
+/// difference may hide).
+#[cfg(test)]
+mod lane_kernel_equivalence {
+    use super::*;
+    use crate::{Color, Stroke};
+    use std::f32::consts::TAU;
+
+    /// Knife-edge margin around the exact threshold. Well below every
+    /// tolerance in play (ABS_EPS is 2e-2), so a lane operand drifting by
+    /// more than ~5e-4 flips one of the bracketing cases on the side the
+    /// drift approaches — this is what the sabotage check leans on.
+    const KNIFE: f32 = 5.0e-4;
+
+    const PIVOT: Point = Point { x: 204.0, y: 204.0 };
+    const T: RecordTransform = RecordTransform {
+        scale: 0.9994,
+        angle: 0.0123,
+    };
+    /// A denormal: the smallest positive normal f32 is ~1.18e-38.
+    const DENORMAL: f32 = 1.0e-40;
+    const POISONS: [f32; 4] = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, DENORMAL];
+
+    fn transforms() -> [RecordTransform; 5] {
+        [
+            RecordTransform::IDENTITY,
+            T,
+            RecordTransform {
+                scale: 1.37,
+                angle: 3.0,
+            },
+            RecordTransform {
+                scale: f32::NAN,
+                angle: f32::NAN,
+            },
+            RecordTransform {
+                scale: f32::INFINITY,
+                angle: 0.0,
+            },
+        ]
+    }
+
+    /// Recolor lists compared as bit patterns: the contract is bitwise
+    /// identity, and `Color`'s `PartialEq` would spuriously fail a NaN
+    /// color that BOTH paths produced identically.
+    fn bits(recolors: &[(u32, Color)]) -> Vec<(u32, [u32; 4])> {
+        recolors
+            .iter()
+            .map(|&(i, Color(r, g, b, a))| {
+                (i, [r.to_bits(), g.to_bits(), b.to_bits(), a.to_bits()])
+            })
+            .collect()
+    }
+
+    struct Case<R> {
+        label: String,
+        current: R,
+        retained: R,
+        /// The scalar authority's verdict under [`T`], asserted where the
+        /// case exists to prove a specific edge falls on a specific side —
+        /// so the corpus provably exercises what it claims. `None` for
+        /// poison cases, whose verdict the scalar function itself defines.
+        expected: Option<RecordMatch>,
+    }
+
+    // ---- arcs ----
+
+    fn arc_base(stroke: Option<f32>) -> SolidArcRecord {
+        SolidArcRecord {
+            center: PIVOT,
+            radius: 120.0,
+            start_angle: 1.0,
+            sweep_angle: 0.4,
+            inner_radius: 96.0,
+            color: Color::WHITE,
+            stroke: stroke.map(Stroke::new),
+        }
+    }
+
+    /// `retained` moved by exactly [`T`] — the same products and sum the
+    /// scalar comparison forms on its own side, so the pair is Exact.
+    fn arc_moved(retained: &SolidArcRecord) -> SolidArcRecord {
+        SolidArcRecord {
+            center: retained.center,
+            radius: retained.radius * T.scale,
+            start_angle: retained.start_angle + T.angle,
+            sweep_angle: retained.sweep_angle,
+            inner_radius: retained.inner_radius * T.scale,
+            color: retained.color,
+            stroke: retained.stroke.map(|stroke| Stroke {
+                width: stroke.width * T.scale,
+                ..stroke
+            }),
+        }
+    }
+
+    type ArcGet = fn(&SolidArcRecord) -> f32;
+    type ArcSet = fn(&mut SolidArcRecord, f32);
+
+    fn arc_fields() -> [(&'static str, ArcGet, ArcSet); 6] {
+        [
+            ("center.x", |a| a.center.x, |a, v| a.center.x = v),
+            ("center.y", |a| a.center.y, |a, v| a.center.y = v),
+            ("radius", |a| a.radius, |a, v| a.radius = v),
+            (
+                "inner_radius",
+                |a| a.inner_radius,
+                |a, v| a.inner_radius = v,
+            ),
+            ("start_angle", |a| a.start_angle, |a, v| a.start_angle = v),
+            ("sweep_angle", |a| a.sweep_angle, |a, v| a.sweep_angle = v),
+        ]
+    }
+
+    fn arc_corpus() -> Vec<Case<SolidArcRecord>> {
+        let mut corpus: Vec<Case<SolidArcRecord>> = Vec::new();
+        for stroke in [None, Some(5.0_f32)] {
+            let retained = arc_base(stroke);
+            let matched = arc_moved(&retained);
+            corpus.push(Case {
+                label: format!("exact, stroke {stroke:?}"),
+                current: matched,
+                retained,
+                expected: Some(RecordMatch::Exact),
+            });
+            let mut recolored = matched;
+            recolored.color = Color::rgb(0.9, 0.3, 0.2);
+            corpus.push(Case {
+                label: format!("recolor, stroke {stroke:?}"),
+                current: recolored,
+                retained,
+                expected: Some(RecordMatch::Recolor),
+            });
+        }
+
+        let retained = arc_base(None);
+        let matched = arc_moved(&retained);
+        for (name, get, set) in arc_fields() {
+            let base = get(&matched);
+            // close_angle's tolerance is the flat ABS_EPS; close_rel's
+            // grows with the operands. 0.9/1.1 margins keep the nudge on
+            // the intended side even where it feeds several lanes (the
+            // center feeds two) or shifts its own threshold's `max`.
+            let tolerance = if name == "start_angle" {
+                ABS_EPS
+            } else {
+                ABS_EPS + REL_EPS * base.abs()
+            };
+            for sign in [1.0_f32, -1.0] {
+                let mut inside = matched;
+                set(&mut inside, base + sign * 0.9 * tolerance);
+                corpus.push(Case {
+                    label: format!("{name} just inside, sign {sign}"),
+                    current: inside,
+                    retained,
+                    expected: Some(RecordMatch::Exact),
+                });
+                let mut outside = matched;
+                set(&mut outside, base + sign * 1.1 * tolerance);
+                corpus.push(Case {
+                    label: format!("{name} just outside, sign {sign}"),
+                    current: outside,
+                    retained,
+                    expected: Some(RecordMatch::Mismatch),
+                });
+            }
+            for poison in POISONS {
+                let mut current = matched;
+                set(&mut current, poison);
+                corpus.push(Case {
+                    label: format!("{name} current {poison:e}"),
+                    current,
+                    retained,
+                    expected: None,
+                });
+                let mut poisoned = retained;
+                set(&mut poisoned, poison);
+                corpus.push(Case {
+                    label: format!("{name} retained {poison:e}"),
+                    current: matched,
+                    retained: poisoned,
+                    expected: None,
+                });
+                // The same poison on BOTH sides: infinities subtract to
+                // NaN, denormal pairs sit inside every tolerance.
+                let mut both_current = matched;
+                set(&mut both_current, poison);
+                corpus.push(Case {
+                    label: format!("{name} both {poison:e}"),
+                    current: both_current,
+                    retained: poisoned,
+                    expected: None,
+                });
+            }
+            // Knife edges: deltas of threshold - KNIFE, the threshold
+            // itself, and threshold + KNIFE, both directions. Which side
+            // the dead-on case rounds to is the scalar authority's call
+            // (`expected: None`); what these buy is sensitivity — an
+            // operand off by more than KNIFE in either implementation
+            // flips one of them, where the 10% margins above would
+            // forgive it.
+            for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
+                for sign in [1.0_f32, -1.0] {
+                    let mut edge = matched;
+                    set(&mut edge, base + sign * knife);
+                    corpus.push(Case {
+                        label: format!("{name} knife edge {knife:e}, sign {sign}"),
+                        current: edge,
+                        retained,
+                        expected: None,
+                    });
+                }
+            }
+        }
+
+        // Full-turn wraps take close_angle's paths the tolerance nudges
+        // above cannot reach.
+        for (label, delta, expected) in [
+            ("start_angle +TAU", TAU, RecordMatch::Exact),
+            ("start_angle -TAU", -TAU, RecordMatch::Exact),
+            ("start_angle +3 turns", 3.0 * TAU, RecordMatch::Exact),
+            (
+                "start_angle short of +TAU, inside",
+                TAU - 0.9 * ABS_EPS,
+                RecordMatch::Exact,
+            ),
+            (
+                "start_angle past +TAU, outside",
+                TAU + 1.1 * ABS_EPS,
+                RecordMatch::Mismatch,
+            ),
+        ] {
+            let mut wrapped = matched;
+            wrapped.start_angle += delta;
+            corpus.push(Case {
+                label: label.to_string(),
+                current: wrapped,
+                retained,
+                expected: Some(expected),
+            });
+        }
+
+        // Stroke shapes and width edges.
+        let stroked = arc_base(Some(5.0));
+        let moved_stroked = arc_moved(&stroked);
+        let mut some_vs_none = matched;
+        some_vs_none.stroke = Some(Stroke::new(5.0 * T.scale));
+        corpus.push(Case {
+            label: "stroke Some vs None".to_string(),
+            current: some_vs_none,
+            retained,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        corpus.push(Case {
+            label: "stroke None vs Some".to_string(),
+            current: matched,
+            retained: stroked,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        let width = 5.0 * T.scale;
+        let tolerance = ABS_EPS + REL_EPS * width.abs();
+        for sign in [1.0_f32, -1.0] {
+            let mut inside = moved_stroked;
+            inside.stroke = Some(Stroke::new(width + sign * 0.9 * tolerance));
+            corpus.push(Case {
+                label: format!("stroke width just inside, sign {sign}"),
+                current: inside,
+                retained: stroked,
+                expected: Some(RecordMatch::Exact),
+            });
+            let mut outside = moved_stroked;
+            outside.stroke = Some(Stroke::new(width + sign * 1.1 * tolerance));
+            corpus.push(Case {
+                label: format!("stroke width just outside, sign {sign}"),
+                current: outside,
+                retained: stroked,
+                expected: Some(RecordMatch::Mismatch),
+            });
+            for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
+                let mut edge = moved_stroked;
+                edge.stroke = Some(Stroke::new(width + sign * knife));
+                corpus.push(Case {
+                    label: format!("stroke width knife edge {knife:e}, sign {sign}"),
+                    current: edge,
+                    retained: stroked,
+                    expected: None,
+                });
+            }
+        }
+        for poison in POISONS {
+            let mut current = moved_stroked;
+            current.stroke = Some(Stroke::new(poison));
+            corpus.push(Case {
+                label: format!("stroke width current {poison:e}"),
+                current,
+                retained: stroked,
+                expected: None,
+            });
+            let mut poisoned = stroked;
+            poisoned.stroke = Some(Stroke::new(poison));
+            corpus.push(Case {
+                label: format!("stroke width retained {poison:e}"),
+                current: moved_stroked,
+                retained: poisoned,
+                expected: None,
+            });
+        }
+
+        // A NaN color on matching geometry: `==` is false, so BOTH paths
+        // must call it a Recolor carrying the NaN color.
+        let mut nan_color = matched;
+        nan_color.color = Color(f32::NAN, 0.5, 0.5, 1.0);
+        corpus.push(Case {
+            label: "NaN color".to_string(),
+            current: nan_color,
+            retained,
+            expected: Some(RecordMatch::Recolor),
+        });
+        corpus
+    }
+
+    #[test]
+    fn the_arc_corpus_exercises_what_it_claims() {
+        for case in arc_corpus() {
+            if let Some(expected) = case.expected {
+                assert_eq!(
+                    match_arc(&case.current, &case.retained, PIVOT, T),
+                    expected,
+                    "scalar verdict for `{}`",
+                    case.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arc_kernel_equals_the_scalar_authority_cross_paired() {
+        let corpus = arc_corpus();
+        for t in transforms() {
+            for a in &corpus {
+                for b in &corpus {
+                    assert_eq!(
+                        match_arc_lanes(&a.current, &b.retained, PIVOT, t.scale, t.angle),
+                        match_arc(&a.current, &b.retained, PIVOT, t),
+                        "arc kernel diverged: current `{}` vs retained `{}` under {t:?}",
+                        a.label,
+                        b.label
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arc_run_equals_a_scalar_reference_from_every_start() {
+        let corpus = arc_corpus();
+        let current: Vec<SolidArcRecord> = corpus.iter().map(|case| case.current).collect();
+        let snapshot: Vec<SolidArcRecord> = corpus.iter().map(|case| case.retained).collect();
+        let mut fast: Vec<(u32, Color)> = Vec::new();
+        let mut naive: Vec<(u32, Color)> = Vec::new();
+        for start in 0..current.len() {
+            fast.clear();
+            naive.clear();
+            let matched = match_arc_run(
+                &current[start..],
+                &snapshot[start..],
+                PIVOT,
+                T,
+                7,
+                &mut fast,
+            );
+            let mut mismatch = None;
+            for (i, (now, then)) in current[start..].iter().zip(&snapshot[start..]).enumerate() {
+                match match_arc(now, then, PIVOT, T) {
+                    RecordMatch::Exact => {}
+                    RecordMatch::Recolor => naive.push(((7 + i) as u32, now.color)),
+                    RecordMatch::Mismatch => {
+                        mismatch = Some(i);
+                        break;
+                    }
+                }
+            }
+            let reference = mismatch.unwrap_or(current.len() - start);
+            assert_eq!(
+                (matched, bits(&fast)),
+                (reference, bits(&naive)),
+                "arc run diverged from start {start}"
+            );
+        }
+    }
+
+    // ---- round rects ----
+
+    fn rr_base(stroke: Option<f32>) -> SolidRoundRectRecord {
+        // A circle of diameter 10 at (304, 204) — off-pivot, so rotation
+        // moves it.
+        SolidRoundRectRecord {
+            rect: Rect {
+                x: 299.0,
+                y: 199.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            radii: CornerRadii::uniform(5.0),
+            color: Color::WHITE,
+            stroke: stroke.map(Stroke::new),
+        }
+    }
+
+    /// `retained` moved by exactly [`T`]: the center through the very
+    /// `apply` arithmetic the scalar comparison uses, the extents through
+    /// its exact products.
+    fn rr_moved(retained: &SolidRoundRectRecord) -> SolidRoundRectRecord {
+        let (c_then, d_then) = circle_view(retained).expect("the base is a circle");
+        let c_now = T.apply(PIVOT, c_then);
+        let d_now = d_then * T.scale;
+        SolidRoundRectRecord {
+            rect: Rect {
+                x: c_now.x - d_now * 0.5,
+                y: c_now.y - d_now * 0.5,
+                width: d_now,
+                height: d_now,
+            },
+            radii: CornerRadii::uniform(d_now * 0.5),
+            color: retained.color,
+            stroke: retained.stroke.map(|stroke| Stroke {
+                width: stroke.width * T.scale,
+                ..stroke
+            }),
+        }
+    }
+
+    type RrGet = fn(&SolidRoundRectRecord) -> f32;
+    type RrSet = fn(&mut SolidRoundRectRecord, f32);
+
+    fn rr_fields() -> [(&'static str, RrGet, RrSet); 8] {
+        [
+            ("rect.x", |r| r.rect.x, |r, v| r.rect.x = v),
+            ("rect.y", |r| r.rect.y, |r, v| r.rect.y = v),
+            ("rect.width", |r| r.rect.width, |r, v| r.rect.width = v),
+            ("rect.height", |r| r.rect.height, |r, v| r.rect.height = v),
+            (
+                "radii.top_left",
+                |r| r.radii.top_left,
+                |r, v| r.radii.top_left = v,
+            ),
+            (
+                "radii.top_right",
+                |r| r.radii.top_right,
+                |r, v| r.radii.top_right = v,
+            ),
+            (
+                "radii.bottom_right",
+                |r| r.radii.bottom_right,
+                |r, v| r.radii.bottom_right = v,
+            ),
+            (
+                "radii.bottom_left",
+                |r| r.radii.bottom_left,
+                |r, v| r.radii.bottom_left = v,
+            ),
+        ]
+    }
+
+    fn rr_corpus() -> Vec<Case<SolidRoundRectRecord>> {
+        let mut corpus: Vec<Case<SolidRoundRectRecord>> = Vec::new();
+        for stroke in [None, Some(3.0_f32)] {
+            let retained = rr_base(stroke);
+            let matched = rr_moved(&retained);
+            corpus.push(Case {
+                label: format!("exact, stroke {stroke:?}"),
+                current: matched,
+                retained,
+                expected: Some(RecordMatch::Exact),
+            });
+            let mut recolored = matched;
+            recolored.color = Color::rgb(0.2, 0.8, 0.4);
+            corpus.push(Case {
+                label: format!("recolor, stroke {stroke:?}"),
+                current: recolored,
+                retained,
+                expected: Some(RecordMatch::Recolor),
+            });
+        }
+
+        let retained = rr_base(None);
+        let matched = rr_moved(&retained);
+        for (name, get, set) in rr_fields() {
+            let base = get(&matched);
+            let tolerance = ABS_EPS + REL_EPS * base.abs();
+            for sign in [1.0_f32, -1.0] {
+                let mut inside = matched;
+                set(&mut inside, base + sign * 0.9 * tolerance);
+                corpus.push(Case {
+                    label: format!("{name} just inside, sign {sign}"),
+                    current: inside,
+                    retained,
+                    expected: Some(RecordMatch::Exact),
+                });
+                let mut outside = matched;
+                set(&mut outside, base + sign * 1.1 * tolerance);
+                corpus.push(Case {
+                    label: format!("{name} just outside, sign {sign}"),
+                    current: outside,
+                    retained,
+                    expected: Some(RecordMatch::Mismatch),
+                });
+            }
+            for poison in POISONS {
+                let mut current = matched;
+                set(&mut current, poison);
+                corpus.push(Case {
+                    label: format!("{name} current {poison:e}"),
+                    current,
+                    retained,
+                    expected: None,
+                });
+                let mut poisoned = retained;
+                set(&mut poisoned, poison);
+                corpus.push(Case {
+                    label: format!("{name} retained {poison:e}"),
+                    current: matched,
+                    retained: poisoned,
+                    expected: None,
+                });
+                let mut both_current = matched;
+                set(&mut both_current, poison);
+                corpus.push(Case {
+                    label: format!("{name} both {poison:e}"),
+                    current: both_current,
+                    retained: poisoned,
+                    expected: None,
+                });
+            }
+            // Knife edges, exactly as in the arc corpus: sub-tolerance
+            // sensitivity for the equivalence assertion.
+            for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
+                for sign in [1.0_f32, -1.0] {
+                    let mut edge = matched;
+                    set(&mut edge, base + sign * knife);
+                    corpus.push(Case {
+                        label: format!("{name} knife edge {knife:e}, sign {sign}"),
+                        current: edge,
+                        retained,
+                        expected: None,
+                    });
+                }
+            }
+        }
+
+        // Non-circles: the scalar path fails circle_view's `let ... else`,
+        // the lane path its is_circle lanes — including a retained
+        // non-circle behind a pristine current, and a non-circle paired
+        // with ITSELF (which must still be a Mismatch).
+        let mut squashed = matched;
+        squashed.rect.height = squashed.rect.width * 2.0;
+        corpus.push(Case {
+            label: "current non-circle (squashed)".to_string(),
+            current: squashed,
+            retained,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        let mut loose_radii = retained;
+        loose_radii.radii = CornerRadii::uniform(2.0);
+        corpus.push(Case {
+            label: "retained non-circle (loose radii)".to_string(),
+            current: matched,
+            retained: loose_radii,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        corpus.push(Case {
+            label: "non-circle vs itself".to_string(),
+            current: loose_radii,
+            retained: loose_radii,
+            expected: Some(RecordMatch::Mismatch),
+        });
+
+        // Stroke shapes and width edges.
+        let stroked = rr_base(Some(3.0));
+        let moved_stroked = rr_moved(&stroked);
+        let mut some_vs_none = matched;
+        some_vs_none.stroke = Some(Stroke::new(3.0 * T.scale));
+        corpus.push(Case {
+            label: "stroke Some vs None".to_string(),
+            current: some_vs_none,
+            retained,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        corpus.push(Case {
+            label: "stroke None vs Some".to_string(),
+            current: matched,
+            retained: stroked,
+            expected: Some(RecordMatch::Mismatch),
+        });
+        let width = 3.0 * T.scale;
+        let tolerance = ABS_EPS + REL_EPS * width.abs();
+        for sign in [1.0_f32, -1.0] {
+            let mut inside = moved_stroked;
+            inside.stroke = Some(Stroke::new(width + sign * 0.9 * tolerance));
+            corpus.push(Case {
+                label: format!("stroke width just inside, sign {sign}"),
+                current: inside,
+                retained: stroked,
+                expected: Some(RecordMatch::Exact),
+            });
+            let mut outside = moved_stroked;
+            outside.stroke = Some(Stroke::new(width + sign * 1.1 * tolerance));
+            corpus.push(Case {
+                label: format!("stroke width just outside, sign {sign}"),
+                current: outside,
+                retained: stroked,
+                expected: Some(RecordMatch::Mismatch),
+            });
+            for knife in [tolerance - KNIFE, tolerance, tolerance + KNIFE] {
+                let mut edge = moved_stroked;
+                edge.stroke = Some(Stroke::new(width + sign * knife));
+                corpus.push(Case {
+                    label: format!("stroke width knife edge {knife:e}, sign {sign}"),
+                    current: edge,
+                    retained: stroked,
+                    expected: None,
+                });
+            }
+        }
+        for poison in POISONS {
+            let mut current = moved_stroked;
+            current.stroke = Some(Stroke::new(poison));
+            corpus.push(Case {
+                label: format!("stroke width current {poison:e}"),
+                current,
+                retained: stroked,
+                expected: None,
+            });
+        }
+
+        let mut nan_color = matched;
+        nan_color.color = Color(f32::NAN, 0.5, 0.5, 1.0);
+        corpus.push(Case {
+            label: "NaN color".to_string(),
+            current: nan_color,
+            retained,
+            expected: Some(RecordMatch::Recolor),
+        });
+        corpus
+    }
+
+    #[test]
+    fn the_round_rect_corpus_exercises_what_it_claims() {
+        for case in rr_corpus() {
+            if let Some(expected) = case.expected {
+                assert_eq!(
+                    match_round_rect(&case.current, &case.retained, PIVOT, T),
+                    expected,
+                    "scalar verdict for `{}`",
+                    case.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn round_rect_kernel_equals_the_scalar_authority_cross_paired() {
+        let corpus = rr_corpus();
+        for t in transforms() {
+            let (sin, cos) = t.angle.sin_cos();
+            for a in &corpus {
+                for b in &corpus {
+                    assert_eq!(
+                        match_round_rect_lanes(&a.current, &b.retained, PIVOT, t.scale, sin, cos),
+                        match_round_rect(&a.current, &b.retained, PIVOT, t),
+                        "round-rect kernel diverged: current `{}` vs retained `{}` under {t:?}",
+                        a.label,
+                        b.label
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn round_rect_run_equals_a_scalar_reference_from_every_start() {
+        let corpus = rr_corpus();
+        let current: Vec<SolidRoundRectRecord> = corpus.iter().map(|case| case.current).collect();
+        let snapshot: Vec<SolidRoundRectRecord> = corpus.iter().map(|case| case.retained).collect();
+        let mut fast: Vec<(u32, Color)> = Vec::new();
+        let mut naive: Vec<(u32, Color)> = Vec::new();
+        for start in 0..current.len() {
+            fast.clear();
+            naive.clear();
+            let matched = match_round_rect_run(
+                &current[start..],
+                &snapshot[start..],
+                PIVOT,
+                T,
+                7,
+                &mut fast,
+            );
+            let mut mismatch = None;
+            for (i, (now, then)) in current[start..].iter().zip(&snapshot[start..]).enumerate() {
+                match match_round_rect(now, then, PIVOT, T) {
+                    RecordMatch::Exact => {}
+                    RecordMatch::Recolor => naive.push(((7 + i) as u32, now.color)),
+                    RecordMatch::Mismatch => {
+                        mismatch = Some(i);
+                        break;
+                    }
+                }
+            }
+            let reference = mismatch.unwrap_or(current.len() - start);
+            assert_eq!(
+                (matched, bits(&fast)),
+                (reference, bits(&naive)),
+                "round-rect run diverged from start {start}"
+            );
+        }
+    }
+
+    // ---- arbitrary bit patterns ----
+
+    /// A deterministic xorshift over raw bit patterns — half the values
+    /// squashed into a plausible coordinate range, half left as arbitrary
+    /// bits (NaN payloads, infinities, denormals, huge magnitudes) — so the
+    /// kernels meet float shapes no hand-written corpus anticipates.
+    struct XorShift(u32);
+
+    impl XorShift {
+        fn next(&mut self) -> u32 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            self.0 = x;
+            x
+        }
+
+        fn f32(&mut self) -> f32 {
+            if self.next() & 1 == 0 {
+                (self.next() as f32 / u32::MAX as f32) * 1000.0 - 500.0
+            } else {
+                f32::from_bits(self.next())
+            }
+        }
+
+        fn stroke(&mut self) -> Option<Stroke> {
+            (self.next() & 1 == 0).then(|| Stroke::new(self.f32()))
+        }
+
+        fn arc(&mut self) -> SolidArcRecord {
+            SolidArcRecord {
+                center: Point::new(self.f32(), self.f32()),
+                radius: self.f32(),
+                start_angle: self.f32(),
+                sweep_angle: self.f32(),
+                inner_radius: self.f32(),
+                color: Color::WHITE,
+                stroke: self.stroke(),
+            }
+        }
+
+        fn round_rect(&mut self) -> SolidRoundRectRecord {
+            SolidRoundRectRecord {
+                rect: Rect {
+                    x: self.f32(),
+                    y: self.f32(),
+                    width: self.f32(),
+                    height: self.f32(),
+                },
+                radii: CornerRadii {
+                    top_left: self.f32(),
+                    top_right: self.f32(),
+                    bottom_right: self.f32(),
+                    bottom_left: self.f32(),
+                },
+                color: Color::WHITE,
+                stroke: self.stroke(),
+            }
+        }
+    }
+
+    #[test]
+    fn kernels_equal_the_authorities_on_arbitrary_bit_patterns() {
+        let mut rng = XorShift(0x9e37_79b9);
+        for _ in 0..4000 {
+            let t = RecordTransform {
+                scale: rng.f32(),
+                angle: rng.f32(),
+            };
+            let (sin, cos) = t.angle.sin_cos();
+            let (a, b) = (rng.arc(), rng.arc());
+            assert_eq!(
+                match_arc_lanes(&a, &b, PIVOT, t.scale, t.angle),
+                match_arc(&a, &b, PIVOT, t),
+                "arc kernel diverged: {a:?} vs {b:?} under {t:?}"
+            );
+            let (c, d) = (rng.round_rect(), rng.round_rect());
+            assert_eq!(
+                match_round_rect_lanes(&c, &d, PIVOT, t.scale, sin, cos),
+                match_round_rect(&c, &d, PIVOT, t),
+                "round-rect kernel diverged: {c:?} vs {d:?} under {t:?}"
+            );
         }
     }
 }
