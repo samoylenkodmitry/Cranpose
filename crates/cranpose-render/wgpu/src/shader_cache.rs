@@ -86,37 +86,41 @@ impl ShaderPipelineCache {
                 immediate_size: 0,
             });
 
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("RuntimeShader Effect Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader_module,
-                    entry_point: Some("fullscreen_vs"),
-                    buffers: &[], // Fullscreen quad from vertex_index
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+            crate::render::create_render_pipeline_logged(
+                device,
+                &format!("runtime-shader mode={mode:?} depth={depth}"),
+                &wgpu::RenderPipelineDescriptor {
+                    label: Some("RuntimeShader Effect Pipeline"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader_module,
+                        entry_point: Some("fullscreen_vs"),
+                        buffers: &[], // Fullscreen quad from vertex_index
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader_module,
+                        entry_point: Some("effect_fs"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(mode.blend_state()),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    depth_stencil: crate::display_clip::content_depth_state(depth),
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader_module,
-                    entry_point: Some("effect_fs"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: Some(mode.blend_state()),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: crate::display_clip::content_depth_state(depth),
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
+            )
         };
 
         self.cache.insert(cache_key, pipeline);
