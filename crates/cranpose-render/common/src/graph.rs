@@ -1,5 +1,29 @@
 use std::mem::size_of;
 use std::rc::Rc;
+use std::sync::OnceLock;
+
+fn backdrops_dropped() -> bool {
+    static DROPPED: OnceLock<bool> = OnceLock::new();
+    *DROPPED.get_or_init(|| std::env::var_os("CRANPOSE_NO_BACKDROP").is_some())
+}
+
+fn backdrop_dp_limit(name: &'static str, slot: &'static OnceLock<f32>) -> f32 {
+    *slot.get_or_init(|| {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.trim().parse::<f32>().ok())
+            .unwrap_or(0.0)
+    })
+}
+
+fn backdrop_dropped_by_size(width: f32, height: f32) -> bool {
+    static UNDER: OnceLock<f32> = OnceLock::new();
+    static OVER: OnceLock<f32> = OnceLock::new();
+    let side = width.max(height);
+    let under = backdrop_dp_limit("CRANPOSE_BACKDROP_DROP_UNDER_DP", &UNDER);
+    let over = backdrop_dp_limit("CRANPOSE_BACKDROP_DROP_OVER_DP", &OVER);
+    (under > 0.0 && side < under) || (over > 0.0 && side > over)
+}
 
 use cranpose_core::NodeId;
 use cranpose_foundation::PointerEvent;
@@ -314,7 +338,20 @@ impl LayerNode {
         self.graphics_layer.render_effect.as_ref()
     }
 
+    /// The layer's backdrop effect, or `None` when `CRANPOSE_NO_BACKDROP`
+    /// drops every backdrop.
+    ///
+    /// Dropping them costs the frosted look and answers what the look costs:
+    /// each backdrop layer takes its own offscreen target, blur pass and
+    /// composite, so a screen of frosted controls pays per control. The dial
+    /// belongs to the same family as `CRANPOSE_FILL_DIAG` and
+    /// `CRANPOSE_SEGMENT_DIAG`: a measurement, never a shipping setting.
     pub fn backdrop(&self) -> Option<&RenderEffect> {
+        if backdrops_dropped()
+            || backdrop_dropped_by_size(self.local_bounds.width, self.local_bounds.height)
+        {
+            return None;
+        }
         self.graphics_layer.backdrop_effect.as_ref()
     }
 

@@ -9,6 +9,95 @@ use crate::{Brush, Color, ColorFilter, ImageBitmap, ImageSampling};
 use std::ops::AddAssign;
 use std::rc::Rc;
 
+const VECTOR_PATH_MASK_CACHE_ENTRIES: usize = 96;
+const VECTOR_PATH_MASK_CACHE_BYTES: usize = 8 * 1024 * 1024;
+
+struct VectorPathMaskCache {
+    entries: Vec<(u64, ImageBitmap)>,
+    bytes: usize,
+}
+
+impl VectorPathMaskCache {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            bytes: 0,
+        }
+    }
+
+    fn get(&mut self, key: u64) -> Option<ImageBitmap> {
+        let index = self.entries.iter().position(|(seen, _)| *seen == key)?;
+        let entry = self.entries.remove(index);
+        let image = entry.1.clone();
+        self.entries.push(entry);
+        Some(image)
+    }
+
+    fn put(&mut self, key: u64, image: ImageBitmap) {
+        let bytes = image.width() as usize * image.height() as usize * 4;
+        if bytes > VECTOR_PATH_MASK_CACHE_BYTES {
+            return;
+        }
+        self.bytes += bytes;
+        self.entries.push((key, image));
+        while self.entries.len() > VECTOR_PATH_MASK_CACHE_ENTRIES
+            || self.bytes > VECTOR_PATH_MASK_CACHE_BYTES
+        {
+            let (_, dropped) = self.entries.remove(0);
+            self.bytes = self
+                .bytes
+                .saturating_sub(dropped.width() as usize * dropped.height() as usize * 4);
+        }
+    }
+}
+
+thread_local! {
+    static VECTOR_PATH_MASKS: std::cell::RefCell<VectorPathMaskCache> =
+        const { std::cell::RefCell::new(VectorPathMaskCache::new()) };
+}
+
+fn vector_path_mask_key(
+    path: &crate::VectorPath,
+    origin: Point,
+    mask_size: (usize, usize),
+    rgb: [u8; 3],
+    alpha: f32,
+) -> u64 {
+    use std::hash::Hasher;
+    let mut hasher = crate::fx_hash::FxHasher::default();
+    hasher.write_u8(path.fill_rule() as u8);
+    hasher.write_u32(origin.x.to_bits());
+    hasher.write_u32(origin.y.to_bits());
+    hasher.write_usize(mask_size.0);
+    hasher.write_usize(mask_size.1);
+    hasher.write(&rgb);
+    hasher.write_u32(alpha.to_bits());
+    for subpath in path.subpaths() {
+        hasher.write_usize(subpath.len());
+        for point in subpath {
+            hasher.write_u32(point.x.to_bits());
+            hasher.write_u32(point.y.to_bits());
+        }
+    }
+    hasher.finish()
+}
+
+fn vector_path_mask_cache_dropped() -> bool {
+    static DROPPED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DROPPED.get_or_init(|| std::env::var_os("CRANPOSE_NO_PATH_CACHE").is_some())
+}
+
+fn vector_path_mask_cache_get(key: u64) -> Option<ImageBitmap> {
+    if vector_path_mask_cache_dropped() {
+        return None;
+    }
+    VECTOR_PATH_MASKS.with(|cache| cache.borrow_mut().get(key))
+}
+
+fn vector_path_mask_cache_put(key: u64, image: ImageBitmap) {
+    VECTOR_PATH_MASKS.with(|cache| cache.borrow_mut().put(key, image));
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Point {
     pub x: f32,
@@ -2046,21 +2135,39 @@ impl DrawScope for DrawScopeDefault {
             .ceil()
             .clamp(1.0, MAX_MASK_PIXELS) as usize;
 
-        let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
-
         let red = (color.0.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         let green = (color.1.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         let blue = (color.2.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
         let alpha = color.3.clamp(0.0, 1.0);
-
-        let mut pixels = Vec::with_capacity(mask.len() * 4);
-        for coverage in mask {
-            pixels.extend_from_slice(&[red, green, blue, (alpha * coverage as f32 + 0.5) as u8]);
-        }
-
-        let Ok(image) = ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
-        else {
-            return;
+        let key = vector_path_mask_key(
+            path,
+            origin,
+            (mask_width, mask_height),
+            [red, green, blue],
+            alpha,
+        );
+        let cached = vector_path_mask_cache_get(key);
+        let image = match cached {
+            Some(image) => image,
+            None => {
+                let mask = path.coverage_mask(mask_width, mask_height, origin, SUPERSAMPLE);
+                let mut pixels = Vec::with_capacity(mask.len() * 4);
+                for coverage in mask {
+                    pixels.extend_from_slice(&[
+                        red,
+                        green,
+                        blue,
+                        (alpha * coverage as f32 + 0.5) as u8,
+                    ]);
+                }
+                let Ok(image) =
+                    ImageBitmap::from_rgba8(mask_width as u32, mask_height as u32, pixels)
+                else {
+                    return;
+                };
+                vector_path_mask_cache_put(key, image.clone());
+                image
+            }
         };
 
         self.push_other(DrawPrimitive::Image {
@@ -2378,6 +2485,36 @@ mod tests {
             (alpha as i32 - 128).abs() <= 2,
             "interior alpha must honor the brush alpha, got {alpha}"
         );
+    }
+
+    #[test]
+    fn the_same_path_and_color_reuse_one_raster() {
+        let path = crate::VectorPath::parse("M 0 0 H 7 V 7 H 0 Z").expect("valid path");
+        let raster_of = |brush: Brush| {
+            let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+            scope.draw_vector_path(&path, brush);
+            let primitives = scope.into_primitives();
+            let DrawPrimitive::Image { image, .. } = &primitives[0] else {
+                panic!("expected image primitive");
+            };
+            image.clone()
+        };
+
+        let first = raster_of(Brush::solid(Color::rgba(0.0, 0.0, 1.0, 1.0)));
+        let second = raster_of(Brush::solid(Color::rgba(0.0, 0.0, 1.0, 1.0)));
+        assert_eq!(first.id(), second.id());
+
+        let other_color = raster_of(Brush::solid(Color::rgba(1.0, 0.0, 0.0, 1.0)));
+        assert_ne!(first.id(), other_color.id());
+
+        let wider = crate::VectorPath::parse("M 0 0 H 9 V 7 H 0 Z").expect("valid path");
+        let mut scope = DrawScopeDefault::new(Size::new(16.0, 16.0));
+        scope.draw_vector_path(&wider, Brush::solid(Color::rgba(0.0, 0.0, 1.0, 1.0)));
+        let primitives = scope.into_primitives();
+        let DrawPrimitive::Image { image, .. } = &primitives[0] else {
+            panic!("expected image primitive");
+        };
+        assert_ne!(first.id(), image.id());
     }
 
     #[test]

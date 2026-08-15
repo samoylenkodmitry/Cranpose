@@ -10,6 +10,7 @@ use crate::scene::{
     SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
 };
 use crate::surface_executor::backend::LayerSurfaceRoundedClip;
+use crate::surface_executor::layer_source_uses_external_backdrop_underlay;
 use crate::surface_plan::{
     composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
     layer_contains_descendant_backdrop, layer_needs_rigid_snap, layer_surface_requirements_cached,
@@ -1930,6 +1931,12 @@ fn collect_layer_contents_into(
                 }
                 let child_contains_descendant_backdrop =
                     layer_contains_descendant_backdrop(child_layer.as_ref());
+                let child_needs_nested_underlay = child_contains_descendant_backdrop
+                    && layer_source_uses_external_backdrop_underlay(
+                        &source_scene,
+                        &source_children,
+                        true,
+                    );
                 child_layers.push(ChildLayerComposite {
                     z_index: local_scene.next_z,
                     logical_rect: child_logical_rect,
@@ -1948,7 +1955,7 @@ fn collect_layer_contents_into(
                     visual_clip,
                     surface_clip,
                     shadow_draws: std::mem::take(&mut shadow_scene.shadow_draws),
-                    needs_nested_underlay: child_contains_descendant_backdrop,
+                    needs_nested_underlay: child_needs_nested_underlay,
                     node_id: child_layer.node_id,
                     backdrop: child_layer.backdrop().cloned(),
                     has_effect: child_layer.effect().is_some(),

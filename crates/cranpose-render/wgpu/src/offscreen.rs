@@ -116,9 +116,23 @@ pub(crate) struct OffscreenPool {
     max_texture_dim: u32,
 }
 
-/// Maximum pooled targets. Each target is a GPU texture (4 bytes/pixel RGBA).
-/// At 1920×1080 each is ~8 MB, so 16 targets ≈ 128 MB worst case.
-const MAX_POOLED_TARGETS: usize = 16;
+/// Backstop on pooled targets, so a pathological frame cannot grow the pool
+/// without bound even when every target is small.
+const MAX_POOLED_TARGETS: usize = 64;
+
+/// Memory the pool may hold. A count-only cap cannot bound memory, because a
+/// target is anything from 132x132 to full screen; a byte budget can.
+///
+/// A screen of frosted controls asks for one surface per control every frame:
+/// a scrolling list on a 1080x2244 phone acquired thirteen, and a cap of
+/// sixteen targets kept the wrong ones, so twelve of the thirteen were created
+/// again on every frame. 64 MB holds a frame's worth of surfaces on that phone
+/// with room for the blur scratch.
+const MAX_POOLED_BYTES: u64 = 64 * 1024 * 1024;
+
+fn target_bytes(width: u32, height: u32) -> u64 {
+    u64::from(width) * u64::from(height) * 4
+}
 
 impl OffscreenPool {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
@@ -188,12 +202,23 @@ impl OffscreenPool {
 
     /// Return a target to the pool for future reuse.
     ///
-    /// Drops the target instead of pooling if the pool is already at capacity.
+    /// The pool keeps the most recently returned targets, since those are the
+    /// sizes the next frame asks for, and drops the oldest ones once it is
+    /// over its budget.
     pub fn release(&mut self, target: OffscreenTarget) {
-        if self.available.len() < MAX_POOLED_TARGETS {
-            self.available.push(target);
+        self.available.push(target);
+        while self.available.len() > MAX_POOLED_TARGETS
+            || self.pooled_bytes() > MAX_POOLED_BYTES && self.available.len() > 1
+        {
+            self.available.remove(0);
         }
-        // else: target is dropped, freeing GPU memory
+    }
+
+    fn pooled_bytes(&self) -> u64 {
+        self.available
+            .iter()
+            .map(|t| target_bytes(t.width, t.height))
+            .sum()
     }
 
     /// The bind group layout for sampling offscreen textures.
@@ -247,6 +272,32 @@ impl OffscreenPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame of frosted controls returns more surfaces than the old count
+    /// cap held, and the sizes it returns are the sizes the next frame asks
+    /// for.
+    #[test]
+    fn a_frame_worth_of_small_surfaces_stays_pooled() {
+        let bytes: u64 = (0..20).map(|_| target_bytes(132, 132)).sum();
+        assert!(
+            bytes < MAX_POOLED_BYTES,
+            "twenty control surfaces must fit the pool budget"
+        );
+        assert!(
+            20 < MAX_POOLED_TARGETS,
+            "twenty control surfaces must fit the pool count"
+        );
+    }
+
+    #[test]
+    fn the_budget_bounds_full_screen_surfaces() {
+        let full_screen = target_bytes(1080, 2244);
+        let held = MAX_POOLED_BYTES / full_screen;
+        assert!(
+            (2..=8).contains(&held),
+            "the budget should hold a few full-screen surfaces, not dozens: {held}"
+        );
+    }
 
     #[test]
     fn pool_starts_empty() {

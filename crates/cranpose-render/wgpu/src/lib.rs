@@ -284,6 +284,39 @@ pub struct WgpuRenderer {
 }
 
 impl WgpuRenderer {
+    fn update_scene_and_plan_memo(
+        &mut self,
+        applier: &mut MemoryApplier,
+        root: NodeId,
+        dirty_nodes: &[NodeId],
+        refresh_hits: bool,
+    ) {
+        let mut changed_nodes = std::mem::take(&mut self.frontend.changed_nodes);
+        let outcome = pipeline::update_from_applier(
+            applier,
+            root,
+            &mut self.frontend.scene,
+            1.0,
+            dirty_nodes,
+            refresh_hits,
+            &mut changed_nodes,
+        );
+        match outcome {
+            pipeline::SceneUpdateOutcome::Patched => {
+                for node_id in &changed_nodes {
+                    self.frontend
+                        .layer_surface_requirements_cache
+                        .remove(node_id);
+                }
+            }
+            pipeline::SceneUpdateOutcome::Rebuilt => {
+                self.frontend.layer_surface_requirements_cache.clear();
+            }
+        }
+        changed_nodes.clear();
+        self.frontend.changed_nodes = changed_nodes;
+    }
+
     /// Create a new WGPU renderer.
     ///
     /// * `fonts` – font bytes to load, ordered by priority (first = highest priority).
@@ -1333,6 +1366,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
+        self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload
@@ -1347,6 +1381,7 @@ impl Renderer for WgpuRenderer {
         _viewport: Size,
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
+        self.frontend.layer_surface_requirements_cache.clear();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload
@@ -1365,14 +1400,7 @@ impl Renderer for WgpuRenderer {
         if dirty_nodes.is_empty() {
             return self.rebuild_scene_from_applier(applier, root, viewport);
         }
-        pipeline::update_from_applier(
-            applier,
-            root,
-            &mut self.frontend.scene,
-            1.0,
-            dirty_nodes,
-            true,
-        );
+        self.update_scene_and_plan_memo(applier, root, dirty_nodes, true);
         Ok(())
     }
 
@@ -1386,14 +1414,7 @@ impl Renderer for WgpuRenderer {
         if dirty_nodes.is_empty() {
             return self.rebuild_scene_from_applier(applier, root, viewport);
         }
-        pipeline::update_from_applier(
-            applier,
-            root,
-            &mut self.frontend.scene,
-            1.0,
-            dirty_nodes,
-            false,
-        );
+        self.update_scene_and_plan_memo(applier, root, dirty_nodes, false);
         Ok(())
     }
 

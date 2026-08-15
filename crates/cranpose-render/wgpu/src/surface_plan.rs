@@ -73,6 +73,10 @@ pub(crate) struct TranslationRenderContext {
 pub(crate) struct LayerSurfaceRequest<'a> {
     pub(crate) root_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    /// The one colour the underlay holds under this child, when it holds
+    /// only one; the raster cache key carries it so the child keeps its
+    /// raster while it moves over that colour.
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) logical_rect_override: Option<Rect>,
     pub(crate) capture_clip_override: Option<Rect>,
@@ -83,6 +87,7 @@ pub(crate) struct LayerSurfaceRequest<'a> {
 pub(crate) struct LayerSurfaceRenderOptions<'a> {
     pub(crate) target_scale: f32,
     pub(crate) backdrop_underlay: Option<&'a OffscreenTarget>,
+    pub(crate) backdrop_underlay_color: Option<u32>,
     pub(crate) allow_runtime_cache: bool,
     pub(crate) cache_candidate: Option<(
         cranpose_render_common::raster_cache::LayerRasterCacheKey,
@@ -233,6 +238,10 @@ pub(crate) fn layer_needs_rigid_snap(layer: &LayerNode, translated_content_conte
 
 pub(crate) fn layer_cache_key(layer: &LayerNode) -> usize {
     layer as *const LayerNode as usize
+}
+
+pub(crate) fn layer_requirements_key(layer: &LayerNode) -> Option<usize> {
+    layer.node_id
 }
 
 fn layer_contains_backdrop(layer: &LayerNode) -> bool {
@@ -405,8 +414,8 @@ pub(crate) fn layer_surface_requirements_cached(
         LayerSurfaceRequirements,
     >,
 ) -> LayerSurfaceRequirements {
-    let cache_key = layer_cache_key(layer);
-    if let Some(cached) = layer_surface_requirements_cache.get(&cache_key) {
+    let cache_key = layer_requirements_key(layer);
+    if let Some(cached) = cache_key.and_then(|key| layer_surface_requirements_cache.get(&key)) {
         return *cached;
     }
 
@@ -539,7 +548,9 @@ pub(crate) fn layer_surface_requirements_cached(
         contains_backdrop_content,
         contains_runtime_shader,
     };
-    layer_surface_requirements_cache.insert(cache_key, requirements);
+    if let Some(cache_key) = cache_key {
+        layer_surface_requirements_cache.insert(cache_key, requirements);
+    }
     requirements
 }
 
@@ -585,6 +596,24 @@ mod tests {
             cache_hashes_valid: false,
             children: Vec::<RenderNode>::new(),
         }
+    }
+
+    #[test]
+    fn a_backdrop_keeps_the_surface_that_holds_the_layer_content() {
+        let mut layer = test_layer(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 60.0,
+            height: 24.0,
+        });
+        layer.graphics_layer.backdrop_effect = Some(RenderEffect::blur(8.0));
+        layer.isolation.group_opacity = true;
+
+        let requirements = layer_surface_requirements(&layer);
+
+        assert!(requirements
+            .surface_requirements
+            .contains(SurfaceRequirement::Backdrop));
     }
 
     #[test]
@@ -1214,5 +1243,284 @@ mod tests {
             false
         ));
         assert!(layer_needs_rigid_snap(&scope_text_layer(), false));
+    }
+}
+
+#[cfg(test)]
+mod carried_plan_tests_support {
+    use super::{layer_surface_requirements, layer_surface_requirements_cached};
+    use cranpose_core::collections::map::HashMap;
+    use cranpose_render_common::graph::{LayerNode, RenderNode};
+
+    pub(super) fn plan_whole_tree(
+        layer: &LayerNode,
+        cache: &mut HashMap<usize, super::LayerSurfaceRequirements>,
+    ) {
+        layer_surface_requirements_cached(layer, cache);
+        for child in &layer.children {
+            if let RenderNode::Layer(child_layer) = child {
+                plan_whole_tree(child_layer, cache);
+            }
+        }
+    }
+
+    pub(super) fn assert_carried_plan_matches_fresh_plan(
+        layer: &LayerNode,
+        cache: &mut HashMap<usize, super::LayerSurfaceRequirements>,
+        path: &str,
+    ) {
+        let fresh = layer_surface_requirements(layer);
+        let carried = layer_surface_requirements_cached(layer, cache);
+        assert_eq!(
+            carried, fresh,
+            "surface requirements at {path} (node {:?})",
+            layer.node_id
+        );
+        for (index, child) in layer.children.iter().enumerate() {
+            if let RenderNode::Layer(child_layer) = child {
+                assert_carried_plan_matches_fresh_plan(
+                    child_layer,
+                    cache,
+                    &format!("{path}/{index}"),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod carried_plan_tests {
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
+    use cranpose_core::collections::map::HashMap;
+    use cranpose_core::NodeId;
+    use cranpose_render_common::scene_builder::{
+        build_graph_from_applier, update_graph_from_applier_report_into,
+    };
+    use cranpose_ui::text::TextStyle;
+    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text};
+    use cranpose_ui_graphics::GraphicsLayer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn a_patched_scene_plans_the_surfaces_a_fresh_plan_finds() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let alpha_holder: Rc<RefCell<Option<cranpose_core::MutableState<f32>>>> =
+            Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+        let alpha_holder_for_comp = alpha_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            let alpha = cranpose_core::useState(|| 1.0f32);
+            *alpha_holder_for_comp.borrow_mut() = Some(alpha);
+            Column(
+                Modifier::empty()
+                    .size_points(240.0, 320.0)
+                    .vertical_scroll(scroll_state.clone(), false),
+                ColumnSpec::default(),
+                move || {
+                    for index in 0..12usize {
+                        cranpose_ui::Box(
+                            Modifier::empty()
+                                .size_points(240.0, 60.0)
+                                .graphics_layer(move || GraphicsLayer {
+                                    alpha: if index == 3 { alpha.get() } else { 1.0 },
+                                    ..GraphicsLayer::default()
+                                }),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    }
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let mut cache: HashMap<usize, super::LayerSurfaceRequirements> = HashMap::new();
+        plan_whole_tree(&graph.root, &mut cache);
+        assert!(!cache.is_empty(), "the first plan must fill the memo");
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state");
+        assert!(
+            scroll_state.dispatch_raw_delta(90.0) > 0.0,
+            "test scroll must be consumed"
+        );
+        let alpha = alpha_holder
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("alpha state");
+        alpha.set_value(0.4);
+        composition
+            .process_invalid_scopes()
+            .expect("row recomposition");
+        let mut dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        dirty_nodes.extend(cranpose_ui::take_draw_repass_nodes());
+        dirty_nodes.sort_unstable();
+        dirty_nodes.dedup();
+        assert!(!dirty_nodes.is_empty(), "the frame must have dirty nodes");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let mut changed_nodes: Vec<NodeId> = Vec::new();
+        let report = update_graph_from_applier_report_into(
+            &mut applier,
+            &mut graph,
+            &dirty_nodes,
+            1.0,
+            &mut changed_nodes,
+        );
+        applier.clear_runtime_handle();
+        assert!(report.applied, "the patch should apply in place");
+
+        for node_id in &changed_nodes {
+            cache.remove(node_id);
+        }
+        assert_carried_plan_matches_fresh_plan(&graph.root, &mut cache, "root");
+    }
+}
+
+#[cfg(test)]
+mod carried_plan_structure_tests {
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
+    use cranpose_core::collections::map::HashMap;
+    use cranpose_core::NodeId;
+    use cranpose_render_common::scene_builder::{
+        build_graph_from_applier, update_graph_from_applier_report_into,
+    };
+    use cranpose_ui::text::TextStyle;
+    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, Size, Text};
+    use cranpose_ui_graphics::GraphicsLayer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn a_row_that_leaves_the_list_leaves_the_plan_a_fresh_plan_finds() {
+        let rows_holder: Rc<RefCell<Option<cranpose_core::MutableState<usize>>>> =
+            Rc::new(RefCell::new(None));
+        let column_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let rows_holder_for_comp = rows_holder.clone();
+        let column_holder_for_comp = column_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let rows = cranpose_core::useState(|| 12usize);
+            *rows_holder_for_comp.borrow_mut() = Some(rows);
+            let column_holder_for_content = column_holder_for_comp.clone();
+            let column_id = Column(
+                Modifier::empty()
+                    .size_points(240.0, 720.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.7,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    for index in 0..rows.get() {
+                        cranpose_ui::Box(
+                            Modifier::empty().size_points(240.0, 60.0),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    }
+                },
+            );
+            *column_holder_for_content.borrow_mut() = Some(column_id);
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 720.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let mut cache: HashMap<usize, super::LayerSurfaceRequirements> = HashMap::new();
+        plan_whole_tree(&graph.root, &mut cache);
+        let planned_with_twelve_rows = cache.len();
+
+        let rows = rows_holder.borrow().as_ref().copied().expect("row state");
+        rows.set_value(8);
+        composition
+            .process_invalid_scopes()
+            .expect("row recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let column_id = column_holder.borrow().expect("column id");
+        let mut changed_nodes: Vec<NodeId> = Vec::new();
+        let report = update_graph_from_applier_report_into(
+            &mut applier,
+            &mut graph,
+            &[column_id],
+            1.0,
+            &mut changed_nodes,
+        );
+        applier.clear_runtime_handle();
+        assert!(report.applied, "the structural patch should apply in place");
+
+        for node_id in &changed_nodes {
+            cache.remove(node_id);
+        }
+        assert!(
+            cache.len() < planned_with_twelve_rows,
+            "the rows that left must leave the memo: {} of {planned_with_twelve_rows} left",
+            cache.len()
+        );
+        assert_carried_plan_matches_fresh_plan(&graph.root, &mut cache, "root");
     }
 }
