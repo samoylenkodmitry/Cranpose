@@ -73,7 +73,7 @@ fn property_flag(name: &str) -> bool {
 /// any length — so a name may run right up to or past that pre-O limit, as
 /// `debug.cranpose.retained_mesh_px2` does; every deployment target is far
 /// past O.)
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 33] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 34] = [
     ("debug.cranpose.gpu_stats", "CRANPOSE_GPU_STATS"),
     ("debug.cranpose.present_thread", "CRANPOSE_PRESENT_THREAD"),
     ("debug.cranpose.command_feed", "CRANPOSE_COMMAND_FEED"),
@@ -97,6 +97,10 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 33] = [
     (
         "debug.cranpose.similarity_replay",
         "CRANPOSE_SIMILARITY_REPLAY",
+    ),
+    (
+        "debug.cranpose.stale_transition",
+        "CRANPOSE_STALE_TRANSITION",
     ),
     (
         "debug.cranpose.update_stage_ms",
