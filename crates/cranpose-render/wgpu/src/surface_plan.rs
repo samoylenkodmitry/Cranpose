@@ -1224,21 +1224,12 @@ mod tests {
 }
 
 #[cfg(test)]
-mod carried_plan_tests {
+mod carried_plan_tests_support {
     use super::{layer_surface_requirements, layer_surface_requirements_cached};
     use cranpose_core::collections::map::HashMap;
-    use cranpose_core::NodeId;
     use cranpose_render_common::graph::{LayerNode, RenderNode};
-    use cranpose_render_common::scene_builder::{
-        build_graph_from_applier, update_graph_from_applier_report_into,
-    };
-    use cranpose_ui::text::TextStyle;
-    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text};
-    use cranpose_ui_graphics::GraphicsLayer;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
-    fn plan_whole_tree(
+    pub(super) fn plan_whole_tree(
         layer: &LayerNode,
         cache: &mut HashMap<usize, super::LayerSurfaceRequirements>,
     ) {
@@ -1250,7 +1241,7 @@ mod carried_plan_tests {
         }
     }
 
-    fn assert_carried_plan_matches_fresh_plan(
+    pub(super) fn assert_carried_plan_matches_fresh_plan(
         layer: &LayerNode,
         cache: &mut HashMap<usize, super::LayerSurfaceRequirements>,
         path: &str,
@@ -1272,6 +1263,23 @@ mod carried_plan_tests {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod carried_plan_tests {
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
+    use cranpose_core::collections::map::HashMap;
+    use cranpose_core::NodeId;
+    use cranpose_render_common::scene_builder::{
+        build_graph_from_applier, update_graph_from_applier_report_into,
+    };
+    use cranpose_ui::text::TextStyle;
+    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text};
+    use cranpose_ui_graphics::GraphicsLayer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn a_patched_scene_plans_the_surfaces_a_fresh_plan_finds() {
@@ -1379,6 +1387,117 @@ mod carried_plan_tests {
         for node_id in &changed_nodes {
             cache.remove(node_id);
         }
+        assert_carried_plan_matches_fresh_plan(&graph.root, &mut cache, "root");
+    }
+}
+
+#[cfg(test)]
+mod carried_plan_structure_tests {
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
+    use cranpose_core::collections::map::HashMap;
+    use cranpose_core::NodeId;
+    use cranpose_render_common::scene_builder::{
+        build_graph_from_applier, update_graph_from_applier_report_into,
+    };
+    use cranpose_ui::text::TextStyle;
+    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, Size, Text};
+    use cranpose_ui_graphics::GraphicsLayer;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn a_row_that_leaves_the_list_leaves_the_plan_a_fresh_plan_finds() {
+        let rows_holder: Rc<RefCell<Option<cranpose_core::MutableState<usize>>>> =
+            Rc::new(RefCell::new(None));
+        let column_holder: Rc<RefCell<Option<NodeId>>> = Rc::new(RefCell::new(None));
+        let rows_holder_for_comp = rows_holder.clone();
+        let column_holder_for_comp = column_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let rows = cranpose_core::useState(|| 12usize);
+            *rows_holder_for_comp.borrow_mut() = Some(rows);
+            let column_holder_for_content = column_holder_for_comp.clone();
+            let column_id = Column(
+                Modifier::empty()
+                    .size_points(240.0, 720.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.7,
+                        ..GraphicsLayer::default()
+                    }),
+                ColumnSpec::default(),
+                move || {
+                    for index in 0..rows.get() {
+                        cranpose_ui::Box(
+                            Modifier::empty().size_points(240.0, 60.0),
+                            cranpose_ui::BoxSpec::default(),
+                            move || {
+                                Text(
+                                    format!("row {index}"),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    }
+                },
+            );
+            *column_holder_for_content.borrow_mut() = Some(column_id);
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 720.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let mut cache: HashMap<usize, super::LayerSurfaceRequirements> = HashMap::new();
+        plan_whole_tree(&graph.root, &mut cache);
+        let planned_with_twelve_rows = cache.len();
+
+        let rows = rows_holder.borrow().as_ref().copied().expect("row state");
+        rows.set_value(8);
+        composition
+            .process_invalid_scopes()
+            .expect("row recomposition");
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("updated layout");
+        let column_id = column_holder.borrow().expect("column id");
+        let mut changed_nodes: Vec<NodeId> = Vec::new();
+        let report = update_graph_from_applier_report_into(
+            &mut applier,
+            &mut graph,
+            &[column_id],
+            1.0,
+            &mut changed_nodes,
+        );
+        applier.clear_runtime_handle();
+        assert!(report.applied, "the structural patch should apply in place");
+
+        for node_id in &changed_nodes {
+            cache.remove(node_id);
+        }
+        assert!(
+            cache.len() < planned_with_twelve_rows,
+            "the rows that left must leave the memo: {} of {planned_with_twelve_rows} left",
+            cache.len()
+        );
         assert_carried_plan_matches_fresh_plan(&graph.root, &mut cache, "root");
     }
 }
