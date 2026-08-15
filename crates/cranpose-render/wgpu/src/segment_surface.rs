@@ -638,6 +638,21 @@ impl SegmentSurfaceCache {
         let capture_index = self.capture_cursor;
         self.capture_cursor += 1;
         self.stats.captures += 1;
+        // Always-on engagement proof for device logs, mirroring the
+        // [command-replay] health line: captures are rare (one per admitted
+        // segment per invalidation), so one warn per capture is bounded by
+        // the mechanism itself, and an on-watch A/B arm that never prints
+        // this line provably measured a vacuous mechanism.
+        log::warn!(
+            "[segment-surface] capture #{}: composites {} dirty {} rejected churn {} econ {} cap {} evictions {}",
+            self.stats.captures,
+            self.stats.composites,
+            self.stats.dirty_recaptures,
+            self.stats.rejected_churn,
+            self.stats.rejected_economics,
+            self.stats.rejected_capacity,
+            self.stats.evictions,
+        );
         if stale && dirty {
             self.stats.dirty_recaptures += 1;
         }
