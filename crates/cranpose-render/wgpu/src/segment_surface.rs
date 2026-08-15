@@ -111,7 +111,8 @@ const MAX_SEGMENT_SURFACE_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Frames a key must be observed before its churn window is trusted. Below
 /// this the segment draws direct — a segment that dies young never pays a
-/// capture.
+/// capture — unless the waiver (`waiver_ratio`) admits a never-recolored
+/// candidate whose capture pays for itself within about one frame.
 const ADMISSION_WARMUP_FRAMES: u32 = 8;
 
 /// An entry unseen for this many frames is dropped in the periodic sweep.
@@ -137,6 +138,16 @@ fn env_f32(name: &str, default: f32) -> f32 {
         .unwrap_or(default)
 }
 
+/// As [`env_f32`], except zero is a meaningful value (a kill switch), not a
+/// malformed one.
+fn env_f32_zero_ok(name: &str, default: f32) -> f32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(default)
+}
+
 /// Per-frame snapshot of the module's tunables.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SegmentSurfaceConfig {
@@ -144,6 +155,12 @@ pub(crate) struct SegmentSurfaceConfig {
     /// Admit while `surface_px <= cost_ratio * member_px` — see the module
     /// economics comment for the derivation of the default.
     pub cost_ratio: f32,
+    /// During warmup only: a candidate never observed to recolor may be
+    /// admitted immediately while `surface_px <= waiver_ratio * member_px`
+    /// — a strictly tighter bar than `cost_ratio`, payback within about
+    /// one frame. At or below zero the waiver is off and warmup admits
+    /// nothing, as before.
+    pub waiver_ratio: f32,
     /// Admit while the key's recolored-frame rate over its observation
     /// window stays at or below this. Default sits far inside the measured
     /// bimodal gap (rings 0.0, twinkles ~0.9).
@@ -159,6 +176,7 @@ impl SegmentSurfaceConfig {
         Self {
             enabled: segment_surface_enabled(),
             cost_ratio: env_f32("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", 3.0),
+            waiver_ratio: env_f32_zero_ok("CRANPOSE_SEGMENT_SURFACE_WAIVER_RATIO", 1.0),
             recolor_rate: env_f32("CRANPOSE_SEGMENT_SURFACE_RECOLOR_RATE", 0.125),
             scale_eps: env_f32("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", 0.05),
         }
@@ -169,6 +187,7 @@ impl SegmentSurfaceConfig {
         Self {
             enabled: true,
             cost_ratio: 3.0,
+            waiver_ratio: 1.0,
             recolor_rate: 0.125,
             scale_eps: 0.05,
         }
@@ -346,6 +365,10 @@ impl AdmissionTrack {
         self.observed >= ADMISSION_WARMUP_FRAMES
     }
 
+    fn has_recolored(&self) -> bool {
+        self.window != 0
+    }
+
     fn recolor_rate(&self) -> f32 {
         let considered = self.observed.min(64);
         if considered == 0 {
@@ -391,6 +414,7 @@ pub(crate) struct SegmentSurfaceStats {
     pub rejected_economics: u64,
     pub rejected_capacity: u64,
     pub evictions: u64,
+    pub waived_captures: u64,
 }
 
 /// A capture the frame must encode for a `Composite` decision: the claimed
@@ -570,6 +594,20 @@ impl SegmentSurfaceCache {
         track.note_frame(frame, dirty);
         let warm = track.warm();
         let rate = track.recolor_rate();
+        // Warmup waiver: at bootstrap frame rates the warmup window is
+        // wall-SECONDS during which every frame redraws the whole scene
+        // direct, so a candidate with no recolor history may capture
+        // before the window fills when the capture pays for itself within
+        // about one frame (the tighter `waiver_ratio` bar below). Waste is
+        // bounded: a churny key has no recolor history at bootstrap and
+        // can waive at most once — its first recolor invalidates the entry
+        // in that same frame, within ~2 frames its rate crosses the churn
+        // gate and the key leaves the cache — and `SEGMENT_CAPTURE_SLOTS`
+        // caps any one frame's capture cost.
+        let waived = !warm
+            && !track.has_recolored()
+            && config.waiver_ratio > 0.0
+            && !self.entries.contains_key(&key);
 
         // A live entry serves the frame unless something invalidates it.
         let (stale, drifted) = match self.entries.get_mut(&key) {
@@ -592,8 +630,9 @@ impl SegmentSurfaceCache {
 
         // Anything below needs a (re)capture. Gate on churn first: a stale
         // entry whose segment now churns must LEAVE the cache, not
-        // recapture forever.
-        if !warm || rate > config.recolor_rate {
+        // recapture forever. A waived candidate falls through to buy in at
+        // the tighter bar.
+        if (!warm && !waived) || rate > config.recolor_rate {
             if stale || drifted {
                 self.remove(&key);
             }
@@ -629,9 +668,14 @@ impl SegmentSurfaceCache {
         let byte_size = rect.byte_size();
         let surface_px = rect.width as f32 * rect.height as f32;
         let member_px_priced = member_px.is_finite() && member_px > 0.0;
+        let admit_ratio = if waived {
+            config.waiver_ratio
+        } else {
+            config.cost_ratio
+        };
         if byte_size > MAX_SEGMENT_SURFACE_ENTRY_BYTES
             || !member_px_priced
-            || surface_px > config.cost_ratio * member_px
+            || surface_px > admit_ratio * member_px
         {
             self.remove(&key);
             self.stats.rejected_economics += 1;
@@ -650,13 +694,16 @@ impl SegmentSurfaceCache {
         let capture_index = self.capture_cursor;
         self.capture_cursor += 1;
         self.stats.captures += 1;
+        if waived {
+            self.stats.waived_captures += 1;
+        }
         // Always-on engagement proof for device logs, mirroring the
         // [command-replay] health line: captures are rare (one per admitted
         // segment per invalidation), so one warn per capture is bounded by
         // the mechanism itself, and an on-watch A/B arm that never prints
         // this line provably measured a vacuous mechanism.
         log::warn!(
-            "[segment-surface] capture #{}: composites {} dirty {} rejected churn {} econ {} cap {} evictions {}",
+            "[segment-surface] capture #{}: composites {} dirty {} rejected churn {} econ {} cap {} evictions {} waived {}",
             self.stats.captures,
             self.stats.composites,
             self.stats.dirty_recaptures,
@@ -664,6 +711,7 @@ impl SegmentSurfaceCache {
             self.stats.rejected_economics,
             self.stats.rejected_capacity,
             self.stats.evictions,
+            self.stats.waived_captures,
         );
         if stale && dirty {
             self.stats.dirty_recaptures += 1;
@@ -855,6 +903,12 @@ mod tests {
     #[test]
     fn decide_admits_only_warm_clean_segments_that_pay() {
         let mut cache = SegmentSurfaceCache::default();
+        // Waiver held shut: the warmup count itself is what this test
+        // pins; the waiver's own admissions are pinned below.
+        let config = SegmentSurfaceConfig {
+            waiver_ratio: 0.0,
+            ..SegmentSurfaceConfig::test_default()
+        };
         let key = SegmentSurfaceKey {
             slot: 3,
             first_shape: 0,
@@ -868,12 +922,12 @@ mod tests {
         // Cold: direct, no capture, until the observation that completes
         // the warmup window.
         for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
-            cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+            cache.advance_frame_for_tests(config);
             let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
             assert_eq!(decision, SegmentSurfaceDecision::Direct);
         }
         // Warm and clean: capture.
-        cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+        cache.advance_frame_for_tests(config);
         let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
         assert_eq!(
             decision,
@@ -892,7 +946,7 @@ mod tests {
             shape_count: 3,
         };
         for _ in 0..ADMISSION_WARMUP_FRAMES + 1 {
-            cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+            cache.advance_frame_for_tests(config);
             let _ = cache.decide(sparse, 9, false, 1.0, || Some((rect, 2_000.0)));
         }
         assert!(cache.stats.rejected_economics > 0);
@@ -918,5 +972,135 @@ mod tests {
         }
         assert_eq!(cache.stats.captures, 0);
         assert!(cache.stats.rejected_churn > 0);
+    }
+
+    #[test]
+    fn warmup_waiver_admits_a_paying_static_candidate_immediately() {
+        let mut cache = SegmentSurfaceCache::default();
+        let key = SegmentSurfaceKey {
+            slot: 6,
+            first_shape: 0,
+            shape_count: 420,
+        };
+        let rect = CaptureRect {
+            origin: [0.0, 0.0],
+            width: 300,
+            height: 300,
+        };
+        // 90k surface px against 120k member px: the capture pays for
+        // itself within one frame, and the key has never recolored — the
+        // waiver must not wait out the warmup window.
+        cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+        let mut decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));
+        if decision == SegmentSurfaceDecision::Direct {
+            cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+            decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));
+        }
+        assert_eq!(
+            decision,
+            SegmentSurfaceDecision::Composite {
+                capture: Some(CapturePlan {
+                    index: 0,
+                    rect,
+                    member_px: 120_000.0,
+                })
+            },
+            "a paying, never-recolored candidate must capture by the second frame"
+        );
+        assert_eq!(cache.stats.waived_captures, 1);
+    }
+
+    #[test]
+    fn warmup_waiver_skips_a_recolored_candidate() {
+        let mut cache = SegmentSurfaceCache::default();
+        let key = SegmentSurfaceKey {
+            slot: 6,
+            first_shape: 0,
+            shape_count: 420,
+        };
+        let rect = CaptureRect {
+            origin: [0.0, 0.0],
+            width: 300,
+            height: 300,
+        };
+        // One recolor on the first observed frame disqualifies the key
+        // from waiving for the rest of the warmup window, paying
+        // economics notwithstanding.
+        for frame in 0..ADMISSION_WARMUP_FRAMES - 1 {
+            cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+            let decision = cache.decide(key, 7, frame == 0, 1.0, || Some((rect, 120_000.0)));
+            assert_eq!(decision, SegmentSurfaceDecision::Direct);
+        }
+        assert_eq!(cache.stats.captures, 0);
+        assert_eq!(cache.stats.waived_captures, 0);
+    }
+
+    #[test]
+    fn warmup_waiver_respects_its_economics_bar() {
+        let mut cache = SegmentSurfaceCache::default();
+        let key = SegmentSurfaceKey {
+            slot: 6,
+            first_shape: 0,
+            shape_count: 420,
+        };
+        let rect = CaptureRect {
+            origin: [0.0, 0.0],
+            width: 300,
+            height: 300,
+        };
+        // 90k surface px against 40k member px sits between the bars:
+        // over the waiver's 1.0, under the steady-state 3.0 — direct
+        // through warmup, admitted once warm.
+        for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
+            cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+            let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
+            assert_eq!(decision, SegmentSurfaceDecision::Direct);
+        }
+        cache.advance_frame_for_tests(SegmentSurfaceConfig::test_default());
+        let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 40_000.0)));
+        assert_eq!(
+            decision,
+            SegmentSurfaceDecision::Composite {
+                capture: Some(CapturePlan {
+                    index: 0,
+                    rect,
+                    member_px: 40_000.0,
+                })
+            }
+        );
+        assert_eq!(cache.stats.waived_captures, 0);
+    }
+
+    #[test]
+    fn zero_waiver_ratio_disables_the_waiver() {
+        let mut cache = SegmentSurfaceCache::default();
+        let config = SegmentSurfaceConfig {
+            waiver_ratio: 0.0,
+            ..SegmentSurfaceConfig::test_default()
+        };
+        let key = SegmentSurfaceKey {
+            slot: 6,
+            first_shape: 0,
+            shape_count: 420,
+        };
+        let rect = CaptureRect {
+            origin: [0.0, 0.0],
+            width: 300,
+            height: 300,
+        };
+        // The candidate would waive on economics; the kill switch must
+        // hold warmup admission exactly where it was.
+        for _ in 0..ADMISSION_WARMUP_FRAMES - 1 {
+            cache.advance_frame_for_tests(config);
+            let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));
+            assert_eq!(decision, SegmentSurfaceDecision::Direct);
+        }
+        cache.advance_frame_for_tests(config);
+        let decision = cache.decide(key, 7, false, 1.0, || Some((rect, 120_000.0)));
+        assert!(matches!(
+            decision,
+            SegmentSurfaceDecision::Composite { capture: Some(_) }
+        ));
+        assert_eq!(cache.stats.waived_captures, 0);
     }
 }
