@@ -962,6 +962,19 @@ fn underlay_fill_scissor(
     height: u32,
 ) -> Option<(u32, u32, u32, u32)> {
     let rect = sample_rect?.translate(-child_logical_rect.x, -child_logical_rect.y);
+    // Snapping moves a backdrop by up to a device pixel after this union is
+    // taken, so the fill keeps a margin that far out.
+    let margin = if child_scale.is_finite() && child_scale > 0.0 {
+        2.0 / child_scale
+    } else {
+        2.0
+    };
+    let rect = Rect {
+        x: rect.x - margin,
+        y: rect.y - margin,
+        width: rect.width + margin * 2.0,
+        height: rect.height + margin * 2.0,
+    };
     crate::render::scissor_rect_for_rect(rect, child_scale, width, height)
 }
 
@@ -6098,7 +6111,7 @@ mod tests {
         let filled = (scissor.2 as u64) * (scissor.3 as u64);
         let whole = (full.0 as u64) * (full.1 as u64);
         assert_eq!(whole, 504_000, "a 1200x420 row underlay");
-        assert_eq!(filled, 28_224, "only the glass and the reach of its blur");
+        assert_eq!(filled, 29_584, "only the glass, the reach of its blur and a snap margin");
         assert!(
             sample_rect.x <= glass.x && sample_rect.y <= glass.y,
             "the blur reach must widen the rect: sample={sample_rect:?} glass={glass:?}"
