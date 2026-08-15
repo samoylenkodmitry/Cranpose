@@ -155,7 +155,76 @@ pub(crate) fn decode_spans(spans: &[SpanRecord], ticks: &[u64], period_ns: f32) 
 #[derive(Default)]
 pub(crate) struct GpuFrameTimer {
     state: Option<TimerState>,
+    sizes: Option<SizeReport>,
     refused: bool,
+}
+
+#[derive(Default)]
+pub(crate) struct SizeReport {
+    window: u32,
+    frames: u32,
+    buckets: BTreeMap<(GpuSpanKind, u32, u32), u32>,
+    frame: Vec<(GpuSpanKind, u32, u32)>,
+    last_frame: Vec<(GpuSpanKind, u32, u32)>,
+}
+
+impl SizeReport {
+    pub(crate) fn new(window: u32) -> Self {
+        Self {
+            window,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn record(&mut self, kind: GpuSpanKind, width: u32, height: u32) {
+        if self.frame.len() < MAX_LISTED_PASSES {
+            self.frame.push((kind, width, height));
+        }
+    }
+
+    pub(crate) fn end_frame(&mut self) {
+        self.frames += 1;
+        for entry in &self.frame {
+            *self.buckets.entry(*entry).or_default() += 1;
+        }
+        std::mem::swap(&mut self.last_frame, &mut self.frame);
+        self.frame.clear();
+        if self.frames >= self.window {
+            self.print();
+            let window = self.window;
+            *self = Self::new(window);
+        }
+    }
+
+    fn print(&self) {
+        if self.frames == 0 {
+            return;
+        }
+        let frames = f64::from(self.frames);
+        log::warn!(
+            "[gpu-pass] sizes only, frames={}, the adapter carries no timestamp query",
+            self.frames
+        );
+        for ((kind, width, height), count) in &self.buckets {
+            log::warn!(
+                "[gpu-pass]   {} {}x{} per_frame_n={:.2}",
+                kind.label(),
+                width,
+                height,
+                f64::from(*count) / frames,
+            );
+        }
+        let mut line = String::new();
+        for (kind, width, height) in &self.last_frame {
+            if !line.is_empty() {
+                line.push_str("; ");
+            }
+            line.push_str(&format!("{} {width}x{height}", kind.label()));
+        }
+        if !line.is_empty() {
+            log::warn!("[gpu-pass]   one frame: {line}");
+        }
+    }
 }
 
 struct TimerState {
@@ -186,10 +255,6 @@ struct Pending {
 }
 
 impl GpuFrameTimer {
-    pub(crate) fn is_on(&self) -> bool {
-        self.state.is_some()
-    }
-
     pub(crate) fn begin_frame(
         &mut self,
         device: &wgpu::Device,
@@ -205,8 +270,12 @@ impl GpuFrameTimer {
         };
         if self.state.is_none() {
             if !device.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-                self.refused = true;
-                log::warn!("[gpu-pass] the device has no timestamp queries, timing stays off");
+                if self.sizes.is_none() {
+                    log::warn!(
+                        "[gpu-pass] the device has no timestamp query, the report carries pass sizes alone"
+                    );
+                    self.sizes = Some(SizeReport::new(window));
+                }
                 return;
             }
             let inside_encoders = device
@@ -237,10 +306,18 @@ impl GpuFrameTimer {
         width: u32,
         height: u32,
     ) -> Option<PassTimestamps> {
+        if let Some(sizes) = self.sizes.as_mut() {
+            sizes.record(kind, width, height);
+            return None;
+        }
         self.state.as_mut()?.open_pass(kind, width, height)
     }
 
     pub(crate) fn end_frame(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(sizes) = self.sizes.as_mut() {
+            sizes.end_frame();
+            return;
+        }
         let Some(state) = self.state.as_mut() else {
             return;
         };
@@ -629,6 +706,26 @@ mod tests {
         assert!((report.blur_ms() - 3.0).abs() < 1e-9);
         assert!((report.composite_ms() - 3.0).abs() < 1e-9);
         assert!((report.frame_ms - report.spans_ms() - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_size_report_counts_passes_per_frame() {
+        let mut report = SizeReport::new(2);
+        report.record(GpuSpanKind::BlurHorizontal, 270, 100);
+        report.record(GpuSpanKind::BlurHorizontal, 270, 100);
+        report.record(GpuSpanKind::Composite, 1080, 420);
+        report.end_frame();
+        assert_eq!(report.frames, 1);
+        assert_eq!(
+            report.buckets.get(&(GpuSpanKind::BlurHorizontal, 270, 100)),
+            Some(&2)
+        );
+        assert_eq!(report.last_frame.len(), 3);
+        assert!(report.frame.is_empty());
+        report.record(GpuSpanKind::Composite, 1080, 420);
+        report.end_frame();
+        assert_eq!(report.frames, 0);
+        assert!(report.buckets.is_empty());
     }
 
     #[test]
