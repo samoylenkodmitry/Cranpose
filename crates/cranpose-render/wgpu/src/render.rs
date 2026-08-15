@@ -6772,6 +6772,14 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                     let scratch = self
                         .recorder
                         .acquire_transient_offscreen(&device, scratch_descriptor);
+                    let vertical_descriptor = self.renderer.transient_offscreen_descriptor(
+                        "Blur Rounded Mask Vertical Scratch",
+                        scratch_width,
+                        scratch_height,
+                    );
+                    let vertical = self
+                        .recorder
+                        .acquire_transient_offscreen(&device, vertical_descriptor);
                     let fused = self
                         .renderer
                         .effect_renderer
@@ -6780,6 +6788,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             &device,
                             source,
                             &scratch,
+                            Some(&vertical),
                             dest_view,
                             *radius_x,
                             *radius_y,
@@ -6791,7 +6800,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             viewport,
                         );
                     if fused {
-                        self.recorder.record_passes(2);
+                        self.recorder.record_passes(3);
                         self.renderer.effect_renderer.record_blur_pass();
                         self.renderer
                             .effect_renderer
@@ -6799,9 +6808,13 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             .set(self.renderer.effect_renderer.debug_effects.get() + 1);
                         self.renderer.effect_renderer.record_composite_pass();
                         self.recorder
+                            .release_transient_offscreen(vertical_descriptor, vertical);
+                        self.recorder
                             .release_transient_offscreen(scratch_descriptor, scratch);
                         return Ok(());
                     }
+                    self.recorder
+                        .release_transient_offscreen(vertical_descriptor, vertical);
                     self.recorder
                         .release_transient_offscreen(scratch_descriptor, scratch);
                 }
