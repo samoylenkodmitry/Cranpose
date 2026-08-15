@@ -71,10 +71,18 @@ wgpu = { version = "29.0", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+# `gles` is declared, not inherited. Android has a real GL fallback --
+# `initialize_android_rendering_with_backend_fallback` reaches for it when no
+# Vulkan adapter answers -- and until now the backend behind it arrived only
+# through Cargo feature unification with another crate in the graph. It was in
+# every shipped library and nothing said so, so nothing protected it: drop the
+# unrelated dependent that pulled it in and the fallback would have gone on
+# compiling and quietly stopped existing.
 wgpu = { version = "29.0", default-features = false, features = [
     "std",
     "parking_lot",
     "vulkan",
+    "gles",
     "wgsl",
 ] }
 

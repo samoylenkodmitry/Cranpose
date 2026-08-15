@@ -1069,6 +1069,7 @@ fn init_gpu_threaded_for_android(
             resources.queue.clone(),
             resources.surface_format,
             resources.backend,
+            resources.adapter.get_downlevel_capabilities().flags,
             Arc::new(frame_driver.frame_waker()),
             Some(Arc::new(crate::android_frame_telemetry::monotonic_nanos)),
         )
@@ -1139,6 +1140,7 @@ where
                 setup.resources.queue.clone(),
                 setup.resources.surface_format,
                 setup.resources.backend,
+                setup.resources.adapter.get_downlevel_capabilities().flags,
             );
         }
 
@@ -1177,6 +1179,7 @@ where
                     setup.resources.queue.clone(),
                     setup.resources.surface_format,
                     setup.resources.backend,
+                    setup.resources.adapter.get_downlevel_capabilities().flags,
                 );
             }
             log::info!("Renderer reinitialized with new Android GPU pipeline resources");

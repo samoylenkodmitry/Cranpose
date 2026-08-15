@@ -441,6 +441,7 @@ impl WgpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        adapter_downlevel: wgpu::DownlevelFlags,
     ) {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
@@ -456,6 +457,7 @@ impl WgpuRenderer {
             queue,
             surface_format,
             adapter_backend,
+            adapter_downlevel,
             self.frontend.text_fonts.clone(),
             self.renderer_epoch,
             store_feed_generation,
@@ -520,6 +522,7 @@ impl WgpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        adapter_downlevel: wgpu::DownlevelFlags,
         waker: Arc<dyn Fn() + Send + Sync>,
         clock: Option<Arc<dyn Fn() -> i64 + Send + Sync>>,
     ) -> Result<(), WgpuRendererError> {
@@ -532,6 +535,7 @@ impl WgpuRenderer {
             queue,
             surface_format,
             adapter_backend,
+            adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
             store_feed_generation,
@@ -555,6 +559,7 @@ impl WgpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        adapter_downlevel: wgpu::DownlevelFlags,
     ) -> InlinePresentRuntime {
         self.retire_live_backend();
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
@@ -564,6 +569,7 @@ impl WgpuRenderer {
             queue,
             surface_format,
             adapter_backend,
+            adapter_downlevel,
             text_fonts: self.frontend.text_fonts.clone(),
             renderer_epoch: self.renderer_epoch,
             store_feed_generation,

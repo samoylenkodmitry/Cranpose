@@ -164,10 +164,40 @@ struct ShapeBatchLimits {
 }
 
 impl ShapeBatchLimits {
-    fn for_device(device: &wgpu::Device) -> Self {
-        let limits = device.limits();
+    fn for_device(device: &wgpu::Device, downlevel: wgpu::DownlevelFlags) -> Self {
+        Self::select(&device.limits(), downlevel)
+    }
+
+    /// Storage mode or uniform mode, from the two things that decide it.
+    ///
+    /// Split out from `for_device` because the interesting case cannot be
+    /// reached with a device in hand: it needs an adapter that reports storage
+    /// buffers and no vertex-stage access, which is every ARM Mali GLES driver
+    /// and no desktop.
+    fn select(limits: &wgpu::Limits, downlevel: wgpu::DownlevelFlags) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
-        if limits.max_storage_buffers_per_shader_stage >= 2 {
+        if limits.max_storage_buffers_per_shader_stage >= 2
+            // `max_storage_buffers_per_shader_stage` alone is NOT the question,
+            // even though its name reads like a per-stage minimum. On ARM's
+            // GLES driver it comes back non-zero off the fragment stage while
+            // the vertex stage has no storage at all, so the check passed, the
+            // storage layout was built, and binding 0 -- the shape array, which
+            // is VERTEX_FRAGMENT because `vs_main` pulls quad corners out of it
+            // -- failed validation the moment the layout was created:
+            //
+            //   In Device::create_bind_group_layout, label = 'Shape Bind Group
+            //   Layout'; Binding 0 entry is invalid; Downlevel flags
+            //   DownlevelFlags(VERTEX_STORAGE) are required but not supported
+            //   on the device.
+            //
+            // wgpu treats that as fatal, so the renderer thread panicked and
+            // the app dropped back to the launcher on Mali-G76 (r18p0, 2019)
+            // and Mali-G715 (r54p3, 2024) alike -- driver age is not the
+            // variable. Adreno 650 and Adreno 702 have the flag and are
+            // unaffected. `VERTEX_STORAGE` is the flag that actually answers
+            // the question the layout asks, so ask it.
+            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+        {
             return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
         }
         Self::for_uniform_binding_size(limits.max_uniform_buffer_binding_size)
@@ -6202,6 +6232,12 @@ impl GpuRenderer {
         queue: Arc<wgpu::Queue>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
+        // Beside the backend because it is the same kind of fact: something
+        // only the ADAPTER can answer, which the device cannot be asked for
+        // (wgpu 29 has `Adapter::get_downlevel_capabilities` and no device
+        // equivalent) and which decides whether the shape arrays can be
+        // storage buffers at all.
+        adapter_downlevel: wgpu::DownlevelFlags,
         text_fonts: SoftwareTextFontSet,
         renderer_epoch: u64,
         store_feed_generation: u64,
@@ -6226,7 +6262,7 @@ impl GpuRenderer {
             let sentry = Arc::clone(&device_errors);
             device.on_uncaptured_error(Arc::new(move |error| sentry.record(&error)));
         }
-        let shape_batch_limits = ShapeBatchLimits::for_device(&device);
+        let shape_batch_limits = ShapeBatchLimits::for_device(&device, adapter_downlevel);
         let uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("Uniform Bind Group Layout"),
@@ -6263,10 +6299,11 @@ impl GpuRenderer {
         // scene fits one batch); uniform arrays on WebGL-class devices, which
         // have no storage buffers in fragment shaders. The shape array is
         // visible to the vertex stage as well: the pipeline has no vertex
-        // buffer and `vs_main` pulls quad corners from ShapeData. (Storage
-        // mode is gated on `max_storage_buffers_per_shader_stage`, which GL
-        // backends report as the minimum across stages, so a device that
-        // cannot read storage from the vertex stage falls back to uniforms.)
+        // buffer and `vs_main` pulls quad corners from ShapeData. Storage mode
+        // is gated on `DownlevelFlags::VERTEX_STORAGE` as well as on the
+        // limit -- see `ShapeBatchLimits::select`, where the comment this
+        // replaces claimed GL reports the limit as the minimum across stages
+        // and Mali proved otherwise.
         let mut shape_bind_group_layout_entries = vec![
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -16759,6 +16796,53 @@ fn inner_shadow_composite_mask(
         ],
         radii,
     })
+}
+
+#[cfg(test)]
+mod shape_batch_limits_tests {
+    use super::*;
+
+    /// A device that reports plenty of storage buffers, as ARM's GLES driver
+    /// does off the fragment stage.
+    fn generous_limits() -> wgpu::Limits {
+        wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 8,
+            max_storage_buffer_binding_size: 128 << 20,
+            max_uniform_buffer_binding_size: 16 << 10,
+            ..wgpu::Limits::default()
+        }
+    }
+
+    #[test]
+    fn a_device_without_vertex_storage_takes_the_uniform_path() {
+        // The shape array is bound VERTEX_FRAGMENT because `vs_main` reads
+        // quad corners out of it, so a device that cannot read storage from
+        // the vertex stage cannot host the storage layout AT ALL -- creating
+        // it is a validation error and wgpu makes that fatal. The limit alone
+        // says nothing about it: Mali reports 8 here and zero vertex storage.
+        let limits = ShapeBatchLimits::select(&generous_limits(), wgpu::DownlevelFlags::empty());
+        assert!(
+            !limits.storage,
+            "no VERTEX_STORAGE must mean uniform mode, whatever the limit says"
+        );
+    }
+
+    #[test]
+    fn a_device_with_vertex_storage_still_takes_the_storage_path() {
+        let limits = ShapeBatchLimits::select(&generous_limits(), wgpu::DownlevelFlags::all());
+        assert!(
+            limits.storage,
+            "the flag must not cost storage mode on a device that has it"
+        );
+    }
+
+    #[test]
+    fn the_limit_still_gates_storage_when_the_flag_is_present() {
+        let mut limits = generous_limits();
+        limits.max_storage_buffers_per_shader_stage = 1;
+        let limits = ShapeBatchLimits::select(&limits, wgpu::DownlevelFlags::all());
+        assert!(!limits.storage, "two bindings are needed, not one");
+    }
 }
 
 #[cfg(test)]
