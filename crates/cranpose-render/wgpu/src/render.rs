@@ -6307,6 +6307,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
+        backdrop_input_hashes: &[u64],
         z_start: usize,
         z_end: usize,
         excluded_effect_layer: Option<usize>,
@@ -6400,7 +6401,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                             width,
                             height,
                             root_scale,
-                            None,
+                            backdrop_input_hashes.get(index).copied(),
                         )?;
                     }
                     LayerEventKind::Effect(index) => {
@@ -7262,6 +7263,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
+        backdrop_input_hashes: &[u64],
         z_start: usize,
         z_end: usize,
         excluded_effect_layer: Option<usize>,
@@ -7282,6 +7284,7 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
             draw_ops,
             effect_layers,
             backdrop_layers,
+            backdrop_input_hashes,
             z_start,
             z_end,
             excluded_effect_layer,

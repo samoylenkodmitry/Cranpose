@@ -907,7 +907,10 @@ fn underlay_sample_rect(source: &LoweredChildSource) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for layer in &source.scene.backdrop_layers {
         let rect = padded_backdrop_rect(layer.rect, &layer.effect);
-        let rect = layer.clip.and_then(|clip| rect.intersect(clip)).unwrap_or(rect);
+        let rect = layer
+            .clip
+            .and_then(|clip| rect.intersect(clip))
+            .unwrap_or(rect);
         bounds = union_rect(bounds, rect);
     }
     for layer in &source.scene.effect_layers {
@@ -1169,6 +1172,7 @@ fn render_scene_range_to_target<B: SurfaceExecutionBackend>(
             &scene.draw_ops,
             &scene.effect_layers,
             &scene.backdrop_layers,
+            &scene_backdrop_input_hashes(scene, &[], (width, height), root_scale),
             z_start,
             z_end,
             None,
@@ -1665,6 +1669,7 @@ fn render_effect_layer_to_view<B: SurfaceExecutionBackend>(
         &window_scene.draw_ops,
         &window_scene.effect_layers,
         &window_scene.backdrop_layers,
+        &[],
         layer.z_start,
         layer.z_end,
         Some(window_effect_index),
@@ -2751,6 +2756,44 @@ fn backdrop_scene_prefix_hash(
     }
 
     hasher.finish()
+}
+
+/// One input hash per backdrop the scene carries, in the order the render
+/// path indexes them. A backdrop that lives in a scene rather than on a child
+/// composite reaches the blur cache through these; without one the blur runs
+/// again on every frame whose scene under it never moved.
+fn scene_backdrop_input_hashes(
+    scene: &CompositorScene,
+    prior_child_contributions: &[BackdropPrefixChildContribution],
+    target_size: (u32, u32),
+    root_scale: f32,
+) -> Vec<u64> {
+    if scene.backdrop_layers.is_empty() {
+        return Vec::new();
+    }
+    scene
+        .backdrop_layers
+        .iter()
+        .map(|layer| {
+            let (layer_rect, layer_clip) = snapped_backdrop_geometry(layer, root_scale);
+            let capture_rect = visible_backdrop_capture_rect(
+                layer_rect,
+                layer_clip,
+                &layer.effect,
+                root_scale,
+                target_size,
+            )
+            .unwrap_or(layer.rect);
+            backdrop_scene_prefix_hash(
+                scene,
+                prior_child_contributions,
+                layer.z_index,
+                capture_rect,
+                target_size,
+                root_scale,
+            )
+        })
+        .collect()
 }
 
 fn scene_range_content_hash(
@@ -4000,6 +4043,12 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     &mut pending_composite_load_op,
                     &mut next_load_op,
                 );
+                let local_backdrop_hashes = scene_backdrop_input_hashes(
+                    local_scene,
+                    &prior_child_contributions,
+                    (width, height),
+                    target_scale,
+                );
                 backend.render_range_with_layer_events_to_target(
                     &target,
                     &local_scene.shapes,
@@ -4011,6 +4060,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                     &local_scene.draw_ops,
                     &local_scene.effect_layers,
                     &local_scene.backdrop_layers,
+                    &local_backdrop_hashes,
                     cursor_z,
                     child.z_index,
                     None,
@@ -4359,6 +4409,12 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &mut pending_composite_load_op,
                 &mut next_load_op,
             );
+            let local_backdrop_hashes = scene_backdrop_input_hashes(
+                local_scene,
+                &prior_child_contributions,
+                (width, height),
+                target_scale,
+            );
             backend.render_range_with_layer_events_to_target(
                 &target,
                 &local_scene.shapes,
@@ -4370,6 +4426,7 @@ fn render_layer_source_uncached<B: SurfaceExecutionBackend>(
                 &local_scene.draw_ops,
                 &local_scene.effect_layers,
                 &local_scene.backdrop_layers,
+                &local_backdrop_hashes,
                 cursor_z,
                 local_scene.next_z,
                 None,
@@ -4860,6 +4917,7 @@ pub(crate) fn render_effect_layer_to_target<B: SurfaceExecutionBackend>(
         &window_scene.draw_ops,
         &window_scene.effect_layers,
         &window_scene.backdrop_layers,
+        &[],
         layer.z_start,
         layer.z_end,
         Some(window_effect_index),
@@ -5620,14 +5678,14 @@ mod tests {
         direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
         direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
-        layer_surface_dest_quad, layer_surface_translation_context, rounded_fill_covers_rect,
-        underlay_fill_scissor, underlay_sample_rect,
+        layer_surface_dest_quad, layer_surface_translation_context,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
-        render_string_scene_hash, retained_render_effect_hash, snapped_backdrop_geometry,
-        surface_target_size, visible_backdrop_capture_rect, BackdropPrefixChildContribution,
-        DirectChunkRunCoalescer, SceneBrush, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
-        MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS, MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES,
-        MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        render_string_scene_hash, retained_render_effect_hash, rounded_fill_covers_rect,
+        scene_backdrop_input_hashes, snapped_backdrop_geometry, surface_target_size,
+        underlay_fill_scissor, underlay_sample_rect, visible_backdrop_capture_rect,
+        BackdropPrefixChildContribution, DirectChunkRunCoalescer, SceneBrush,
+        DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
     use crate::effect_renderer::CompositeSampleMode;
     use crate::normalized_scene::TranslateBy;
@@ -6174,6 +6232,46 @@ mod tests {
         assert_eq!(
             left_key, right_key,
             "a later moving child must not invalidate an earlier backdrop input"
+        );
+    }
+
+    #[test]
+    fn a_backdrop_in_a_scene_carries_an_input_hash_to_the_blur_cache() {
+        let layer = test_backdrop_layer(Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 60.0,
+            height: 40.0,
+        });
+        let mut black_scene = scene_with_prefix_shape(Color::BLACK);
+        black_scene.backdrop_layers.push(layer.clone());
+        let mut red_scene = scene_with_prefix_shape(Color::RED);
+        red_scene.backdrop_layers.push(layer.clone());
+        let mut black_again = scene_with_prefix_shape(Color::BLACK);
+        black_again.backdrop_layers.push(layer.clone());
+
+        let black = scene_backdrop_input_hashes(&black_scene, &[], (200, 120), 1.0);
+        let red = scene_backdrop_input_hashes(&red_scene, &[], (200, 120), 1.0);
+        let repeat = scene_backdrop_input_hashes(&black_again, &[], (200, 120), 1.0);
+
+        assert_eq!(black.len(), 1, "one hash per backdrop the scene carries");
+        assert_eq!(
+            black, repeat,
+            "an unchanged scene under the glass must reach the same cache entry"
+        );
+        assert_ne!(
+            black, red,
+            "a changed draw under the glass must miss the cache"
+        );
+        assert!(
+            scene_backdrop_input_hashes(
+                &scene_with_prefix_shape(Color::BLACK),
+                &[],
+                (200, 120),
+                1.0
+            )
+            .is_empty(),
+            "a scene with no backdrop asks for no hashes"
         );
     }
 

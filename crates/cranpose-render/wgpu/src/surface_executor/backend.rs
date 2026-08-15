@@ -197,6 +197,7 @@ pub(crate) trait SurfaceExecutionBackend {
         draw_ops: &[DrawOp],
         effect_layers: &[EffectLayer],
         backdrop_layers: &[BackdropLayer],
+        backdrop_input_hashes: &[u64],
         z_start: usize,
         z_end: usize,
         excluded_effect_layer: Option<usize>,

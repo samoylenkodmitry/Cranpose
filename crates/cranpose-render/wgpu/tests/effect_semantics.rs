@@ -2052,7 +2052,10 @@ fn opaque_row_with_glass_fixture(animated_color: Color) -> RenderGraph {
             backdrop_effect: Some(RenderEffect::blur(6.0)),
             ..GraphicsLayer::default()
         },
-        vec![solid_rect(glass_bounds, Color::from_rgba_u8(255, 255, 255, 60))],
+        vec![solid_rect(
+            glass_bounds,
+            Color::from_rgba_u8(255, 255, 255, 60),
+        )],
     );
     glass.isolation.shape_clip = true;
     let row_bounds = Rect {
@@ -2095,7 +2098,9 @@ fn a_row_whose_glass_reads_only_its_own_draws_keeps_its_raster() {
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
-            eprintln!("skipping opaque row raster assertions because headless WGPU init failed: {err}");
+            eprintln!(
+                "skipping opaque row raster assertions because headless WGPU init failed: {err}"
+            );
             return;
         }
     };
