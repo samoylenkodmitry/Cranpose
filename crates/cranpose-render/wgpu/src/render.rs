@@ -5895,6 +5895,16 @@ pub struct GpuRenderer {
     /// high-water capacity across frames. Always empty between drains.
     #[cfg(not(target_arch = "wasm32"))]
     color_patch_scratch: Vec<crate::scene::ColorPatch>,
+    /// Capture staging scratch for `capture_replay_slot`: the converted
+    /// `ShapeData` records and gradient stops are built here, copied into
+    /// the slot's fresh GPU buffers, and the allocations survive to the
+    /// next capture — a re-partition frame captures one slot per segment
+    /// and used to allocate both vectors per slot.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_capture_shape_scratch: Vec<ShapeData>,
+    /// The gradient-stop half of the capture staging scratch.
+    #[cfg(not(target_arch = "wasm32"))]
+    replay_capture_gradient_scratch: Vec<GradientStop>,
     /// Recycled confirmations buffer for the next [`crate::frame_packet::ReplayAck`]:
     /// `consume_replay_ops` fills it, the planner drains it in `apply_ack`,
     /// and the render loop hands the emptied vec (capacity intact) back
@@ -6668,6 +6678,10 @@ impl GpuRenderer {
             replay_color_patches: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             color_patch_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_capture_shape_scratch: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replay_capture_gradient_scratch: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_ack_confirmations: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -12374,6 +12388,10 @@ impl GpuRenderer {
         // loop restores the vec after the planner drains the ack.
         let mut confirmations = std::mem::take(&mut self.replay_ack_confirmations);
         debug_assert!(confirmations.is_empty());
+        // One refs buffer for the whole batch: a re-partition frame carries
+        // one capture per segment, and `shapes` outlives the loop, so each
+        // capture's collect reuses a single allocation.
+        let mut refs: Vec<&DrawShape> = Vec::new();
         for capture in ops.captures.drain(..) {
             if capture.frame != ops.frame {
                 // Defensive: a capture that outlived its frame references
@@ -12396,7 +12414,8 @@ impl GpuRenderer {
             let Some(slice) = shapes.get(capture.shape_start..end) else {
                 continue;
             };
-            let refs: Vec<&DrawShape> = slice.iter().collect();
+            refs.clear();
+            refs.extend(slice.iter());
             let Some(gpu_slot) = self.capture_replay_slot(&refs, brushes, root_scale) else {
                 continue;
             };
@@ -12573,8 +12592,17 @@ impl GpuRenderer {
             gradient_offsets.push(total_gradient_stops);
         }
 
-        let mut shape_data = vec![ShapeData::zeroed(); shape_count];
-        let mut gradients = vec![GradientStop::zeroed(); (total_gradient_stops as usize).max(1)];
+        // Staging scratch, not fresh vectors: cleared and re-zeroed to this
+        // capture's exact sizes, capacity kept across captures.
+        let mut shape_data = std::mem::take(&mut self.replay_capture_shape_scratch);
+        shape_data.clear();
+        shape_data.resize(shape_count, ShapeData::zeroed());
+        let mut gradients = std::mem::take(&mut self.replay_capture_gradient_scratch);
+        gradients.clear();
+        gradients.resize(
+            (total_gradient_stops as usize).max(1),
+            GradientStop::zeroed(),
+        );
         convert_shapes_into_outputs(
             shape_refs,
             brushes,
@@ -12836,6 +12864,10 @@ impl GpuRenderer {
                 submitted_area_scale,
             },
         );
+        // The staging buffers return to their scratch slots, contents
+        // spent, capacity kept for the next capture.
+        self.replay_capture_shape_scratch = shape_data;
+        self.replay_capture_gradient_scratch = gradients;
         Some(id)
     }
 

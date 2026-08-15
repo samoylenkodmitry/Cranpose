@@ -24,7 +24,14 @@ use cranpose_ui_graphics::{
 
 const SIZE: u32 = 408;
 const CENTER: f32 = 204.0;
-const FRAMES: usize = 8;
+/// Enough frames for the twinkle alpha cycle (period 11, `record_frame`'s
+/// `% 11`) to wrap past the frame-1 capture: at frame 12 every twinkle
+/// returns EXACTLY to its captured color, which must reach the GPU as an
+/// explicit restore patch — a recorder that emits recolors only as
+/// diff-vs-snapshot emits nothing there, the slot's paint mirror keeps
+/// frame 11's colors, and the whole twinkle field renders stale. Eight
+/// frames never wrapped the cycle, which is how that defect hid.
+const FRAMES: usize = 13;
 
 /// One frame of the synthetic boss through the RECORDING path: rings
 /// rotating at distinct speeds under a breathing scale, churning sparks,
@@ -206,6 +213,12 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     // adds its own interpolation noise, measured in arc_mesh_parity).
     std::env::set_var("CRANPOSE_ARC_MESH", "0");
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    // The feed has defaulted ON since its parity was proven, so the
+    // baseline must say "0" explicitly: with the variable merely unset the
+    // baseline renders through the very retention path under test, and any
+    // stale-slot defect cancels out of the comparison — which is exactly
+    // how the mod-11 stale-recolor defect stayed invisible here.
+    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
     let baseline = render_sequence(&mut renderer, &graphs);
 
     std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
@@ -308,10 +321,12 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
             // capture quad crops the AA falloff slightly differently than a
             // freshly computed tight quad. This is the envelope the flat
             // detector has always shipped — the feed measures IDENTICAL
-            // per-frame counts on this scene (253..1195 channels of 666k,
-            // growing with accumulated rotation until a recapture resets
-            // it). Wider divergence means a real defect, like the shifted
-            // self-similar anchor pairing this test once caught.
+            // per-frame counts on this scene (260..1815 channels of 666k
+            // across the 13 frames, growing with accumulated rotation until
+            // a recapture resets it). Wider divergence means a real defect:
+            // the shifted self-similar anchor pairing this test once
+            // caught, or the stale twinkle recolors at the frame-12 alpha
+            // wrap (11398 channels) that the restore patches now reset.
             assert!(
                 differing < 2500 && worst < 160,
                 "frame {frame}: {differing} channels diverged (worst {worst}) — beyond the\n                 flat detector's edge-AA envelope"
