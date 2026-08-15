@@ -5611,6 +5611,8 @@ pub struct GpuRenderer {
     warning_state: RendererWarningState,
     #[cfg(not(target_arch = "wasm32"))]
     replay_upload_stats: ReplayUploadStats,
+    #[cfg(not(target_arch = "wasm32"))]
+    segment_encode_stats: SegmentEncodeStats,
     /// The frame's replay recolor patches, parked here by
     /// `consume_replay_ops` until the retained prepare arms drain them
     /// (`stage_replay_patches`). The vec this frame's ops displace is last
@@ -5803,6 +5805,47 @@ impl ReplayUploadStats {
                 self.patches / patched,
                 self.records / patched,
                 self.slots / patched,
+            );
+            *self = Self::default();
+        }
+    }
+}
+
+/// Aggregate cost of the fused native partition loop — the numbers a
+/// parallel-encode decision needs: how many partitions each chunk carries
+/// and how long the serial loop spends encoding them. Always-on for the
+/// same reason as [`ReplayUploadStats`]: the watch takes no setprop diag
+/// flags, so the line has to reach logcat on its own, and one warn every
+/// [`Self::REPORT_CALLS`] chunks is bounded.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct SegmentEncodeStats {
+    calls: u64,
+    partitions: u64,
+    max_partitions: u64,
+    encode_micros: u64,
+    max_call_micros: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SegmentEncodeStats {
+    const REPORT_CALLS: u64 = 1024;
+
+    fn note_call(&mut self, partitions: u64, micros: u64) {
+        self.calls += 1;
+        self.partitions += partitions;
+        self.max_partitions = self.max_partitions.max(partitions);
+        self.encode_micros += micros;
+        self.max_call_micros = self.max_call_micros.max(micros);
+        if self.calls >= Self::REPORT_CALLS {
+            log::warn!(
+                "[segment-encode] {} chunks: avg {:.1} partitions (max {}), \
+                 avg {:.2} ms encode (max {:.2})",
+                self.calls,
+                self.partitions as f64 / self.calls as f64,
+                self.max_partitions,
+                self.encode_micros as f64 / self.calls as f64 / 1000.0,
+                self.max_call_micros as f64 / 1000.0,
             );
             *self = Self::default();
         }
@@ -6308,6 +6351,8 @@ impl GpuRenderer {
             warning_state: RendererWarningState::default(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_upload_stats: ReplayUploadStats::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            segment_encode_stats: SegmentEncodeStats::default(),
             #[cfg(not(target_arch = "wasm32"))]
             replay_color_patches: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -9212,7 +9257,10 @@ impl GpuRenderer {
         let mut rendered_any = false;
         let mut pass_count = 0_u32;
         let mut next_load_op = load_op;
+        let encode_started = std::time::Instant::now();
+        let mut partition_count = 0_u64;
         for partition in partitions {
+            partition_count += 1;
             let outcome = self.render_segment_draw_chunk_fused_native_partition(
                 frame_encoder,
                 target_view,
@@ -9237,6 +9285,9 @@ impl GpuRenderer {
                 next_load_op = wgpu::LoadOp::Load;
             }
         }
+
+        self.segment_encode_stats
+            .note_call(partition_count, encode_started.elapsed().as_micros() as u64);
 
         Ok(Some(SegmentRenderOutcome {
             rendered_any,
