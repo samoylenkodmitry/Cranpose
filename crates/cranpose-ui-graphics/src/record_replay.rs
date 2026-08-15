@@ -41,7 +41,25 @@ fn close_rel(a: f32, b: f32) -> bool {
 
 fn close_angle(a: f32, b: f32) -> bool {
     use std::f32::consts::TAU;
-    let mut d = (a - b) % TAU;
+    // `%` on f32 is a libm `fmodf` CALL on armv7 — real per-record cost in
+    // the contiguous verify loops. For |a - b| < TAU the remainder is the
+    // identity (fmod returns its numerator exactly when it is smaller in
+    // magnitude than the divisor), so the wrap below computes the identical
+    // boolean without the call; only unbounded deltas take the slow path.
+    // NaN falls through both fast-path comparisons to the fmod arm and
+    // lands false there, as before.
+    let d = a - b;
+    if d.abs() < TAU {
+        let wrapped = if d > TAU * 0.5 {
+            d - TAU
+        } else if d < -TAU * 0.5 {
+            d + TAU
+        } else {
+            d
+        };
+        return wrapped.abs() <= ABS_EPS;
+    }
+    let mut d = d % TAU;
     if d > TAU * 0.5 {
         d -= TAU;
     }
@@ -49,6 +67,83 @@ fn close_angle(a: f32, b: f32) -> bool {
         d += TAU;
     }
     d.abs() <= ABS_EPS
+}
+
+#[cfg(test)]
+mod close_angle_equivalence {
+    use super::*;
+
+    fn close_angle_reference(a: f32, b: f32) -> bool {
+        use std::f32::consts::TAU;
+        let mut d = (a - b) % TAU;
+        if d > TAU * 0.5 {
+            d -= TAU;
+        }
+        if d < -TAU * 0.5 {
+            d += TAU;
+        }
+        d.abs() <= ABS_EPS
+    }
+
+    /// The fast path must agree with the fmod form on every input class:
+    /// tiny deltas, exact and near half-turn boundaries, just under and
+    /// past a full turn (both fixup directions), multi-turn magnitudes,
+    /// signed zero, and NaN/infinite inputs.
+    #[test]
+    fn fast_path_matches_the_fmod_form() {
+        use std::f32::consts::{PI, TAU};
+        let interesting = [
+            0.0_f32,
+            -0.0,
+            1e-8,
+            -1e-8,
+            0.019,
+            -0.019,
+            0.021,
+            -0.021,
+            1.0,
+            -1.0,
+            PI - 1e-3,
+            PI,
+            PI + 1e-3,
+            -PI,
+            TAU - 0.02,
+            TAU - 1e-6,
+            TAU,
+            TAU + 1e-6,
+            TAU + 0.019,
+            -TAU,
+            -TAU - 0.019,
+            3.0 * TAU + 0.01,
+            -7.5 * TAU,
+            123.456,
+            -987.654,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+        ];
+        for &a in &interesting {
+            for &b in &interesting {
+                assert_eq!(
+                    close_angle(a, b),
+                    close_angle_reference(a, b),
+                    "close_angle({a}, {b}) diverged from the fmod form"
+                );
+            }
+        }
+        // Dense sweep across four turns of deltas at several anchors.
+        for anchor in [-500.0_f32, -6.0, 0.0, 6.0, 500.0] {
+            for i in -2520..=2520 {
+                let d = i as f32 * 0.01;
+                assert_eq!(
+                    close_angle(anchor + d, anchor),
+                    close_angle_reference(anchor + d, anchor),
+                    "sweep diverged at anchor {anchor} delta {d}"
+                );
+            }
+        }
+    }
 }
 
 fn close_point(a: Point, b: Point) -> bool {
