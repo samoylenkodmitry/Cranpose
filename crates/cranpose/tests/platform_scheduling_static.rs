@@ -1256,6 +1256,9 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
         // them, mirroring how HWUI votes the panel's frame rate.
         "android_frame_rate.rs",
+        // The ADPF hint session: dlsym-resolved APerformanceHint_* calls and
+        // the sessions they manage; absent symbols degrade to a no-op.
+        "android_perf_hint.rs",
         "android_frame_telemetry.rs",
         "android_jni.rs",
         "android_accessibility.rs",
@@ -1454,6 +1457,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         // `ANativeWindow_setFrameRate*` NDK symbols and the calls through
         // them, mirroring how HWUI votes the panel's frame rate.
         "crates/cranpose/src/android_frame_rate.rs",
+        "crates/cranpose/src/android_perf_hint.rs",
         "crates/cranpose/src/android_frame_telemetry.rs",
         "crates/cranpose/src/android_jni.rs",
         "crates/cranpose/src/android_accessibility.rs",
