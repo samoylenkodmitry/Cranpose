@@ -73,6 +73,11 @@ pub enum CancelReason {
     /// retry. Producer state (epochs, viewport) still matched — only the
     /// swapchain was missing.
     SurfaceUnavailable,
+    /// The device reported an uncaptured error (validation/OOM/internal)
+    /// since the previous frame: nothing of this packet is encoded on the
+    /// suspect device. One cancel per poisoning — the gate clears as it
+    /// fires, so the next packet renders (see `DeviceErrorSentry`).
+    DeviceError,
 }
 
 /// What the present stage did with a packet. `NotRun` is the `Default` so a
