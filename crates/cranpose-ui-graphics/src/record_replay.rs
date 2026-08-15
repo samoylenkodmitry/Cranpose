@@ -524,14 +524,21 @@ fn views_compatible(
 /// insertions and deletions (entity churn between frames). Pairing is
 /// structural only; transform-consistency during verification decides
 /// whether a pair actually moved together, so a wrong pairing costs a
-/// segment, never a wrong capture.
-fn align_recordings(current: &CommandRecording, retained: &CommandRecording) -> Vec<Option<usize>> {
+/// segment, never a wrong capture. Fills `aligned` (cleared, then resized
+/// to the current tape length): an out-param, so the caller owns a
+/// reusable buffer instead of allocating ~tape-length per call.
+fn align_recordings(
+    current: &CommandRecording,
+    retained: &CommandRecording,
+    aligned: &mut Vec<Option<usize>>,
+) {
     let pair = |i: usize, j: usize| -> bool {
         views_compatible(current, view_at(current, i), retained, view_at(retained, j))
     };
     let current_len = current.tape.len();
     let retained_len = retained.tape.len();
-    let mut aligned = vec![None; current_len];
+    aligned.clear();
+    aligned.resize(current_len, None);
     let (mut i, mut j) = (0usize, 0usize);
     let mut events = 0usize;
     while i < current_len && j < retained_len {
@@ -545,7 +552,8 @@ fn align_recordings(current: &CommandRecording, retained: &CommandRecording) -> 
         if events > MAX_RESYNC_EVENTS {
             // Not churn — the structure is gone. An empty alignment makes
             // the caller restart from a fresh snapshot.
-            return vec![None; current_len];
+            aligned.fill(None);
+            return;
         }
         let mut resynced = false;
         'search: for total in 1..=RESYNC_SPAN {
@@ -564,7 +572,6 @@ fn align_recordings(current: &CommandRecording, retained: &CommandRecording) -> 
             j += 1;
         }
     }
-    aligned
 }
 
 /// Derives the pair's implied transform, with pinnedness.
@@ -855,6 +862,10 @@ pub struct CommandReplayState {
     /// high-water capacity; refilled per verified frame.
     verify_pending: std::collections::VecDeque<CommandSegment>,
     verify_survivors: Vec<CommandSegment>,
+    /// [`align_recordings`]' alignment buffer, persistent so the partition
+    /// after every collapse reuses one ~tape-length allocation instead of
+    /// growing a fresh one per convergence cycle.
+    align_scratch: Vec<Option<usize>>,
 }
 
 impl Default for CommandReplayState {
@@ -876,6 +887,7 @@ impl Default for CommandReplayState {
             best_recolor_scratch: Vec::new(),
             verify_pending: std::collections::VecDeque::new(),
             verify_survivors: Vec::new(),
+            align_scratch: Vec::new(),
         }
     }
 }
@@ -958,7 +970,10 @@ impl CommandReplayState {
     }
 
     fn take_snapshot(&mut self, current: &CommandRecording, center: Point) {
-        self.snapshot = current.clone();
+        // `clone_from` semantics: the previous snapshot's buffers are
+        // reused, not reallocated — this runs twice per convergence cycle
+        // on the heavy scenes' ~17k-record tapes.
+        self.snapshot.clone_records_from(current);
         self.center = center;
         self.segments.clear();
         self.phase = CommandReplayPhase::Snapshotted;
@@ -972,13 +987,13 @@ impl CommandReplayState {
     /// IS this frame, so what the renderer retains equals what later
     /// transforms move.
     fn partition(&mut self, current: &CommandRecording, center: Point) -> ReplayOutcome {
-        let aligned = align_recordings(current, &self.snapshot);
+        align_recordings(current, &self.snapshot, &mut self.align_scratch);
         let mut chains: Vec<(usize, usize)> = Vec::new();
         let mut i = 0;
         while i < current.tape.len() {
             let (Some(view), Some(snapshot_view)) = (
                 view_at(current, i),
-                aligned[i].and_then(|j| view_at(&self.snapshot, j)),
+                self.align_scratch[i].and_then(|j| view_at(&self.snapshot, j)),
             ) else {
                 i += 1;
                 continue;
@@ -1001,7 +1016,7 @@ impl CommandReplayState {
             while end < current.tape.len() {
                 let (Some(view), Some(snapshot_view)) = (
                     view_at(current, end),
-                    aligned[end].and_then(|j| view_at(&self.snapshot, j)),
+                    self.align_scratch[end].and_then(|j| view_at(&self.snapshot, j)),
                 ) else {
                     break;
                 };

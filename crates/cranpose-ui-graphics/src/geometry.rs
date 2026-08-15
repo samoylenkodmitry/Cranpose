@@ -1035,6 +1035,19 @@ impl CommandRecording {
         self.arcs.clear();
         self.others.clear();
     }
+
+    /// A buffer-reusing deep copy: `clone_from` on every store, so
+    /// refreshing a long-lived recording (the replay snapshot, twice per
+    /// convergence cycle on a heavy scene's ~17k-record tape) truncates and
+    /// copies into the existing allocations instead of cloning five fresh
+    /// buffers. Semantically identical to `*self = source.clone()`.
+    pub(crate) fn clone_records_from(&mut self, source: &Self) {
+        self.tape.clone_from(&source.tape);
+        self.rects.clone_from(&source.rects);
+        self.round_rects.clone_from(&source.round_rects);
+        self.arcs.clone_from(&source.arcs);
+        self.others.clone_from(&source.others);
+    }
 }
 
 /// What [`DrawScopeDefault::finish`] hands back: the materialized primitives,
