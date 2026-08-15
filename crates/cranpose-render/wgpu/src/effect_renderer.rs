@@ -451,7 +451,6 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn create_fullscreen_pipeline(
     device: &wgpu::Device,
     cache: Option<&wgpu::PipelineCache>,

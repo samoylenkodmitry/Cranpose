@@ -9589,7 +9589,7 @@ impl GpuRenderer {
         let mut rendered_any = false;
         let mut pass_count = 0_u32;
         let mut next_load_op = load_op;
-        let encode_started = std::time::Instant::now();
+        let encode_started = Instant::now();
         let mut partition_count = 0_u64;
         for partition in partitions {
             partition_count += 1;
