@@ -193,6 +193,7 @@ impl RendererFrontend {
             #[cfg(not(target_arch = "wasm32"))]
             crate::shape_replay::SHAPE_REPLAY
                 .with(|state| state.borrow_mut().begin_frame(replay_supported, root_scale));
+            crate::collect_memo::begin_frame(root_scale);
             let collected = collect_layer_contents_reusing(
                 &graph.root,
                 &mut self.text_state,
@@ -208,6 +209,7 @@ impl RendererFrontend {
                 &mut self.layer_surface_requirements_cache,
                 recycled_scene,
             );
+            crate::collect_memo::end_frame();
             self.direct_scene_capacity = collected.scene.capacity_hint();
             if root_direct_scene_events_are_supported(&collected.scene)
                 && direct_root_child_underlays_are_supported(&collected)

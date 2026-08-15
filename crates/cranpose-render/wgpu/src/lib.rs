@@ -5,6 +5,7 @@
 
 #![deny(unsafe_code)]
 
+mod collect_memo;
 #[cfg(not(target_arch = "wasm32"))]
 mod cost_tuner;
 mod effect_renderer;
@@ -248,9 +249,11 @@ impl WgpuRenderer {
                         .layer_surface_requirements_cache
                         .remove(node_id);
                 }
+                collect_memo::drop_nodes(&changed_nodes);
             }
             pipeline::SceneUpdateOutcome::Rebuilt => {
                 self.frontend.layer_surface_requirements_cache.clear();
+                collect_memo::drop_all();
             }
         }
         changed_nodes.clear();
@@ -691,6 +694,7 @@ impl Renderer for WgpuRenderer {
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
         self.frontend.layer_surface_requirements_cache.clear();
+        collect_memo::drop_all();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload
@@ -706,6 +710,7 @@ impl Renderer for WgpuRenderer {
     ) -> Result<(), Self::Error> {
         self.frontend.scene.clear();
         self.frontend.layer_surface_requirements_cache.clear();
+        collect_memo::drop_all();
         self.frontend.dev_overlay_graph = None;
         self.frontend.dev_overlay_cache = None;
         // Build scene in logical dp - scaling happens in GPU vertex upload

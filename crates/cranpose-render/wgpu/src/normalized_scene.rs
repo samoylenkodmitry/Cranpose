@@ -1573,6 +1573,53 @@ fn collect_layer_contents_into(
     layer_surface_rect_cache: &mut HashMap<usize, Rect>,
     layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
 ) {
+    let memo_key = crate::collect_memo::memo_key(
+        layer_offset,
+        inherited_clip,
+        inherited_translated_snap_anchor,
+        translation_context,
+        child_surface_ctx,
+    );
+    if crate::collect_memo::try_reuse(layer.node_id, &memo_key, local_scene) {
+        return;
+    }
+    let memo_base = crate::collect_memo::base_of(local_scene, child_layers.len());
+    collect_layer_contents_into_inner(
+        layer,
+        text_layout,
+        inherited_clip,
+        layer_offset,
+        inherited_translated_snap_anchor,
+        translation_context,
+        child_surface_ctx,
+        local_scene,
+        child_layers,
+        layer_surface_rect_cache,
+        layer_surface_requirements_cache,
+    );
+    crate::collect_memo::capture(
+        layer.node_id,
+        memo_key,
+        local_scene,
+        memo_base,
+        child_layers.len(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_layer_contents_into_inner(
+    layer: &LayerNode,
+    text_layout: &mut impl TextLayoutResolver,
+    inherited_clip: Option<Rect>,
+    layer_offset: Point,
+    inherited_translated_snap_anchor: Option<SnapAnchor>,
+    translation_context: TranslationRenderContext,
+    child_surface_ctx: TranslationRenderContext,
+    local_scene: &mut CompositorScene,
+    child_layers: &mut Vec<ChildLayerComposite>,
+    layer_surface_rect_cache: &mut HashMap<usize, Rect>,
+    layer_surface_requirements_cache: &mut HashMap<usize, LayerSurfaceRequirements>,
+) {
     let local_layer = local_content_layer_for(&layer.graphics_layer);
     let layer_bounds = layer.local_bounds.translate(layer_offset.x, layer_offset.y);
     let layer_clip = layer
