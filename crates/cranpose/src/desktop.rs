@@ -1437,6 +1437,7 @@ impl App {
             Arc::clone(&context.queue),
             surface_format,
             context.adapter_backend,
+            context.adapter.get_downlevel_capabilities().flags,
             scale_factor,
         );
         trace_native_window_timing(format_args!(
@@ -3009,11 +3010,12 @@ fn wgpu_renderer_for_surface(
     queue: Arc<wgpu::Queue>,
     surface_format: wgpu::TextureFormat,
     backend: wgpu::Backend,
+    downlevel: wgpu::DownlevelFlags,
     scale_factor: f64,
 ) -> WgpuRenderer {
     let mut renderer = WgpuRenderer::with_text_system(text_system);
     renderer.set_root_scale(scale_factor as f32);
-    renderer.init_gpu(device, queue, surface_format, backend);
+    renderer.init_gpu(device, queue, surface_format, backend, downlevel);
     renderer
 }
 
@@ -4205,6 +4207,7 @@ impl ApplicationHandler for App {
             Arc::clone(&queue),
             surface_format,
             adapter_info.backend,
+            adapter.get_downlevel_capabilities().flags,
             initial_scale,
         );
 

@@ -154,6 +154,7 @@ pub fn reinit_gpu(renderer: &mut LockedRenderer) -> Result<(), String> {
         Arc::new(queue),
         wgpu::TextureFormat::Bgra8UnormSrgb,
         adapter.get_info().backend,
+        adapter.get_downlevel_capabilities().flags,
     );
     Ok(())
 }
@@ -206,6 +207,7 @@ fn create_headless_renderer_with_format(
         Arc::new(queue),
         surface_format,
         adapter.get_info().backend,
+        adapter.get_downlevel_capabilities().flags,
     );
     Ok(renderer)
 }
