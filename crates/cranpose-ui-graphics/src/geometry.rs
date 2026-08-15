@@ -1271,6 +1271,27 @@ impl DrawScopeDefault {
         }
     }
 
+    /// Like [`Self::finish`], but materializing nothing: the consumer is
+    /// about to re-emit a PREVIOUS frame's saved emission in place of this
+    /// recording (the stale-transition serve on a replay collapse frame),
+    /// so building this frame's primitives — the very cost the serve
+    /// exists to skip — would be pure waste. The recording and
+    /// materialization buffers still return, cleared exactly as
+    /// [`Self::finish`] leaves them, so the command's steady-state
+    /// ping-pong keeps its earned capacity.
+    pub fn finish_recording_only(mut self) -> FinishedRecording {
+        let mut out = std::mem::take(&mut self.out);
+        out.clear();
+        note_recorded_primitive_count(self.size, self.rec.tape.len());
+        self.rec.clear();
+        FinishedRecording {
+            primitives: out,
+            content_markers: self.content_markers,
+            recording: self.rec,
+            dropped: Vec::new(),
+        }
+    }
+
     /// Like [`Self::finish`], but for a verified command: a retained span
     /// whose slot `bypass` approves is NOT materialized — its records cease
     /// to exist as per-frame primitives, which is the entire point of

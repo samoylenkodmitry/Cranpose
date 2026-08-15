@@ -876,6 +876,15 @@ pub struct CommandReplayState {
     /// after every collapse reuses one ~tape-length allocation instead of
     /// growing a fresh one per convergence cycle.
     align_scratch: Vec<Option<usize>>,
+    /// Whether the LAST advance collapsed out of an established capture —
+    /// the `Captured`-phase coverage collapse in [`Self::finish_verify`].
+    /// That is the frame whose emission re-materializes and re-encodes the
+    /// whole tape at once, and therefore the only frame the
+    /// stale-transition serve (scene builder) may replace. Bootstrap
+    /// `AllDynamic` frames (idle snapshot, short tape, retirement) never
+    /// set it: they are not transitions out of retention, so there is
+    /// nothing cheaper to substitute. Cleared at every advance.
+    collapsed_from_captured: bool,
 }
 
 impl Default for CommandReplayState {
@@ -898,6 +907,7 @@ impl Default for CommandReplayState {
             verify_pending: std::collections::VecDeque::new(),
             verify_survivors: Vec::new(),
             align_scratch: Vec::new(),
+            collapsed_from_captured: false,
         }
     }
 }
@@ -930,6 +940,16 @@ impl CommandReplayState {
         self.center
     }
 
+    /// Whether the last [`Self::advance_pooled`] collapsed out of an
+    /// established capture (the `Captured`-phase coverage collapse) — the
+    /// expensive full-rematerialization frame the stale-transition serve
+    /// can replace with the previous frame's emission. False on every
+    /// bootstrap `AllDynamic` frame: an idle snapshot, a short tape, or a
+    /// retirement never had a capture to collapse out of.
+    pub fn collapsed_from_captured(&self) -> bool {
+        self.collapsed_from_captured
+    }
+
     /// Advances the state machine with this frame's recording and returns
     /// what the frame can retain. Phases mirror the flat-list detector:
     /// snapshot on the first sighting, partition into
@@ -955,6 +975,7 @@ impl CommandReplayState {
         current: &CommandRecording,
         pool: Option<&dyn VerifyExecutor>,
     ) -> ReplayOutcome {
+        self.collapsed_from_captured = false;
         if current.tape.len() < MIN_REPLAY_COMMAND_RECORDS {
             self.retire();
             return ReplayOutcome::AllDynamic;
@@ -1376,6 +1397,10 @@ impl CommandReplayState {
         let collapsed = retained_records == 0 || coverage < MIN_COVERAGE_FRACTION;
         let eroded = coverage + RECAPTURE_EROSION < self.capture_coverage
             && self.frames_since_capture >= RECAPTURE_COOLDOWN_FRAMES;
+        // Only the collapse marks the frame as servable-stale: an eroded
+        // frame still emits high-coverage spans and costs an ordinary
+        // frame, so replacing it would trade nothing for a frame of lag.
+        self.collapsed_from_captured = collapsed;
         if collapsed || eroded {
             // Re-snapshot so the next two frames re-partition. Collapse pays
             // immediately; mere erosion waits out the capture cooldown.
@@ -2299,6 +2324,71 @@ mod tests {
             })
             .collect();
         assert!(transforms.windows(2).any(|w| w[0].angle != w[1].angle));
+    }
+
+    /// A ring scene sharing nothing with [`ring_frame`] — different radii,
+    /// band ratio, sweep, counts — so a state captured on one collapses
+    /// whole when fed the other.
+    fn flipped_ring_frame(frame: usize) -> CommandRecording {
+        let mut scope = DrawScopeDefault::new(Size::new(408.0, 408.0));
+        for ring in 0..4 {
+            let rotation = (0.02 + ring as f32 * 0.007) * frame as f32;
+            let radius = 75.0 + ring as f32 * 27.0;
+            for slot in 0..260 {
+                let start = slot as f32 * (std::f32::consts::TAU / 260.0) + rotation;
+                scope.draw_annular_sector(
+                    Brush::solid(Color::WHITE),
+                    CENTER,
+                    radius * 0.75,
+                    radius,
+                    start,
+                    0.015,
+                );
+            }
+        }
+        scope.recorded().clone()
+    }
+
+    #[test]
+    fn only_a_collapse_out_of_capture_sets_the_transition_flag() {
+        let mut state = CommandReplayState::default();
+        // Bootstrap frames never flag: the idle snapshot...
+        assert!(matches!(
+            state.advance(&ring_frame(3, 300, 0, 10)),
+            ReplayOutcome::AllDynamic
+        ));
+        assert!(!state.collapsed_from_captured());
+        // ...the partition/capture frame...
+        assert!(matches!(
+            state.advance(&ring_frame(3, 300, 1, 10)),
+            ReplayOutcome::Spans(_)
+        ));
+        assert!(!state.collapsed_from_captured());
+        // ...and an ordinary verified frame.
+        assert!(matches!(
+            state.advance(&ring_frame(3, 300, 2, 10)),
+            ReplayOutcome::Spans(_)
+        ));
+        assert!(!state.collapsed_from_captured());
+        // The content flip: nothing survives verification, the frame
+        // collapses out of the established capture — the flag's one
+        // trigger, and the frame whose emission would re-materialize the
+        // whole tape.
+        assert!(matches!(
+            state.advance(&flipped_ring_frame(3)),
+            ReplayOutcome::AllDynamic
+        ));
+        assert!(state.collapsed_from_captured());
+        // The next advance clears it: re-convergence frames are ordinary.
+        let _ = state.advance(&flipped_ring_frame(4));
+        assert!(!state.collapsed_from_captured());
+        // A short tape retires the state — a bootstrap path, never a
+        // collapse, even straight after retention.
+        let _ = state.advance(&flipped_ring_frame(5));
+        let short = ring_frame(1, 40, 0, 0);
+        assert!(short.len() < MIN_REPLAY_COMMAND_RECORDS);
+        assert!(matches!(state.advance(&short), ReplayOutcome::AllDynamic));
+        assert!(!state.collapsed_from_captured());
     }
 
     #[test]
