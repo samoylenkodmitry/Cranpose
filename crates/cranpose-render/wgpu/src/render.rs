@@ -843,13 +843,40 @@ fn shape_draw_is_visible_in_viewport(
     viewport: ViewportUniformParams,
     root_scale: f32,
 ) -> bool {
+    let Some(viewport_rect) = viewport_rect_in_logical(viewport, root_scale) else {
+        return false;
+    };
+    shape_draw_is_visible_in_rect(shape, viewport_rect, root_scale)
+}
+
+/// The viewport in logical units, or `None` for a degenerate scale — the
+/// four divides are loop-invariant at every filter call site, so the hot
+/// paths derive this once per batch and test shapes against the result.
+fn viewport_rect_in_logical(viewport: ViewportUniformParams, root_scale: f32) -> Option<Rect> {
+    if !root_scale.is_finite() || root_scale <= 0.0 {
+        return None;
+    }
+    Some(Rect {
+        x: viewport.offset[0] / root_scale,
+        y: viewport.offset[1] / root_scale,
+        width: viewport.width as f32 / root_scale,
+        height: viewport.height as f32 / root_scale,
+    })
+}
+
+/// [`shape_draw_is_visible_in_viewport`] with the logical viewport rect
+/// already derived: identical decision, none of the per-shape divides.
+fn shape_draw_is_visible_in_rect(shape: &DrawShape, viewport_rect: Rect, root_scale: f32) -> bool {
     let snap_delta = shape
         .snap_anchor
         .map(|anchor| snap_delta_for_anchor(anchor, root_scale))
         .unwrap_or_default();
     let rect = quad_bounds(translate_quad(shape.quad, snap_delta));
-    let clip = shape.clip;
-    draw_rect_is_visible_in_viewport(rect, clip, viewport, root_scale)
+    let visible_rect = match shape.clip {
+        Some(clip) => clip.intersect(viewport_rect),
+        None => Some(viewport_rect),
+    };
+    visible_rect.is_some_and(|visible| rect.intersect(visible).is_some())
 }
 
 fn cached_text_glyph_quad(
@@ -11022,11 +11049,15 @@ impl GpuRenderer {
                 height,
                 offset: viewport_offset,
             };
+            let viewport_rect_logical = viewport_rect_in_logical(viewport, root_scale);
             let Some(prepared_shape) = self.prepare_shapes_batch(
                 shapes[start..end]
                     .iter()
                     .map(|(shape, _blend_mode)| shape)
-                    .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+                    .filter(|shape| match viewport_rect_logical {
+                        Some(rect) => shape_draw_is_visible_in_rect(shape, rect, root_scale),
+                        None => false,
+                    }),
                 brushes,
                 root_scale,
                 viewport,
@@ -12735,9 +12766,12 @@ impl GpuRenderer {
             height,
             offset: viewport_offset,
         };
+        let viewport_rect_logical = viewport_rect_in_logical(viewport, root_scale);
         let Some(batch) = self.prepare_shapes_batch(
-            layer_shapes
-                .filter(|shape| shape_draw_is_visible_in_viewport(shape, viewport, root_scale)),
+            layer_shapes.filter(|shape| match viewport_rect_logical {
+                Some(rect) => shape_draw_is_visible_in_rect(shape, rect, root_scale),
+                None => false,
+            }),
             brushes,
             root_scale,
             viewport,
