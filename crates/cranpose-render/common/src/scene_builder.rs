@@ -95,6 +95,17 @@ pub fn update_graph_from_applier_report(
     dirty_nodes: &[NodeId],
     scale: f32,
 ) -> GraphUpdateReport {
+    let mut changed_nodes = Vec::new();
+    update_graph_from_applier_report_into(applier, graph, dirty_nodes, scale, &mut changed_nodes)
+}
+
+pub fn update_graph_from_applier_report_into(
+    applier: &mut MemoryApplier,
+    graph: &mut RenderGraph,
+    dirty_nodes: &[NodeId],
+    scale: f32,
+    changed_nodes: &mut Vec<NodeId>,
+) -> GraphUpdateReport {
     if dirty_nodes.is_empty() {
         return GraphUpdateReport {
             applied: true,
@@ -117,8 +128,10 @@ pub fn update_graph_from_applier_report(
                 };
             };
             let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
+            collect_layer_node_ids(&graph.root, changed_nodes);
             graph.root = root;
             graph.root.recompute_raster_cache_hashes();
+            collect_layer_node_ids(&graph.root, changed_nodes);
             return GraphUpdateReport {
                 applied: true,
                 hit_graph_dirty,
@@ -133,6 +146,7 @@ pub fn update_graph_from_applier_report(
         &mut remaining_dirty_nodes,
         inherited_translated_content_context,
         false,
+        changed_nodes,
     ) {
         Some(report) => report,
         None => {
@@ -168,6 +182,7 @@ fn replace_dirty_layers_from_applier(
     dirty_nodes: &mut HashSet<NodeId>,
     inherited_translated_content_context: bool,
     ancestor_hashed: bool,
+    changed_nodes: &mut Vec<NodeId>,
 ) -> Option<ReplaceDirtyLayersReport> {
     if dirty_nodes.is_empty() {
         return Some(ReplaceDirtyLayersReport::default());
@@ -216,7 +231,9 @@ fn replace_dirty_layers_from_applier(
             }
             report.hit_graph_dirty |= layer_hit_graph_state_dirty(child_layer, &replacement);
             remove_dirty_descendants(&replacement, dirty_nodes);
+            collect_layer_node_ids(child_layer, changed_nodes);
             **child_layer = replacement;
+            collect_layer_node_ids(child_layer, changed_nodes);
             crate::graph_hash::recompute_layer_raster_cache_hashes_under(
                 child_layer,
                 child_ancestor_hashed,
@@ -231,6 +248,7 @@ fn replace_dirty_layers_from_applier(
             dirty_nodes,
             child_inherited_translated_content_context,
             child_ancestor_hashed,
+            changed_nodes,
         )?;
         report.updated |= child_report.updated;
         report.hit_graph_dirty |= child_report.hit_graph_dirty;
@@ -243,6 +261,9 @@ fn replace_dirty_layers_from_applier(
                 RenderNode::Primitive(_) | RenderNode::DrawRun(_) => false,
             });
         crate::graph_hash::refresh_layer_own_raster_cache_hashes(parent, ancestor_hashed);
+        if let Some(node_id) = parent.node_id {
+            changed_nodes.push(node_id);
+        }
     }
 
     Some(report)
@@ -262,6 +283,17 @@ fn layer_hit_graph_state_dirty(previous: &LayerNode, replacement: &LayerNode) ->
         || previous.transform_to_parent != replacement.transform_to_parent
         || previous.clip_rect() != replacement.clip_rect()
         || previous.graphics_layer.shape != replacement.graphics_layer.shape
+}
+
+fn collect_layer_node_ids(layer: &LayerNode, out: &mut Vec<NodeId>) {
+    if let Some(node_id) = layer.node_id {
+        out.push(node_id);
+    }
+    for child in &layer.children {
+        if let RenderNode::Layer(child_layer) = child {
+            collect_layer_node_ids(child_layer, out);
+        }
+    }
 }
 
 fn remove_dirty_descendants(layer: &LayerNode, dirty_nodes: &mut HashSet<NodeId>) {
