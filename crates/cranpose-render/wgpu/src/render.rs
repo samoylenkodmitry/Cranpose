@@ -6757,10 +6757,16 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
             {
                 if *radius_x > 0.0 || *radius_y > 0.0 {
                     let device = self.renderer.device.clone();
-                    let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
-                        "Blur Rounded Mask Scratch",
+                    let (scratch_width, scratch_height) = crate::effect_renderer::blur_scratch_size(
+                        *radius_x,
+                        *radius_y,
                         source.width,
                         source.height,
+                    );
+                    let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
+                        "Blur Rounded Mask Scratch",
+                        scratch_width,
+                        scratch_height,
                     );
                     let scratch = self
                         .recorder
@@ -7776,6 +7782,9 @@ impl GpuRenderer {
             .shrink_retained_capacity(RETAINED_STAGED_UPLOAD_BYTES, RETAINED_STAGED_UPLOAD_COPIES);
 
         self.layer_surface_cache.finish_frame(&self.frame_stats);
+        for target in self.layer_surface_cache.take_recycled() {
+            self.effect_renderer.release_offscreen(target);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         self.retained_bundle_cache.end_frame();
 
@@ -10330,8 +10339,14 @@ impl GpuRenderer {
             return;
         }
 
+        let (scratch_w, scratch_h) = crate::effect_renderer::blur_scratch_size(
+            pixel_radius,
+            pixel_radius,
+            bounds_w,
+            bounds_h,
+        );
         let scratch_descriptor =
-            self.transient_offscreen_descriptor("Shadow Blur Scratch", bounds_w, bounds_h);
+            self.transient_offscreen_descriptor("Shadow Blur Scratch", scratch_w, scratch_h);
         let scratch = frame_encoder.acquire_transient_offscreen(&device, scratch_descriptor);
         {
             self.effect_renderer.encode_blur_scissored_ping_pong_passes(
@@ -10588,8 +10603,14 @@ impl GpuRenderer {
         } else {
             frame_encoder.acquire_transient_offscreen(&device, source_descriptor)
         };
+        let (scratch_w, scratch_h) = crate::effect_renderer::blur_scratch_size(
+            pixel_radius,
+            pixel_radius,
+            bounds_w,
+            bounds_h,
+        );
         let scratch_descriptor =
-            self.transient_offscreen_descriptor("Shape Shadow Blur Scratch", bounds_w, bounds_h);
+            self.transient_offscreen_descriptor("Shape Shadow Blur Scratch", scratch_w, scratch_h);
         let scratch = frame_encoder.acquire_transient_offscreen(&device, scratch_descriptor);
         let mut next_load_op = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let source_outcome = self.encode_shadow_shape_source_passes(

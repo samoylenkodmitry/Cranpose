@@ -43,7 +43,15 @@ fn sample_with_tile_mode(uv: vec2<f32>) -> vec4<f32> {
 }
 
 fn blurred_sample(uv: vec2<f32>) -> vec4<f32> {
-    let texture_size = max(params.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0));
+    let input_size = vec2<f32>(
+        params.texture_size_and_tile_mode.w,
+        params.container_and_feather.w,
+    );
+    let texture_size = select(
+        max(params.texture_size_and_tile_mode.xy, vec2<f32>(1.0, 1.0)),
+        input_size,
+        input_size.x >= 1.0 && input_size.y >= 1.0,
+    );
     let pixel_size = 1.0 / texture_size;
     let dir = params.direction_and_radius.xy;
     let radius = max(dot(dir, params.direction_and_radius.zw), 0.0);

@@ -14,6 +14,21 @@ pub(crate) const MAX_SCENE_RANGE_CACHE_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 pub(crate) const MAX_SCENE_RANGE_CACHE_BYTES: u64 = 32 * 1024 * 1024;
 const RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY: usize = 256;
 
+/// Takes out the values no other holder still references, and keeps the rest
+/// for a later call.
+fn take_unshared<T>(pending: &mut Vec<Rc<T>>) -> Vec<T> {
+    let mut free = Vec::new();
+    let mut held = Vec::new();
+    for value in pending.drain(..) {
+        match Rc::try_unwrap(value) {
+            Ok(owned) => free.push(owned),
+            Err(shared) => held.push(shared),
+        }
+    }
+    *pending = held;
+    free
+}
+
 pub(crate) struct LayerSurfaceCache {
     entries: BoundedLruCache<LayerRasterCacheKey, CachedLayerSurface>,
     scene_range_entries: BoundedLruCache<LayerRasterCacheKey, CachedLayerSurface>,
@@ -21,6 +36,17 @@ pub(crate) struct LayerSurfaceCache {
     bytes: u64,
     scene_range_bytes: u64,
     seen_this_frame: HashSet<usize>,
+    /// Surfaces this cache no longer keys, waiting to go back to the offscreen
+    /// pool.
+    ///
+    /// A layer whose backdrop moves changes its key every frame, so its entry
+    /// is replaced every frame. Dropping the entry here would free the texture
+    /// to the allocator while the pool stays empty of that size, and the next
+    /// acquire creates the texture again: a scrolling list with a frosted bar
+    /// allocated twelve targets and 15 MB per frame on a Mali G76 with a pool
+    /// of twenty-six unused targets. The sizes repeat exactly, so the pool
+    /// serves every one of them once the surfaces come back.
+    recycled: Vec<Rc<OffscreenTarget>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -46,7 +72,20 @@ impl LayerSurfaceCache {
             bytes: 0,
             scene_range_bytes: 0,
             seen_this_frame: HashSet::new(),
+            recycled: Vec::new(),
         }
+    }
+
+    fn recycle(&mut self, entry: CachedLayerSurface) {
+        self.recycled.push(entry.target);
+    }
+
+    /// Hands back the surfaces no other holder still references.
+    ///
+    /// A surface stays in the list while the frame that composites from it is
+    /// still recorded, and is offered again on a later frame.
+    pub(crate) fn take_recycled(&mut self) -> Vec<OffscreenTarget> {
+        take_unshared(&mut self.recycled)
     }
 
     pub(crate) fn get(
@@ -94,6 +133,7 @@ impl LayerSurfaceCache {
                 break;
             };
             self.bytes = self.bytes.saturating_sub(evicted_entry.byte_size);
+            self.recycle(evicted_entry);
             self.remove_identity_for_key(&evicted_key);
             frame_stats.record_layer_cache_eviction();
         }
@@ -106,6 +146,7 @@ impl LayerSurfaceCache {
         let cached_handle = cached.target.clone();
         if let Some((replaced_key, replaced_entry)) = self.entries.push(key, cached) {
             self.bytes = self.bytes.saturating_sub(replaced_entry.byte_size);
+            self.recycle(replaced_entry);
             if replaced_key != key {
                 frame_stats.record_layer_cache_eviction();
             }
@@ -154,6 +195,7 @@ impl LayerSurfaceCache {
             return;
         };
         self.bytes = self.bytes.saturating_sub(entry.byte_size);
+        self.recycle(entry);
         self.remove_identity_for_key(key);
     }
 
@@ -181,6 +223,7 @@ impl LayerSurfaceCache {
             self.scene_range_bytes = self
                 .scene_range_bytes
                 .saturating_sub(evicted_entry.byte_size);
+            self.recycle(evicted_entry);
             frame_stats.record_layer_cache_eviction();
         }
 
@@ -194,6 +237,7 @@ impl LayerSurfaceCache {
             self.scene_range_bytes = self
                 .scene_range_bytes
                 .saturating_sub(replaced_entry.byte_size);
+            self.recycle(replaced_entry);
             frame_stats.record_layer_cache_eviction();
         }
         self.scene_range_bytes = self.scene_range_bytes.saturating_add(byte_size);
@@ -205,6 +249,7 @@ impl LayerSurfaceCache {
             return;
         };
         self.scene_range_bytes = self.scene_range_bytes.saturating_sub(entry.byte_size);
+        self.recycle(entry);
     }
 }
 
@@ -216,8 +261,34 @@ impl Default for LayerSurfaceCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES};
+    use super::{take_unshared, MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES};
     use crate::surface_executor::offscreen_byte_size;
+    use std::rc::Rc;
+
+    /// A layer whose backdrop moves replaces its cache entry every frame. The
+    /// surface it drops has to come back for the offscreen pool, or the
+    /// renderer creates a texture of the same size again on the next frame.
+    #[test]
+    fn a_dropped_surface_comes_back() {
+        let mut pending = vec![Rc::new(7u32), Rc::new(9u32)];
+        let mut taken = take_unshared(&mut pending);
+        taken.sort_unstable();
+        assert_eq!(taken, vec![7, 9]);
+        assert!(pending.is_empty());
+    }
+
+    /// A surface the recorded frame still composites from stays held, and is
+    /// offered again once its last holder lets go.
+    #[test]
+    fn a_surface_in_use_waits_for_its_last_holder() {
+        let held = Rc::new(7u32);
+        let mut pending = vec![Rc::clone(&held), Rc::new(9u32)];
+        assert_eq!(take_unshared(&mut pending), vec![9]);
+        assert_eq!(pending.len(), 1);
+        drop(held);
+        assert_eq!(take_unshared(&mut pending), vec![7]);
+        assert!(pending.is_empty());
+    }
 
     #[test]
     fn scene_range_cache_keeps_multiple_visible_scale_buckets() {

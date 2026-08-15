@@ -314,12 +314,48 @@ fn brush_is_opaque(brush: &Brush) -> bool {
     }
 }
 
+/// Whether a filled rect with these corner radii paints every pixel of `rect`.
+///
+/// A rounded fill misses only its four corner squares, so a band that clears
+/// them on one axis is covered whatever it does on the other: a row's frosted
+/// button sits mid-height, far from the card's rounded corners, and the card
+/// behind it is the whole of the button's backdrop input. Reading that as "not
+/// covered" costs the row its raster cache on every frame it scrolls.
+fn rounded_fill_covers_rect(
+    bounds: Rect,
+    shape: Option<cranpose_ui_graphics::RoundedCornerShape>,
+    rect: Rect,
+) -> bool {
+    if !rect_contains_rect(bounds, rect) {
+        return false;
+    }
+    let Some(shape) = shape else {
+        return true;
+    };
+    let radii = shape.radii();
+    let radius = radii
+        .top_left
+        .max(radii.top_right)
+        .max(radii.bottom_right)
+        .max(radii.bottom_left);
+    if !(radius > 0.0) {
+        return true;
+    }
+    let clears_corners_vertically =
+        rect.y >= bounds.y + radius && rect.y + rect.height <= bounds.y + bounds.height - radius;
+    let clears_corners_horizontally =
+        rect.x >= bounds.x + radius && rect.x + rect.width <= bounds.x + bounds.width - radius;
+    clears_corners_vertically || clears_corners_horizontally
+}
+
 fn shape_opaque_covers_rect(shape: &DrawShape, brushes: &[Brush], rect: Rect) -> bool {
     shape.blend_mode == BlendMode::SrcOver
-        && shape.shape.is_none()
+        && shape.stroke.is_none()
+        && shape.arc.is_none()
         && scene_brush_is_opaque(shape.brush, brushes)
         && clip_contains_rect(shape.clip, rect)
-        && axis_aligned_quad_rect(shape.quad).is_some_and(|bounds| rect_contains_rect(bounds, rect))
+        && axis_aligned_quad_rect(shape.quad)
+            .is_some_and(|bounds| rounded_fill_covers_rect(bounds, shape.shape, rect))
 }
 
 fn image_opaque_covers_rect(image: &ImageDraw, rect: Rect) -> bool {
@@ -443,7 +479,7 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
         .clip
         .and_then(|clip| layer.rect.intersect(clip))
         .unwrap_or(layer.rect);
-    rect.width > 0.0
+    let covered = rect.width > 0.0
         && rect.height > 0.0
         && scene_range_has_opaque_cover_before(
             shapes,
@@ -455,7 +491,35 @@ pub(crate) fn backdrop_underlay_is_covered_by_local_content(
             backdrop_layers,
             layer.z_index,
             rect,
-        )
+        );
+    if !covered && layer_render_diag_enabled() {
+        let prior_event =
+            prior_layer_event_intersects_rect(effect_layers, backdrop_layers, layer.z_index, rect);
+        let ops_below = scene_range_draw_ops(draw_ops, 0, layer.z_index).len();
+        let shapes_below = shapes.iter().filter(|s| s.z_index < layer.z_index).count();
+        log::warn!(
+            "[layer-render-diag] backdrop node={:?} rect=({:.1},{:.1},{:.1},{:.1}) prior_event={prior_event} ops_below={ops_below} shapes_below={shapes_below}",
+            layer.node_id,
+            rect.x,
+            rect.y,
+            rect.width,
+            rect.height,
+        );
+        for shape in shapes.iter().filter(|s| s.z_index < layer.z_index).take(4) {
+            log::warn!(
+                "[layer-render-diag]   shape z={} bounds={:?} rounded={} stroke={} arc={} blend={:?} opaque={} clip_ok={}",
+                shape.z_index,
+                axis_aligned_quad_rect(shape.quad),
+                shape.shape.is_some(),
+                shape.stroke.is_some(),
+                shape.arc.is_some(),
+                shape.blend_mode,
+                scene_brush_is_opaque(shape.brush, brushes),
+                clip_contains_rect(shape.clip, rect),
+            );
+        }
+    }
+    covered
 }
 
 fn layer_source_uses_external_backdrop_underlay(
@@ -2236,6 +2300,14 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
 /// the same admission rules and key, decided from the values captured at
 /// collection time. `child.logical_rect` stands in for the memoized estimate
 /// the node-based path re-reads — it is that memoized value.
+/// Measurement dial only: keeps a layer that holds a frosted descendant in the
+/// raster cache, which shows a stale blur inside that descendant. It answers
+/// "what would the cache be worth here" and must never ship on.
+fn stale_backdrop_cache_probe() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("CRANPOSE_STALE_BACKDROP_CACHE").is_some())
+}
+
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
     root_scale: f32,
@@ -2256,7 +2328,8 @@ fn child_layer_raster_cache_candidate(
     if !cache_is_allowed {
         return None;
     }
-    if has_backdrop_underlay && child.contains_descendant_backdrop {
+    if has_backdrop_underlay && child.contains_descendant_backdrop && !stale_backdrop_cache_probe()
+    {
         return None;
     }
     // A RuntimeShader produces different output every frame from uniforms no
@@ -5437,7 +5510,7 @@ mod tests {
         direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
         direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
         layer_source_cache_key, layer_source_uses_external_backdrop_underlay,
-        layer_surface_dest_quad, layer_surface_translation_context,
+        layer_surface_dest_quad, layer_surface_translation_context, rounded_fill_covers_rect,
         minimum_surface_scale_for_composite, quad_bounds_rect, rects_intersect,
         render_string_scene_hash, retained_render_effect_hash, snapped_backdrop_geometry,
         surface_target_size, visible_backdrop_capture_rect, BackdropPrefixChildContribution,
@@ -5468,6 +5541,49 @@ mod tests {
         RuntimeShader,
     };
     use std::sync::Arc;
+
+    #[test]
+    fn a_rounded_card_covers_what_sits_clear_of_its_corners() {
+        let card = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 344.0,
+            height: 110.0,
+        };
+        let shape = Some(cranpose_ui_graphics::RoundedCornerShape::uniform(20.0));
+        let button = Rect {
+            x: 284.0,
+            y: 33.0,
+            width: 44.0,
+            height: 44.0,
+        };
+        assert!(rounded_fill_covers_rect(card, shape, button));
+
+        let corner = Rect {
+            x: 2.0,
+            y: 2.0,
+            width: 30.0,
+            height: 30.0,
+        };
+        assert!(!rounded_fill_covers_rect(card, shape, corner));
+
+        let full_width_band = Rect {
+            x: 0.0,
+            y: 40.0,
+            width: 344.0,
+            height: 20.0,
+        };
+        assert!(rounded_fill_covers_rect(card, shape, full_width_band));
+
+        let outside = Rect {
+            x: 340.0,
+            y: 40.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        assert!(!rounded_fill_covers_rect(card, shape, outside));
+        assert!(rounded_fill_covers_rect(card, None, corner));
+    }
 
     #[test]
     fn direct_chunk_run_coalescer_merges_consecutive_direct_chunks() {
