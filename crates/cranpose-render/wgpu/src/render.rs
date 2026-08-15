@@ -1333,53 +1333,73 @@ fn gradient_tile_mode_value(tile_mode: TileMode) -> u32 {
     }
 }
 
+/// The base text the shape rewrites below start from: `shape.wgsl` alone, or
+/// — under `CRANPOSE_SOLID_TRIM_VARYINGS` — `shape.wgsl` with the trimmed
+/// solid entries appended. Appending happens BEFORE the storage/array
+/// rewrites so the paint-select injection and the batch-limit resizes land
+/// in the trimmed entries exactly as they land in `vs_main` (the
+/// substitution tests pin five landings); with the trim off the text is the
+/// borrowed shipping constant, byte-identical to what always compiled.
+fn shape_shader_base(solid_trim: bool) -> Cow<'static, str> {
+    if solid_trim {
+        return Cow::Owned(format!(
+            "{}\n{}",
+            shaders::SHADER,
+            shaders::SOLID_TRIM_APPENDIX
+        ));
+    }
+    Cow::Borrowed(shaders::SHADER)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn shape_shader_source(batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
+fn shape_shader_source(batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
+    let base = shape_shader_base(solid_trim);
     // These literals must stay in sync with `shape.wgsl`; a mismatch makes
     // the substitution silently no-op and leaves the shader sized for the
     // downlevel floor.
     if batch_limits.storage {
         return Cow::Owned(
-            shaders::SHADER
-                .replace(
-                    "var<uniform> shape_data: array<ShapeData, 102>;",
-                    "var<storage, read> shape_data: array<ShapeData>;",
-                )
-                .replace(
-                    "var<uniform> gradient_stops: array<GradientStop, 256>;",
-                    // Also inject the retained-paint array here: one mutable
-                    // color per shape, read when `similarity.paint_select`
-                    // is set, so recolor patches upload 16-byte colors
-                    // instead of whole ShapeData records. The base text
-                    // never declares it — uniform-mode devices cannot bind
-                    // storage and never host retained slots.
-                    "var<storage, read> gradient_stops: array<GradientStop>;\n\n\
+            base.replace(
+                "var<uniform> shape_data: array<ShapeData, 102>;",
+                "var<storage, read> shape_data: array<ShapeData>;",
+            )
+            .replace(
+                "var<uniform> gradient_stops: array<GradientStop, 256>;",
+                // Also inject the retained-paint array here: one mutable
+                // color per shape, read when `similarity.paint_select`
+                // is set, so recolor patches upload 16-byte colors
+                // instead of whole ShapeData records. The base text
+                // never declares it — uniform-mode devices cannot bind
+                // storage and never host retained slots.
+                "var<storage, read> gradient_stops: array<GradientStop>;\n\n\
                      @group(1) @binding(3)\n\
                      var<storage, read> paint: array<vec4<f32>>;",
-                )
-                .replace(
-                    "output.color = shape.color;",
-                    "output.color = \
+            )
+            .replace(
+                "output.color = shape.color;",
+                "output.color = \
                      select(shape.color, paint[shape_idx], similarity.paint_select > 0.5);",
-                ),
+            ),
         );
     }
     Cow::Owned(
-        shaders::SHADER
-            .replace(
-                "array<ShapeData, 102>",
-                &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
-            )
-            .replace(
-                "array<GradientStop, 256>",
-                &format!("array<GradientStop, {}>", batch_limits.max_gradient_stops),
-            ),
+        base.replace(
+            "array<ShapeData, 102>",
+            &format!("array<ShapeData, {}>", batch_limits.max_shapes_per_batch),
+        )
+        .replace(
+            "array<GradientStop, 256>",
+            &format!("array<GradientStop, {}>", batch_limits.max_gradient_stops),
+        ),
     )
 }
 
 #[cfg(target_arch = "wasm32")]
-fn shape_shader_source(_batch_limits: ShapeBatchLimits) -> Cow<'static, str> {
-    Cow::Borrowed(shaders::SHADER)
+fn shape_shader_source(_batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow<'static, str> {
+    // wasm keeps the downlevel array lengths verbatim. The trim flag is
+    // env-driven and a browser has no environment to set it in, but the arm
+    // stays honest for any embedder that reaches it.
+    shape_shader_base(solid_trim)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1390,13 +1410,15 @@ fn create_shape_pipeline(
     shape_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
+    solid_trim: bool,
+    vertex_entry: &'static str,
     fragment_entry: &'static str,
     depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Shader"),
         source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
-            shape_shader_source(batch_limits),
+            shape_shader_source(batch_limits, solid_trim),
             depth,
         )),
     });
@@ -1412,10 +1434,10 @@ fn create_shape_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_main"),
+            entry_point: Some(vertex_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            // No vertex buffer: `vs_main` pulls quad corners from ShapeData
-            // by `vertex_index`.
+            // No vertex buffer: `vs_main` (and its trimmed twin `vs_solid`)
+            // pulls quad corners from ShapeData by `vertex_index`.
             buffers: &[],
         },
         fragment: Some(wgpu::FragmentState {
@@ -1461,8 +1483,10 @@ fn create_mesh_shape_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Mesh Shader"),
+        // Mesh slots may carry gradients, so this family always compiles the
+        // full interface — the trimmed entries never pair with `vs_mesh`.
         source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
-            shape_shader_source(batch_limits),
+            shape_shader_source(batch_limits, false),
             depth,
         )),
     });
@@ -1524,13 +1548,15 @@ fn create_instanced_shape_pipeline(
     shape_layout: &wgpu::BindGroupLayout,
     blend_mode: BlendMode,
     batch_limits: ShapeBatchLimits,
+    solid_trim: bool,
+    vertex_entry: &'static str,
     fragment_entry: &'static str,
     depth: bool,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Shape Instanced Shader"),
         source: wgpu::ShaderSource::Wgsl(display_clip::with_content_z(
-            shape_shader_source(batch_limits),
+            shape_shader_source(batch_limits, solid_trim),
             depth,
         )),
     });
@@ -1546,7 +1572,7 @@ fn create_instanced_shape_pipeline(
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
-            entry_point: Some("vs_shape_instanced"),
+            entry_point: Some(vertex_entry),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             // No vertex buffer: like `vs_main`, the corners come from
             // ShapeData; only the shape index source differs
@@ -4504,6 +4530,22 @@ fn instanced_quads_enabled() -> bool {
     std::env::var("CRANPOSE_INSTANCED_QUADS").as_deref() != Ok("0")
 }
 
+/// Trimmed-varying solid pipelines: default OFF, `CRANPOSE_SOLID_TRIM_VARYINGS=1`
+/// (or the `debug.cranpose.solid_trim` property on Android) opts in. When on,
+/// the two `fs_solid` pipeline families compile `vs_solid` /
+/// `vs_solid_instanced` + `fs_solid_trim` — the inter-stage interface without
+/// the eight gradient scalars `fs_solid` never reads (see
+/// `shape_solid_trim.wgsl` for the location discipline). Read at pipeline
+/// build like every lazy pipeline — the property is seeded into the
+/// environment before the render loop starts, and the `PassPipeline` slots
+/// cache the first build, so retained bundles and direct draws always encode
+/// the same selection. Kill switch first: the previous attempt (16a5d312,
+/// reverted in 371dd06a) died on a watch undiagnosed, so the trim ships dark
+/// until a Vulkan-validated device session clears it.
+fn solid_trim_varyings_enabled() -> bool {
+    std::env::var("CRANPOSE_SOLID_TRIM_VARYINGS").as_deref() == Ok("1")
+}
+
 /// Kill switch for the display clip region cull: default ON wherever the
 /// platform reports a cullable visible region
 /// (`set_display_visible_region`), and `CRANPOSE_ROUND_CULL` (or the
@@ -6468,6 +6510,8 @@ impl GpuRenderer {
                 &self.shape_bind_group_layout,
                 blend_mode,
                 self.shape_batch_limits,
+                false,
+                "vs_main",
                 "fs_main",
                 depth,
             )
@@ -6477,10 +6521,20 @@ impl GpuRenderer {
     /// The `fs_solid` twin of [`Self::shape_pipeline`], SrcOver only. Callers
     /// pick it exactly when the draw's shapes carry zero gradient stops; the
     /// coverage math is byte-identical, the gradient machinery is compiled
-    /// out of the fragment stage.
+    /// out of the fragment stage. Under `CRANPOSE_SOLID_TRIM_VARYINGS`
+    /// (re-read per build, see [`solid_trim_varyings_enabled`]) the build
+    /// compiles the trimmed-interface entries instead; either variant encodes
+    /// identically — same layouts, same blend, no vertex buffers — so every
+    /// caller, retained bundles included, is oblivious to the selection.
     fn shape_pipeline_solid(&self) -> &wgpu::RenderPipeline {
         self.pipeline_solid
             .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
+                let solid_trim = solid_trim_varyings_enabled();
+                let (vertex_entry, fragment_entry) = if solid_trim {
+                    ("vs_solid", "fs_solid_trim")
+                } else {
+                    ("vs_main", "fs_solid")
+                };
                 create_shape_pipeline(
                     &self.device,
                     self.surface_format,
@@ -6488,7 +6542,9 @@ impl GpuRenderer {
                     &self.shape_bind_group_layout,
                     BlendMode::SrcOver,
                     self.shape_batch_limits,
-                    "fs_solid",
+                    solid_trim,
+                    vertex_entry,
+                    fragment_entry,
                     depth,
                 )
             })
@@ -6527,6 +6583,8 @@ impl GpuRenderer {
                 &self.shape_bind_group_layout,
                 blend_mode,
                 self.shape_batch_limits,
+                false,
+                "vs_shape_instanced",
                 "fs_main",
                 depth,
             )
@@ -6534,6 +6592,8 @@ impl GpuRenderer {
     }
 
     /// The `fs_solid` twin of [`Self::instanced_pipeline`], SrcOver only.
+    /// Trims its varyings under `CRANPOSE_SOLID_TRIM_VARYINGS` exactly like
+    /// [`Self::shape_pipeline_solid`].
     #[cfg(not(target_arch = "wasm32"))]
     fn instanced_pipeline_solid<'a>(
         &'a self,
@@ -6542,6 +6602,12 @@ impl GpuRenderer {
         instanced
             .pipeline_solid
             .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
+                let solid_trim = solid_trim_varyings_enabled();
+                let (vertex_entry, fragment_entry) = if solid_trim {
+                    ("vs_solid_instanced", "fs_solid_trim")
+                } else {
+                    ("vs_shape_instanced", "fs_solid")
+                };
                 create_instanced_shape_pipeline(
                     &self.device,
                     self.surface_format,
@@ -6549,7 +6615,9 @@ impl GpuRenderer {
                     &self.shape_bind_group_layout,
                     BlendMode::SrcOver,
                     self.shape_batch_limits,
-                    "fs_solid",
+                    solid_trim,
+                    vertex_entry,
+                    fragment_entry,
                     depth,
                 )
             })
@@ -22493,7 +22561,8 @@ mod tests {
 
     #[test]
     fn storage_shape_shader_swaps_the_arrays_to_runtime_sized_storage() {
-        let source = shape_shader_source(ShapeBatchLimits::for_storage_binding_size(128 << 20));
+        let source =
+            shape_shader_source(ShapeBatchLimits::for_storage_binding_size(128 << 20), false);
         assert!(
             source.contains("var<storage, read> shape_data: array<ShapeData>;"),
             "storage-mode shader must declare a runtime-sized shape array"
@@ -22549,13 +22618,117 @@ mod tests {
     }
 
     #[test]
+    fn solid_trim_keeps_the_full_struct_locations_with_the_dropped_slots_vacant() {
+        // Suspect #1 from the reverted first trim (16a5d312 / 371dd06a): the
+        // survivors were renumbered densely. Every surviving varying line in
+        // `VertexOutputSolid` must be byte-identical to its `VertexOutput`
+        // line — same index, same interpolation, same type — and the two
+        // dropped slots must stay vacant.
+        let appendix = shaders::SOLID_TRIM_APPENDIX;
+        for line in [
+            "@location(0) color: vec4<f32>,",
+            "@location(1) uv: vec2<f32>,",
+            "@location(2) world_pos: vec2<f32>,",
+            "@location(3) @interpolate(flat) rect: vec4<f32>,",
+            "@location(4) @interpolate(flat) radii: vec4<f32>,",
+            "@location(6) @interpolate(flat) clip_rect: vec4<f32>,",
+            "@location(7) @interpolate(flat) stroke_params: vec4<f32>,",
+            "@location(8) @interpolate(flat) arc_params: vec4<f32>,",
+        ] {
+            assert!(
+                shaders::SHADER.contains(line),
+                "`{line}` drifted out of VertexOutput; realign the trimmed \
+                 struct line for line before touching anything else"
+            );
+            assert!(
+                appendix.contains(line),
+                "`{line}` must appear verbatim in VertexOutputSolid — the \
+                 surviving varyings keep the full struct's location indices"
+            );
+        }
+        assert!(
+            !appendix.contains("@location(5)"),
+            "location 5 is gradient_params' slot and must stay VACANT — \
+             dense renumbering is the reverted attempt's suspect #1"
+        );
+        assert!(
+            !appendix.contains("@location(9)"),
+            "location 9 is brush's slot and must stay VACANT — dense \
+             renumbering is the reverted attempt's suspect #1"
+        );
+        assert!(
+            !appendix.contains("output.gradient_params") && !appendix.contains("output.brush"),
+            "the trimmed vertex entries must not write the dropped varyings"
+        );
+    }
+
+    #[test]
+    fn solid_trim_source_reaches_every_injection_and_validates() {
+        // The trimmed entries are appended BEFORE `shape_shader_source`'s
+        // rewrites, so the storage rewrite's paint-select injection must land
+        // in all five vertex entries — a solid entry that missed it would
+        // freeze every recolor on the retained slots it draws.
+        let storage =
+            shape_shader_source(ShapeBatchLimits::for_storage_binding_size(128 << 20), true);
+        for entry in [
+            "fn vs_solid(",
+            "fn vs_solid_instanced(",
+            "fn fs_solid_trim(",
+        ] {
+            assert!(
+                storage.contains(entry),
+                "trimmed storage source must carry `{entry}`"
+            );
+        }
+        assert_eq!(
+            storage
+                .matches("select(shape.color, paint[shape_idx], similarity.paint_select > 0.5)")
+                .count(),
+            5,
+            "vs_main, vs_shape_instanced, vs_mesh, vs_solid and \
+             vs_solid_instanced must all read paint under the paint_select \
+             flag"
+        );
+
+        // Both variants a native device can compile must be valid WGSL, flat
+        // and with the display-clip z rewrite applied.
+        let uniform = shape_shader_source(ShapeBatchLimits::desktop(), true);
+        for source in [&storage, &uniform] {
+            for depth in [false, true] {
+                let text = display_clip::with_content_z(Cow::Owned(source.to_string()), depth);
+                let module = naga::front::wgsl::parse_str(&text)
+                    .expect("trimmed shape shader must parse as WGSL");
+                naga::valid::Validator::new(
+                    naga::valid::ValidationFlags::all(),
+                    naga::valid::Capabilities::all(),
+                )
+                .validate(&module)
+                .expect("trimmed shape shader must validate for WebGPU");
+            }
+        }
+    }
+
+    #[test]
+    fn solid_trim_flag_reads_the_documented_variable() {
+        // The parity suite's trimmed arms set exactly this variable; a name
+        // drift here would leave them silently comparing full against full.
+        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        assert!(!solid_trim_varyings_enabled(), "the trim must default OFF");
+        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "1");
+        assert!(solid_trim_varyings_enabled());
+        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "0");
+        assert!(!solid_trim_varyings_enabled());
+        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+    }
+
+    #[test]
     fn uniform_shape_shader_keeps_the_in_record_color_and_no_paint_binding() {
         // The base text serves WebGL-class uniform devices, which can bind
         // no storage buffers: the paint array and its select must exist only
         // in the storage-mode rewrite.
         for source in [
             Cow::Borrowed(shaders::SHADER),
-            shape_shader_source(ShapeBatchLimits::desktop()),
+            shape_shader_source(ShapeBatchLimits::desktop(), false),
         ] {
             assert!(
                 !source.contains("paint: array"),
@@ -22639,7 +22812,7 @@ mod tests {
     #[test]
     fn native_shape_shader_source_uses_native_batch_limits() {
         let limits = ShapeBatchLimits::desktop();
-        let source = shape_shader_source(limits);
+        let source = shape_shader_source(limits, false);
 
         assert!(source.contains(&format!(
             "array<ShapeData, {}>",

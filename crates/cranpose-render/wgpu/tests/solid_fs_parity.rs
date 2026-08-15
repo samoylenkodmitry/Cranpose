@@ -18,6 +18,10 @@
 //! primitives are hand-built `DrawRunNode::new` runs with no command id,
 //! so no feed, no retention, no replay slots: every pass renders through
 //! the fresh-batch path, the exact pipeline-selection site under test.
+//!
+//! `trimmed_varyings_do_not_move_a_byte` is the one environmental exception:
+//! `CRANPOSE_SOLID_TRIM_VARYINGS` latches at pipeline build, so its arms are
+//! whole fresh renderers, per the `instanced_quad_parity` discipline.
 
 mod support;
 
@@ -27,6 +31,7 @@ use cranpose_render_common::graph::{
 };
 use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_render_common::Renderer;
+use cranpose_render_wgpu::DisplayVisibleRegion;
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
 
 const SIZE: u32 = 256;
@@ -221,4 +226,101 @@ fn solid_fragment_entry_matches_fs_main() {
          solid shapes as fs_main does, and a divergence this size is a shading difference \
          rather than the compiler contracting floats differently between two programs"
     );
+}
+
+/// One trim arm: a fresh renderer (the instanced selection latches at
+/// construction, the trim at first solid pipeline build), captured three
+/// ways — the solid scene flat, the solid scene under the display-clip cull
+/// (the depth-variant pipelines), and the mixed scene (the gradient batch
+/// that must keep riding `fs_main` untouched). The renderer drops before the
+/// caller starts the next arm, releasing the GPU lock.
+fn capture_trim_arm() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!("skipping trim parity arm: headless WGPU init failed: {err}");
+            return None;
+        }
+    };
+    let flat = render_arm(&mut renderer, &graph_for(false));
+    let mixed = render_arm(&mut renderer, &graph_for(true));
+    renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
+    std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+    let culled = render_arm(&mut renderer, &graph_for(false));
+    std::env::remove_var("CRANPOSE_ROUND_CULL");
+    renderer.set_display_visible_region(DisplayVisibleRegion::Full);
+    Some((flat, culled, mixed))
+}
+
+/// Zero-byte compare with a diff report worth reading on failure.
+fn assert_no_byte_moved(label: &str, full: &[u8], trimmed: &[u8]) {
+    assert_eq!(full.len(), trimmed.len(), "{label}: capture sizes differ");
+    let mut differing = 0usize;
+    let mut worst = 0u8;
+    for (a, b) in full.iter().zip(trimmed) {
+        let diff = a.abs_diff(*b);
+        if diff > 0 {
+            differing += 1;
+            worst = worst.max(diff);
+        }
+    }
+    assert_eq!(
+        differing, 0,
+        "{label}: {differing} bytes diverged (worst {worst}) between the full \
+         and trimmed varying interfaces — the trim only removes varyings \
+         `fs_solid` never read and reuses the one shared coverage function, \
+         so ANY movement is a wiring defect (renumbered location, misrouted \
+         entry point), not float-contraction noise"
+    );
+}
+
+/// The step-2 bar: `CRANPOSE_SOLID_TRIM_VARYINGS` must not move a byte.
+///
+/// Unlike `solid_fragment_entry_matches_fs_main` above — which compares two
+/// different fragment PROGRAMS and pins a measured contraction envelope —
+/// this compares the same shared coverage body over identically interpolated
+/// inputs, so the bar is zero, on every vertex path: six-vertex `vs_solid`
+/// (`CRANPOSE_INSTANCED_QUADS=0`), instanced `vs_solid_instanced` (default),
+/// and the display-clip depth variants of both (the culled arm). The mixed
+/// captures double as the negative control's negative: a gradient batch must
+/// render identically because it never touches the trimmed pipelines.
+#[test]
+fn trimmed_varyings_do_not_move_a_byte() {
+    for instanced in ["0", "1"] {
+        std::env::set_var("CRANPOSE_INSTANCED_QUADS", instanced);
+        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        let Some((full_flat, full_culled, full_mixed)) = capture_trim_arm() else {
+            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+            return;
+        };
+        // The culled capture must actually have culled something, or its
+        // compare proves nothing about the depth-variant pipelines.
+        assert_ne!(
+            full_flat, full_culled,
+            "instanced={instanced}: the display-clip cull never engaged"
+        );
+
+        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "1");
+        let trimmed = capture_trim_arm();
+        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+        let (trim_flat, trim_culled, trim_mixed) =
+            trimmed.expect("headless WGPU init failed mid-suite");
+
+        assert_no_byte_moved(
+            &format!("instanced={instanced} flat"),
+            &full_flat,
+            &trim_flat,
+        );
+        assert_no_byte_moved(
+            &format!("instanced={instanced} culled"),
+            &full_culled,
+            &trim_culled,
+        );
+        assert_no_byte_moved(
+            &format!("instanced={instanced} mixed"),
+            &full_mixed,
+            &trim_mixed,
+        );
+    }
 }

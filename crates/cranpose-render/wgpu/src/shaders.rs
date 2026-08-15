@@ -2,6 +2,13 @@
 
 pub const SHADER: &str = cranpose_ui_graphics::framework_shaders::SHAPE_WGSL;
 
+/// Trimmed-varying solid entries (`CRANPOSE_SOLID_TRIM_VARYINGS` opt-in):
+/// `shape_shader_source` appends this to [`SHADER`] when the trim is on, so
+/// the default build's modules stay byte-identical to the shipping text.
+/// Never compiled alone.
+pub const SOLID_TRIM_APPENDIX: &str =
+    cranpose_ui_graphics::framework_shaders::SHAPE_SOLID_TRIM_WGSL;
+
 pub const IMAGE_SHADER: &str = cranpose_ui_graphics::framework_shaders::IMAGE_WGSL;
 
 pub const GLYPH_ATLAS_SHADER: &str = cranpose_ui_graphics::framework_shaders::GLYPH_ATLAS_WGSL;
@@ -201,6 +208,26 @@ mod tests {
         if let Err(err) = validate_glsl_portability(super::SHADER, "fs_main", ShaderStage::Fragment)
         {
             panic!("shape.wgsl fragment stage must lower to GLSL ES 300: {err}");
+        }
+    }
+
+    #[test]
+    fn trimmed_shape_shader_validates_for_webgpu_and_lowers_to_glsl() {
+        // The trimmed solid entries ride appended to the base text
+        // (`CRANPOSE_SOLID_TRIM_VARYINGS`). A desktop GL context with the
+        // flag set would lower exactly these two entry points at pipeline
+        // build, so the gap-preserving locations must survive the GLSL
+        // backend too, not just WebGPU validation.
+        let source = format!("{}\n{}", super::SHADER, super::SOLID_TRIM_APPENDIX);
+        if let Err(err) = validate_wgsl_module(&source) {
+            panic!("shape.wgsl + shape_solid_trim.wgsl must validate for WebGPU: {err}");
+        }
+        if let Err(err) = validate_glsl_portability(&source, "vs_solid", ShaderStage::Vertex) {
+            panic!("trimmed solid vertex stage must lower to GLSL ES 300: {err}");
+        }
+        if let Err(err) = validate_glsl_portability(&source, "fs_solid_trim", ShaderStage::Fragment)
+        {
+            panic!("trimmed solid fragment stage must lower to GLSL ES 300: {err}");
         }
     }
 

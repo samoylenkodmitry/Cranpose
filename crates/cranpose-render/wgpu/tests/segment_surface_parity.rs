@@ -260,6 +260,11 @@ fn set_common_env() {
     // the module unit tests pin the gate — so they widen the ratio to
     // admit all three rings.
     std::env::set_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", "6.0");
+    // The cache defaults ON since the watch A/B earned the flip, so every
+    // baseline arm must hold the kill switch shut EXPLICITLY — an unset
+    // variable now measures cache against cache and proves nothing. The
+    // active arms open it with "1" right before their cached run.
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
 }
 
 fn clear_env() {
@@ -303,7 +308,7 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
     assert_eq!(
         stats_before,
         (0, 0, 0, 0, 0),
-        "the cache must stay silent while the kill switch is off"
+        "the cache must stay silent while the kill switch is held shut"
     );
 
     std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
