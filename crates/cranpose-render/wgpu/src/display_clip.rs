@@ -437,6 +437,10 @@ mod tests {
     fn content_z_substitution_matches_every_fused_pass_vertex_stage() {
         for (name, source) in [
             ("shape", crate::shaders::SHADER),
+            // The trimmed solid entries are appended to the shape source
+            // under `CRANPOSE_SOLID_TRIM_VARYINGS`; their z tails must take
+            // the same rewrite so the trimmed depth pipelines cull too.
+            ("shape_solid_trim", crate::shaders::SOLID_TRIM_APPENDIX),
             ("image", crate::shaders::IMAGE_SHADER),
             ("glyph_atlas", crate::shaders::GLYPH_ATLAS_SHADER),
             ("fullscreen_quad", crate::shaders::FULLSCREEN_QUAD_VS),
