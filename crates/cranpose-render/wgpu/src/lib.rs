@@ -20,6 +20,8 @@ mod normalized_scene;
 mod offscreen;
 mod pipeline;
 #[cfg(not(target_arch = "wasm32"))]
+mod pipeline_disk_cache;
+#[cfg(not(target_arch = "wasm32"))]
 mod present_runtime;
 mod render;
 mod run_entry;

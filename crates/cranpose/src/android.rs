@@ -1370,9 +1370,38 @@ fn create_android_gpu_resources(
     log::info!("Found adapter: {:?}", adapter_info.backend);
     let adapter = Arc::new(adapter);
 
+    // Name the pipeline disk cache's blob now that the adapter is known: the
+    // file is keyed by adapter identity (vendor, device, driver strings), so
+    // a driver update or a different GPU starts cold instead of feeding wgpu
+    // a stale blob. `run` decided the directory; a pre-set full path wins.
+    if std::env::var_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
+        if let Some(cache_dir) = std::env::var_os("CRANPOSE_PIPELINE_CACHE_DIR") {
+            let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in adapter_info
+                .driver
+                .bytes()
+                .chain(adapter_info.driver_info.bytes())
+            {
+                driver_hash ^= u64::from(byte);
+                driver_hash = driver_hash.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            let file_name = format!(
+                "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
+                adapter_info.vendor, adapter_info.device,
+            );
+            std::env::set_var(
+                "CRANPOSE_PIPELINE_CACHE_FILE",
+                std::path::Path::new(&cache_dir).join(file_name),
+            );
+        }
+    }
+
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
-        required_features: wgpu::Features::empty(),
+        // The pipeline cache feature where the driver offers it (Vulkan) —
+        // see `pipeline_disk_cache` in the renderer. The intersection stays
+        // empty on adapters without it, so nothing else changes.
+        required_features: adapter.features() & wgpu::Features::PIPELINE_CACHE,
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: crate::gpu_limits::mobile_memory_hints(),
@@ -1717,6 +1746,21 @@ pub fn run(
     // before anything reads it, so the renderer's and app shell's existing
     // environment-gated telemetry is reachable on device.
     crate::android_frame_telemetry::seed_env_from_system_properties();
+
+    // Give the renderer's pipeline disk cache a writable home. Only the
+    // directory is decided here — the blob's file name is keyed by adapter
+    // identity, which is not known until device setup composes
+    // `CRANPOSE_PIPELINE_CACHE_FILE` from this directory. Seeded properties
+    // (above) and pre-set environments win, so tests and debugging can
+    // redirect or disable it.
+    if std::env::var_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
+        if let Some(data_path) = app.internal_data_path() {
+            std::env::set_var(
+                "CRANPOSE_PIPELINE_CACHE_DIR",
+                data_path.join("cranpose_gpu"),
+            );
+        }
+    }
 
     // Threaded present runtime (pipeline step 7b), default OFF: the frame
     // is split at the packet boundary and acquire/encode/submit/present

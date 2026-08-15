@@ -1452,9 +1452,169 @@ fn shape_shader_source(_batch_limits: ShapeBatchLimits, solid_trim: bool) -> Cow
     shape_shader_base(solid_trim)
 }
 
+/// Runs one `create_render_pipeline` call under a timer and logs the result.
+/// First-use creation happens on the render thread behind `get_or_init`,
+/// where a driver backend compile is whole missed frames on slow devices;
+/// the tag names the permutation so a stalled launch names its pipelines.
+pub(crate) fn create_render_pipeline_logged<'a>(
+    device: &wgpu::Device,
+    cache: Option<&'a wgpu::PipelineCache>,
+    tag: &str,
+    mut descriptor: wgpu::RenderPipelineDescriptor<'a>,
+) -> wgpu::RenderPipeline {
+    descriptor.cache = cache;
+    let started = Instant::now();
+    let pipeline = device.create_render_pipeline(&descriptor);
+    log::info!(
+        "[pipeline-create] {tag} {:.1}ms",
+        instant_ms(started, Instant::now())
+    );
+    pipeline
+}
+
+/// `CRANPOSE_PIPELINE_PREWARM=0` (property `debug.cranpose.pipeline_prewarm`)
+/// keeps first-use creation as the only compile path.
+#[cfg(not(target_arch = "wasm32"))]
+fn pipeline_prewarm_enabled() -> bool {
+    std::env::var("CRANPOSE_PIPELINE_PREWARM").as_deref() != Ok("0")
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+struct PipelinePrewarmInputs {
+    device: Arc<wgpu::Device>,
+    cache: Option<wgpu::PipelineCache>,
+    surface_format: wgpu::TextureFormat,
+    uniform_layout: wgpu::BindGroupLayout,
+    shape_layout: wgpu::BindGroupLayout,
+    image_layout: wgpu::BindGroupLayout,
+    batch_limits: ShapeBatchLimits,
+    instanced: bool,
+}
+
+/// Builds the pipelines a first frame reaches for — off the render thread,
+/// concurrent with app startup — and drops them. The point is the shared
+/// device pipeline cache: the render thread's own `get_or_init` creates then
+/// find the driver's compiled code instead of paying for it mid-frame
+/// (measured on a Pixel Watch 3: 661 + 496 + 552 ms for the three shape
+/// pipelines alone, each one swallowed frame). The set is the framework's
+/// own base family with the flags the accessors would latch — same inputs,
+/// same permutations, so the cache keys match. Spawned only when the device
+/// has a pipeline cache; without one, warming another thread's `wgpu`
+/// objects would leave nothing behind for the render thread to find.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_pipeline_prewarm(inputs: PipelinePrewarmInputs) {
+    if !pipeline_prewarm_enabled() {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("cranpose-pl-warm".into())
+        .spawn(move || {
+            let started = Instant::now();
+            let cache = inputs.cache.as_ref();
+            let device = &inputs.device;
+            let solid_trim = solid_trim_varyings_enabled();
+            let mut built = 0_u32;
+            if inputs.instanced {
+                let (vertex_entry, fragment_entry) = if solid_trim {
+                    ("vs_solid_instanced", "fs_solid_trim")
+                } else {
+                    ("vs_shape_instanced", "fs_solid")
+                };
+                drop(create_instanced_shape_pipeline(
+                    device,
+                    cache,
+                    inputs.surface_format,
+                    &inputs.uniform_layout,
+                    &inputs.shape_layout,
+                    BlendMode::SrcOver,
+                    inputs.batch_limits,
+                    solid_trim,
+                    vertex_entry,
+                    fragment_entry,
+                    false,
+                ));
+                drop(create_instanced_shape_pipeline(
+                    device,
+                    cache,
+                    inputs.surface_format,
+                    &inputs.uniform_layout,
+                    &inputs.shape_layout,
+                    BlendMode::SrcOver,
+                    inputs.batch_limits,
+                    false,
+                    "vs_shape_instanced",
+                    "fs_main",
+                    false,
+                ));
+            } else {
+                let (vertex_entry, fragment_entry) = if solid_trim {
+                    ("vs_solid", "fs_solid_trim")
+                } else {
+                    ("vs_main", "fs_solid")
+                };
+                drop(create_shape_pipeline(
+                    device,
+                    cache,
+                    inputs.surface_format,
+                    &inputs.uniform_layout,
+                    &inputs.shape_layout,
+                    BlendMode::SrcOver,
+                    inputs.batch_limits,
+                    solid_trim,
+                    vertex_entry,
+                    fragment_entry,
+                    false,
+                ));
+                drop(create_shape_pipeline(
+                    device,
+                    cache,
+                    inputs.surface_format,
+                    &inputs.uniform_layout,
+                    &inputs.shape_layout,
+                    BlendMode::SrcOver,
+                    inputs.batch_limits,
+                    false,
+                    "vs_main",
+                    "fs_main",
+                    false,
+                ));
+            }
+            built += 2;
+            if inputs.batch_limits.storage {
+                drop(create_mesh_shape_pipeline(
+                    device,
+                    cache,
+                    inputs.surface_format,
+                    &inputs.uniform_layout,
+                    &inputs.shape_layout,
+                    inputs.batch_limits,
+                    false,
+                ));
+                built += 1;
+            }
+            drop(create_glyph_atlas_pipeline(
+                device,
+                cache,
+                inputs.surface_format,
+                &inputs.uniform_layout,
+                &inputs.image_layout,
+                false,
+            ));
+            built += 1;
+            log::info!(
+                "[pipeline-prewarm] {built} pipelines in {:.1} ms",
+                instant_ms(started, Instant::now())
+            );
+        });
+    if let Err(error) = spawned {
+        log::warn!("[pipeline-prewarm] thread failed to spawn: {error}");
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn create_shape_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
@@ -1479,41 +1639,46 @@ fn create_shape_pipeline(
         immediate_size: 0,
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some(vertex_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            // No vertex buffer: `vs_main` (and its trimmed twin `vs_solid`)
-            // pulls quad corners from ShapeData by `vertex_index`.
-            buffers: &[],
+    create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("shape entry={fragment_entry} blend={blend_mode:?} depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(vertex_entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                // No vertex buffer: `vs_main` (and its trimmed twin `vs_solid`)
+                // pulls quad corners from ShapeData by `vertex_index`.
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_state_for_mode(blend_mode)),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state_for_mode(blend_mode)),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 /// Storage-mode pipeline for retained slots that captured a conservative arc
@@ -1525,6 +1690,7 @@ fn create_shape_pipeline(
 #[cfg(not(target_arch = "wasm32"))]
 fn create_mesh_shape_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
@@ -1547,39 +1713,44 @@ fn create_mesh_shape_pipeline(
         immediate_size: 0,
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Retained Mesh Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs_mesh"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[MeshVertex::desc()],
+    create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("mesh depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Retained Mesh Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_mesh"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[MeshVertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 /// Storage-mode pipeline for ordinary shape batches drawn as instanced
@@ -1593,6 +1764,7 @@ fn create_mesh_shape_pipeline(
 #[allow(clippy::too_many_arguments)]
 fn create_instanced_shape_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     shape_layout: &wgpu::BindGroupLayout,
@@ -1617,46 +1789,52 @@ fn create_instanced_shape_pipeline(
         immediate_size: 0,
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Instanced Render Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some(vertex_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            // No vertex buffer: like `vs_main`, the corners come from
-            // ShapeData; only the shape index source differs
-            // (`instance_index` instead of `vertex_index / 6`).
-            buffers: &[],
+    create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("instanced entry={fragment_entry} blend={blend_mode:?} depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Instanced Render Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some(vertex_entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                // No vertex buffer: like `vs_main`, the corners come from
+                // ShapeData; only the shape index source differs
+                // (`instance_index` instead of `vertex_index / 6`).
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(fragment_entry),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_state_for_mode(blend_mode)),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some(fragment_entry),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state_for_mode(blend_mode)),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 fn create_image_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
@@ -1677,43 +1855,49 @@ fn create_image_pipeline(
         immediate_size: 0,
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Image Pipeline"),
-        layout: Some(&image_pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &image_shader,
-            entry_point: Some("image_vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Vertex::desc()],
+    create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("image blend={blend_mode:?} depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Image Pipeline"),
+            layout: Some(&image_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &image_shader,
+                entry_point: Some("image_vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Vertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &image_shader,
+                entry_point: Some("image_fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_state_for_mode(blend_mode)),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &image_shader,
-            entry_point: Some("image_fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state_for_mode(blend_mode)),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 fn create_glyph_atlas_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
     uniform_layout: &wgpu::BindGroupLayout,
     image_layout: &wgpu::BindGroupLayout,
@@ -1733,39 +1917,44 @@ fn create_glyph_atlas_pipeline(
         immediate_size: 0,
     });
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Glyph Atlas Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("glyph_atlas_vs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[Vertex::desc()],
+    create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("glyph-atlas depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Glyph Atlas Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("glyph_atlas_vs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[Vertex::desc()],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("glyph_atlas_fs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("glyph_atlas_fs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend_state_for_mode(BlendMode::SrcOver)),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 /// Pipeline for the display-clip occluder — the tessellated complement
@@ -1778,6 +1967,7 @@ fn create_glyph_atlas_pipeline(
 #[cfg(not(target_arch = "wasm32"))]
 fn create_display_clip_occluder_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     surface_format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1789,53 +1979,58 @@ fn create_display_clip_occluder_pipeline(
         bind_group_layouts: &[],
         immediate_size: 0,
     });
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Display Clip Occluder Pipeline"),
-        layout: Some(&pipeline_layout),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("mask_vs"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: (std::mem::size_of::<[f32; 2]>()) as wgpu::BufferAddress,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
+    create_render_pipeline_logged(
+        device,
+        cache,
+        "occluder",
+        wgpu::RenderPipelineDescriptor {
+            label: Some("Display Clip Occluder Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("mask_vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: (std::mem::size_of::<[f32; 2]>()) as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x2,
+                    }],
                 }],
-            }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("mask_fs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("mask_fs"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::empty(),
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            unclipped_depth: false,
-            polygon_mode: wgpu::PolygonMode::Fill,
-            conservative: false,
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: display_clip::DISPLAY_CLIP_DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Always),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        }),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 #[repr(C)]
@@ -5569,6 +5764,12 @@ pub struct GpuRenderer {
     surface_format: wgpu::TextureFormat,
     adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
+    /// `Some` exactly when the device granted [`wgpu::Features::PIPELINE_CACHE`]
+    /// (Vulkan; the platform layer requests it where the adapter offers it).
+    /// Every pipeline creation in this renderer passes it so the driver can
+    /// reuse compiled code across creates — and across launches once
+    /// [`crate::pipeline_disk_cache`] persists the blob.
+    pipeline_cache: Option<wgpu::PipelineCache>,
     pipeline: PassPipeline,
     pipeline_dst_out: PassPipeline,
     /// `fs_solid` twin of `pipeline` (SrcOver only), for gradient-free draws.
@@ -6307,8 +6508,38 @@ impl GpuRenderer {
                 }],
             });
 
+        // The cache handle costs nothing to create and pays on every device:
+        // in-process, the shape family's permutations share most of their
+        // compiled code; across launches, the persisted blob turns first-use
+        // compiles (2.0 s of render thread inside the first six seconds on a
+        // Pixel Watch 3) into cache hits. `None` where the device lacks the
+        // feature — every creation site then behaves exactly as before.
+        #[cfg(not(target_arch = "wasm32"))]
+        let pipeline_cache = crate::pipeline_disk_cache::load(&device);
+        #[cfg(target_arch = "wasm32")]
+        let pipeline_cache: Option<wgpu::PipelineCache> = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(cache) = pipeline_cache.clone() {
+            crate::pipeline_disk_cache::spawn_persist_schedule(cache);
+            spawn_pipeline_prewarm(PipelinePrewarmInputs {
+                device: Arc::clone(&device),
+                cache: pipeline_cache.clone(),
+                surface_format,
+                uniform_layout: uniform_bind_group_layout.clone(),
+                shape_layout: shape_bind_group_layout.clone(),
+                image_layout: image_bind_group_layout.clone(),
+                batch_limits: shape_batch_limits,
+                instanced: instanced_quads.is_some(),
+            });
+        }
+
         let effects_started = Instant::now();
-        let effect_renderer = EffectRenderer::new(&device, surface_format, adapter_backend);
+        let effect_renderer = EffectRenderer::new(
+            &device,
+            pipeline_cache.clone(),
+            surface_format,
+            adapter_backend,
+        );
         let effects_ms = instant_ms(effects_started, Instant::now());
 
         let renderer = Self {
@@ -6321,6 +6552,7 @@ impl GpuRenderer {
             surface_format,
             adapter_backend,
             shape_batch_limits,
+            pipeline_cache,
             pipeline,
             pipeline_dst_out,
             pipeline_solid,
@@ -6608,12 +6840,16 @@ impl GpuRenderer {
             return;
         };
         debug_assert_eq!((*size_w, *size_h), (width, height));
-        let pipeline = self
-            .display_clip
-            .occluder_pipeline
-            .get_or_init(self.adapter_backend, || {
-                create_display_clip_occluder_pipeline(&self.device, self.surface_format)
-            });
+        let pipeline =
+            self.display_clip
+                .occluder_pipeline
+                .get_or_init(self.adapter_backend, || {
+                    create_display_clip_occluder_pipeline(
+                        &self.device,
+                        self.pipeline_cache.as_ref(),
+                        self.surface_format,
+                    )
+                });
         render_pass.set_scissor_rect(0, 0, width, height);
         render_pass.set_pipeline(pipeline);
         render_pass.set_vertex_buffer(0, resources.occluder_vertex_buffer.slice(..));
@@ -6629,6 +6865,7 @@ impl GpuRenderer {
         resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_shape_pipeline(
                 &self.device,
+                self.pipeline_cache.as_ref(),
                 self.surface_format,
                 &self.uniform_bind_group_layout,
                 &self.shape_bind_group_layout,
@@ -6661,6 +6898,7 @@ impl GpuRenderer {
                 };
                 create_shape_pipeline(
                     &self.device,
+                    self.pipeline_cache.as_ref(),
                     self.surface_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
@@ -6680,6 +6918,7 @@ impl GpuRenderer {
             .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
                 create_mesh_shape_pipeline(
                     &self.device,
+                    self.pipeline_cache.as_ref(),
                     self.surface_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
@@ -6702,6 +6941,7 @@ impl GpuRenderer {
         resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_instanced_shape_pipeline(
                 &self.device,
+                self.pipeline_cache.as_ref(),
                 self.surface_format,
                 &self.uniform_bind_group_layout,
                 &self.shape_bind_group_layout,
@@ -6734,6 +6974,7 @@ impl GpuRenderer {
                 };
                 create_instanced_shape_pipeline(
                     &self.device,
+                    self.pipeline_cache.as_ref(),
                     self.surface_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
@@ -6755,6 +6996,7 @@ impl GpuRenderer {
         resource.get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
             create_image_pipeline(
                 &self.device,
+                self.pipeline_cache.as_ref(),
                 self.surface_format,
                 &self.uniform_bind_group_layout,
                 &self.image_bind_group_layout,
@@ -6769,6 +7011,7 @@ impl GpuRenderer {
             .get_or_init(self.adapter_backend, self.pass_depth(), |depth| {
                 create_glyph_atlas_pipeline(
                     &self.device,
+                    self.pipeline_cache.as_ref(),
                     self.surface_format,
                     &self.uniform_bind_group_layout,
                     &self.image_bind_group_layout,
@@ -6785,6 +7028,7 @@ impl GpuRenderer {
             |depth| {
                 create_glyph_atlas_pipeline(
                     &self.device,
+                    self.pipeline_cache.as_ref(),
                     self.surface_format,
                     &self.retained_glyph_uniform_bind_group_layout,
                     &self.image_bind_group_layout,
@@ -9345,7 +9589,7 @@ impl GpuRenderer {
         let mut rendered_any = false;
         let mut pass_count = 0_u32;
         let mut next_load_op = load_op;
-        let encode_started = std::time::Instant::now();
+        let encode_started = Instant::now();
         let mut partition_count = 0_u64;
         for partition in partitions {
             partition_count += 1;

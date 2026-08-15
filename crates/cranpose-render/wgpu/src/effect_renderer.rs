@@ -22,6 +22,9 @@ use std::cell::Cell;
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
+    /// The device's shared pipeline cache (see `GpuRenderer`); every lazy
+    /// effect pipeline creation passes it.
+    pipeline_cache: Option<wgpu::PipelineCache>,
 
     blur_shader: wgpu::ShaderModule,
     blur_rounded_mask_shader: wgpu::ShaderModule,
@@ -450,6 +453,7 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 #[allow(clippy::too_many_arguments)]
 fn create_fullscreen_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -458,41 +462,48 @@ fn create_fullscreen_pipeline(
     blend: wgpu::BlendState,
     depth: bool,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("fullscreen_vs"),
-            buffers: &[],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+    crate::render::create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("effect {label} entry={fragment_entry} depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("fullscreen_vs"),
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment_entry),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment_entry),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_projective_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -500,50 +511,56 @@ fn create_projective_pipeline(
     blend: wgpu::BlendState,
     depth: bool,
 ) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("projective_blit_vs"),
-            buffers: &[wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
+    crate::render::create_render_pipeline_logged(
+        device,
+        cache,
+        &format!("effect {label} depth={depth}"),
+        wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("projective_blit_vs"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ProjectiveBlitVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x2,
+                    }],
                 }],
-            }],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("projective_blit_fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: display_clip::content_depth_state(depth),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("projective_blit_fs"),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleStrip,
-            strip_index_format: None,
-            front_face: wgpu::FrontFace::Ccw,
-            cull_mode: None,
-            ..Default::default()
-        },
-        depth_stencil: display_clip::content_depth_state(depth),
-        multisample: wgpu::MultisampleState::default(),
-        multiview_mask: None,
-        cache: None,
-    })
+    )
 }
 
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
+        pipeline_cache: Option<wgpu::PipelineCache>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
     ) -> Self {
@@ -692,7 +709,8 @@ impl EffectRenderer {
         });
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
-            shader_cache: ShaderPipelineCache::new(adapter_backend),
+            shader_cache: ShaderPipelineCache::new(adapter_backend, pipeline_cache.clone()),
+            pipeline_cache,
             blur_shader,
             blur_rounded_mask_shader,
             blur_pipeline_layout,
@@ -787,6 +805,7 @@ impl EffectRenderer {
         self.blur_pipeline.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 "Blur Pipeline",
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
@@ -803,6 +822,7 @@ impl EffectRenderer {
             .get_or_init(self.adapter_backend, || {
                 create_fullscreen_pipeline(
                     device,
+                    self.pipeline_cache.as_ref(),
                     "Blur Rounded Mask Pipeline",
                     &self.blur_pipeline_layout,
                     &self.blur_rounded_mask_shader,
@@ -818,6 +838,7 @@ impl EffectRenderer {
         self.offset_pipeline.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 "Offset Pipeline",
                 &self.offset_pipeline_layout,
                 &self.offset_shader,
@@ -863,6 +884,7 @@ impl EffectRenderer {
             });
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 label,
                 &self.blit_pipeline_layout,
                 depth_shader.as_ref().unwrap_or(&self.blit_shader),
@@ -923,6 +945,7 @@ impl EffectRenderer {
             });
             create_projective_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 label,
                 &self.projective_blit_pipeline_layout,
                 depth_shader
