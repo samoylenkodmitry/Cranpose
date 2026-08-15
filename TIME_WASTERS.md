@@ -641,3 +641,28 @@ its timing as production-performance evidence.
   commit) lifts both sides equally and cannot. Rerun the job before treating a
   failure here as a regression, and do not "fix" it by widening the bound: the
   ratio is the guard.
+- No local gate compiles the browser, and a release is where you find out
+  (2026-08-14/15): v0.1.91 published to crates.io with `cranpose-render-wgpu`
+  failing to build for wasm32. `cargo test --workspace`, `cargo clippy
+  --workspace --all-targets` and `cargo check --workspace --all-features` all
+  build the HOST target and were green. The only thing in the tree that compiles
+  the browser is `apps/desktop-demo/build-web.sh`, which runs in the `wasm build
+  (linux)` CI job — so the break surfaced from the Pages deploy of a release
+  that had already published. Two causes, same shape: `init_gpu` grew a
+  `DownlevelFlags` argument and every host caller was updated except `web.rs`,
+  and `static_span_stats` read a `#[cfg(not(target_arch = "wasm32"))]` field
+  without carrying the gate its siblings all have.
+  Run `./build-web.sh --fast` before every tag. And note that `gh pr merge
+  --admin` bypasses the `wasm build (linux)` job, which is exactly the check
+  that would otherwise catch this class.
+- The release tag must be at `main` HEAD when the workflow READS it, not when
+  you create it (2026-08-14/15): merges land continuously here, and three
+  separate releases hit "Tag vX.Y.Z must be created from main HEAD" because
+  something merged in the seconds or minutes after tagging. The recovery is
+  cheap — verify the new HEAD, `git tag -f -a`, `git push -f origin <tag>` —
+  and the workflow's version rewrite is idempotent, so the second run
+  short-circuits at "No version changes needed" and publishes. The trap is
+  assuming a queued Publish means it is fine. Also watch for a branch that
+  hand-bumps the workspace version (#427 carried "Version 0.1.92 across the
+  workspace"): harmless while the numbers agree with the tag, a conflict the
+  moment they do not.
