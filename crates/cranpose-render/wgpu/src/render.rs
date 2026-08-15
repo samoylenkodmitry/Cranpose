@@ -17361,7 +17361,7 @@ mod tests {
 
     #[test]
     fn a_frosted_layer_keeps_its_own_surface() {
-        let mut frosted = frosted_layer(
+        let frosted = frosted_layer(
             Rect {
                 x: 0.0,
                 y: 0.0,
@@ -17370,8 +17370,6 @@ mod tests {
             },
             Point::new(10.0, 6.0),
         );
-        frosted.graphics_layer.alpha = 0.5;
-        frosted.isolation.group_opacity = true;
         let root = test_layer(
             Rect {
                 x: 0.0,
