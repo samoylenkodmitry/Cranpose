@@ -77,7 +77,13 @@
 //! (`CRANPOSE_SEGMENT_SURFACE_RECOLOR_RATE`), which admits every ring and
 //! rejects the twinkle field with a wide margin on both sides.
 //!
-//! Kill switch: default OFF; `CRANPOSE_SEGMENT_SURFACE=1` opts in (property
+//! Kill switch: DEFAULT ON, earned by measurement — Pixel Watch 3 mega
+//! scene, alternating pairs off-charger: ON 59.01/58.53 fps vs OFF
+//! 53.73/52.37 (+5.3/+6.2, ten times the protocol noise floor), with
+//! engagement proven live (captures + composites counting, ~2.1k churn
+//! rejections keeping the twinkle field direct, zero economics
+//! rejections at the default ratio) and the full scene visually intact.
+//! `CRANPOSE_SEGMENT_SURFACE=0` disables (property
 //! `debug.cranpose.segment_surface`). The watch A/B earns any flip.
 
 use crate::offscreen::OffscreenTarget;
@@ -120,7 +126,7 @@ const CAPTURE_PAD_PX: f32 = 2.0;
 /// opts in. Mirrored from `debug.cranpose.segment_surface` on Android. Read
 /// per frame, not latched, so the parity harness can flip it between arms.
 fn segment_surface_enabled() -> bool {
-    std::env::var("CRANPOSE_SEGMENT_SURFACE").as_deref() == Ok("1")
+    std::env::var("CRANPOSE_SEGMENT_SURFACE").as_deref() != Ok("0")
 }
 
 fn env_f32(name: &str, default: f32) -> f32 {
