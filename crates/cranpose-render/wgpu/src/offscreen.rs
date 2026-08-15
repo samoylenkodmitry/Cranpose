@@ -103,6 +103,44 @@ impl OffscreenTarget {
     pub(crate) fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
+
+    pub(crate) fn from_readable_texture(
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+    ) -> Option<Self> {
+        if !texture_supports_backdrop_reads(texture.usage()) {
+            return None;
+        }
+        Some(Self {
+            texture: texture.clone(),
+            view: view.clone(),
+            width: texture.width(),
+            height: texture.height(),
+            cached_bind_group: OnceCell::new(),
+        })
+    }
+}
+
+pub(crate) fn texture_supports_backdrop_reads(usage: wgpu::TextureUsages) -> bool {
+    usage.contains(wgpu::TextureUsages::COPY_SRC)
+        && usage.contains(wgpu::TextureUsages::TEXTURE_BINDING)
+}
+
+pub(crate) fn capture_root_target_reads() -> bool {
+    cranpose_core::env_flag!("CRANPOSE_CAPTURE_ROOT_TARGET_READS")
+}
+
+pub fn display_surface_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
+    let mut usages = wgpu::TextureUsages::RENDER_ATTACHMENT;
+    for read in [
+        wgpu::TextureUsages::COPY_SRC,
+        wgpu::TextureUsages::TEXTURE_BINDING,
+    ] {
+        if supported.contains(read) {
+            usages |= read;
+        }
+    }
+    usages
 }
 
 /// Pool of reusable offscreen render targets.
@@ -297,6 +335,39 @@ mod tests {
             (2..=8).contains(&held),
             "the budget should hold a few full-screen surfaces, not dozens: {held}"
         );
+    }
+
+    #[test]
+    fn a_surface_asks_for_the_reads_the_adapter_offers() {
+        let all = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST;
+        let asked = display_surface_usages(all);
+        assert!(asked.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
+        assert!(asked.contains(wgpu::TextureUsages::COPY_SRC));
+        assert!(asked.contains(wgpu::TextureUsages::TEXTURE_BINDING));
+        assert!(!asked.contains(wgpu::TextureUsages::COPY_DST));
+        assert!(texture_supports_backdrop_reads(asked));
+    }
+
+    #[test]
+    fn a_surface_that_offers_no_read_keeps_the_attachment_alone() {
+        let asked = display_surface_usages(wgpu::TextureUsages::RENDER_ATTACHMENT);
+        assert_eq!(asked, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        assert!(!texture_supports_backdrop_reads(asked));
+    }
+
+    #[test]
+    fn one_read_alone_is_not_enough_for_a_backdrop() {
+        let copy_only =
+            display_surface_usages(wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC);
+        assert!(copy_only.contains(wgpu::TextureUsages::COPY_SRC));
+        assert!(!texture_supports_backdrop_reads(copy_only));
+        let sample_only = display_surface_usages(
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        assert!(!texture_supports_backdrop_reads(sample_only));
     }
 
     #[test]

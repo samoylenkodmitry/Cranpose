@@ -81,6 +81,7 @@ pub(crate) struct RendererFrontend {
     pub(crate) layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     pub(crate) overlay_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
+    pub(crate) root_target_reads: bool,
 }
 
 impl RendererFrontend {
@@ -100,6 +101,7 @@ impl RendererFrontend {
             layer_surface_requirements_cache: HashMap::new(),
             overlay_surface_requirements_cache: HashMap::new(),
             changed_nodes: Vec::new(),
+            root_target_reads: false,
         }
     }
 
@@ -220,8 +222,8 @@ impl RendererFrontend {
                 recycled_scene,
             );
             self.direct_scene_capacity = collected.scene.capacity_hint();
-            if root_direct_scene_events_are_supported(&collected.scene)
-                && direct_root_child_underlays_are_supported(&collected)
+            if root_direct_scene_events_are_supported(&collected.scene, self.root_target_reads)
+                && direct_root_child_underlays_are_supported(&collected, self.root_target_reads)
             {
                 Some(collected)
             } else {
