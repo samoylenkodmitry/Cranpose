@@ -1131,9 +1131,14 @@ fn create_android_gpu_resources(
     log::info!("Found adapter: {:?}", adapter_info.backend);
     let adapter = Arc::new(adapter);
 
+    let timing_features =
+        cranpose_render_wgpu::gpu_timing::requested_features(adapter.features());
+    if !timing_features.is_empty() {
+        log::info!("[gpu-pass] the android device asks for timestamp queries");
+    }
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("Android Device"),
-        required_features: wgpu::Features::empty(),
+        required_features: timing_features,
         required_limits: crate::gpu_limits::mobile_device_limits(adapter.limits()),
         experimental_features: wgpu::ExperimentalFeatures::disabled(),
         memory_hints: crate::gpu_limits::mobile_memory_hints(),

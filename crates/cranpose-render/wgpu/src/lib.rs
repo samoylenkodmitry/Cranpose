@@ -12,6 +12,7 @@ mod frame_graph;
 mod frame_packet;
 mod frontend;
 pub(crate) mod gpu_stats;
+pub mod gpu_timing;
 mod layer_events;
 mod layer_surface_cache;
 mod lazy_resource;

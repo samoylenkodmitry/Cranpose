@@ -7,6 +7,7 @@ use crate::frame_graph::{
     FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, UploadAllocatorId,
     UploadAllocatorSpec,
 };
+use crate::gpu_timing::GpuSpanKind;
 use crate::offscreen::{OffscreenPool, OffscreenTarget};
 use crate::shader_cache::{RuntimeShaderPipelineMode, ShaderPipelineCache};
 use crate::shaders;
@@ -1027,6 +1028,15 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
         self.note_offscreen_fill(scissor, None, dest_size);
+        let span = recorder.begin_gpu_span(
+            if horizontal {
+                GpuSpanKind::BlurHorizontal
+            } else {
+                GpuSpanKind::BlurVertical
+            },
+            dest_size.0,
+            dest_size.1,
+        );
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1054,6 +1064,8 @@ impl EffectRenderer {
             pass.set_scissor_rect(x, y, w, h);
         }
         pass.draw(0..4, 0..1);
+        drop(pass);
+        recorder.end_gpu_span(span);
     }
 
     fn blur_uniforms(
@@ -1244,6 +1256,11 @@ impl EffectRenderer {
             &self.debug_upload_bytes,
         );
         self.note_composite_fill(scissor, Some(dest_viewport), (source.width, source.height));
+        let span = recorder.begin_gpu_span(
+            GpuSpanKind::BlurRoundedMask,
+            dest_viewport.2.max(0.0) as u32,
+            dest_viewport.3.max(0.0) as u32,
+        );
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1269,6 +1286,8 @@ impl EffectRenderer {
             pass.set_scissor_rect(x, y, w, h);
         }
         pass.draw(0..4, 0..1);
+        drop(pass);
+        recorder.end_gpu_span(span);
         true
     }
 
@@ -1817,6 +1836,15 @@ impl EffectRenderer {
             (source.width, source.height),
         );
 
+        let span = recorder.begin_gpu_span(
+            GpuSpanKind::Composite,
+            options
+                .dest_viewport
+                .map_or(source.width, |viewport| viewport.2.max(0.0) as u32),
+            options
+                .dest_viewport
+                .map_or(source.height, |viewport| viewport.3.max(0.0) as u32),
+        );
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1841,6 +1869,8 @@ impl EffectRenderer {
             pass.set_scissor_rect(x, y, w, h);
         }
         pass.draw(0..4, 0..1);
+        drop(pass);
+        recorder.end_gpu_span(span);
     }
 
     pub(crate) fn encode_composite_batch_to_view_pass<C: FrameCommandRecorder>(
@@ -1858,6 +1888,7 @@ impl EffectRenderer {
 
         let prepared = self.prepare_composite_batch_draws(recorder, device, load_op, items);
 
+        let span = recorder.begin_gpu_span(GpuSpanKind::Composite, viewport.0, viewport.1);
         let mut pass = recorder
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1878,6 +1909,8 @@ impl EffectRenderer {
         for draw in &prepared {
             self.draw_prepared_composite(&mut pass, viewport, draw);
         }
+        drop(pass);
+        recorder.end_gpu_span(span);
     }
 
     pub(crate) fn prepare_composite_batch_draws<'a, C: FrameCommandRecorder>(

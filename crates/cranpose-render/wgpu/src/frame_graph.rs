@@ -1,3 +1,4 @@
+use crate::gpu_timing::{GpuFrameTimer, GpuSpanId, GpuSpanKind};
 use crate::offscreen::OffscreenTarget;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
@@ -7,6 +8,7 @@ use web_time::Instant;
 pub(crate) struct WgpuFrameGraphExecutor {
     transient_textures: TransientTexturePool,
     upload_allocators: FrameUploadAllocators,
+    gpu_timer: GpuFrameTimer,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -332,6 +334,7 @@ pub(crate) struct PassContext<'pass> {
     transient_texture_bytes: &'pass mut u64,
     staged_upload_cursor: &'pass mut u64,
     pass_count: u32,
+    gpu_timer: &'pass mut GpuFrameTimer,
 }
 
 fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
@@ -449,6 +452,7 @@ impl WgpuFrameGraphExecutor {
             transient_releases: PendingTransientReleases::new(&mut self.transient_textures),
             transient_texture_bytes: 0,
             pass_count: 0,
+            gpu_timer: &mut self.gpu_timer,
         }
     }
 
@@ -466,6 +470,7 @@ impl WgpuFrameGraphExecutor {
         let mut staged_upload_cursor = 0u64;
         let mut pending_transient_releases = Vec::new();
         let mut encoder = Self::create_command_encoder(device, graph.label);
+        self.gpu_timer.begin_frame(device, queue, &mut encoder);
 
         if graph.passes.len() == 1 {
             let pass = graph
@@ -526,7 +531,9 @@ impl WgpuFrameGraphExecutor {
             release_pending_transients(&mut self.transient_textures, pending_transient_releases);
             return Err(FrameGraphError::NoDeclaredPasses);
         }
+        self.gpu_timer.end_frame(&mut encoder);
         let submission = Self::submit_with_timing(queue, encoder);
+        self.gpu_timer.after_submit(device);
         release_pending_transients(&mut self.transient_textures, pending_transient_releases);
         let retained_texture_bytes = self.retained_texture_bytes();
         Ok(FrameGraphExecution {
@@ -564,6 +571,7 @@ impl WgpuFrameGraphExecutor {
             transient_texture_bytes,
             staged_upload_cursor,
             pass_count: 0,
+            gpu_timer: &mut self.gpu_timer,
         };
         let recorded_pass_count = pass.encode(pass_index, &mut context)?;
         log_frame_graph_pass_timing(pass_start, pass_label, pass_index);
@@ -671,6 +679,15 @@ pub(crate) trait FrameCommandRecorder {
     }
 
     fn recorded_pass_count(&self) -> u32;
+
+    fn begin_gpu_span(
+        &mut self,
+        kind: GpuSpanKind,
+        width: u32,
+        height: u32,
+    ) -> Option<GpuSpanId>;
+
+    fn end_gpu_span(&mut self, span: Option<GpuSpanId>);
 }
 
 impl FrameCommandRecorder for PassContext<'_> {
@@ -741,6 +758,14 @@ impl FrameCommandRecorder for PassContext<'_> {
     fn recorded_pass_count(&self) -> u32 {
         self.pass_count
     }
+
+    fn begin_gpu_span(&mut self, kind: GpuSpanKind, width: u32, height: u32) -> Option<GpuSpanId> {
+        self.gpu_timer.begin_span(self.encoder, kind, width, height)
+    }
+
+    fn end_gpu_span(&mut self, span: Option<GpuSpanId>) {
+        self.gpu_timer.end_span(self.encoder, span);
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -749,6 +774,7 @@ pub(crate) struct WgpuFrameEncoder<'a> {
     encoder: wgpu::CommandEncoder,
     uploads: &'a mut FrameUploadAllocators,
     transient_releases: PendingTransientReleases<'a>,
+    gpu_timer: &'a mut GpuFrameTimer,
     transient_texture_bytes: u64,
     pass_count: u32,
 }
@@ -892,6 +918,15 @@ impl FrameCommandRecorder for WgpuFrameEncoder<'_> {
 
     fn recorded_pass_count(&self) -> u32 {
         Self::recorded_pass_count(self)
+    }
+
+    fn begin_gpu_span(&mut self, kind: GpuSpanKind, width: u32, height: u32) -> Option<GpuSpanId> {
+        self.gpu_timer
+            .begin_span(&mut self.encoder, kind, width, height)
+    }
+
+    fn end_gpu_span(&mut self, span: Option<GpuSpanId>) {
+        self.gpu_timer.end_span(&mut self.encoder, span);
     }
 }
 

@@ -69,7 +69,7 @@ fn property_flag(name: &str) -> bool {
 ///
 /// Property names are capped at 32 bytes by `PROP_NAME_MAX`, which is why they
 /// are abbreviations rather than the full variable name.
-const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 29] = [
+const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 30] = [
     ("debug.cranpose.no_backdrop", "CRANPOSE_NO_BACKDROP"),
     ("debug.cranpose.blur_scale", "CRANPOSE_BLUR_SCALE"),
     ("debug.cranpose.root_direct", "CRANPOSE_ROOT_DIRECT_DIAG"),
@@ -135,6 +135,7 @@ const PROPERTY_BACKED_ENV_VARS: [(&str, &str); 29] = [
     ("debug.cranpose.async_haptics", "CRANPOSE_ASYNC_HAPTICS"),
     ("debug.cranpose.fill_diag", "CRANPOSE_FILL_DIAG"),
     ("debug.cranpose.static_span", "CRANPOSE_STATIC_SPAN"),
+    ("debug.cranpose.gpu_pass", "CRANPOSE_GPU_PASS_TIMING"),
 ];
 
 /// Copies the [`PROPERTY_BACKED_ENV_VARS`] properties that are set into the

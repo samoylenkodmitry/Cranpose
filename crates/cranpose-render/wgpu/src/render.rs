@@ -101,6 +101,7 @@ use web_time::Instant;
 
 use crate::gpu_stats;
 use crate::gpu_stats::gpu_stats_enabled;
+use crate::gpu_timing::GpuSpanKind;
 use crate::pipeline::push_layer_shadow;
 
 /// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
@@ -9079,6 +9080,8 @@ impl GpuRenderer {
 
             let use_retained_bundles = retained_bundles_enabled();
             let mut retained_encode_ms = 0.0_f64;
+            let content_span =
+                frame_encoder.begin_gpu_span(GpuSpanKind::Content, width, height);
             {
                 let mut render_pass =
                     frame_encoder
@@ -9217,6 +9220,7 @@ impl GpuRenderer {
                     }
                 }
             }
+            frame_encoder.end_gpu_span(content_span);
             // Span capture (miss frames whose leading run proved stable):
             // re-render JUST the span shapes into the pooled offscreen,
             // through the IDENTICAL pipelines at identical device
