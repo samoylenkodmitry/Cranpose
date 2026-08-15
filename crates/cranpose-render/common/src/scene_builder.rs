@@ -2328,6 +2328,98 @@ mod tests {
     }
 
     #[test]
+    fn scrolled_list_under_a_composited_layer_keeps_the_hashes_a_full_walk_leaves() {
+        let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
+        let scroll_holder_for_comp = scroll_holder.clone();
+
+        let mut composition = cranpose_ui::run_test_composition(move || {
+            let scroll_state =
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            cranpose_ui::Box(
+                Modifier::empty()
+                    .size_points(240.0, 320.0)
+                    .graphics_layer(|| GraphicsLayer {
+                        alpha: 0.6,
+                        ..GraphicsLayer::default()
+                    }),
+                cranpose_ui::BoxSpec::default(),
+                move || {
+                    Column(
+                        Modifier::empty()
+                            .size_points(240.0, 320.0)
+                            .vertical_scroll(scroll_state.clone(), false),
+                        ColumnSpec::default(),
+                        || {
+                            for index in 0..12usize {
+                                cranpose_ui::Box(
+                                    Modifier::empty().size_points(240.0, 60.0).graphics_layer(
+                                        || GraphicsLayer {
+                                            alpha: 0.8,
+                                            ..GraphicsLayer::default()
+                                        },
+                                    ),
+                                    cranpose_ui::BoxSpec::default(),
+                                    move || {
+                                        Text(
+                                            format!("row {index}"),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    },
+                                );
+                            }
+                        },
+                    );
+                },
+            );
+        });
+
+        let root = composition.root().expect("composition root");
+        let viewport = Size {
+            width: 240.0,
+            height: 320.0,
+        };
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("initial scroll layout");
+        let mut graph = build_graph_from_applier(&mut applier, root, 1.0).expect("initial graph");
+        graph.root.recompute_raster_cache_hashes();
+        applier.clear_runtime_handle();
+        drop(applier);
+
+        let scroll_state = scroll_holder
+            .borrow()
+            .as_ref()
+            .cloned()
+            .expect("scroll state should be captured");
+        assert!(
+            scroll_state.dispatch_raw_delta(96.0) > 0.0,
+            "test scroll must be consumed"
+        );
+        let dirty_nodes = cranpose_ui::pending_layout_repass_nodes_snapshot();
+        assert!(
+            !dirty_nodes.is_empty(),
+            "a scroll must schedule a scoped scene update"
+        );
+
+        let handle = composition.runtime_handle();
+        let mut applier = composition.applier_mut();
+        applier.set_runtime_handle(handle);
+        applier
+            .compute_layout(root, viewport)
+            .expect("scrolled layout");
+        let report = update_graph_from_applier_report(&mut applier, &mut graph, &dirty_nodes, 1.0);
+        applier.clear_runtime_handle();
+
+        assert!(report.applied, "scroll update should apply in place");
+        assert_dirty_hash_road_matches_full_walk(&graph);
+    }
+
+    #[test]
     fn update_graph_from_applier_refreshes_scroll_content_offset() {
         let scroll_holder: Rc<RefCell<Option<ScrollState>>> = Rc::new(RefCell::new(None));
         let scroll_holder_for_comp = scroll_holder.clone();
