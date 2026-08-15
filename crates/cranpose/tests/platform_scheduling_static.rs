@@ -1500,6 +1500,11 @@ fn workspace_ffi_boundaries_are_explicit() {
         // whose invariants the pool's completion barrier enforces; the crate
         // root denies unsafe code and opts this one module back in by name.
         "crates/cranpose-render/wgpu/src/worker_pool.rs",
+        // The pipeline disk cache: one wgpu create_pipeline_cache call,
+        // unsafe because seeding data is trusted; the module writes that
+        // data itself from get_data, keys the file by adapter identity,
+        // and asks wgpu to validate the header besides (fallback: true).
+        "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         // The shape-run entry borrows its DrawPrimitive, whose TYPE is !Sync
         // (the Text variant holds Rc) even though the constructor only ever
         // admits the Sync-payload shape variants. The module is kept tiny so
@@ -1560,6 +1565,7 @@ fn unsafe_blocks_have_nearby_safety_invariants() {
         "crates/cranpose/src/ios_accessibility.rs",
         "crates/cranpose-audio/src/ring.rs",
         "crates/cranpose-audio/src/backend/aaudio.rs",
+        "crates/cranpose-render/wgpu/src/pipeline_disk_cache.rs",
         "apps/desktop-demo-platform/src/android_entry.rs",
         "apps/isolated-demo/src/native_entry.rs",
     ];

@@ -22,6 +22,9 @@ use std::cell::Cell;
 pub(crate) struct EffectRenderer {
     offscreen_pool: OffscreenPool,
     pub shader_cache: ShaderPipelineCache,
+    /// The device's shared pipeline cache (see `GpuRenderer`); every lazy
+    /// effect pipeline creation passes it.
+    pipeline_cache: Option<wgpu::PipelineCache>,
 
     blur_shader: wgpu::ShaderModule,
     blur_rounded_mask_shader: wgpu::ShaderModule,
@@ -448,8 +451,10 @@ fn dst_out_blend_state() -> wgpu::BlendState {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn create_fullscreen_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -460,8 +465,9 @@ fn create_fullscreen_pipeline(
 ) -> wgpu::RenderPipeline {
     crate::render::create_render_pipeline_logged(
         device,
+        cache,
         &format!("effect {label} entry={fragment_entry} depth={depth}"),
-        &wgpu::RenderPipelineDescriptor {
+        wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
             vertex: wgpu::VertexState {
@@ -495,8 +501,10 @@ fn create_fullscreen_pipeline(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_projective_pipeline(
     device: &wgpu::Device,
+    cache: Option<&wgpu::PipelineCache>,
     label: &'static str,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
@@ -506,8 +514,9 @@ fn create_projective_pipeline(
 ) -> wgpu::RenderPipeline {
     crate::render::create_render_pipeline_logged(
         device,
+        cache,
         &format!("effect {label} depth={depth}"),
-        &wgpu::RenderPipelineDescriptor {
+        wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
             vertex: wgpu::VertexState {
@@ -552,6 +561,7 @@ fn create_projective_pipeline(
 impl EffectRenderer {
     pub fn new(
         device: &wgpu::Device,
+        pipeline_cache: Option<wgpu::PipelineCache>,
         surface_format: wgpu::TextureFormat,
         adapter_backend: wgpu::Backend,
     ) -> Self {
@@ -700,7 +710,8 @@ impl EffectRenderer {
         });
         Self {
             offscreen_pool: OffscreenPool::new(device, surface_format),
-            shader_cache: ShaderPipelineCache::new(adapter_backend),
+            shader_cache: ShaderPipelineCache::new(adapter_backend, pipeline_cache.clone()),
+            pipeline_cache,
             blur_shader,
             blur_rounded_mask_shader,
             blur_pipeline_layout,
@@ -795,6 +806,7 @@ impl EffectRenderer {
         self.blur_pipeline.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 "Blur Pipeline",
                 &self.blur_pipeline_layout,
                 &self.blur_shader,
@@ -811,6 +823,7 @@ impl EffectRenderer {
             .get_or_init(self.adapter_backend, || {
                 create_fullscreen_pipeline(
                     device,
+                    self.pipeline_cache.as_ref(),
                     "Blur Rounded Mask Pipeline",
                     &self.blur_pipeline_layout,
                     &self.blur_rounded_mask_shader,
@@ -826,6 +839,7 @@ impl EffectRenderer {
         self.offset_pipeline.get_or_init(self.adapter_backend, || {
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 "Offset Pipeline",
                 &self.offset_pipeline_layout,
                 &self.offset_shader,
@@ -871,6 +885,7 @@ impl EffectRenderer {
             });
             create_fullscreen_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 label,
                 &self.blit_pipeline_layout,
                 depth_shader.as_ref().unwrap_or(&self.blit_shader),
@@ -931,6 +946,7 @@ impl EffectRenderer {
             });
             create_projective_pipeline(
                 device,
+                self.pipeline_cache.as_ref(),
                 label,
                 &self.projective_blit_pipeline_layout,
                 depth_shader

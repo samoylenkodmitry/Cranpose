@@ -27,14 +27,18 @@ pub(crate) struct ShaderPipelineCache {
     backend: wgpu::Backend,
     cache: HashMap<(u64, RuntimeShaderPipelineMode, bool), wgpu::RenderPipeline>,
     disabled: HashSet<u64>,
+    /// The device's shared pipeline cache (see `GpuRenderer`); runtime
+    /// shader pipelines pass it like every built-in pipeline does.
+    pipeline_cache: Option<wgpu::PipelineCache>,
 }
 
 impl ShaderPipelineCache {
-    pub fn new(backend: wgpu::Backend) -> Self {
+    pub fn new(backend: wgpu::Backend, pipeline_cache: Option<wgpu::PipelineCache>) -> Self {
         Self {
             backend,
             cache: HashMap::new(),
             disabled: HashSet::new(),
+            pipeline_cache,
         }
     }
 
@@ -88,8 +92,9 @@ impl ShaderPipelineCache {
 
             crate::render::create_render_pipeline_logged(
                 device,
+                self.pipeline_cache.as_ref(),
                 &format!("runtime-shader mode={mode:?} depth={depth}"),
-                &wgpu::RenderPipelineDescriptor {
+                wgpu::RenderPipelineDescriptor {
                     label: Some("RuntimeShader Effect Pipeline"),
                     layout: Some(&pipeline_layout),
                     vertex: wgpu::VertexState {
