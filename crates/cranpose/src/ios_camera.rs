@@ -385,7 +385,7 @@ fn capture_photo() -> Option<CameraStill> {
         };
         let supported = unsafe { holder.photo_output.supportedFlashModes() }
             .iter()
-            .any(|mode| mode.as_i64() == wanted.0);
+            .any(|mode| mode.as_i64() == wanted.0 as i64);
         if supported {
             unsafe { settings.setFlashMode(wanted) };
         }
