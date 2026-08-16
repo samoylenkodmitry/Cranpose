@@ -35,6 +35,31 @@ pub struct CameraStill {
     pub jpeg: Vec<u8>,
 }
 
+/// One capture device the app may pick, as reported by [`Camera::lenses`].
+///
+/// `id` is the platform's own handle for the device (an `AVCaptureDevice`
+/// uniqueID on iOS, a camera2 id on Android); pass it back to
+/// [`Camera::use_lens`]. `name` is for a button label: "Ultra wide", "Wide",
+/// "Tele".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CameraLens {
+    pub id: String,
+    pub name: String,
+}
+
+/// What the light does when a still is captured.
+///
+/// `Auto` leaves the choice to the device's exposure metering. A backend with
+/// no flash reports `false` from [`Camera::set_flash`] and the app hides the
+/// control.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FlashMode {
+    #[default]
+    Off,
+    Auto,
+    On,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CameraError {
     /// No live camera backend on this platform.
@@ -72,6 +97,38 @@ pub trait Camera: Send + Sync {
     fn set_torch(&self, _on: bool) -> bool {
         false
     }
+    /// The capture devices the app may pick between, back cameras first and in
+    /// field-of-view order (widest first). An empty list means the app shows no
+    /// lens control: either the platform has one camera or the backend does not
+    /// list them.
+    fn lenses(&self) -> Vec<CameraLens> {
+        Vec::new()
+    }
+
+    /// The id of the device the session uses, or `None` when nothing is open
+    /// and the backend has no stored choice.
+    fn lens(&self) -> Option<String> {
+        None
+    }
+
+    /// Open `id` instead of the current device, keeping the session running.
+    /// Returns `false` when the id is unknown or the backend cannot switch.
+    fn use_lens(&self, _id: &str) -> bool {
+        false
+    }
+
+    /// Whether the current device has a flash for stills.
+    fn has_flash(&self) -> bool {
+        false
+    }
+
+    /// What the flash does on the next [`capture_still`](Self::capture_still).
+    /// Returns `false` where the device has no flash or the backend has none
+    /// wired; the mode dies with the session.
+    fn set_flash(&self, _mode: FlashMode) -> bool {
+        false
+    }
+
     /// Stop the session and release the device.
     fn stop(&self);
 }
@@ -128,6 +185,71 @@ mod tests {
         let cam = camera().expect("registered");
         assert_eq!(cam.start().unwrap(), "fake");
         assert_eq!(cam.latest_frame().unwrap().width, 1);
+        clear_platform_camera();
+    }
+
+    #[test]
+    fn a_backend_that_lists_no_lens_and_no_flash_says_so() {
+        clear_platform_camera();
+        struct Bare;
+        impl Camera for Bare {
+            fn start(&self) -> Result<String, CameraError> {
+                Ok("bare".into())
+            }
+            fn latest_frame(&self) -> Option<CameraFrame> {
+                None
+            }
+            fn stop(&self) {}
+        }
+        set_platform_camera(Arc::new(Bare));
+        let cam = camera().expect("registered");
+        assert!(cam.lenses().is_empty());
+        assert_eq!(cam.lens(), None);
+        assert!(!cam.use_lens("0"));
+        assert!(!cam.has_flash());
+        assert!(!cam.set_flash(FlashMode::On));
+        clear_platform_camera();
+    }
+
+    #[test]
+    fn a_backend_that_lists_two_lenses_hands_them_over_in_order() {
+        clear_platform_camera();
+        struct Two;
+        impl Camera for Two {
+            fn start(&self) -> Result<String, CameraError> {
+                Ok("two".into())
+            }
+            fn latest_frame(&self) -> Option<CameraFrame> {
+                None
+            }
+            fn lenses(&self) -> Vec<CameraLens> {
+                vec![
+                    CameraLens {
+                        id: "u".into(),
+                        name: "Ultra wide".into(),
+                    },
+                    CameraLens {
+                        id: "w".into(),
+                        name: "Wide".into(),
+                    },
+                ]
+            }
+            fn lens(&self) -> Option<String> {
+                Some("w".into())
+            }
+            fn use_lens(&self, id: &str) -> bool {
+                id == "u" || id == "w"
+            }
+            fn stop(&self) {}
+        }
+        set_platform_camera(Arc::new(Two));
+        let cam = camera().expect("registered");
+        let lenses = cam.lenses();
+        assert_eq!(lenses.len(), 2);
+        assert_eq!(lenses[0].name, "Ultra wide");
+        assert_eq!(cam.lens().as_deref(), Some("w"));
+        assert!(cam.use_lens("u"));
+        assert!(!cam.use_lens("tele"));
         clear_platform_camera();
     }
 }
