@@ -850,3 +850,8 @@ required-features = ["desktop", "robot-app"]
 name = "lens_probe"
 path = "examples/lens_probe.rs"
 required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "idle_burn_probe"
+path = "examples/idle_burn_probe.rs"
+required-features = ["desktop", "robot-app"]
