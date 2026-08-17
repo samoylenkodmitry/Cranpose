@@ -78,7 +78,6 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
             // Runs on an AAudio worker thread, not the real-time one, so this
             // may log. A disconnect ends the stream; the engine reopens the
             // device the next time it is asked to play.
-            log::warn!("AAudio stream error: {error:?}");
         }))
         .open_stream()
         .map_err(backend_error("failed to open the AAudio output stream"))?;
@@ -114,9 +113,7 @@ struct AAudioSink {
 
 impl AudioSink for AAudioSink {
     fn suspend(&self) {
-        if let Err(error) = self.stream.request_pause() {
-            log::debug!("failed to pause the AAudio stream: {error}");
-        }
+        if let Err(error) = self.stream.request_pause() {}
     }
 
     fn resume(&self) {
@@ -132,9 +129,17 @@ impl AudioSink for AAudioSink {
                 log::debug!("failed to settle the AAudio stream before starting it: {error}");
             }
         }
-        if let Err(error) = self.stream.request_start() {
-            log::debug!("failed to restart the AAudio stream: {error}");
-        }
+        match self.stream.request_start() {}
+    }
+
+    fn is_running(&self) -> bool {
+        let state = self.stream.state();
+        let alive = matches!(
+            state,
+            AudioStreamState::Started | AudioStreamState::Starting
+        );
+        if !alive {}
+        alive
     }
 
     fn park(&self) {
@@ -143,9 +148,7 @@ impl AudioSink for AAudioSink {
         // stopped stream is a no-op in AAudio, so this stays correct on the
         // releases where returning `Stop` from the callback already tore the
         // stream down.
-        if let Err(error) = self.stream.request_stop() {
-            log::debug!("failed to release the idle AAudio stream: {error}");
-        }
+        if let Err(error) = self.stream.request_stop() {}
     }
 }
 

@@ -24,6 +24,17 @@ pub trait AudioSink {
     /// Starts the stream again: after [`suspend`](AudioSink::suspend), and
     /// after the mixer gave the device up for want of anything to play.
     fn resume(&self) {}
+    /// Whether the stream is actually running right now.
+    ///
+    /// NOT a cached flag: ask the platform. `streaming` is set by the engine
+    /// and cleared only by the mixer's own data callback, so a stream the
+    /// platform reclaims WITHOUT running that callback leaves every liveness
+    /// signal the engine owns stuck at "fine" -- and cues are then written into
+    /// a dead stream for the life of the process. Observed on a Pixel Watch 3.
+    fn is_running(&self) -> bool {
+        true
+    }
+
     /// Releases the device after the mixer reported itself idle.
     ///
     /// This is the half of stopping that a real-time callback cannot do for
