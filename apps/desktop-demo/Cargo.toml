@@ -855,3 +855,8 @@ required-features = ["desktop", "robot-app"]
 name = "idle_burn_probe"
 path = "examples/idle_burn_probe.rs"
 required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_subcompose_loop_disposal"
+path = "examples/robot_subcompose_loop_disposal.rs"
+required-features = ["desktop", "robot-app"]
