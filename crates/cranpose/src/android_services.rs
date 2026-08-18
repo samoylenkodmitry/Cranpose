@@ -23,15 +23,15 @@ use cranpose_services::{
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
-use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 // --- Cross-thread signal parking (UI thread → native loop) -------------------
 
 static NETWORK_ONLINE: AtomicBool = AtomicBool::new(true);
 static NETWORK_METERED: AtomicBool = AtomicBool::new(false);
+static NETWORK_CALLBACK_REGISTERED: AtomicBool = AtomicBool::new(false);
 
 static INSETS_LEFT_PX: AtomicI32 = AtomicI32::new(0);
 static INSETS_TOP_PX: AtomicI32 = AtomicI32::new(0);
@@ -66,14 +66,14 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
         log::info!("CRANPOSE_ASYNC_HAPTICS=0: haptics stay on the calling thread");
         None
     };
-    set_platform_haptics(Rc::new(AndroidHaptics {
+    set_platform_haptics(Arc::new(AndroidHaptics {
         app: app.clone(),
-        amplitude_control: Cell::new(None),
+        amplitude_control: AtomicU8::new(0),
         queue: haptics_queue,
     }));
     set_platform_share_sheet(Rc::new(AndroidShareSheet { app: app.clone() }));
-    set_platform_notifier(Rc::new(AndroidNotifier { app: app.clone() }));
-    set_platform_network_monitor(Rc::new(AndroidNetworkMonitor));
+    set_platform_notifier(Arc::new(AndroidNotifier { app: app.clone() }));
+    set_platform_network_monitor(Arc::new(AndroidNetworkMonitor { app: app.clone() }));
     // Pulled rather than pushed from `onCreate`: `getIntent()` is populated
     // before the native thread starts, so reading it here is deterministic,
     // whereas a push would race the thread that consumes it.
@@ -206,7 +206,7 @@ struct AndroidHaptics {
     /// `Vibrator.hasAmplitudeControl()`, queried once and cached: the answer
     /// cannot change for the life of the process, and the query costs a JNI
     /// round trip that UI code should not repeat.
-    amplitude_control: Cell<Option<bool>>,
+    amplitude_control: AtomicU8,
     /// Handoff to the "cranpose-haptics" delivery thread, or `None` for the
     /// synchronous path.
     queue: Option<Arc<HapticQueue>>,
@@ -413,7 +413,7 @@ fn deliver_haptic_command(app: &android_activity::AndroidApp, command: &HapticCo
         }
     });
     if let Err(error) = result {
-        log::debug!("Android {what} failed: {error}");
+        log::warn!("Android {what} failed: {error}");
     }
 }
 
@@ -460,8 +460,10 @@ impl Haptics for AndroidHaptics {
     }
 
     fn has_amplitude_control(&self) -> bool {
-        if let Some(known) = self.amplitude_control.get() {
-            return known;
+        match self.amplitude_control.load(Ordering::Acquire) {
+            1 => return false,
+            2 => return true,
+            _ => {}
         }
         let supported = with_android_activity_env(&self.app, |env, activity| {
             env.call_method(
@@ -477,7 +479,8 @@ impl Haptics for AndroidHaptics {
             })
         })
         .unwrap_or(false);
-        self.amplitude_control.set(Some(supported));
+        self.amplitude_control
+            .store(if supported { 2 } else { 1 }, Ordering::Release);
         supported
     }
 }
@@ -625,7 +628,9 @@ impl Notifier for AndroidNotifier {
 
 // --- Network monitor --------------------------------------------------------------
 
-struct AndroidNetworkMonitor;
+struct AndroidNetworkMonitor {
+    app: android_activity::AndroidApp,
+}
 
 impl NetworkMonitor for AndroidNetworkMonitor {
     fn status(&self) -> NetworkStatus {
@@ -633,6 +638,28 @@ impl NetworkMonitor for AndroidNetworkMonitor {
             online: NETWORK_ONLINE.load(Ordering::Acquire),
             metered: NETWORK_METERED.load(Ordering::Acquire),
         }
+    }
+
+    fn is_alive(&self) -> bool {
+        NETWORK_CALLBACK_REGISTERED.load(Ordering::Acquire)
+    }
+
+    fn reconnect(&self) {
+        let registered = with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeEnsureNetworkCallback"),
+                jni_sig!("()Z"),
+                &[],
+            )
+            .and_then(|value| value.z())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        })
+        .unwrap_or(false);
+        NETWORK_CALLBACK_REGISTERED.store(registered, Ordering::Release);
     }
 }
 
@@ -701,6 +728,16 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
 ) {
     NETWORK_ONLINE.store(online, Ordering::Release);
     NETWORK_METERED.store(metered, Ordering::Release);
+}
+
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkRegistration(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    registered: jboolean,
+) {
+    NETWORK_CALLBACK_REGISTERED.store(registered, Ordering::Release);
 }
 
 #[doc(hidden)]

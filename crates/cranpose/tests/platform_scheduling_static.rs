@@ -530,7 +530,7 @@ fn android_play_billing_reaches_the_purchase_registry() {
         "the Android backend should install the Play Billing purchase backend alongside the other platform services"
     );
     assert!(
-        backend_source.contains("set_platform_purchases(Rc::new(AndroidPurchases { app }))")
+        backend_source.contains("set_platform_purchases(Arc::new(AndroidPurchases {")
             && backend_source.contains("load_cranpose_java_class(env, &activity, BILLING_CLASS)"),
         "the Play Billing backend should reach its Java bridge through the activity class loader and register itself into cranpose_services::purchases"
     );

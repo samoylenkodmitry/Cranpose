@@ -25,12 +25,12 @@ use objc2_ui_kit::{
 use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 /// Installs the iOS photo picker as the platform image picker.
 pub(crate) fn register() {
-    set_platform_image_picker(Rc::new(IosImagePicker));
+    set_platform_image_picker(Arc::new(IosImagePicker));
 }
 
 struct IosImagePicker;

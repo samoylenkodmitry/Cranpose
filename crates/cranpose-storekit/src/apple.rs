@@ -10,8 +10,7 @@ use cranpose_services::purchases::{
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::rc::Rc;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------- ABI codes
 //
@@ -210,8 +209,14 @@ unsafe extern "C" fn on_message(
 /// The App Store backend. Install it with [`register`].
 pub struct StoreKitPurchases;
 
+static STOREKIT_PRODUCT_IDS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
 impl Purchases for StoreKitPurchases {
     fn configure(&self, product_ids: &[&str]) {
+        *STOREKIT_PRODUCT_IDS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            product_ids.iter().map(|id| (*id).to_owned()).collect();
         // Newline-separated: product ids are `[A-Za-z0-9._-]` on both stores,
         // so a newline cannot occur inside one and no escaping is needed.
         let joined = product_ids.join("\n");
@@ -246,11 +251,27 @@ impl Purchases for StoreKitPurchases {
     fn take_event(&self) -> Option<PurchaseEvent> {
         shared().events.pop_front()
     }
+
+    fn is_connected(&self) -> bool {
+        matches!(
+            self.state().phase,
+            StorePhase::Connecting | StorePhase::Ready
+        )
+    }
+
+    fn reconnect(&self) {
+        let ids = STOREKIT_PRODUCT_IDS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        self.configure(&refs);
+    }
 }
 
 /// Installs StoreKit as the platform purchase backend.
 pub fn register() {
-    set_platform_purchases(Rc::new(StoreKitPurchases));
+    set_platform_purchases(Arc::new(StoreKitPurchases));
 }
 
 #[cfg(test)]

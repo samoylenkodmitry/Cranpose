@@ -14,7 +14,10 @@ description = "Multiplatform system services for Cranpose (HTTP, URI, and OS int
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
+log = "0.4"
+parking_lot = "0.12.5"
 thiserror = "2.0.18"
+web-time.workspace = true
 
 [features]
 default = []

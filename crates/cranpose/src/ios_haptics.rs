@@ -13,11 +13,11 @@ use objc2_ui_kit::{
     UIImpactFeedbackGenerator, UIImpactFeedbackStyle, UINotificationFeedbackGenerator,
     UINotificationFeedbackType, UISelectionFeedbackGenerator,
 };
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Installs the iOS haptics as the platform haptics.
 pub(crate) fn register() {
-    set_platform_haptics(Rc::new(IosHaptics));
+    set_platform_haptics(Arc::new(IosHaptics));
 }
 
 struct IosHaptics;

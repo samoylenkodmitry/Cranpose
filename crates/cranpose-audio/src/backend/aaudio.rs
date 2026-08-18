@@ -115,7 +115,7 @@ struct AAudioSink {
 impl AudioSink for AAudioSink {
     fn suspend(&self) {
         if let Err(error) = self.stream.request_pause() {
-            log::debug!("failed to pause the AAudio stream: {error}");
+            log::warn!("failed to pause the AAudio stream: {error}");
         }
     }
 
@@ -129,7 +129,7 @@ impl AudioSink for AAudioSink {
         // lifecycle path, where `suspend` left the stream paused.
         if self.stream.state() == AudioStreamState::Started {
             if let Err(error) = self.stream.request_stop() {
-                log::debug!("failed to settle the AAudio stream before starting it: {error}");
+                log::warn!("failed to settle the AAudio stream before starting it: {error}");
             }
         }
         if let Err(error) = self.stream.request_start() {
@@ -155,7 +155,7 @@ impl AudioSink for AAudioSink {
         // releases where returning `Stop` from the callback already tore the
         // stream down.
         if let Err(error) = self.stream.request_stop() {
-            log::debug!("failed to release the idle AAudio stream: {error}");
+            log::warn!("failed to release the idle AAudio stream: {error}");
         }
     }
 }
@@ -165,7 +165,7 @@ impl Drop for AAudioSink {
         // Stopping before the stream closes means the callback has returned for
         // the last time, so the mixer it owns is dropped on this thread.
         if let Err(error) = self.stream.request_stop() {
-            log::debug!("failed to stop the AAudio stream: {error}");
+            log::warn!("failed to stop the AAudio stream: {error}");
         }
     }
 }

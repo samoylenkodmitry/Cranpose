@@ -54,12 +54,12 @@ pub use engine::AudioEngine;
 pub use mixer::{MAX_CLIPS, MAX_VOICES};
 
 use cranpose_services::{set_platform_audio, AudioPlayerRef};
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Creates an engine without registering it, for an app that wants to hold the
 /// handle itself.
-pub fn create() -> Rc<AudioEngine> {
-    Rc::new(AudioEngine::new())
+pub fn create() -> Arc<AudioEngine> {
+    Arc::new(AudioEngine::new())
 }
 
 /// Creates an engine and installs it as the platform audio player.
@@ -69,7 +69,7 @@ pub fn create() -> Rc<AudioEngine> {
 /// installing the engine in an app that never plays anything costs nothing.
 pub fn install() -> AudioPlayerRef {
     let engine: AudioPlayerRef = create();
-    set_platform_audio(Rc::clone(&engine));
+    set_platform_audio(Arc::clone(&engine));
     engine
 }
 

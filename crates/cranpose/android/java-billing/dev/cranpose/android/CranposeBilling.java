@@ -160,6 +160,11 @@ public final class CranposeBilling implements PurchasesUpdatedListener {
         billing.configure(productIds);
     }
 
+    public static boolean cranposeBillingIsConnected(Activity activity) {
+        CranposeBilling billing = attach(activity);
+        return billing != null && billing.client.isReady();
+    }
+
     /** Presents the Play payment sheet for one product. */
     public static void cranposeBillingPurchase(Activity activity, String productId) {
         CranposeBilling billing = attach(activity);

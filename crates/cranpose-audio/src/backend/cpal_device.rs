@@ -122,13 +122,13 @@ struct CpalSink {
 impl AudioSink for CpalSink {
     fn suspend(&self) {
         if let Err(error) = self.stream.pause() {
-            log::debug!("failed to pause the output stream: {error}");
+            log::warn!("failed to pause the output stream: {error}");
         }
     }
 
     fn resume(&self) {
         if let Err(error) = self.stream.play() {
-            log::debug!("failed to restart the output stream: {error}");
+            log::warn!("failed to restart the output stream: {error}");
         }
     }
 
@@ -136,7 +136,7 @@ impl AudioSink for CpalSink {
         // cpal has no stop, only pause; it releases the callback thread, which
         // is the part that costs anything on a desktop.
         if let Err(error) = self.stream.pause() {
-            log::debug!("failed to release the idle output stream: {error}");
+            log::warn!("failed to release the idle output stream: {error}");
         }
     }
 }

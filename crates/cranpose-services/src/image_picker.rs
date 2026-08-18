@@ -9,12 +9,13 @@
 //! and Android (SAF), where a plain file picker already surfaces images.
 
 use crate::file_picker::{default_file_picker, FileFilter, FilePickerOptions, PickerFuture};
+use crate::registry::ServiceRegistry;
 use cranpose_core::compositionLocalOfWithPolicy;
 use cranpose_core::CompositionLocal;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_macros::composable;
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Image extensions offered when the picker falls back to the file picker.
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif"];
@@ -37,7 +38,7 @@ pub enum ImageSource {
 }
 
 /// Picks or captures a single image and returns its encoded bytes.
-pub trait ImagePicker {
+pub trait ImagePicker: Send + Sync {
     /// Present a picker/camera for `source` and resolve to the chosen image's
     /// encoded bytes, or `None` if the user cancelled.
     fn pick_image(
@@ -46,25 +47,23 @@ pub trait ImagePicker {
     ) -> PickerFuture<Result<Option<Vec<u8>>, ImagePickerError>>;
 }
 
-pub type ImagePickerRef = Rc<dyn ImagePicker>;
+pub type ImagePickerRef = Arc<dyn ImagePicker>;
 
-thread_local! {
-    static PLATFORM_IMAGE_PICKER: RefCell<Option<ImagePickerRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_IMAGE_PICKER: ServiceRegistry<dyn ImagePicker> = ServiceRegistry::new();
 
 /// Installs a platform image picker, replacing any previously installed one.
 /// The iOS backend registers a photo-library picker here.
 pub fn set_platform_image_picker(picker: ImagePickerRef) {
-    PLATFORM_IMAGE_PICKER.with(|cell| *cell.borrow_mut() = Some(picker));
+    PLATFORM_IMAGE_PICKER.set(picker);
 }
 
 /// Removes any registered platform image picker (tests and teardown).
 pub fn clear_platform_image_picker() {
-    PLATFORM_IMAGE_PICKER.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_IMAGE_PICKER.clear();
 }
 
 fn registered_platform_image_picker() -> Option<ImagePickerRef> {
-    PLATFORM_IMAGE_PICKER.with(|cell| cell.borrow().clone())
+    PLATFORM_IMAGE_PICKER.get_or_warn("image picker")
 }
 
 struct PlatformImagePicker;
@@ -100,7 +99,7 @@ impl ImagePicker for PlatformImagePicker {
 }
 
 pub fn default_image_picker() -> ImagePickerRef {
-    Rc::new(PlatformImagePicker)
+    Arc::new(PlatformImagePicker)
 }
 
 pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
@@ -111,7 +110,7 @@ pub fn local_image_picker() -> CompositionLocal<ImagePickerRef> {
     LOCAL_IMAGE_PICKER.with(|cell| {
         let mut local = cell.borrow_mut();
         local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_image_picker, Rc::ptr_eq))
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_image_picker, Arc::ptr_eq))
             .clone()
     })
 }
@@ -130,10 +129,10 @@ pub fn ProvideImagePicker(content: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use std::sync::RwLock;
 
     struct FixedImagePicker {
-        bytes: RefCell<Option<Vec<u8>>>,
+        bytes: RwLock<Option<Vec<u8>>>,
     }
 
     impl ImagePicker for FixedImagePicker {
@@ -141,16 +140,17 @@ mod tests {
             &self,
             _source: ImageSource,
         ) -> PickerFuture<Result<Option<Vec<u8>>, ImagePickerError>> {
-            let bytes = self.bytes.borrow().clone();
+            let bytes = self.bytes.read().unwrap().clone();
             Box::pin(async move { Ok(bytes) })
         }
     }
 
     #[test]
     fn registered_image_picker_takes_precedence() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_image_picker();
-        set_platform_image_picker(Rc::new(FixedImagePicker {
-            bytes: RefCell::new(Some(vec![1, 2, 3])),
+        set_platform_image_picker(Arc::new(FixedImagePicker {
+            bytes: RwLock::new(Some(vec![1, 2, 3])),
         }));
         let picker = default_image_picker();
         let result = pollster::block_on(picker.pick_image(ImageSource::Camera));
@@ -160,6 +160,7 @@ mod tests {
 
     #[test]
     fn camera_is_unsupported_without_a_platform_picker() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_image_picker();
         let result = pollster::block_on(default_image_picker().pick_image(ImageSource::Camera));
         assert!(matches!(result, Err(ImagePickerError::Unsupported)));

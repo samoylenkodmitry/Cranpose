@@ -1027,6 +1027,7 @@ public class CranposeActivity extends NativeActivity {
 
     /** Current network state (online, metered) changed. */
     private static native void nativeOnNetworkStatus(boolean online, boolean metered);
+    private static native void nativeOnNetworkRegistration(boolean registered);
 
     /** System-bar/cutout insets changed (physical px). */
     private static native void nativeOnInsetsChanged(int left, int top, int right, int bottom);
@@ -1146,6 +1147,7 @@ public class CranposeActivity extends NativeActivity {
             } catch (Exception ignored) {
             }
             cranposeNetworkCallback = null;
+            nativeOnNetworkRegistration(false);
         }
         super.onDestroy();
     }
@@ -1285,11 +1287,12 @@ public class CranposeActivity extends NativeActivity {
         nativeOnInsetsChanged(left, top, right, bottom);
     }
 
-    private void registerNetworkCallback() {
+    private boolean registerNetworkCallback() {
         ConnectivityManager manager =
                 (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         if (manager == null) {
-            return;
+            nativeOnNetworkRegistration(false);
+            return false;
         }
         pushNetworkStatus(manager);
         cranposeNetworkCallback = new ConnectivityManager.NetworkCallback() {
@@ -1310,9 +1313,17 @@ public class CranposeActivity extends NativeActivity {
         };
         try {
             manager.registerDefaultNetworkCallback(cranposeNetworkCallback);
+            nativeOnNetworkRegistration(true);
+            return true;
         } catch (Exception ignored) {
             cranposeNetworkCallback = null;
+            nativeOnNetworkRegistration(false);
+            return false;
         }
+    }
+
+    public boolean cranposeEnsureNetworkCallback() {
+        return cranposeNetworkCallback != null || registerNetworkCallback();
     }
 
     private void pushNetworkStatus(ConnectivityManager manager) {

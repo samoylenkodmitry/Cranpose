@@ -14,6 +14,7 @@ description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, c
 [dependencies]
 cranpose-services = { workspace = true }
 log = "0.4"
+parking_lot = "0.12.5"
 
 [features]
 # The AAudio output device. Costs nothing off Android: `ndk` is only declared

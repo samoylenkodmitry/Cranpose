@@ -5,8 +5,8 @@
 //! monitor via [`set_platform_network_monitor`] (iOS `NWPathMonitor`, Android
 //! `ConnectivityManager`, web `navigator.connection`).
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use crate::registry::{RecoveryGate, ServiceRegistry};
+use std::sync::{Arc, OnceLock};
 
 /// A snapshot of the current network state.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,11 +27,13 @@ impl Default for NetworkStatus {
 }
 
 /// Reports the current network status.
-pub trait NetworkMonitor {
+pub trait NetworkMonitor: Send + Sync {
     fn status(&self) -> NetworkStatus;
+    fn is_alive(&self) -> bool;
+    fn reconnect(&self);
 }
 
-pub type NetworkMonitorRef = Rc<dyn NetworkMonitor>;
+pub type NetworkMonitorRef = Arc<dyn NetworkMonitor>;
 
 struct DefaultNetworkMonitor;
 
@@ -39,41 +41,60 @@ impl NetworkMonitor for DefaultNetworkMonitor {
     fn status(&self) -> NetworkStatus {
         NetworkStatus::default()
     }
+
+    fn is_alive(&self) -> bool {
+        true
+    }
+
+    fn reconnect(&self) {}
 }
 
-thread_local! {
-    static PLATFORM_NETWORK_MONITOR: RefCell<Option<NetworkMonitorRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_NETWORK_MONITOR: ServiceRegistry<dyn NetworkMonitor> = ServiceRegistry::new();
+static DEFAULT_NETWORK_MONITOR: OnceLock<NetworkMonitorRef> = OnceLock::new();
+static NETWORK_RECOVERY: RecoveryGate = RecoveryGate::new();
 
 /// Installs a platform network monitor, replacing any previous one.
 pub fn set_platform_network_monitor(monitor: NetworkMonitorRef) {
-    PLATFORM_NETWORK_MONITOR.with(|cell| *cell.borrow_mut() = Some(monitor));
+    PLATFORM_NETWORK_MONITOR.set(monitor);
+    NETWORK_RECOVERY.succeeded();
 }
 
 /// Removes any registered platform network monitor (tests and teardown).
 pub fn clear_platform_network_monitor() {
-    PLATFORM_NETWORK_MONITOR.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_NETWORK_MONITOR.clear();
 }
 
 /// The active network monitor: the platform one if installed, else the default
 /// (online, unmetered).
 pub fn network_monitor() -> NetworkMonitorRef {
     PLATFORM_NETWORK_MONITOR
-        .with(|cell| cell.borrow().clone())
-        .unwrap_or_else(|| Rc::new(DefaultNetworkMonitor))
+        .get_or_warn("network monitor")
+        .unwrap_or_else(|| {
+            DEFAULT_NETWORK_MONITOR
+                .get_or_init(|| Arc::new(DefaultNetworkMonitor))
+                .clone()
+        })
 }
 
 /// Convenience: the current network status.
 pub fn network_status() -> NetworkStatus {
-    network_monitor().status()
+    let monitor = network_monitor();
+    if monitor.is_alive() {
+        NETWORK_RECOVERY.succeeded();
+    } else if NETWORK_RECOVERY.try_start() {
+        monitor.reconnect();
+    }
+    monitor.status()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn default_is_online_unmetered_and_overridable() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_network_monitor();
         assert_eq!(
             network_status(),
@@ -90,9 +111,48 @@ mod tests {
                     metered: true,
                 }
             }
+
+            fn is_alive(&self) -> bool {
+                true
+            }
+
+            fn reconnect(&self) {}
         }
-        set_platform_network_monitor(Rc::new(Metered));
+        set_platform_network_monitor(Arc::new(Metered));
         assert!(network_status().metered);
+        clear_platform_network_monitor();
+    }
+
+    #[test]
+    fn dead_monitor_reconnects_before_status_is_read() {
+        let _guard = crate::registry::test_service_guard();
+        struct Reconnecting {
+            alive: AtomicBool,
+            reconnects: AtomicUsize,
+        }
+        impl NetworkMonitor for Reconnecting {
+            fn status(&self) -> NetworkStatus {
+                NetworkStatus {
+                    online: self.alive.load(Ordering::Acquire),
+                    metered: false,
+                }
+            }
+            fn is_alive(&self) -> bool {
+                self.alive.load(Ordering::Acquire)
+            }
+            fn reconnect(&self) {
+                self.reconnects.fetch_add(1, Ordering::AcqRel);
+                self.alive.store(true, Ordering::Release);
+            }
+        }
+        clear_platform_network_monitor();
+        let monitor = Arc::new(Reconnecting {
+            alive: AtomicBool::new(false),
+            reconnects: AtomicUsize::new(0),
+        });
+        set_platform_network_monitor(monitor.clone());
+        assert!(network_status().online);
+        assert_eq!(monitor.reconnects.load(Ordering::Acquire), 1);
         clear_platform_network_monitor();
     }
 }

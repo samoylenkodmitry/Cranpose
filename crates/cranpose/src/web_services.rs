@@ -12,16 +12,18 @@ use cranpose_services::{
     HapticPattern, Haptics, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent,
     ShareError, ShareSheet,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 
 pub(crate) fn register() {
     set_platform_share_sheet(Rc::new(WebShareSheet));
-    set_platform_notifier(Rc::new(WebNotifier::default()));
-    set_platform_haptics(Rc::new(WebHaptics));
+    set_platform_notifier(Arc::new(WebNotifier::default()));
+    set_platform_haptics(Arc::new(WebHaptics));
     set_platform_device_info(Rc::new(WebDeviceInfo));
     register_network_monitor();
 }
@@ -97,10 +99,10 @@ impl ShareSheet for WebShareSheet {
 // --- Notifications ----------------------------------------------------------
 
 #[derive(Default)]
-struct WebNotifier {
-    /// Live notifications by id so `cancel`/replacement can `close()` them.
-    /// The click closure is kept alive alongside its notification.
-    active: RefCell<HashMap<String, (web_sys::Notification, Closure<dyn FnMut()>)>>,
+struct WebNotifier;
+
+thread_local! {
+    static ACTIVE_NOTIFICATIONS: RefCell<HashMap<String, (web_sys::Notification, Closure<dyn FnMut()>)>> = RefCell::new(HashMap::new());
 }
 
 impl WebNotifier {
@@ -144,11 +146,12 @@ impl Notifier for WebNotifier {
         }) as Box<dyn FnMut()>);
         notification.set_onclick(Some(on_click.as_ref().unchecked_ref()));
 
-        if let Some((previous, _closure)) = self
-            .active
-            .borrow_mut()
-            .insert(request.id.clone(), (notification, on_click))
-        {
+        let previous = ACTIVE_NOTIFICATIONS.with(|active| {
+            active
+                .borrow_mut()
+                .insert(request.id.clone(), (notification, on_click))
+        });
+        if let Some((previous, _closure)) = previous {
             // Replaced by tag already, but close defensively so the old one
             // cannot linger on browsers that ignore tags.
             previous.close();
@@ -156,7 +159,9 @@ impl Notifier for WebNotifier {
     }
 
     fn cancel(&self, id: &str) {
-        if let Some((notification, _closure)) = self.active.borrow_mut().remove(id) {
+        if let Some((notification, _closure)) =
+            ACTIVE_NOTIFICATIONS.with(|active| active.borrow_mut().remove(id))
+        {
             notification.close();
         }
     }
@@ -244,35 +249,42 @@ impl DeviceInfo for WebDeviceInfo {
 
 // --- Network status ----------------------------------------------------------
 
-struct WebNetworkMonitor {
-    online: Rc<Cell<bool>>,
-}
+struct WebNetworkMonitor;
 
 impl NetworkMonitor for WebNetworkMonitor {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
-            online: self.online.get(),
+            online: NETWORK_ONLINE.load(Ordering::Acquire),
             // Browsers expose no reliable metered signal on the stable
             // Network Information API surface; report unmetered.
             metered: false,
         }
     }
+
+    fn is_alive(&self) -> bool {
+        web_sys::window().is_some()
+    }
+
+    fn reconnect(&self) {}
 }
 
 fn register_network_monitor() {
     let Some(window) = web_sys::window() else {
         return;
     };
-    let online = Rc::new(Cell::new(window.navigator().on_line()));
+    let online = Arc::new(AtomicBool::new(window.navigator().on_line()));
 
     for (event, value) in [("online", true), ("offline", false)] {
-        let online = Rc::clone(&online);
+        let online = Arc::clone(&online);
         let closure = Closure::wrap(Box::new(move || {
-            online.set(value);
+            online.store(value, Ordering::Release);
         }) as Box<dyn FnMut()>);
         let _ = window.add_event_listener_with_callback(event, closure.as_ref().unchecked_ref());
         closure.forget();
     }
 
-    set_platform_network_monitor(Rc::new(WebNetworkMonitor { online }));
+    NETWORK_ONLINE.store(online.load(Ordering::Acquire), Ordering::Release);
+    set_platform_network_monitor(Arc::new(WebNetworkMonitor));
 }
+
+static NETWORK_ONLINE: AtomicBool = AtomicBool::new(true);

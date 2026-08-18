@@ -12,12 +12,13 @@
 //! that degrades to the closest [`HapticFeedback`] constant, so a backend that
 //! implements only [`Haptics::perform`] still answers the whole trait.
 
+use crate::registry::ServiceRegistry;
 use cranpose_core::compositionLocalOfWithPolicy;
 use cranpose_core::CompositionLocal;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_macros::composable;
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, OnceLock};
 
 /// A haptic feedback event.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -240,7 +241,7 @@ impl HapticPattern {
 ///
 /// Only [`perform`](Haptics::perform) has to be implemented. Every other method
 /// falls back to it, so extending this trait cannot break an existing backend.
-pub trait Haptics {
+pub trait Haptics: Send + Sync {
     /// Plays a semantic feedback event.
     fn perform(&self, feedback: HapticFeedback);
 
@@ -287,7 +288,7 @@ pub trait Haptics {
     }
 }
 
-pub type HapticsRef = Rc<dyn Haptics>;
+pub type HapticsRef = Arc<dyn Haptics>;
 
 struct NoopHaptics;
 
@@ -295,24 +296,23 @@ impl Haptics for NoopHaptics {
     fn perform(&self, _feedback: HapticFeedback) {}
 }
 
-thread_local! {
-    static PLATFORM_HAPTICS: RefCell<Option<HapticsRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_HAPTICS: ServiceRegistry<dyn Haptics> = ServiceRegistry::new();
+static NOOP_HAPTICS: OnceLock<HapticsRef> = OnceLock::new();
 
 /// Installs a platform haptics implementation, replacing any previous one.
 pub fn set_platform_haptics(haptics: HapticsRef) {
-    PLATFORM_HAPTICS.with(|cell| *cell.borrow_mut() = Some(haptics));
+    PLATFORM_HAPTICS.set(haptics);
 }
 
 /// Removes any registered platform haptics (tests and teardown).
 pub fn clear_platform_haptics() {
-    PLATFORM_HAPTICS.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_HAPTICS.clear();
 }
 
 pub fn default_haptics() -> HapticsRef {
     PLATFORM_HAPTICS
-        .with(|cell| cell.borrow().clone())
-        .unwrap_or_else(|| Rc::new(NoopHaptics))
+        .get_or_warn("haptics")
+        .unwrap_or_else(|| NOOP_HAPTICS.get_or_init(|| Arc::new(NoopHaptics)).clone())
 }
 
 pub fn local_haptics() -> CompositionLocal<HapticsRef> {
@@ -323,7 +323,7 @@ pub fn local_haptics() -> CompositionLocal<HapticsRef> {
     LOCAL_HAPTICS.with(|cell| {
         let mut local = cell.borrow_mut();
         local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_haptics, Rc::ptr_eq))
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_haptics, Arc::ptr_eq))
             .clone()
     })
 }
@@ -342,41 +342,43 @@ pub fn ProvideHaptics(content: impl FnOnce()) {
 mod tests {
     use super::*;
     use crate::run_test_composition;
-    use std::cell::Cell;
+    use parking_lot::Mutex;
 
     /// A backend that implements only `perform`, exactly as one written before
     /// the waveform methods existed would.
     #[derive(Default)]
     struct Rec {
-        events: RefCell<Vec<HapticFeedback>>,
+        events: Mutex<Vec<HapticFeedback>>,
     }
 
     impl Haptics for Rec {
         fn perform(&self, feedback: HapticFeedback) {
-            self.events.borrow_mut().push(feedback);
+            self.events.lock().push(feedback);
         }
     }
 
     #[test]
     fn registered_haptics_receives_events() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_haptics();
         default_haptics().perform(HapticFeedback::Selection); // no-op, no panic
 
-        struct Counter(Rc<Cell<u32>>);
+        struct Counter(Arc<Mutex<u32>>);
         impl Haptics for Counter {
             fn perform(&self, _f: HapticFeedback) {
-                self.0.set(self.0.get() + 1);
+                *self.0.lock() += 1;
             }
         }
-        let count = Rc::new(Cell::new(0));
-        set_platform_haptics(Rc::new(Counter(count.clone())));
+        let count = Arc::new(Mutex::new(0));
+        set_platform_haptics(Arc::new(Counter(count.clone())));
         default_haptics().perform(HapticFeedback::ImpactMedium);
-        assert_eq!(count.get(), 1);
+        assert_eq!(*count.lock(), 1);
         clear_platform_haptics();
     }
 
     #[test]
     fn noop_backend_answers_every_method_without_panicking() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_haptics();
         let haptics = default_haptics();
         haptics.perform(HapticFeedback::Error);
@@ -455,7 +457,7 @@ mod tests {
 
     #[test]
     fn defaulted_methods_fall_back_to_perform() {
-        let backend = Rc::new(Rec::default());
+        let backend = Arc::new(Rec::default());
         let haptics: HapticsRef = backend.clone();
 
         haptics.vibrate(10, 20);
@@ -469,7 +471,7 @@ mod tests {
         haptics.cancel();
 
         assert_eq!(
-            *backend.events.borrow(),
+            *backend.events.lock(),
             vec![
                 HapticFeedback::ImpactLight,
                 HapticFeedback::ImpactMedium,
@@ -485,8 +487,9 @@ mod tests {
 
     #[test]
     fn provide_haptics_publishes_the_platform_backend() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_haptics();
-        let backend = Rc::new(Rec::default());
+        let backend = Arc::new(Rec::default());
         let haptics: HapticsRef = backend.clone();
         set_platform_haptics(haptics);
 
@@ -496,7 +499,7 @@ mod tests {
             });
         });
 
-        assert_eq!(*backend.events.borrow(), vec![HapticFeedback::Success]);
+        assert_eq!(*backend.events.lock(), vec![HapticFeedback::Success]);
         clear_platform_haptics();
     }
 }

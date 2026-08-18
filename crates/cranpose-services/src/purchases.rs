@@ -34,9 +34,9 @@
 //! [`take_event`] drains one-shot events — the things a snapshot cannot
 //! express, like "the user cancelled" — for showing a message once.
 
-use std::cell::RefCell;
+use crate::registry::{RecoveryGate, ServiceRegistry};
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
+use std::sync::{Arc, OnceLock};
 
 /// A product as the store describes it, in the user's locale and currency.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,7 +186,7 @@ pub enum PurchaseEvent {
 /// Implementations are installed with [`set_platform_purchases`] and must be
 /// non-blocking: every method returns immediately and reports back by
 /// updating the snapshot returned from [`Purchases::state`].
-pub trait Purchases {
+pub trait Purchases: Send + Sync {
     /// Declare the product ids this app sells and start talking to the store.
     /// Called again on relaunch; backends should treat it as idempotent.
     fn configure(&self, product_ids: &[&str]);
@@ -204,10 +204,14 @@ pub trait Purchases {
 
     /// Take the next pending one-shot event, if any.
     fn take_event(&self) -> Option<PurchaseEvent>;
+
+    fn is_connected(&self) -> bool;
+
+    fn reconnect(&self);
 }
 
 /// Shared handle to the active [`Purchases`] backend.
-pub type PurchasesRef = Rc<dyn Purchases>;
+pub type PurchasesRef = Arc<dyn Purchases>;
 
 /// The no-store backend: nothing is for sale and nothing is owned.
 struct NoPurchases;
@@ -226,15 +230,17 @@ impl Purchases for NoPurchases {
     fn take_event(&self) -> Option<PurchaseEvent> {
         None
     }
+
+    fn is_connected(&self) -> bool {
+        false
+    }
+
+    fn reconnect(&self) {}
 }
 
-thread_local! {
-    static PLATFORM_PURCHASES: RefCell<Option<PurchasesRef>> = const { RefCell::new(None) };
-    /// The no-store backend, created once per thread. [`purchases`] is on the
-    /// frame path — an app polls the snapshot every frame — so the fallback
-    /// must be a reference-count bump, not a fresh allocation each call.
-    static NO_PURCHASES: PurchasesRef = Rc::new(NoPurchases);
-}
+static PLATFORM_PURCHASES: ServiceRegistry<dyn Purchases> = ServiceRegistry::new();
+static NO_PURCHASES: OnceLock<PurchasesRef> = OnceLock::new();
+static PURCHASE_RECOVERY: RecoveryGate = RecoveryGate::new();
 
 /// Installs a platform purchase backend, replacing any previous one.
 static STORE_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
@@ -263,25 +269,32 @@ pub fn note_store_news() {
 }
 
 pub fn set_platform_purchases(purchases: PurchasesRef) {
-    PLATFORM_PURCHASES.with(|cell| *cell.borrow_mut() = Some(purchases));
+    PLATFORM_PURCHASES.set(purchases);
+    PURCHASE_RECOVERY.succeeded();
 }
 
 /// Removes any registered purchase backend (tests and teardown).
 pub fn clear_platform_purchases() {
-    PLATFORM_PURCHASES.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_PURCHASES.clear();
 }
 
 /// The active backend: the platform one if installed, else the no-store
 /// backend.
 pub fn purchases() -> PurchasesRef {
-    PLATFORM_PURCHASES
-        .with(|cell| cell.borrow().clone())
-        .unwrap_or_else(|| NO_PURCHASES.with(Rc::clone))
+    let purchases = PLATFORM_PURCHASES
+        .get_or_warn("purchases")
+        .unwrap_or_else(|| NO_PURCHASES.get_or_init(|| Arc::new(NoPurchases)).clone());
+    if purchases.is_connected() {
+        PURCHASE_RECOVERY.succeeded();
+    } else if PURCHASE_RECOVERY.try_start() {
+        purchases.reconnect();
+    }
+    purchases
 }
 
 /// Whether a real store backend is installed on this platform.
 pub fn store_available() -> bool {
-    PLATFORM_PURCHASES.with(|cell| cell.borrow().is_some())
+    PLATFORM_PURCHASES.get().is_some()
 }
 
 /// Convenience: declare the products this app sells and connect to the store.
@@ -312,9 +325,11 @@ pub fn take_event() -> Option<PurchaseEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     #[test]
     fn default_backend_sells_nothing_and_owns_nothing() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_purchases();
         let state = store_state();
         assert_eq!(state.phase, StorePhase::Unavailable);
@@ -353,6 +368,7 @@ mod tests {
 
     #[test]
     fn installed_backend_answers_prices_and_ownership() {
+        let _guard = crate::registry::test_service_guard();
         struct Fake;
         impl Purchases for Fake {
             fn configure(&self, _product_ids: &[&str]) {}
@@ -379,8 +395,12 @@ mod tests {
             fn take_event(&self) -> Option<PurchaseEvent> {
                 Some(PurchaseEvent::Purchased("com.example.pro".into()))
             }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            fn reconnect(&self) {}
         }
-        set_platform_purchases(Rc::new(Fake));
+        set_platform_purchases(Arc::new(Fake));
         let state = store_state();
         assert_eq!(state.phase, StorePhase::Ready);
         assert!(state.owns("com.example.pro"));
@@ -395,6 +415,49 @@ mod tests {
             take_event(),
             Some(PurchaseEvent::Purchased("com.example.pro".into()))
         );
+        clear_platform_purchases();
+    }
+
+    #[test]
+    fn dead_store_reconnects_before_frame_state_is_read() {
+        let _guard = crate::registry::test_service_guard();
+        struct Reconnecting {
+            alive: AtomicBool,
+            reconnects: AtomicUsize,
+        }
+        impl Purchases for Reconnecting {
+            fn configure(&self, _product_ids: &[&str]) {}
+            fn state(&self) -> StoreState {
+                StoreState {
+                    phase: if self.alive.load(Ordering::Acquire) {
+                        StorePhase::Ready
+                    } else {
+                        StorePhase::Unavailable
+                    },
+                    ..StoreState::default()
+                }
+            }
+            fn purchase(&self, _product_id: &str) {}
+            fn restore(&self) {}
+            fn take_event(&self) -> Option<PurchaseEvent> {
+                None
+            }
+            fn is_connected(&self) -> bool {
+                self.alive.load(Ordering::Acquire)
+            }
+            fn reconnect(&self) {
+                self.reconnects.fetch_add(1, Ordering::AcqRel);
+                self.alive.store(true, Ordering::Release);
+            }
+        }
+        clear_platform_purchases();
+        let purchases = Arc::new(Reconnecting {
+            alive: AtomicBool::new(false),
+            reconnects: AtomicUsize::new(0),
+        });
+        set_platform_purchases(purchases.clone());
+        assert_eq!(store_state().phase, StorePhase::Ready);
+        assert_eq!(purchases.reconnects.load(Ordering::Acquire), 1);
         clear_platform_purchases();
     }
 }

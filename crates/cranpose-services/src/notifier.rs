@@ -7,12 +7,14 @@
 //! / osascript / PowerShell toast); CI without a notification service simply
 //! drops them.
 
+use crate::registry::ServiceRegistry;
 use cranpose_core::compositionLocalOfWithPolicy;
 use cranpose_core::CompositionLocal;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_macros::composable;
+use parking_lot::Mutex;
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, OnceLock};
 
 /// A local notification to post.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +55,7 @@ impl NotifyRequest {
 
 /// Posts local notifications. Installed by the platform backend; the default is
 /// a no-op.
-pub trait Notifier {
+pub trait Notifier: Send + Sync {
     /// Request permission to show notifications (idempotent; safe to call more
     /// than once).
     fn request_permission(&self);
@@ -63,10 +65,7 @@ pub trait Notifier {
     fn cancel(&self, id: &str);
 }
 
-pub type NotifierRef = Rc<dyn Notifier>;
-
-use std::sync::Mutex;
-use std::sync::OnceLock;
+pub type NotifierRef = Arc<dyn Notifier>;
 
 fn pending_deeplink_slot() -> &'static Mutex<Option<String>> {
     static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
@@ -77,18 +76,13 @@ fn pending_deeplink_slot() -> &'static Mutex<Option<String>> {
 /// by the platform backend's notification delegate; the app drains it via
 /// [`take_notification_deeplink`].
 pub fn push_notification_deeplink(link: String) {
-    if let Ok(mut slot) = pending_deeplink_slot().lock() {
-        *slot = Some(link);
-    }
+    *pending_deeplink_slot().lock() = Some(link);
 }
 
 /// Take (and clear) the deep-link payload of the most recently tapped
 /// notification, if any. Polled by the app's deep-link handling.
 pub fn take_notification_deeplink() -> Option<String> {
-    pending_deeplink_slot()
-        .lock()
-        .ok()
-        .and_then(|mut s| s.take())
+    pending_deeplink_slot().lock().take()
 }
 
 #[cfg(not(all(
@@ -111,23 +105,21 @@ impl Notifier for NoopNotifier {
     fn cancel(&self, _id: &str) {}
 }
 
-thread_local! {
-    static PLATFORM_NOTIFIER: RefCell<Option<NotifierRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_NOTIFIER: ServiceRegistry<dyn Notifier> = ServiceRegistry::new();
 
 /// Installs a platform notifier, replacing any previously installed one.
 pub fn set_platform_notifier(notifier: NotifierRef) {
-    PLATFORM_NOTIFIER.with(|cell| *cell.borrow_mut() = Some(notifier));
+    PLATFORM_NOTIFIER.set(notifier);
 }
 
 /// Removes any registered platform notifier (tests and teardown).
 pub fn clear_platform_notifier() {
-    PLATFORM_NOTIFIER.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_NOTIFIER.clear();
 }
 
 pub fn default_notifier() -> NotifierRef {
     PLATFORM_NOTIFIER
-        .with(|cell| cell.borrow().clone())
+        .get_or_warn("notifier")
         .unwrap_or_else(|| {
             #[cfg(all(
                 feature = "notifier-native",
@@ -136,7 +128,7 @@ pub fn default_notifier() -> NotifierRef {
                 not(target_os = "ios")
             ))]
             {
-                Rc::new(desktop::DesktopNotifier)
+                Arc::new(desktop::DesktopNotifier)
             }
             #[cfg(not(all(
                 feature = "notifier-native",
@@ -145,7 +137,7 @@ pub fn default_notifier() -> NotifierRef {
                 not(target_os = "ios")
             )))]
             {
-                Rc::new(NoopNotifier)
+                Arc::new(NoopNotifier)
             }
         })
 }
@@ -264,7 +256,7 @@ pub fn local_notifier() -> CompositionLocal<NotifierRef> {
     LOCAL_NOTIFIER.with(|cell| {
         let mut local = cell.borrow_mut();
         local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_notifier, Rc::ptr_eq))
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_notifier, Arc::ptr_eq))
             .clone()
     })
 }
@@ -282,29 +274,30 @@ pub fn ProvideNotifier(content: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
+    use parking_lot::Mutex;
 
     #[derive(Default)]
     struct Recorder {
-        posted: RefCell<Vec<String>>,
+        posted: Mutex<Vec<String>>,
     }
     impl Notifier for Recorder {
         fn request_permission(&self) {}
         fn notify(&self, request: NotifyRequest) {
-            self.posted.borrow_mut().push(request.id);
+            self.posted.lock().push(request.id);
         }
         fn cancel(&self, _id: &str) {}
     }
 
     #[test]
     fn default_is_noop_then_registered_takes_over() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_notifier();
         // No panic on the no-op default.
         default_notifier().notify(NotifyRequest::new("a", "t", "b"));
-        let rec = Rc::new(Recorder::default());
+        let rec = Arc::new(Recorder::default());
         set_platform_notifier(rec.clone());
         default_notifier().notify(NotifyRequest::new("done", "t", "b").with_deeplink("doc/1"));
-        assert_eq!(rec.posted.borrow().as_slice(), &["done".to_string()]);
+        assert_eq!(rec.posted.lock().as_slice(), &["done".to_string()]);
         clear_platform_notifier();
     }
 }
