@@ -81,7 +81,6 @@ pub(crate) struct RendererFrontend {
     pub(crate) layer_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     pub(crate) overlay_surface_requirements_cache: HashMap<usize, LayerSurfaceRequirements>,
     pub(crate) changed_nodes: Vec<cranpose_core::NodeId>,
-    pub(crate) root_target_reads: bool,
 }
 
 impl RendererFrontend {
@@ -101,7 +100,6 @@ impl RendererFrontend {
             layer_surface_requirements_cache: HashMap::new(),
             overlay_surface_requirements_cache: HashMap::new(),
             changed_nodes: Vec::new(),
-            root_target_reads: true,
         }
     }
 
@@ -222,8 +220,8 @@ impl RendererFrontend {
                 recycled_scene,
             );
             self.direct_scene_capacity = collected.scene.capacity_hint();
-            if root_direct_scene_events_are_supported(&collected.scene, self.root_target_reads)
-                && direct_root_child_underlays_are_supported(&collected, self.root_target_reads)
+            if root_direct_scene_events_are_supported(&collected.scene, true)
+                && direct_root_child_underlays_are_supported(&collected, true)
             {
                 Some(collected)
             } else {
@@ -568,12 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_collect_stashes_scene_and_builds_surface_packet() {
-        // A descendant backdrop passes the direct-eligibility gate but the
-        // collected scene carries a root-local backdrop event, which the
-        // direct path cannot render — the reject branch must recycle the
-        // collected scene AND still lower the frame into a surface packet,
-        // matching the old rejected-direct → graph-fallback control flow.
+    fn direct_root_with_descendant_backdrop_keeps_the_direct_packet() {
         let mut frontend = frontend();
         let mut backdrop = layer_node(
             bounds(40.0, 40.0),
@@ -599,19 +592,17 @@ mod tests {
 
         let packet = frontend
             .build_frame_packet(320, 240, false, 0, 0)
-            .expect("a rejected direct collect must fall through to a surface packet");
-        let surface = surface_root(&packet);
+            .expect("a direct root with readable composition must produce a packet");
+        let root = direct_root(&packet);
         assert!(
-            surface.lowered.contains_descendant_backdrop,
-            "the surface lowering must carry the descendant backdrop the direct path rejected"
+            root.child_layers
+                .iter()
+                .any(|child| child.backdrop.is_some()),
+            "the direct root must retain the descendant backdrop effect"
         );
         assert!(
-            !surface.source.scene.shapes.is_empty() || !surface.source.children.is_empty(),
-            "the surface source must carry the collected root content"
-        );
-        assert!(
-            !frontend.retained_direct_scenes.is_empty(),
-            "rejected collect must stash the scene for recycling"
+            frontend.retained_direct_scenes.is_empty(),
+            "a readable composition root must not recycle a supported direct scene"
         );
         assert_eq!(packet.frame_id, 1);
     }

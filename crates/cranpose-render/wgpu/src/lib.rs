@@ -675,7 +675,6 @@ impl WgpuRenderer {
                     .to_string(),
             ));
         };
-        self.frontend.root_target_reads = true;
         let packet = self
             .frontend
             .build_frame_packet(
@@ -729,7 +728,6 @@ impl WgpuRenderer {
                     .to_string(),
             ));
         };
-        self.frontend.root_target_reads = true;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
