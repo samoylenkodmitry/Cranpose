@@ -133,8 +133,19 @@ impl AudioSink for AAudioSink {
             }
         }
         if let Err(error) = self.stream.request_start() {
-            log::debug!("failed to restart the AAudio stream: {error}");
+            log::warn!("failed to restart the AAudio stream: {error}");
         }
+    }
+
+    fn is_running(&self) -> bool {
+        let state = self.stream.state();
+        !matches!(
+            state,
+            AudioStreamState::Uninitialized
+                | AudioStreamState::Closing
+                | AudioStreamState::Closed
+                | AudioStreamState::Disconnected
+        )
     }
 
     fn park(&self) {
