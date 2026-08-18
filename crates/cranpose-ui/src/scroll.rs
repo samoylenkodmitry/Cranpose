@@ -40,6 +40,8 @@ pub(crate) struct ScrollStateInner {
     /// Maximum scroll value (content_size - viewport_size)
     /// Using RefCell instead of MutableState to avoid snapshot isolation issues
     max_value: RefCell<f32>,
+    overscroll: Cell<f32>,
+    overscroll_limit: Cell<f32>,
     /// Callbacks to invalidate layout when scroll value changes
     /// Using HashMap to allow multiple listeners (e.g. real node + clones)
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
@@ -75,6 +77,8 @@ impl ScrollState {
             inner: Rc::new(ScrollStateInner {
                 value: ownedMutableStateOf(initial),
                 max_value: RefCell::new(0.0),
+                overscroll: Cell::new(0.0),
+                overscroll_limit: Cell::new(160.0),
                 invalidate_callbacks: RefCell::new(HashMap::new()),
                 next_invalidate_callback_id: Cell::new(1),
                 pending_invalidation: Cell::new(false),
@@ -114,6 +118,10 @@ impl ScrollState {
         self.inner.value.get_non_reactive()
     }
 
+    pub(crate) fn overscroll_non_reactive(&self) -> f32 {
+        self.inner.overscroll.get()
+    }
+
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
         *self.inner.max_value.borrow()
@@ -122,7 +130,7 @@ impl ScrollState {
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
     /// Returns the actual amount scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let current = self.value();
+        let current = self.value_non_reactive();
         let max = self.max_value();
         let new_value = (current + delta).clamp(0.0, max);
         let actual_delta = new_value - current;
@@ -135,6 +143,55 @@ impl ScrollState {
         }
 
         actual_delta
+    }
+
+    pub(crate) fn dispatch_gesture_delta(&self, delta: f32) -> f32 {
+        if delta.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let overscroll = self.inner.overscroll.get();
+        let mut remaining = delta;
+        let mut consumed = 0.0;
+        if overscroll.abs() > f32::EPSILON && delta.signum() != overscroll.signum() {
+            let release = delta.abs().min(overscroll.abs()) * delta.signum();
+            consumed += release;
+            remaining -= release;
+            self.dispatch_overscroll_settle_delta(release);
+        }
+        if remaining.abs() > f32::EPSILON {
+            let applied = -self.dispatch_raw_delta(-remaining);
+            consumed += applied;
+            let unconsumed = remaining - applied;
+            if unconsumed.abs() > f32::EPSILON {
+                self.dispatch_overscroll_delta(unconsumed);
+            }
+        }
+        consumed
+    }
+
+    pub(crate) fn dispatch_fling_delta(&self, delta: f32) -> f32 {
+        if delta.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let overscroll = self.inner.overscroll.get();
+        let mut remaining = delta;
+        let mut consumed = 0.0;
+        if overscroll.abs() > f32::EPSILON && delta.signum() == overscroll.signum() {
+            let release = delta.abs().min(overscroll.abs()) * delta.signum();
+            consumed += release;
+            remaining -= release;
+            self.dispatch_overscroll_settle_delta(-release);
+        }
+        if remaining.abs() > f32::EPSILON {
+            let applied = self.dispatch_raw_delta(remaining);
+            consumed += applied;
+            let unconsumed = remaining - applied;
+            if unconsumed.abs() > f32::EPSILON {
+                self.dispatch_overscroll_delta(-unconsumed);
+                consumed += unconsumed;
+            }
+        }
+        consumed
     }
 
     /// Sets the maximum scroll value (internal use by ScrollNode).
@@ -150,6 +207,42 @@ impl ScrollState {
         self.inner.value.set(clamped);
 
         self.invalidate();
+    }
+
+    pub(crate) fn dispatch_overscroll_delta(&self, delta: f32) -> f32 {
+        if !delta.is_finite() || delta.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let limit = self.inner.overscroll_limit.get();
+        let current = self.inner.overscroll.get();
+        let resistance = (1.0 - current.abs() / limit).clamp(0.12, 1.0) * 0.5;
+        let next = (current + delta * resistance).clamp(-limit, limit);
+        let applied = next - current;
+        if applied.abs() > f32::EPSILON {
+            self.inner.overscroll.set(next);
+            self.invalidate();
+        }
+        applied
+    }
+
+    pub(crate) fn dispatch_overscroll_settle_delta(&self, delta: f32) -> f32 {
+        let current = self.inner.overscroll.get();
+        let limit = self.inner.overscroll_limit.get();
+        let next = (current + delta).clamp(-limit, limit);
+        let applied = next - current;
+        if applied.abs() > f32::EPSILON {
+            self.inner.overscroll.set(next);
+            self.invalidate();
+        }
+        applied
+    }
+
+    pub(crate) fn set_overscroll_limit(&self, limit: f32) {
+        if limit.is_finite() && limit > 0.0 {
+            self.inner.overscroll_limit.set(limit);
+            let current = self.inner.overscroll.get();
+            self.inner.overscroll.set(current.clamp(-limit, limit));
+        }
     }
 
     /// Adds an invalidation callback and returns its ID
@@ -556,6 +649,8 @@ impl LayoutModifierNode for ScrollNode {
             || (!self.is_vertical && constraints.max_width.is_finite())
         {
             self.state.set_max_value(max_scroll);
+            self.state
+                .set_overscroll_limit((if self.is_vertical { height } else { width }) * 0.5);
         }
 
         // Step 6: Read scroll value and calculate offset
@@ -567,6 +662,7 @@ impl LayoutModifierNode for ScrollNode {
         } else {
             -scroll
         };
+        let abs_scroll = abs_scroll + self.state.overscroll_non_reactive();
 
         let (x_offset, y_offset) = if self.is_vertical {
             (0.0, abs_scroll)

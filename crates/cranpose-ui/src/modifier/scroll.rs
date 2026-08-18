@@ -102,6 +102,8 @@ struct ScrollGestureState {
     /// Current fling animation (if any).
     fling_animation: Option<FlingAnimation>,
 
+    is_overscrolling: bool,
+
     /// Current settle animation driving toward a policy target (if any).
     settle_animation: Option<SettleAnimation>,
 
@@ -122,6 +124,7 @@ impl Default for ScrollGestureState {
             gesture_start_event_time_ms: None,
             last_velocity_sample_ms: None,
             fling_animation: None,
+            is_overscrolling: false,
             settle_animation: None,
             wheel_settle_watcher: None,
         }
@@ -210,16 +213,27 @@ trait ScrollTarget: Clone {
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         None
     }
+
+    fn apply_overscroll_delta(&self, _delta: f32) -> f32 {
+        0.0
+    }
+
+    fn apply_overscroll_settle_delta(&self, _delta: f32) -> f32 {
+        0.0
+    }
+
+    fn current_overscroll(&self) -> f32 {
+        0.0
+    }
 }
 
 impl ScrollTarget for ScrollState {
     fn apply_delta(&self, delta: f32) -> f32 {
-        // Regular scroll uses negative delta (natural scrolling)
-        self.dispatch_raw_delta(-delta)
+        self.dispatch_gesture_delta(delta)
     }
 
     fn apply_fling_delta(&self, delta: f32) -> f32 {
-        self.dispatch_raw_delta(delta)
+        self.dispatch_fling_delta(delta)
     }
 
     fn invalidate(&self) {
@@ -247,6 +261,18 @@ impl ScrollTarget for ScrollState {
 
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         ScrollState::settle_policy(self)
+    }
+
+    fn apply_overscroll_delta(&self, delta: f32) -> f32 {
+        self.dispatch_overscroll_delta(delta)
+    }
+
+    fn apply_overscroll_settle_delta(&self, delta: f32) -> f32 {
+        self.dispatch_overscroll_settle_delta(delta)
+    }
+
+    fn current_overscroll(&self) -> f32 {
+        self.overscroll_non_reactive()
     }
 }
 
@@ -391,6 +417,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         gs.velocity_tracker.reset();
         gs.gesture_start_time = Some(Instant::now());
         gs.gesture_start_event_time_ms = time_ms;
+        gs.is_overscrolling = self.scroll_target.current_overscroll().abs() > 0.001;
 
         // Add initial position to velocity tracker
         let pos = if self.is_vertical {
@@ -465,6 +492,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
                     self.motion_context.set_active(true);
+                } else if self.scroll_target.can_scroll() {
+                    gs.is_overscrolling = true;
+                    self.motion_context.set_active(true);
                 }
             } else if cross_delta > DRAG_THRESHOLD && cross_delta > main_delta {
                 gs.axis_locked_out = true;
@@ -534,9 +564,23 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             } else {
                 incremental_delta
             };
-            let _ = self.scroll_target.apply_delta(delta);
+            let consumed = self.scroll_target.apply_delta(delta);
+            let unconsumed = delta - consumed;
+            if unconsumed.abs() > 0.001 {
+                self.scroll_target.apply_overscroll_delta(unconsumed);
+            }
             self.scroll_target.invalidate();
             true // Consume event while dragging
+        } else if gs.is_overscrolling {
+            drop(gs);
+            let delta = if self.reverse_scrolling {
+                -incremental_delta
+            } else {
+                incremental_delta
+            };
+            self.scroll_target.apply_overscroll_delta(delta);
+            self.scroll_target.invalidate();
+            false
         } else {
             false
         }
@@ -612,6 +656,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             velocity
         };
         let fling_velocity = -adjusted_velocity;
+        let has_overscroll = self.scroll_target.current_overscroll().abs() > 0.001;
 
         // Settle policy: remap where this interaction comes to rest (the
         // `targetContentOffset` analog). When it moves the rest position, a
@@ -632,7 +677,12 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             None
         };
 
-        if let Some(target) = settle_target {
+        if has_overscroll {
+            if let Some(old_fling) = existing_fling {
+                old_fling.cancel();
+            }
+            self.start_overscroll_settle(fling_velocity);
+        } else if let Some(target) = settle_target {
             if let Some(old_fling) = existing_fling {
                 old_fling.cancel();
             }
@@ -654,6 +704,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
                 let scroll_target_for_fling = scroll_target.clone();
                 let scroll_target_for_end = scroll_target.clone();
+                let detector_for_end = self.clone_for_watcher();
 
                 fling.start_fling(
                     initial_value,
@@ -668,7 +719,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     move || {
                         // Animation complete - invalidate to ensure final render
                         scroll_target_for_end.invalidate();
-                        motion_context.set_active(false);
+                        if detector_for_end.scroll_target.current_overscroll().abs() > 0.001 {
+                            detector_for_end.start_overscroll_settle(0.0);
+                        } else {
+                            motion_context.set_active(false);
+                        }
                     },
                 );
 
@@ -709,6 +764,39 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             },
         );
         let mut gs = self.gesture_state.borrow_mut();
+        gs.settle_animation = Some(settle);
+    }
+
+    fn start_overscroll_settle(&self, initial_velocity: f32) {
+        let Some(runtime) = current_runtime_handle() else {
+            let current = self.scroll_target.current_overscroll();
+            self.scroll_target.apply_overscroll_settle_delta(-current);
+            self.motion_context.set_active(false);
+            return;
+        };
+        let settle = SettleAnimation::new(runtime);
+        let scroll_target_for_settle = self.scroll_target.clone();
+        let scroll_target_for_end = self.scroll_target.clone();
+        let motion_context = self.motion_context.clone();
+        let initial = self.scroll_target.current_overscroll();
+        settle.start_settle(
+            initial,
+            initial_velocity,
+            0.0,
+            move |delta| {
+                let consumed = scroll_target_for_settle.apply_overscroll_settle_delta(delta);
+                scroll_target_for_settle.invalidate();
+                consumed
+            },
+            move || {
+                let current = scroll_target_for_end.current_overscroll();
+                scroll_target_for_end.apply_overscroll_settle_delta(-current);
+                scroll_target_for_end.invalidate();
+                motion_context.set_active(false);
+            },
+        );
+        let mut gs = self.gesture_state.borrow_mut();
+        gs.is_overscrolling = false;
         gs.settle_animation = Some(settle);
     }
 
