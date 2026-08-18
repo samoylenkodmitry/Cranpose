@@ -5,8 +5,9 @@ use cranpose_animation::{
 use cranpose_core::useState;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
-    composable, Button, ButtonSpec, Column, ColumnSpec, LinearArrangement, Modifier, Text,
-    TextStyle,
+    composable, Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec,
+    LinearArrangement, Modifier, Text, TextStyle, CIRCULAR_INDICATOR_STROKE_WIDTH,
+    PROGRESS_INDICATOR_COLOR,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -17,6 +18,7 @@ static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 enum ProbeMode {
     None,
     Unread,
+    DrawOnly,
     Consumed,
 }
 
@@ -60,6 +62,28 @@ fn main() {
                 unread_runtime.runtime_stats.frame_callbacks_len,
             );
 
+            click_mode(&robot, "Draw-only transition");
+            robot.reset_fps_stats().expect("reset draw-only FPS stats");
+            let root_after_draw_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(350));
+            let draw_only = robot.fps_stats().expect("read draw-only FPS stats");
+            let draw_only_runtime = robot
+                .get_runtime_leak_debug_stats()
+                .expect("read draw-only runtime stats");
+            let draw_only_render = robot
+                .get_render_stats()
+                .expect("read draw-only render stats")
+                .expect("draw-only render stats available");
+            println!(
+                "IDLE-TRANSITION mode=draw-only frames={} recompositions={} work_fps={:.1} callbacks={} draws={} uploads={}",
+                draw_only.frame_count,
+                draw_only.recompositions,
+                draw_only.work_fps,
+                draw_only_runtime.runtime_stats.frame_callbacks_len,
+                draw_only_render.draw_calls,
+                draw_only_render.upload_bytes,
+            );
+
             click_mode(&robot, "Consumed transition");
             robot.reset_fps_stats().expect("reset consumed interval stats");
             let root_after_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
@@ -99,6 +123,21 @@ fn main() {
             assert_eq!(
                 unread_runtime.runtime_stats.frame_callbacks_len, 0,
                 "unread infinite transition left a frame callback queued: {unread_runtime:?}"
+            );
+            assert!(
+                draw_only.frame_count > 0
+                    && draw_only.recompositions == 0
+                    && draw_only_runtime.runtime_stats.frame_callbacks_len > 0,
+                "draw-only infinite transition did not animate without composition work: {draw_only:?}"
+            );
+            assert_eq!(
+                ROOT_COMPOSITIONS.load(Ordering::Relaxed),
+                root_after_draw_mode,
+                "draw-only infinite transition recomposed the root"
+            );
+            assert!(
+                draw_only_render.draw_calls > 0,
+                "draw-only infinite transition did not redraw its canvas: {draw_only_render:?}"
             );
             assert!(
                 consumed.frame_count > 0
@@ -164,6 +203,18 @@ fn probe_app() {
             Button(
                 Modifier::empty(),
                 ButtonSpec::default(),
+                move || mode.set(ProbeMode::DrawOnly),
+                || {
+                    Text(
+                        "Draw-only transition",
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                },
+            );
+            Button(
+                Modifier::empty(),
+                ButtonSpec::default(),
                 move || mode.set(ProbeMode::Consumed),
                 || {
                     Text(
@@ -178,6 +229,13 @@ fn probe_app() {
                     format!("{pulse_value:.2}"),
                     Modifier::empty(),
                     TextStyle::default(),
+                );
+            }
+            if mode.get() == ProbeMode::DrawOnly {
+                CircularProgressIndicator(
+                    Modifier::empty(),
+                    PROGRESS_INDICATOR_COLOR,
+                    CIRCULAR_INDICATOR_STROKE_WIDTH,
                 );
             }
         },
