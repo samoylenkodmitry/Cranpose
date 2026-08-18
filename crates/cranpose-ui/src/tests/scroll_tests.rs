@@ -141,6 +141,7 @@ fn first_edge_drag_consumes_event_with_effect_motion() {
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
         let move_event = scroll_pointer_event(PointerEventKind::Move, 0.0, 160.0);
         handler(move_event.clone());
+        move_event.finish_post_dispatch();
 
         assert!(move_event.is_consumed());
     });
@@ -206,7 +207,9 @@ fn lazy_edge_drag_updates_shared_effect() {
                 callback_count_for_effect.set(callback_count_for_effect.get() + 1);
             }));
         handler(scroll_pointer_event(PointerEventKind::Down, 160.0, 40.0));
-        handler(scroll_pointer_event(PointerEventKind::Move, 160.0, 100.0));
+        let move_event = scroll_pointer_event(PointerEventKind::Move, 160.0, 100.0);
+        handler(move_event.clone());
+        move_event.finish_post_dispatch();
 
         assert!(context.overscroll().offset() > 0.0);
         assert!(callback_count.get() > 0);
@@ -361,6 +364,7 @@ fn dispatch_nested(
 ) -> PointerEvent {
     child(event.clone());
     parent(event.clone());
+    event.finish_post_dispatch();
     event
 }
 
@@ -408,6 +412,17 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
             inner.value_non_reactive(),
             400.0,
             "the exhausted inner list has nothing to consume"
+        );
+        assert_eq!(
+            scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+                state_id: inner.id(),
+                is_vertical: true,
+                reverse_scrolling: false,
+            })
+            .overscroll()
+            .offset(),
+            0.0,
+            "a rejected inner edge candidate must not start overscroll"
         );
         assert!(
             outer.value_non_reactive() > 50.0,

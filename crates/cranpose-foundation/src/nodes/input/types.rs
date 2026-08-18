@@ -1,9 +1,25 @@
 use super::rotary::RotaryScrollEvent;
 use cranpose_ui_graphics::Point;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 pub type PointerId = u64;
+
+type PostDispatchAction = Box<dyn FnOnce() -> bool>;
+
+#[derive(Clone)]
+struct DeferredPostDispatch {
+    action: Rc<RefCell<Option<PostDispatchAction>>>,
+}
+
+impl std::fmt::Debug for DeferredPostDispatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeferredPostDispatch")
+            .field("is_pending", &self.action.borrow().is_some())
+            .finish()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerPhase {
@@ -158,6 +174,7 @@ pub struct PointerEvent {
     /// Tracks whether this event has been consumed by a handler.
     /// Shared via Rc<Cell> so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
+    deferred_post_dispatch: DeferredPostDispatch,
 }
 
 impl PointerEvent {
@@ -186,6 +203,9 @@ impl PointerEvent {
             zoom_delta: 1.0,
             source: PointerSource::Unknown,
             consumed: Rc::new(Cell::new(false)),
+            deferred_post_dispatch: DeferredPostDispatch {
+                action: Rc::new(RefCell::new(None)),
+            },
         }
     }
 
@@ -281,6 +301,27 @@ impl PointerEvent {
         self.consumed.get()
     }
 
+    pub fn defer_post_dispatch_action<F>(&self, action: F)
+    where
+        F: FnOnce() -> bool + 'static,
+    {
+        *self.deferred_post_dispatch.action.borrow_mut() = Some(Box::new(action));
+    }
+
+    pub fn finish_post_dispatch(&self) {
+        if self.is_consumed() {
+            self.deferred_post_dispatch.action.borrow_mut().take();
+            return;
+        }
+
+        let Some(action) = self.deferred_post_dispatch.action.borrow_mut().take() else {
+            return;
+        };
+        if action() {
+            self.consume();
+        }
+    }
+
     /// Creates a copy of this event with a new local position, sharing the consumption state.
     pub fn copy_with_local_position(&self, position: Point) -> Self {
         Self {
@@ -296,6 +337,7 @@ impl PointerEvent {
             zoom_delta: self.zoom_delta,
             source: self.source,
             consumed: self.consumed.clone(),
+            deferred_post_dispatch: self.deferred_post_dispatch.clone(),
         }
     }
 }
@@ -389,5 +431,39 @@ mod tests {
         event.consume();
 
         assert!(local.is_consumed());
+    }
+
+    #[test]
+    fn deferred_post_dispatch_action_consumes_when_it_applies() {
+        let event = PointerEvent::new(PointerEventKind::Move, point(0.0, 0.0), point(0.0, 0.0));
+        event.defer_post_dispatch_action(|| true);
+
+        event.finish_post_dispatch();
+
+        assert!(event.is_consumed());
+    }
+
+    #[test]
+    fn deferred_post_dispatch_action_is_replaced_and_discarded_when_consumed() {
+        let event = PointerEvent::new(PointerEventKind::Move, point(0.0, 0.0), point(0.0, 0.0));
+        let first_called = Rc::new(Cell::new(false));
+        let second_called = Rc::new(Cell::new(false));
+        let first_called_in_action = first_called.clone();
+        let second_called_in_action = second_called.clone();
+        event.defer_post_dispatch_action(move || {
+            first_called_in_action.set(true);
+            true
+        });
+        event.defer_post_dispatch_action(move || {
+            second_called_in_action.set(true);
+            true
+        });
+        event.consume();
+
+        event.finish_post_dispatch();
+
+        assert!(!first_called.get());
+        assert!(!second_called.get());
+        assert!(event.is_consumed());
     }
 }

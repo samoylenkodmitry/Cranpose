@@ -23,7 +23,7 @@
 //!      enclosing scrollables abandon the gesture (they see consumed moves).
 //! 3. **Up/Cancel**: Clean up state, consume if was dragging
 
-use super::{inspector_metadata, Modifier, Point, PointerEventKind};
+use super::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
 use crate::current_density;
 use crate::fling_animation::{
     fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY,
@@ -425,7 +425,13 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// 4. While dragging, apply scroll delta and consume events.
     ///
     /// Returns `true` if event should be consumed (we're actively dragging).
-    fn on_move(&self, position: Point, buttons: PointerButtons, time_ms: Option<i64>) -> bool {
+    fn on_move(
+        &self,
+        position: Point,
+        buttons: PointerButtons,
+        time_ms: Option<i64>,
+        event: &PointerEvent,
+    ) -> bool {
         let mut gs = self.gesture_state.borrow_mut();
 
         // Safety: detect missed Up events (hit test delivered to wrong target)
@@ -462,6 +468,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         // the rest of the gesture. Targets that cannot scroll in either
         // direction never capture, so enclosing scrollables receive the
         // gesture instead.
+        let mut edge_candidate = false;
         if !gs.is_dragging && !gs.axis_locked_out {
             let signed_main_delta = calculate_total_delta(down_pos, position, self.is_vertical);
             let main_delta = signed_main_delta.abs();
@@ -473,8 +480,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                     gs.is_dragging = true;
                     self.motion_context.set_active(true);
                 } else if self.scroll_target.can_scroll() {
-                    gs.is_overscrolling = true;
-                    self.motion_context.set_active(true);
+                    edge_candidate = true;
                 }
             } else if cross_delta > DRAG_THRESHOLD && cross_delta > main_delta {
                 gs.axis_locked_out = true;
@@ -555,20 +561,47 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             } else {
                 incremental_delta
             };
-            let overscroll = self.overscroll.clone();
-            let target_consumed = Cell::new(0.0);
-            let before_overscroll = overscroll.offset();
-            overscroll.apply_to_scroll(delta, |delta| {
-                let consumed = self.scroll_target.apply_delta(delta);
-                target_consumed.set(consumed);
-                consumed
-            });
-            self.scroll_target.invalidate();
-            target_consumed.get().abs() > 0.001
-                || (overscroll.offset() - before_overscroll).abs() > 0.001
+            self.apply_overscroll_delta(delta)
+        } else if edge_candidate {
+            drop(gs);
+            let delta = if self.reverse_scrolling {
+                -incremental_delta
+            } else {
+                incremental_delta
+            };
+            let detector = self.clone_for_watcher();
+            event.defer_post_dispatch_action(move || detector.apply_overscroll_candidate(delta));
+            false
         } else {
             false
         }
+    }
+
+    fn apply_overscroll_delta(&self, delta: f32) -> bool {
+        self.motion_context.set_active(true);
+        let overscroll = self.overscroll.clone();
+        let target_consumed = Cell::new(0.0);
+        let before_overscroll = overscroll.offset();
+        overscroll.apply_to_scroll(delta, |delta| {
+            let consumed = self.scroll_target.apply_delta(delta);
+            target_consumed.set(consumed);
+            consumed
+        });
+        self.scroll_target.invalidate();
+        let consumed = target_consumed.get().abs() > 0.001
+            || (overscroll.offset() - before_overscroll).abs() > 0.001;
+        if !consumed {
+            self.motion_context.set_active(false);
+        }
+        consumed
+    }
+
+    fn apply_overscroll_candidate(&self, delta: f32) -> bool {
+        let consumed = self.apply_overscroll_delta(delta);
+        if consumed {
+            self.gesture_state.borrow_mut().is_overscrolling = true;
+        }
+        consumed
     }
 
     /// Handles pointer up event.
@@ -837,13 +870,26 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// Handles mouse wheel / trackpad scroll event.
     ///
     /// Returns `true` when the target consumed any delta.
-    fn on_scroll(&self, axis_delta: f32) -> bool {
+    fn on_scroll(&self, axis_delta: f32, event: &PointerEvent) -> bool {
         if axis_delta.abs() <= f32::EPSILON {
             return false;
         }
 
+        let delta = if self.reverse_scrolling {
+            -axis_delta
+        } else {
+            axis_delta
+        };
+        if !self.scroll_target.can_consume(delta) && self.scroll_target.can_scroll() {
+            let detector = self.clone_for_watcher();
+            event.defer_post_dispatch_action(move || detector.apply_wheel_delta(delta));
+            return false;
+        }
+        self.apply_wheel_delta(delta)
+    }
+
+    fn apply_wheel_delta(&self, delta: f32) -> bool {
         {
-            // Wheel scroll should take over immediately and stop any active drag/fling state.
             let mut gs = self.gesture_state.borrow_mut();
             if let Some(fling) = gs.fling_animation.take() {
                 fling.cancel();
@@ -862,12 +908,6 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         }
 
         self.motion_context.activate_for_current_frame();
-
-        let delta = if self.reverse_scrolling {
-            -axis_delta
-        } else {
-            axis_delta
-        };
         let overscroll = self.overscroll.clone();
         let consumed =
             overscroll.apply_to_scroll(delta, |delta| self.scroll_target.apply_wheel_delta(delta));
@@ -1493,16 +1533,22 @@ fn scroll_impl(
                             PointerEventKind::Down => {
                                 detector.on_down(event.position, event.time_ms)
                             }
-                            PointerEventKind::Move => {
-                                detector.on_move(event.position, event.buttons, event.time_ms)
-                            }
+                            PointerEventKind::Move => detector.on_move(
+                                event.position,
+                                event.buttons,
+                                event.time_ms,
+                                &event,
+                            ),
                             PointerEventKind::Up => detector.on_up(event.time_ms),
                             PointerEventKind::Cancel => detector.on_cancel(),
-                            PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
-                                event.scroll_delta.y
-                            } else {
-                                event.scroll_delta.x
-                            }),
+                            PointerEventKind::Scroll => detector.on_scroll(
+                                if is_vertical {
+                                    event.scroll_delta.y
+                                } else {
+                                    event.scroll_delta.x
+                                },
+                                &event,
+                            ),
                             // Rotary is opt-in via `Modifier::on_rotary_scroll_event`;
                             // touch scroll containers ignore it.
                             PointerEventKind::Zoom
@@ -1683,16 +1729,22 @@ fn lazy_scroll_impl(
                                 PointerEventKind::Down => {
                                     detector.on_down(event.position, event.time_ms)
                                 }
-                                PointerEventKind::Move => {
-                                    detector.on_move(event.position, event.buttons, event.time_ms)
-                                }
+                                PointerEventKind::Move => detector.on_move(
+                                    event.position,
+                                    event.buttons,
+                                    event.time_ms,
+                                    &event,
+                                ),
                                 PointerEventKind::Up => detector.on_up(event.time_ms),
                                 PointerEventKind::Cancel => detector.on_cancel(),
-                                PointerEventKind::Scroll => detector.on_scroll(if is_vertical {
-                                    event.scroll_delta.y
-                                } else {
-                                    event.scroll_delta.x
-                                }),
+                                PointerEventKind::Scroll => detector.on_scroll(
+                                    if is_vertical {
+                                        event.scroll_delta.y
+                                    } else {
+                                        event.scroll_delta.x
+                                    },
+                                    &event,
+                                ),
                                 // Rotary is opt-in via
                                 // `Modifier::on_rotary_scroll_event`.
                                 PointerEventKind::Zoom

@@ -71,6 +71,7 @@ where
                 break;
             }
         }
+        event.finish_post_dispatch();
     }
 
     /// Sets the device source (touch/mouse/stylus) of the pointer sample that
