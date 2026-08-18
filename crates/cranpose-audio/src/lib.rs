@@ -54,7 +54,9 @@ pub use engine::AudioEngine;
 pub use mixer::{MAX_CLIPS, MAX_VOICES};
 
 use cranpose_services::{set_platform_audio, AudioPlayerRef};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+static INSTALLED_ENGINE: OnceLock<Arc<AudioEngine>> = OnceLock::new();
 
 /// Creates an engine without registering it, for an app that wants to hold the
 /// handle itself.
@@ -68,7 +70,7 @@ pub fn create() -> Arc<AudioEngine> {
 /// device opens on the first sound, not here and not when clips are loaded, so
 /// installing the engine in an app that never plays anything costs nothing.
 pub fn install() -> AudioPlayerRef {
-    let engine: AudioPlayerRef = create();
+    let engine: AudioPlayerRef = INSTALLED_ENGINE.get_or_init(create).clone();
     set_platform_audio(Arc::clone(&engine));
     engine
 }
