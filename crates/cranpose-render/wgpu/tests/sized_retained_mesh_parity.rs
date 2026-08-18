@@ -405,12 +405,19 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
                 .zip(&quad_frames[frame - 1])
                 .map(|(a, b)| u64::from(a.abs_diff(*b)))
                 .sum();
+            let temporal_worst = quad_frames[frame]
+                .iter()
+                .zip(&quad_frames[frame - 1])
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
             assert!(
-                mesh_distance < temporal_distance,
+                mesh_distance * 4 < temporal_distance,
                 "frame {frame}: mesh output is not materially closer to its same-frame \
                  quad control than to the previous-frame negative control ({mesh_distance} vs \
                  {temporal_distance}, worst {worst})"
             );
+            assert!(worst <= temporal_worst);
         }
     }
 }

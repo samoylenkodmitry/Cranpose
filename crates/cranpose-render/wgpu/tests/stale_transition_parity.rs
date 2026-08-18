@@ -246,6 +246,7 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     let off_graphs = build_graphs(12, &[FLIP]);
     let off2_graphs = build_graphs(13, &[FLIP]);
     let off3_graphs = build_graphs(15, &[FLIP, FLIP + 1]);
+    let off4_graphs = build_graphs(17, &[FLIP, FLIP + 1]);
 
     // Flag ON: the single-flip sequence and the consecutive-collapse one.
     std::env::set_var("CRANPOSE_STALE_TRANSITION", "1");
@@ -336,6 +337,7 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     let (off2, _) = render_sequence(&mut renderer, &off2_graphs);
     let (on, on_deltas) = render_sequence(&mut renderer, &on_graphs);
     let (off3, _) = render_sequence(&mut renderer, &off3_graphs);
+    let (off4, _) = render_sequence(&mut renderer, &off4_graphs);
     let (on2, _) = render_sequence(&mut renderer, &on2_graphs);
     std::env::remove_var("CRANPOSE_STALE_TRANSITION");
     std::env::remove_var("CRANPOSE_COMMAND_FEED");
@@ -443,6 +445,13 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     );
     let fresh_distance = differing(&on2[FLIP + 1], &off3[FLIP + 1]);
     let stale_distance = differing(&on2[FLIP + 1], &on2[FLIP]);
+    let fresh_worst = worst_diff(&on2[FLIP + 1], &off3[FLIP + 1]);
+    let control_distance = differing(&off4[FLIP + 1], &off3[FLIP + 1]);
+    let control_worst = worst_diff(&off4[FLIP + 1], &off3[FLIP + 1]);
+    assert!(
+        fresh_worst <= control_worst && fresh_distance <= control_distance,
+        "the second collapse must remain inside the independent fresh-control envelope (distance {fresh_distance}/{control_distance}, worst {fresh_worst}/{control_worst})"
+    );
     assert!(
         fresh_distance * 4 < stale_distance,
         "the second collapse must be materially closer to the same-content fresh control \

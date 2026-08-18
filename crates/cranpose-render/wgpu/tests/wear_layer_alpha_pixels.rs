@@ -346,6 +346,7 @@ fn a_real_faded_row_capsule_composites_through_the_layer_too() {
             ])
         })
         .unwrap_or([0; 3]);
+    assert!(offset.into_iter().all(|channel| channel.abs() <= 1));
     for (index, (top, height, scale, alpha)) in rows_for(WIDGET_ROWS).iter().enumerate() {
         // A fifth of the way down the capsule: inside the fill, above the label
         // and clear of the switch. Take the modal colour along that scan line so
