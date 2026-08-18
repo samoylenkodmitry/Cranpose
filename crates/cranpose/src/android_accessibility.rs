@@ -16,10 +16,22 @@ use std::sync::{Mutex, OnceLock};
 
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();
-static LOOP_WAKER: OnceLock<android_activity::AndroidAppWaker> = OnceLock::new();
+static LOOP_WAKER: Mutex<Option<android_activity::AndroidAppWaker>> = Mutex::new(None);
 
 pub(crate) fn set_waker(waker: android_activity::AndroidAppWaker) {
-    let _ = LOOP_WAKER.set(waker);
+    *LOOP_WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(waker);
+}
+
+fn wake_loop() {
+    let waker = LOOP_WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if let Some(waker) = waker {
+        waker.wake();
+    }
 }
 
 fn activations() -> &'static Mutex<Vec<(f32, f32)>> {
@@ -95,9 +107,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((x, y));
-    if let Some(waker) = LOOP_WAKER.get() {
-        waker.wake();
-    }
+    wake_loop();
 }
 
 /// A screen reader picked one of the node's custom actions.
@@ -120,7 +130,5 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .push((virtual_id, action_index as usize));
-    if let Some(waker) = LOOP_WAKER.get() {
-        waker.wake();
-    }
+    wake_loop();
 }

@@ -26,7 +26,7 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 /// Set while a frame callback is posted and has not fired yet, so a loop that
 /// iterates several times before the next vsync posts one callback, not one per
@@ -39,16 +39,12 @@ static CALLBACK_POSTED: AtomicBool = AtomicBool::new(false);
 /// its previous behaviour instead of paying for a null check every iteration.
 static UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 
-/// Wakes the `android_main` looper. There is one frame loop per process, which
-/// is why this is a global rather than callback user data: the choreographer
-/// takes a raw pointer, and a `OnceLock` gives the same reach without a leaked
-/// allocation to justify.
-static WAKER: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+static WAKER: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
-/// Installs the waker the vsync callback fires. Called once, from
-/// `android_main`, before the loop starts; later calls are ignored.
 pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {
-    let _ = WAKER.set(Box::new(waker));
+    *WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(waker));
 }
 
 /// Asks the display to wake the frame loop at the next vsync.
@@ -60,7 +56,12 @@ pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {
 /// Must be called from `android_main`: the callback is delivered on the looper
 /// of the posting thread.
 pub(crate) fn request_wake_at_next_vsync() -> bool {
-    if UNAVAILABLE.load(Ordering::Relaxed) || WAKER.get().is_none() {
+    if UNAVAILABLE.load(Ordering::Relaxed)
+        || WAKER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_none()
+    {
         return false;
     }
     if CALLBACK_POSTED.swap(true, Ordering::AcqRel) {
@@ -98,7 +99,11 @@ unsafe extern "C" fn on_vsync(frame_time_ns: i64, _data: *mut c_void) {
             VSYNC_PERIOD_NS.store(delta, Ordering::Relaxed);
         }
     }
-    if let Some(waker) = WAKER.get() {
+    let waker = WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    if let Some(waker) = waker {
         waker();
     }
 }
