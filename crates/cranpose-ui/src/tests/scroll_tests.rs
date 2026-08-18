@@ -176,18 +176,42 @@ fn lazy_edge_drag_updates_shared_effect() {
                 .expect("layout");
             applier.clear_runtime_handle();
         }
+        let _ = crate::render_state::take_measure_repass_nodes();
         let (handler, _chain) =
             pointer_handler_for(Modifier::empty().lazy_vertical_scroll(state, false));
-        handler(scroll_pointer_event(PointerEventKind::Down, 160.0, 40.0));
-        handler(scroll_pointer_event(PointerEventKind::Move, 160.0, 100.0));
-
         let context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
             state_identity: state.inner_ptr() as usize,
             is_vertical: true,
             reverse_scrolling: false,
         });
+        let callback_count = Rc::new(Cell::new(0_u32));
+        let callback_count_for_effect = callback_count.clone();
+        context
+            .overscroll()
+            .add_invalidate_callback(Box::new(move || {
+                callback_count_for_effect.set(callback_count_for_effect.get() + 1);
+            }));
+        handler(scroll_pointer_event(PointerEventKind::Down, 160.0, 40.0));
+        handler(scroll_pointer_event(PointerEventKind::Move, 160.0, 100.0));
+
         assert!(context.overscroll().offset() > 0.0);
+        assert!(callback_count.get() > 0);
+        assert!(crate::render_state::has_pending_measure_repasses());
     });
+}
+
+#[test]
+fn scroll_motion_context_keeps_effect_identity_for_layout_and_gesture_owners() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let key = ScrollMotionContextKey::LazyList {
+        state_identity: 91,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let effect = scroll_motion_context_for_key(key).overscroll();
+    let context = scroll_motion_context_for_key(key);
+
+    assert!(effect.ptr_eq(&context.overscroll()));
 }
 
 fn scroll_wheel_event(dx: f32, dy: f32) -> PointerEvent {

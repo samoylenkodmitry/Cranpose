@@ -642,9 +642,6 @@ fn bind_layout_invalidation_callback(
         cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
     let overscroll_callback_id = overscroll.add_invalidate_callback(Box::new(move || {
         let _ = crate::render_state::enter_app_context_by_id(app_context_id, || {
-            let _ = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
-                node.request_measure_recompose();
-            });
             crate::schedule_measure_repass(node_id);
             crate::schedule_semantics_invalidation(node_id);
         });
