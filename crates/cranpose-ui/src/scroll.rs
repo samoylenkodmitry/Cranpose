@@ -30,26 +30,15 @@ use std::rc::{Rc, Weak};
 #[derive(Clone, Copy)]
 pub struct ScrollState {
     value: MutableState<f32>,
-    max_value: MutableState<f32>,
-    callbacks: MutableState<ScrollCallbacks>,
-    settle_policy: MutableState<Option<ScrollSettlePolicy>>,
+    inner: MutableState<Rc<ScrollStateInner>>,
 }
 
-#[derive(Clone)]
-struct ScrollCallbacks {
-    listeners: Vec<(u64, Rc<dyn Fn()>)>,
-    next_id: u64,
-    pending_invalidation: bool,
-}
-
-impl Default for ScrollCallbacks {
-    fn default() -> Self {
-        Self {
-            listeners: Vec::new(),
-            next_id: 1,
-            pending_invalidation: false,
-        }
-    }
+pub(crate) struct ScrollStateInner {
+    max_value: RefCell<f32>,
+    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
+    next_invalidate_callback_id: Cell<u64>,
+    pending_invalidation: Cell<bool>,
+    settle_policy: RefCell<Option<ScrollSettlePolicy>>,
 }
 
 /// Remaps where a scroll comes to rest once the user's interaction ends — the
@@ -65,7 +54,7 @@ impl PartialEq for ScrollState {
     /// Two handles are equal when they share the same underlying state
     /// (identity, not value — composable-skip semantics).
     fn eq(&self, other: &Self) -> bool {
-        self.value == other.value
+        self.inner == other.inner
     }
 }
 
@@ -76,26 +65,37 @@ impl ScrollState {
             .expect("ScrollState::new requires an active runtime");
         Self {
             value: MutableState::with_runtime(initial, runtime.clone()),
-            max_value: MutableState::with_runtime(0.0, runtime.clone()),
-            callbacks: MutableState::with_runtime(ScrollCallbacks::default(), runtime.clone()),
-            settle_policy: MutableState::with_runtime(None, runtime),
+            inner: MutableState::with_runtime(
+                Rc::new(ScrollStateInner {
+                    max_value: RefCell::new(0.0),
+                    invalidate_callbacks: RefCell::new(HashMap::new()),
+                    next_invalidate_callback_id: Cell::new(1),
+                    pending_invalidation: Cell::new(false),
+                    settle_policy: RefCell::new(None),
+                }),
+                runtime,
+            ),
         }
+    }
+
+    fn inner(&self) -> Rc<ScrollStateInner> {
+        self.inner.get_non_reactive()
     }
 
     /// Installs (or clears) the settle policy consulted when interactions end.
     pub fn set_settle_policy(&self, policy: Option<ScrollSettlePolicy>) {
-        self.settle_policy.set(policy);
+        *self.inner().settle_policy.borrow_mut() = policy;
     }
 
     /// The currently installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        self.settle_policy.get_non_reactive()
+        self.inner().settle_policy.borrow().clone()
     }
 
     /// Get the unique ID of this ScrollState
     pub fn id(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
-        self.value.runtime_state_id().hash(&mut hasher);
+        self.inner.runtime_state_id().hash(&mut hasher);
         hasher.finish()
     }
 
@@ -117,7 +117,7 @@ impl ScrollState {
 
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
-        self.max_value.get_non_reactive()
+        *self.inner().max_value.borrow()
     }
 
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
@@ -140,7 +140,7 @@ impl ScrollState {
 
     /// Sets the maximum scroll value (internal use by ScrollNode).
     pub(crate) fn set_max_value(&self, max: f32) {
-        self.max_value.set(max);
+        *self.inner().max_value.borrow_mut() = max;
     }
 
     /// Scrolls to the given position immediately.
@@ -155,16 +155,15 @@ impl ScrollState {
 
     /// Adds an invalidation callback and returns its ID
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
+        let inner = self.inner();
+        let id = inner.next_invalidate_callback_id.get();
+        inner.next_invalidate_callback_id.set(id.saturating_add(1));
         let callback: Rc<dyn Fn()> = Rc::from(callback);
-        let mut pending = false;
-        let id = self.callbacks.update(|callbacks| {
-            let id = callbacks.next_id;
-            callbacks.next_id = id.saturating_add(1);
-            callbacks.listeners.push((id, Rc::clone(&callback)));
-            pending = std::mem::replace(&mut callbacks.pending_invalidation, false);
-            id
-        });
-        if pending {
+        inner
+            .invalidate_callbacks
+            .borrow_mut()
+            .insert(id, Rc::clone(&callback));
+        if inner.pending_invalidation.replace(false) {
             callback();
         }
         id
@@ -172,26 +171,19 @@ impl ScrollState {
 
     /// Removes an invalidation callback by ID
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.callbacks.update(|callbacks| {
-            callbacks
-                .listeners
-                .retain(|(listener_id, _)| *listener_id != id)
-        });
+        self.inner().invalidate_callbacks.borrow_mut().remove(&id);
     }
 
     fn invalidate(&self) {
-        let callbacks = self.callbacks.update(|callbacks| {
-            if callbacks.listeners.is_empty() {
-                callbacks.pending_invalidation = true;
-                Vec::new()
-            } else {
-                callbacks
-                    .listeners
-                    .iter()
-                    .map(|(_, callback)| Rc::clone(callback))
-                    .collect()
+        let inner = self.inner();
+        let callbacks: Vec<Rc<dyn Fn()>> = {
+            let callbacks = inner.invalidate_callbacks.borrow();
+            if callbacks.is_empty() {
+                inner.pending_invalidation.set(true);
+                return;
             }
-        });
+            callbacks.values().cloned().collect()
+        };
         for callback in callbacks {
             callback();
         }
@@ -407,7 +399,7 @@ impl Eq for ScrollElement {}
 
 impl Hash for ScrollElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.state.value.runtime_state_id().hash(state);
+        self.state.inner.runtime_state_id().hash(state);
         self.is_vertical.hash(state);
         self.reverse_scrolling.hash(state);
     }

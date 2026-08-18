@@ -1,14 +1,20 @@
 use cranpose::AppLauncher;
 use cranpose_core::remember;
+use cranpose_foundation::text::TextFieldState;
+use cranpose_ui::round_scaling_list::CentreAnchor;
+use cranpose_ui::widgets::wear::rememberWearScalingListState;
 use cranpose_ui::{
     composable, rememberMutableInteractionSource, Box as ComposeBox, BoxSpec, Column, ColumnSpec,
-    Modifier, Row, RowSpec, ScrollState, Text, TextStyle,
+    Modifier, Row, RowSpec, ScrollState, Text, TextStyle, ZoomState,
 };
 
 #[composable]
 fn reactive_handle_copy_screen() {
     let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| state.clone());
     let interaction_source = rememberMutableInteractionSource();
+    let text_state = remember(|| TextFieldState::new("copyable")).with(|state| state.clone());
+    let zoom_state = remember(ZoomState::new).with(|state| state.clone());
+    let wear_state = rememberWearScalingListState(CentreAnchor::default());
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Row(Modifier::empty(), RowSpec::default(), move || {
             ComposeBox(
@@ -17,7 +23,16 @@ fn reactive_handle_copy_screen() {
                     .press_interaction_source(interaction_source),
                 BoxSpec::default(),
                 move || {
-                    Text("left", Modifier::empty(), TextStyle::default());
+                    Text(
+                        format!(
+                            "left {} {:.1} {}",
+                            text_state.text(),
+                            zoom_state.scale_non_reactive(),
+                            wear_state.anchor().index
+                        ),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
             ComposeBox(
@@ -26,7 +41,16 @@ fn reactive_handle_copy_screen() {
                     .press_interaction_source(interaction_source),
                 BoxSpec::default(),
                 move || {
-                    Text("right", Modifier::empty(), TextStyle::default());
+                    Text(
+                        format!(
+                            "right {} {:.1} {}",
+                            text_state.text(),
+                            zoom_state.scale_non_reactive(),
+                            wear_state.anchor().index
+                        ),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
         });
