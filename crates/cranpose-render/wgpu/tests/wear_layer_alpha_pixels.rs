@@ -346,7 +346,10 @@ fn a_real_faded_row_capsule_composites_through_the_layer_too() {
             ])
         })
         .unwrap_or([0; 3]);
-    assert!(offset.into_iter().all(|channel| channel.abs() <= 1));
+    assert!(
+        offset.into_iter().all(|channel| channel.abs() <= 1),
+        "opaque calibration drift exceeded one channel level: {offset:?}"
+    );
     for (index, (top, height, scale, alpha)) in rows_for(WIDGET_ROWS).iter().enumerate() {
         // A fifth of the way down the capsule: inside the fill, above the label
         // and clear of the switch. Take the modal colour along that scan line so
@@ -510,6 +513,10 @@ fn compare(probe: &Probe, fill: (f32, f32, f32)) -> Report {
             ])
         })
         .unwrap_or([0; 3]);
+    assert!(
+        offset.into_iter().all(|channel| channel.abs() <= 1),
+        "opaque calibration drift exceeded one channel level: {offset:?}"
+    );
     for (index, (top, height, scale, alpha)) in probe.rows.iter().enumerate() {
         // The middle of the row, well clear of any antialiased edge.
         let y = (top + height * 0.5).round();

@@ -449,6 +449,10 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     let control_distance = differing(&off4[FLIP + 1], &off3[FLIP + 1]);
     let control_worst = worst_diff(&off4[FLIP + 1], &off3[FLIP + 1]);
     assert!(
+        fresh_worst <= 6,
+        "the second collapse must stay within the absolute fresh pixel envelope: worst {fresh_worst}"
+    );
+    assert!(
         fresh_worst <= control_worst && fresh_distance <= control_distance,
         "the second collapse must remain inside the independent fresh-control envelope (distance {fresh_distance}/{control_distance}, worst {fresh_worst}/{control_worst})"
     );

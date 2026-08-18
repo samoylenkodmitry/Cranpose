@@ -417,6 +417,11 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
                  quad control than to the previous-frame negative control ({mesh_distance} vs \
                  {temporal_distance}, worst {worst})"
             );
+            assert!(
+                worst <= 2,
+                "frame {frame}: mesh interpolation exceeded the absolute identity envelope \
+                 (differing {differing}, worst {worst})"
+            );
             assert!(worst <= temporal_worst);
         }
     }
