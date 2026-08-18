@@ -110,6 +110,7 @@ use cranpose_core::{remember, useState, MutableState, NodeId, SlotId};
 use cranpose_ui_graphics::{CompositingStrategy, Size};
 use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
 use std::cell::{Cell, RefCell};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 
 /// The channel one item's scale and alpha travel down.
@@ -197,9 +198,13 @@ impl WearScalingLayoutInfo {
 /// is offset — because that is the coordinate `ScalingLazyListState` keeps and
 /// because a scaling list has no meaningful "first visible item": the item at
 /// the top of the screen is the one shrunk to nothing.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct WearScalingListState {
     anchor: MutableState<CentreAnchor>,
+    inner: MutableState<Rc<WearScalingListInner>>,
+}
+
+struct WearScalingListInner {
     layout: Rc<RefCell<WearScalingLayoutInfo>>,
     heights: Rc<RefCell<ItemHeights>>,
     indicator: Rc<RefCell<IndicatorState>>,
@@ -207,10 +212,7 @@ pub struct WearScalingListState {
 
 impl PartialEq for WearScalingListState {
     fn eq(&self, other: &Self) -> bool {
-        self.anchor == other.anchor
-            && Rc::ptr_eq(&self.layout, &other.layout)
-            && Rc::ptr_eq(&self.heights, &other.heights)
-            && Rc::ptr_eq(&self.indicator, &other.indicator)
+        self.inner == other.inner
     }
 }
 
@@ -383,6 +385,16 @@ impl ItemHeights {
 }
 
 impl WearScalingListState {
+    fn inner(&self) -> Rc<WearScalingListInner> {
+        self.inner.get_non_reactive()
+    }
+
+    fn id(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.runtime_state_id().hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// The anchor, read reactively — a scope that reads this recomposes when
     /// the list scrolls.
     pub fn anchor(&self) -> CentreAnchor {
@@ -403,14 +415,14 @@ impl WearScalingListState {
         if !delta.is_finite() {
             return;
         }
-        let info = *self.layout.borrow();
+        let info = *self.inner().layout.borrow();
         let anchor = self.anchor.get();
         self.set_anchor(re_anchor(anchor, delta, info));
     }
 
     /// What the last measure pass worked out.
     pub fn layout_info(&self) -> WearScalingLayoutInfo {
-        *self.layout.borrow()
+        *self.inner().layout.borrow()
     }
 
     /// Reads the list the way `ScalingLazyColumnStateAdapter` reads one, for
@@ -425,7 +437,8 @@ impl WearScalingListState {
         &self,
         read: impl FnOnce(&mut ThumbLength, ScalingList<'_>) -> R,
     ) -> R {
-        let mut indicator = self.indicator.borrow_mut();
+        let inner = self.inner();
+        let mut indicator = inner.indicator.borrow_mut();
         let IndicatorState {
             visible,
             total,
@@ -475,18 +488,20 @@ fn re_anchor(anchor: CentreAnchor, delta: f32, info: WearScalingLayoutInfo) -> C
 #[composable]
 pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListState {
     let anchor = useState(move || initial);
-    let layout = remember(|| Rc::new(RefCell::new(WearScalingLayoutInfo::default())))
-        .with(|value| value.clone());
-    let heights =
-        remember(|| Rc::new(RefCell::new(ItemHeights::default()))).with(|value| value.clone());
-    let indicator =
-        remember(|| Rc::new(RefCell::new(IndicatorState::default()))).with(|value| value.clone());
-    WearScalingListState {
-        anchor,
-        layout,
-        heights,
-        indicator,
-    }
+    let inner = remember(|| {
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("rememberWearScalingListState requires an active runtime");
+        MutableState::with_runtime(
+            Rc::new(WearScalingListInner {
+                layout: Rc::new(RefCell::new(WearScalingLayoutInfo::default())),
+                heights: Rc::new(RefCell::new(ItemHeights::default())),
+                indicator: Rc::new(RefCell::new(IndicatorState::default())),
+            }),
+            runtime,
+        )
+    })
+    .with(|state| *state);
+    WearScalingListState { anchor, inner }
 }
 
 /// How a [`WearScalingLazyColumn`] is laid out.
@@ -824,9 +839,10 @@ pub fn WearScalingLazyColumnNode(
     let policy: Rc<SubcomposeMeasurePolicy> = remember({
         let inputs = inputs.clone();
         let transforms = transforms.clone();
-        let layout = state.layout.clone();
-        let heights = state.heights.clone();
-        let indicator = state.indicator.clone();
+        let inner = state.inner();
+        let layout = Rc::clone(&inner.layout);
+        let heights = Rc::clone(&inner.heights);
+        let indicator = Rc::clone(&inner.indicator);
         move || {
             let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(
                 move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
@@ -849,7 +865,7 @@ pub fn WearScalingLazyColumnNode(
     let modifier = modifier.clip_to_bounds();
     // The state's layout cell is allocated once per remembered state and lives
     // exactly as long as it, so its address is a stable identity for the node.
-    let list_id = Rc::as_ptr(&state.layout) as usize;
+    let list_id = state.id();
     let node_id = cranpose_core::with_current_composer(|composer| {
         composer.with_key(&(list_id, "WearScalingLazyColumnNode"), |composer| {
             composer.emit_node({

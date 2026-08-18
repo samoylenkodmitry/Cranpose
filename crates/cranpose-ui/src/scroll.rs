@@ -8,7 +8,7 @@
 //! The actual `Modifier.horizontal_scroll()` and `Modifier.vertical_scroll()`
 //! extension methods are defined in `modifier/scroll.rs`.
 
-use cranpose_core::{ownedMutableStateOf, NodeId, OwnedMutableState};
+use cranpose_core::{MutableState, NodeId};
 use cranpose_foundation::{
     Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
     ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState,
@@ -27,27 +27,17 @@ use std::rc::{Rc, Weak};
 ///
 /// This is a pure scroll model - it does NOT store ephemeral gesture/pointer state.
 /// Gesture state is managed locally in the scroll modifier.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ScrollState {
-    inner: Rc<ScrollStateInner>,
+    value: MutableState<f32>,
+    inner: MutableState<Rc<ScrollStateInner>>,
 }
 
 pub(crate) struct ScrollStateInner {
-    /// Current scroll offset in pixels.
-    /// Uses MutableState<f32> for reactivity - Composables can observe this value.
-    /// Layout reads use get_non_reactive() to avoid triggering recomposition.
-    value: OwnedMutableState<f32>,
-    /// Maximum scroll value (content_size - viewport_size)
-    /// Using RefCell instead of MutableState to avoid snapshot isolation issues
     max_value: RefCell<f32>,
-    /// Callbacks to invalidate layout when scroll value changes
-    /// Using HashMap to allow multiple listeners (e.g. real node + clones)
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_invalidate_callback_id: Cell<u64>,
-    /// Tracks whether we need to invalidate once a callback is registered.
     pending_invalidation: Cell<bool>,
-    /// Optional settle policy consulted when a gesture/fling/wheel interaction
-    /// ends (see [`ScrollSettlePolicy`]).
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
 }
 
@@ -64,38 +54,49 @@ impl PartialEq for ScrollState {
     /// Two handles are equal when they share the same underlying state
     /// (identity, not value — composable-skip semantics).
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.inner == other.inner
     }
 }
 
 impl ScrollState {
     /// Creates a new ScrollState with the given initial scroll position.
     pub fn new(initial: f32) -> Self {
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("ScrollState::new requires an active runtime");
         Self {
-            inner: Rc::new(ScrollStateInner {
-                value: ownedMutableStateOf(initial),
-                max_value: RefCell::new(0.0),
-                invalidate_callbacks: RefCell::new(HashMap::new()),
-                next_invalidate_callback_id: Cell::new(1),
-                pending_invalidation: Cell::new(false),
-                settle_policy: RefCell::new(None),
-            }),
+            value: MutableState::with_runtime(initial, runtime.clone()),
+            inner: MutableState::with_runtime(
+                Rc::new(ScrollStateInner {
+                    max_value: RefCell::new(0.0),
+                    invalidate_callbacks: RefCell::new(HashMap::new()),
+                    next_invalidate_callback_id: Cell::new(1),
+                    pending_invalidation: Cell::new(false),
+                    settle_policy: RefCell::new(None),
+                }),
+                runtime,
+            ),
         }
+    }
+
+    fn inner(&self) -> Rc<ScrollStateInner> {
+        self.inner.get_non_reactive()
     }
 
     /// Installs (or clears) the settle policy consulted when interactions end.
     pub fn set_settle_policy(&self, policy: Option<ScrollSettlePolicy>) {
-        *self.inner.settle_policy.borrow_mut() = policy;
+        *self.inner().settle_policy.borrow_mut() = policy;
     }
 
     /// The currently installed settle policy, if any.
     pub fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
-        self.inner.settle_policy.borrow().clone()
+        self.inner().settle_policy.borrow().clone()
     }
 
     /// Get the unique ID of this ScrollState
     pub fn id(&self) -> u64 {
-        Rc::as_ptr(&self.inner) as usize as u64
+        let mut hasher = DefaultHasher::new();
+        self.inner.runtime_state_id().hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Gets the current scroll position in pixels (reactive - triggers recomposition).
@@ -103,7 +104,7 @@ impl ScrollState {
     /// Use this in Composable functions when you want UI to update on scroll.
     /// Example: `Text("Scroll position: ${scrollState.value()}")`
     pub fn value(&self) -> f32 {
-        self.inner.value.with(|v| *v)
+        self.value.value()
     }
 
     /// Gets the current scroll position in pixels (non-reactive).
@@ -111,12 +112,12 @@ impl ScrollState {
     /// Use this in layout/measure phase to avoid triggering recomposition.
     /// This is called internally by ScrollNode::measure().
     pub fn value_non_reactive(&self) -> f32 {
-        self.inner.value.get_non_reactive()
+        self.value.get_non_reactive()
     }
 
     /// Gets the maximum scroll value.
     pub fn max_value(&self) -> f32 {
-        *self.inner.max_value.borrow()
+        *self.inner().max_value.borrow()
     }
 
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
@@ -129,7 +130,7 @@ impl ScrollState {
 
         if actual_delta.abs() > 0.001 {
             // Use MutableState::set which triggers snapshot observers for reactive updates
-            self.inner.value.set(new_value);
+            self.value.set(new_value);
 
             self.invalidate();
         }
@@ -139,7 +140,7 @@ impl ScrollState {
 
     /// Sets the maximum scroll value (internal use by ScrollNode).
     pub(crate) fn set_max_value(&self, max: f32) {
-        *self.inner.max_value.borrow_mut() = max;
+        *self.inner().max_value.borrow_mut() = max;
     }
 
     /// Scrolls to the given position immediately.
@@ -147,23 +148,22 @@ impl ScrollState {
         let max = self.max_value();
         let clamped = position.clamp(0.0, max);
 
-        self.inner.value.set(clamped);
+        self.value.set(clamped);
 
         self.invalidate();
     }
 
     /// Adds an invalidation callback and returns its ID
     pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
-        let id = self.inner.next_invalidate_callback_id.get();
-        self.inner
-            .next_invalidate_callback_id
-            .set(id.saturating_add(1));
+        let inner = self.inner();
+        let id = inner.next_invalidate_callback_id.get();
+        inner.next_invalidate_callback_id.set(id.saturating_add(1));
         let callback: Rc<dyn Fn()> = Rc::from(callback);
-        self.inner
+        inner
             .invalidate_callbacks
             .borrow_mut()
             .insert(id, Rc::clone(&callback));
-        if self.inner.pending_invalidation.replace(false) {
+        if inner.pending_invalidation.replace(false) {
             callback();
         }
         id
@@ -171,14 +171,15 @@ impl ScrollState {
 
     /// Removes an invalidation callback by ID
     pub(crate) fn remove_invalidate_callback(&self, id: u64) {
-        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+        self.inner().invalidate_callbacks.borrow_mut().remove(&id);
     }
 
     fn invalidate(&self) {
+        let inner = self.inner();
         let callbacks: Vec<Rc<dyn Fn()>> = {
-            let callbacks = self.inner.invalidate_callbacks.borrow();
+            let callbacks = inner.invalidate_callbacks.borrow();
             if callbacks.is_empty() {
-                self.inner.pending_invalidation.set(true);
+                inner.pending_invalidation.set(true);
                 return;
             }
             callbacks.values().cloned().collect()
@@ -388,7 +389,7 @@ impl std::fmt::Debug for ScrollElement {
 impl PartialEq for ScrollElement {
     fn eq(&self, other: &Self) -> bool {
         // ScrollStates are equal if they point to the same underlying state
-        Rc::ptr_eq(&self.state.inner, &other.state.inner)
+        self.state == other.state
             && self.is_vertical == other.is_vertical
             && self.reverse_scrolling == other.reverse_scrolling
     }
@@ -398,7 +399,7 @@ impl Eq for ScrollElement {}
 
 impl Hash for ScrollElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        (Rc::as_ptr(&self.state.inner) as usize).hash(state);
+        self.state.inner.runtime_state_id().hash(state);
         self.is_vertical.hash(state);
         self.reverse_scrolling.hash(state);
     }
@@ -409,7 +410,7 @@ impl ModifierNodeElement for ScrollElement {
 
     fn create(&self) -> Self::Node {
         // println!("ScrollElement::create");
-        ScrollNode::new(self.state.clone(), self.is_vertical, self.reverse_scrolling)
+        ScrollNode::new(self.state, self.is_vertical, self.reverse_scrolling)
     }
 
     fn key(&self) -> Option<u64> {
@@ -421,12 +422,12 @@ impl ModifierNodeElement for ScrollElement {
     }
 
     fn update(&self, node: &mut Self::Node) {
-        let needs_invalidation = !Rc::ptr_eq(&node.state.inner, &self.state.inner)
+        let needs_invalidation = node.state != self.state
             || node.is_vertical != self.is_vertical
             || node.reverse_scrolling != self.reverse_scrolling;
 
         if needs_invalidation {
-            node.state = self.state.clone();
+            node.state = self.state;
             node.is_vertical = self.is_vertical;
             node.reverse_scrolling = self.reverse_scrolling;
         }
