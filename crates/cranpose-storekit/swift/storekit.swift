@@ -112,6 +112,7 @@ private final class BridgeState: @unchecked Sendable {
     private var _sink: Sink?
     private var _productIds: [String] = []
     private var _listenerActive = false
+    private var _listenerGeneration: UInt64 = 0
 
     static let shared = BridgeState()
 
@@ -127,24 +128,27 @@ private final class BridgeState: @unchecked Sendable {
         return _productIds
     }
 
-    func start(sink: Sink, productIds: [String]) -> Bool {
+    func start(sink: Sink, productIds: [String]) -> UInt64? {
         lock.lock()
         defer { lock.unlock() }
         _sink = sink
         _productIds = productIds
-        let shouldStart: Bool
+        let generation: UInt64?
         if !_listenerActive {
-            shouldStart = true
+            _listenerGeneration &+= 1
+            generation = _listenerGeneration
             _listenerActive = true
         } else {
-            shouldStart = false
+            generation = nil
         }
-        return shouldStart
+        return generation
     }
 
-    func listenerEnded() {
+    func listenerEnded(_ generation: UInt64) {
         lock.lock()
-        _listenerActive = false
+        if _listenerGeneration == generation {
+            _listenerActive = false
+        }
         lock.unlock()
     }
 
@@ -175,7 +179,7 @@ public func cranpose_storekit_start(
         .map(String.init)
         .filter { !$0.isEmpty }
     let sink = Sink(callback: callback, ctx: ctx)
-    let first = BridgeState.shared.start(sink: sink, productIds: ids)
+    let generation = BridgeState.shared.start(sink: sink, productIds: ids)
 
     guard #available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *) else {
         // Below the StoreKit 2 floor. The app's deployment target should make
@@ -188,7 +192,7 @@ public func cranpose_storekit_start(
 
     sink.send(.phase, PhaseCode.connecting.rawValue)
 
-    if first {
+    if let generation {
         // Long-running: transactions that arrive without a purchase call —
         // Ask to Buy approvals, purchases made on another device, subscription
         // renewals, and anything the App Store retried after a crash. Apple
@@ -200,7 +204,7 @@ public func cranpose_storekit_start(
                 }
                 await refreshSnapshot()
             }
-            BridgeState.shared.listenerEnded()
+            BridgeState.shared.listenerEnded(generation)
         }
     }
 
