@@ -67,7 +67,6 @@ fn main() {
         .with_robot_app_hook(set_tab_hook)
         .with_test_driver(move |robot| {
             std::thread::sleep(Duration::from_millis(700));
-            let _ = robot.wait_for_idle();
 
             for tab in DEMO_TABS {
                 dump_tab(&robot, tab, &shot_dir);
@@ -88,13 +87,13 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
     robot
         .invoke_app_hook("set-tab", slug)
         .unwrap_or_else(|err| panic!("failed to select tab '{slug}': {err}"));
-    std::thread::sleep(Duration::from_millis(settle_ms()));
-    let _ = robot.wait_for_idle();
 
     if NONDETERMINISTIC_TABS.contains(&tab) {
         // Give network fetches (or a few more animation frames) a chance to
         // produce representative, if not bit-reproducible, content.
+        std::thread::sleep(Duration::from_millis(settle_ms()));
         std::thread::sleep(Duration::from_millis(1500));
+    } else {
         let _ = robot.wait_for_idle();
     }
 
