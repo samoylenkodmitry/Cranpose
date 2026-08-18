@@ -102,4 +102,12 @@ mod tests {
         assert!(!engine.is_running());
         assert!(!default_audio().is_available());
     }
+
+    #[test]
+    fn install_reuses_the_registered_engine() {
+        let first = install();
+        let second = install();
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
 }
