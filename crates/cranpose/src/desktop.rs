@@ -5886,7 +5886,8 @@ fn resolve_robot_screenshot_params_with_scale(
 mod tests {
     #[cfg(feature = "robot")]
     use super::{
-        bound_park_for_robot, ControlFlow, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
+        bound_park_for_robot, robot_frame_present_pending, ControlFlow, ROBOT_IDLE_TIMEOUT,
+        ROBOT_PARKED_COMMAND_POLL_INTERVAL,
     };
     use super::{
         clamp_rect_to_monitor_delta, frame_interval_for_mode, free_running_frame,
