@@ -8,15 +8,20 @@
 #![allow(unsafe_code)]
 
 use block2::RcBlock;
-use cranpose_services::{set_platform_camera, Camera, CameraError, CameraFrame, CameraStill};
+use cranpose_services::{
+    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraStill, FlashMode,
+};
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, AllocAnyThread};
 use objc2_av_foundation::{
-    AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceInput,
-    AVCaptureDevicePosition, AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInDualWideCamera,
-    AVCaptureDeviceTypeBuiltInTripleCamera, AVCaptureFocusMode, AVCaptureOutput, AVCapturePhoto,
+    AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice,
+    AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput, AVCaptureDevicePosition,
+    AVCaptureDeviceType, AVCaptureDeviceTypeBuiltInDualWideCamera,
+    AVCaptureDeviceTypeBuiltInTelephotoCamera, AVCaptureDeviceTypeBuiltInTripleCamera,
+    AVCaptureDeviceTypeBuiltInUltraWideCamera, AVCaptureDeviceTypeBuiltInWideAngleCamera,
+    AVCaptureFlashMode, AVCaptureFocusMode, AVCaptureOutput, AVCapturePhoto,
     AVCapturePhotoCaptureDelegate, AVCapturePhotoOutput, AVCapturePhotoSettings,
     AVCapturePrimaryConstituentDeviceRestrictedSwitchingBehaviorConditions,
     AVCapturePrimaryConstituentDeviceSwitchingBehavior, AVCaptureSession,
@@ -30,7 +35,9 @@ use objc2_core_video::{
     CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth,
     CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
-use objc2_foundation::{NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,
+};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -73,6 +80,18 @@ unsafe impl Send for SessionHolder {}
 
 fn session_slot() -> &'static Mutex<Option<SessionHolder>> {
     static SLOT: OnceLock<Mutex<Option<SessionHolder>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// What the flash does on the next still, kept across a lens switch.
+fn flash_slot() -> &'static Mutex<FlashMode> {
+    static SLOT: OnceLock<Mutex<FlashMode>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(FlashMode::Off))
+}
+
+/// The lens the app picked, or `None` while the default device is in use.
+fn lens_slot() -> &'static Mutex<Option<String>> {
+    static SLOT: OnceLock<Mutex<Option<String>>> = OnceLock::new();
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
@@ -123,6 +142,64 @@ impl Camera for IosCamera {
         true
     }
 
+    fn lenses(&self) -> Vec<CameraLens> {
+        back_lenses()
+            .into_iter()
+            .map(|device| CameraLens {
+                id: unsafe { device.uniqueID() }.to_string(),
+                name: lens_name(&device),
+            })
+            .collect()
+    }
+
+    fn lens(&self) -> Option<String> {
+        if let Ok(slot) = session_slot().lock() {
+            if let Some(holder) = slot.as_ref() {
+                return Some(unsafe { holder.device.uniqueID() }.to_string());
+            }
+        }
+        lens_slot().lock().ok().and_then(|slot| slot.clone())
+    }
+
+    fn use_lens(&self, id: &str) -> bool {
+        if !back_lenses()
+            .iter()
+            .any(|device| unsafe { device.uniqueID() }.to_string() == id)
+        {
+            return false;
+        }
+        let running = session_slot().lock().map(|s| s.is_some()).unwrap_or(false);
+        match lens_slot().lock() {
+            Ok(mut slot) => *slot = Some(id.to_string()),
+            Err(_) => return false,
+        }
+        if !running {
+            return true;
+        }
+        self.stop();
+        start_session().is_ok()
+    }
+
+    fn has_flash(&self) -> bool {
+        if let Ok(slot) = session_slot().lock() {
+            if let Some(holder) = slot.as_ref() {
+                return unsafe { holder.device.hasFlash() };
+            }
+        }
+        back_lenses()
+            .first()
+            .map(|device| unsafe { device.hasFlash() })
+            .unwrap_or(false)
+    }
+
+    fn set_flash(&self, mode: FlashMode) -> bool {
+        match flash_slot().lock() {
+            Ok(mut slot) => *slot = mode,
+            Err(_) => return false,
+        }
+        self.has_flash()
+    }
+
     fn stop(&self) {
         if let Ok(mut slot) = session_slot().lock() {
             if let Some(holder) = slot.take() {
@@ -132,6 +209,56 @@ impl Camera for IosCamera {
         if let Ok(mut f) = latest().lock() {
             *f = None;
         }
+    }
+}
+
+/// The back cameras a phone carries, widest field of view first.
+///
+/// The virtual triple/dual devices are left out: they are what
+/// [`select_camera_device`] opens when the app picks no lens, and listing them
+/// beside their own constituents would offer the same picture twice.
+fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
+    let Some(media_type) = (unsafe { AVMediaTypeVideo }) else {
+        return Vec::new();
+    };
+    let types: [&AVCaptureDeviceType; 3] = unsafe {
+        [
+            AVCaptureDeviceTypeBuiltInUltraWideCamera,
+            AVCaptureDeviceTypeBuiltInWideAngleCamera,
+            AVCaptureDeviceTypeBuiltInTelephotoCamera,
+        ]
+    };
+    let wanted = NSArray::from_slice(&types);
+    let session = unsafe {
+        AVCaptureDeviceDiscoverySession::discoverySessionWithDeviceTypes_mediaType_position(
+            &wanted,
+            Some(media_type),
+            AVCaptureDevicePosition::Back,
+        )
+    };
+    let mut found: Vec<Retained<AVCaptureDevice>> = unsafe { session.devices() }.to_vec();
+    found.sort_by_key(lens_order);
+    found
+}
+
+fn lens_order(device: &AVCaptureDevice) -> u8 {
+    let kind = unsafe { device.deviceType() };
+    let ultra = unsafe { AVCaptureDeviceTypeBuiltInUltraWideCamera };
+    let wide = unsafe { AVCaptureDeviceTypeBuiltInWideAngleCamera };
+    if &*kind == ultra {
+        0
+    } else if &*kind == wide {
+        1
+    } else {
+        2
+    }
+}
+
+fn lens_name(device: &AVCaptureDevice) -> String {
+    match lens_order(device) {
+        0 => "Ultra wide".into(),
+        1 => "Wide".into(),
+        _ => "Tele".into(),
     }
 }
 
@@ -251,6 +378,17 @@ fn capture_photo() -> Option<CameraStill> {
         unsafe {
             settings.setHighResolutionPhotoEnabled(true);
         }
+        let wanted = match *flash_slot().lock().ok()? {
+            FlashMode::Off => AVCaptureFlashMode::Off,
+            FlashMode::Auto => AVCaptureFlashMode::Auto,
+            FlashMode::On => AVCaptureFlashMode::On,
+        };
+        let supported = unsafe { holder.photo_output.supportedFlashModes() }
+            .iter()
+            .any(|mode| mode.as_i64() == wanted.0 as i64);
+        if supported {
+            unsafe { settings.setFlashMode(wanted) };
+        }
         unsafe {
             holder
                 .photo_output
@@ -329,6 +467,12 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
 /// for macro (close-up receipts, below the wide lens's minimum focus distance).
 /// Falls back to the plain wide-angle camera on devices without a virtual one.
 fn select_camera_device(media_type: &AVMediaType) -> Option<Retained<AVCaptureDevice>> {
+    if let Some(id) = lens_slot().lock().ok().and_then(|slot| slot.clone()) {
+        let wanted = NSString::from_str(&id);
+        if let Some(device) = unsafe { AVCaptureDevice::deviceWithUniqueID(&wanted) } {
+            return Some(device);
+        }
+    }
     let virtual_types: [&AVCaptureDeviceType; 2] = unsafe {
         [
             AVCaptureDeviceTypeBuiltInTripleCamera,

@@ -388,6 +388,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
             Arc::clone(&queue),
             config.format,
             backend,
+            adapter.get_downlevel_capabilities().flags,
         );
         renderer.set_root_scale(density);
 

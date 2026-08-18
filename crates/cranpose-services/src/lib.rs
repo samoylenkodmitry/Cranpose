@@ -42,7 +42,7 @@ pub use background::{
 };
 pub use camera::{
     camera, clear_platform_camera, set_platform_camera, Camera, CameraError, CameraFrame,
-    CameraRef, CameraStill,
+    CameraLens, CameraRef, CameraStill, FlashMode,
 };
 pub use device_info::{
     clear_platform_device_info, device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef,

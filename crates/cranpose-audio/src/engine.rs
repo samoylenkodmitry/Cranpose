@@ -43,6 +43,13 @@ pub struct AudioEngine {
     commands: RefCell<ring::Producer<Command>>,
     retired: RefCell<ring::Consumer<ClipData>>,
     seed: RefCell<Option<MixerSeed>>,
+    /// Every clip currently loaded, by slot, so a REOPENED device can be
+    /// refilled. `ClipData` holds `Arc<[f32]>`, so this is a handle each, not
+    /// a second copy of the audio.
+    ///
+    /// Without it a reopen produces a working stream with an empty bank --
+    /// silence again, from a device that now looks healthy.
+    loaded: RefCell<Vec<Option<ClipData>>>,
     sink: RefCell<Option<Box<dyn AudioSink>>>,
     open_sink: SinkOpener,
     free_slots: RefCell<Vec<u32>>,
@@ -89,6 +96,7 @@ impl AudioEngine {
                 underruns: Arc::clone(&underruns),
                 streaming: Arc::clone(&streaming),
             })),
+            loaded: RefCell::new(vec![None; MAX_CLIPS]),
             sink: RefCell::new(None),
             open_sink,
             free_slots: RefCell::new((0..MAX_CLIPS as u32).rev().collect()),
@@ -147,16 +155,70 @@ impl AudioEngine {
 
     /// Opens the output device if it is not open yet. Returns whether a device
     /// is running afterwards.
+    /// Builds a seed for a device that is being opened AGAIN.
+    ///
+    /// The seed carries one half of each ring, moved into the mixer, so the
+    /// original is single-use and `ensure_running` used to fail forever once a
+    /// sink was dropped -- the engine had no reopen path at all. New rings are
+    /// made here and the engine's own ends swapped to match; commands still
+    /// queued for the dead mixer are dropped with it, which is correct, because
+    /// nothing was ever going to drain them.
+    fn rebuild_seed(&self) -> MixerSeed {
+        let (command_tx, command_rx) = ring::channel::<Command>(COMMAND_CAPACITY);
+        let (retired_tx, retired_rx) = ring::channel::<ClipData>(RETIRE_CAPACITY);
+        *self.commands.borrow_mut() = command_tx;
+        *self.retired.borrow_mut() = retired_rx;
+        MixerSeed {
+            commands: command_rx,
+            retired: retired_tx,
+            leaked_clips: Arc::clone(&self.leaked_clips),
+            underruns: Arc::clone(&self.underruns),
+            streaming: Arc::clone(&self.streaming),
+        }
+    }
+
+    /// Re-sends every retained clip to a freshly opened mixer.
+    fn refill_clips(&self) {
+        let clips: Vec<(u32, ClipData)> = self
+            .loaded
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, entry)| entry.clone().map(|data| (slot as u32, data)))
+            .collect();
+        if clips.is_empty() {
+            return;
+        }
+        for (slot, clip) in clips {
+            self.send(Command::LoadClip { slot, clip });
+        }
+    }
+
     fn ensure_running(&self) -> bool {
-        if self.sink.borrow().is_some() {
+        // A sink that is PRESENT is not a sink that is RUNNING. The platform
+        // can reclaim a stream without ever running the data callback that
+        // clears `streaming`, so presence is the one thing that stays true no
+        // matter what happened to the device. Ask the sink itself.
+        if self
+            .sink
+            .borrow()
+            .as_ref()
+            .is_some_and(|sink| sink.is_running())
+        {
             return true;
+        }
+        if self.sink.borrow().is_some() {
+            *self.sink.borrow_mut() = None;
+            self.streaming.store(false, Ordering::SeqCst);
+            self.parked.set(false);
         }
         if self.device_unavailable.get() {
             return false;
         }
-        let Some(seed) = self.seed.borrow_mut().take() else {
-            self.device_unavailable.set(true);
-            return false;
+        let seed = match self.seed.borrow_mut().take() {
+            Some(seed) => seed,
+            // Not a failure any more: this is a REOPEN.
+            None => self.rebuild_seed(),
         };
         // Set before the opener runs, not after: the backend starts the stream
         // inside it, and the first callback can land before it returns.
@@ -165,6 +227,7 @@ impl AudioEngine {
             Ok(sink) => {
                 *self.sink.borrow_mut() = Some(sink);
                 self.publish_settings();
+                self.refill_clips();
                 true
             }
             Err(error) => {
@@ -247,8 +310,33 @@ impl AudioEngine {
     /// What every entry point does first: drop clips the mixer handed back, and
     /// release a device the mixer has reported idle.
     fn housekeeping(&self) {
+        self.drop_dead_sink();
         self.drain_retired();
         self.park_if_idle();
+    }
+
+    /// Throws away a sink whose stream the platform has taken back.
+    ///
+    /// This has to run BEFORE anything reads `streaming` or `sink.is_some()`,
+    /// because those are the two signals a silently reclaimed device leaves
+    /// stale: the mixer's data callback is what clears `streaming`, and a
+    /// stream that dies without running it never clears anything. `play` then
+    /// short-circuits in `wake_stream` (the flag is still true) and never
+    /// reaches `ensure_running` at all -- which is why checking liveness only
+    /// there fixes nothing.
+    fn drop_dead_sink(&self) {
+        let dead = self
+            .sink
+            .borrow()
+            .as_ref()
+            .is_some_and(|sink| !sink.is_running());
+        if !dead {
+            return;
+        }
+        *self.sink.borrow_mut() = None;
+        self.streaming.store(false, Ordering::SeqCst);
+        self.parked.set(false);
+        self.suspended.set(false);
     }
 
     /// Drops clips the mixer handed back. Called from every engine entry point,
@@ -370,14 +458,15 @@ impl AudioPlayer for AudioEngine {
             .ok_or(AudioError::ClipTableFull {
                 capacity: MAX_CLIPS,
             })?;
-        self.send(Command::LoadClip {
-            slot,
-            clip: ClipData {
-                samples: clip.shared_samples(),
-                channels: clip.channels().min(2) as u8,
-                sample_rate: clip.sample_rate(),
-            },
-        });
+        let data = ClipData {
+            samples: clip.shared_samples(),
+            channels: clip.channels().min(2) as u8,
+            sample_rate: clip.sample_rate(),
+        };
+        if let Some(entry) = self.loaded.borrow_mut().get_mut(slot as usize) {
+            *entry = Some(data.clone());
+        }
+        self.send(Command::LoadClip { slot, clip: data });
         Ok(SoundId::from_raw(slot + 1))
     }
 
@@ -386,6 +475,9 @@ impl AudioPlayer for AudioEngine {
             return;
         };
         self.send(Command::UnloadClip { slot });
+        if let Some(entry) = self.loaded.borrow_mut().get_mut(slot as usize) {
+            *entry = None;
+        }
         let mut free = self.free_slots.borrow_mut();
         if !free.contains(&slot) {
             free.push(slot);
@@ -520,6 +612,9 @@ mod tests {
     /// "released and started again".
     #[derive(Default)]
     struct SinkLog {
+        /// Set when the platform has taken the stream back WITHOUT running the
+        /// data callback -- the state that leaves `streaming` stuck true.
+        dead: Cell<bool>,
         suspended: Cell<bool>,
         parks: Cell<u32>,
         resumes: Cell<u32>,
@@ -531,6 +626,9 @@ mod tests {
     }
 
     impl AudioSink for TestSink {
+        fn is_running(&self) -> bool {
+            !self.log.dead.get()
+        }
         fn suspend(&self) {
             self.log.suspended.set(true);
         }
@@ -544,6 +642,7 @@ mod tests {
     }
 
     struct Rig {
+        opens: Rc<Cell<u32>>,
         engine: AudioEngine,
         mixer: Rc<RefCell<Option<Mixer>>>,
         sink: Rc<SinkLog>,
@@ -559,16 +658,21 @@ mod tests {
             let sink = Rc::new(SinkLog::default());
             let mixer_for_opener = Rc::clone(&mixer);
             let sink_for_opener = Rc::clone(&sink);
+            let opens = Rc::new(Cell::new(0u32));
+            let opens_for_opener = Rc::clone(&opens);
             let engine = AudioEngine::with_sink_opener(Box::new(move |seed| {
                 if fail {
                     return Err(AudioError::Backend("no device in this test".into()));
                 }
+                opens_for_opener.set(opens_for_opener.get() + 1);
+                sink_for_opener.dead.set(false);
                 *mixer_for_opener.borrow_mut() = Some(Mixer::new(seed, RIG_SAMPLE_RATE, 2));
                 Ok(Box::new(TestSink {
                     log: Rc::clone(&sink_for_opener),
                 }))
             }));
             Rig {
+                opens,
                 engine,
                 mixer,
                 sink,
@@ -657,6 +761,51 @@ mod tests {
         let out = rig.render(16);
         assert!(out[0] > 0.0, "the load queued before the mixer existed ran");
         assert_eq!(rig.active_voices(), 1);
+    }
+
+    /// REGRESSION: a stream the platform reclaims silently must be reopened.
+    ///
+    /// Captured on a Pixel Watch 3, process alive 1h50m, game in front, no
+    /// sound: cues dispatched and counted, `available=true`, `recoveries=0`,
+    /// and ZERO AAudio activity for the process. No park, no resume, no error
+    /// callback -- the stream was simply gone.
+    ///
+    /// `streaming` is set by the engine and cleared only by the mixer's own
+    /// data callback (`Mixer::settle`). A device reclaimed WITHOUT that
+    /// callback running leaves it stuck true, and every recovery is gated on
+    /// it: `park_if_idle` returns early, `wake_stream` early-returns on the
+    /// swap, and `ensure_running` returns on `sink.is_some()`. Presence is the
+    /// one signal that survives the device dying, so it was the one thing being
+    /// trusted.
+    #[test]
+    fn a_stream_reclaimed_without_a_callback_is_reopened() {
+        let rig = Rig::new();
+        let id = rig.engine.load_clip(tone(4096)).expect("loads");
+        rig.engine.play(id, PlaybackParams::new());
+        assert!(
+            rig.render(16)[0] > 0.0,
+            "audible before the device is taken"
+        );
+        assert_eq!(rig.opens.get(), 1);
+
+        // The platform takes the stream back. No callback runs, so `streaming`
+        // is never cleared and the sink stays Some.
+        rig.sink.dead.set(true);
+        assert!(
+            rig.engine.is_streaming(),
+            "the flag is exactly as stale as on the watch"
+        );
+
+        rig.engine.play(id, PlaybackParams::new());
+        assert_eq!(
+            rig.opens.get(),
+            2,
+            "a dead stream must be dropped and reopened; presence is not liveness"
+        );
+        assert!(
+            rig.render(16)[0] > 0.0,
+            "and the reopened device must be audible"
+        );
     }
 
     #[test]
@@ -935,6 +1084,7 @@ mod tests {
 
         rig.engine.play(id, PlaybackParams::new());
         assert!(rig.engine.is_streaming());
+        assert_eq!(rig.opens.get(), 1, "an idle stream is resumed in place");
         assert_eq!(rig.sink.resumes.get(), resumes + 1, "the stream restarted");
 
         let out = rig.render(16);
