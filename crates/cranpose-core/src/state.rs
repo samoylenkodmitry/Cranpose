@@ -611,7 +611,8 @@ pub(crate) struct SnapshotMutableState<T> {
     id: ObjectId,
     weak_self: Mutex<Option<Weak<Self>>>,
     apply_observers: Mutex<Vec<Box<dyn Fn() + 'static>>>,
-    observation_count: Cell<usize>,
+    read_observation_count: Cell<usize>,
+    scope_observation_count: Cell<usize>,
     subscriber_callbacks: RefCell<Vec<RcWeak<dyn Fn()>>>,
 }
 
@@ -623,11 +624,11 @@ impl<T: Clone + 'static> Drop for StateObservationLease<T> {
     fn drop(&mut self) {
         if let Some(state) = self.state.upgrade() {
             let count = state
-                .observation_count
+                .read_observation_count
                 .get()
                 .checked_sub(1)
                 .expect("state observation lease count underflow");
-            state.observation_count.set(count);
+            state.read_observation_count.set(count);
         }
     }
 }
@@ -807,7 +808,8 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
             id: ObjectId::default(),
             weak_self: Mutex::new(None),
             apply_observers: Mutex::new(Vec::new()),
-            observation_count: Cell::new(0),
+            read_observation_count: Cell::new(0),
+            scope_observation_count: Cell::new(0),
             subscriber_callbacks: RefCell::new(Vec::new()),
         });
 
@@ -829,21 +831,44 @@ impl<T: Clone + 'static> SnapshotMutableState<T> {
 
     fn acquire_observation_lease(&self) -> Option<Box<dyn Any>> {
         let state = self.lock_weak_self().as_ref()?.clone();
-        let was_empty = self.observation_count.get() == 0;
+        let was_empty = !self.has_subscribers();
         let count = self
-            .observation_count
+            .read_observation_count
             .get()
             .checked_add(1)
             .expect("state observation lease count overflow");
-        self.observation_count.set(count);
+        self.read_observation_count.set(count);
         if was_empty {
             notify_subscriber_callbacks(&self.subscriber_callbacks);
         }
         Some(Box::new(StateObservationLease { state }))
     }
 
-    fn has_observers(&self) -> bool {
-        self.observation_count.get() > 0
+    fn add_scope_observer(&self) -> bool {
+        let was_empty = !self.has_subscribers();
+        let count = self
+            .scope_observation_count
+            .get()
+            .checked_add(1)
+            .expect("state scope observation count overflow");
+        self.scope_observation_count.set(count);
+        was_empty
+    }
+
+    fn remove_scope_observers(&self, count: usize) {
+        if count == 0 {
+            return;
+        }
+        let remaining = self
+            .scope_observation_count
+            .get()
+            .checked_sub(count)
+            .expect("state scope observation count underflow");
+        self.scope_observation_count.set(remaining);
+    }
+
+    fn has_subscribers(&self) -> bool {
+        self.read_observation_count.get() > 0 || self.scope_observation_count.get() > 0
     }
 
     fn subscriber_callback(&self, callback: Rc<dyn Fn()>, notify: bool) {
@@ -1326,21 +1351,27 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
     fn register_scope(&self, scope: &RecomposeScope) -> (bool, bool) {
         let mut watchers = self.watchers.borrow_mut();
+        let before = watchers.len();
         watchers.retain(|_, existing| existing.upgrade().is_some());
-        let was_empty = watchers.is_empty();
-        match watchers.get(&scope.id()) {
-            Some(_) => (false, false),
+        self.state.remove_scope_observers(before - watchers.len());
+        let registered = match watchers.get(&scope.id()) {
+            Some(_) => false,
             _ => {
                 watchers.insert(scope.id(), scope.downgrade());
-                (true, was_empty)
+                true
             }
-        }
+        };
+        drop(watchers);
+        let became_subscribed = registered && self.state.add_scope_observer();
+        (registered, became_subscribed)
     }
 
     fn has_subscribers(&self) -> bool {
         let mut watchers = self.watchers.borrow_mut();
+        let before = watchers.len();
         watchers.retain(|_, existing| existing.upgrade().is_some());
-        !watchers.is_empty() || self.state.has_observers()
+        self.state.remove_scope_observers(before - watchers.len());
+        self.state.has_subscribers()
     }
 
     pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
@@ -1349,13 +1380,18 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         // allocation's address, so a dropped scope's id can already belong
         // to a live replacement — its Drop-time unregister must not wipe
         // the new scope's registration.
-        if watchers
+        let removed = if watchers
             .get(&scope_id)
             .is_some_and(|weak| weak.upgrade().is_none())
         {
             watchers.remove(&scope_id);
             shrink_watchers_if_sparse(&mut watchers);
-        }
+            true
+        } else {
+            false
+        };
+        drop(watchers);
+        self.state.remove_scope_observers(usize::from(removed));
     }
 
     fn state_id(&self) -> Option<StateId> {
@@ -1363,8 +1399,9 @@ impl<T: Clone + 'static> MutableStateInner<T> {
     }
 
     fn invalidate_watchers(&self) {
-        let watchers: Vec<RecomposeScope> = {
+        let (watchers, removed_count): (Vec<RecomposeScope>, usize) = {
             let mut watchers = self.watchers.borrow_mut();
+            let before = watchers.len();
             let mut live = Vec::with_capacity(watchers.len());
             watchers.retain(|_, scope| {
                 if let Some(inner) = scope.upgrade() {
@@ -1374,9 +1411,11 @@ impl<T: Clone + 'static> MutableStateInner<T> {
                     false
                 }
             });
+            let removed_count = before - watchers.len();
             shrink_watchers_if_sparse(&mut watchers);
-            live
+            (live, removed_count)
         };
+        self.state.remove_scope_observers(removed_count);
 
         for watcher in watchers {
             debug_record_scope_invalidation::<T>(watcher.id(), self.state_id.get());
@@ -1386,6 +1425,13 @@ impl<T: Clone + 'static> MutableStateInner<T> {
                 watcher.invalidate();
             }
         }
+    }
+}
+
+impl<T: Clone + 'static> Drop for MutableStateInner<T> {
+    fn drop(&mut self) {
+        self.state
+            .remove_scope_observers(self.watchers.get_mut().len());
     }
 }
 
@@ -1400,7 +1446,7 @@ fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>
         if let Some(state_id) = inner.state_id() {
             scope.record_state_subscription(state_id);
         }
-        if became_subscribed && !inner.state.has_observers() {
+        if became_subscribed {
             inner.state.notify_subscribers();
         }
     }
@@ -1785,7 +1831,7 @@ impl<T: Clone + 'static> State<T> {
                 if let Some(state_id) = inner.state_id() {
                     scope.record_state_subscription(state_id);
                 }
-                if became_subscribed && !inner.state.has_observers() {
+                if became_subscribed {
                     inner.state.notify_subscribers();
                 }
             }
@@ -2121,13 +2167,13 @@ mod tests {
 
         let first = StateObject::observation_lease(&*state).expect("first observation lease");
         let second = StateObject::observation_lease(&*state).expect("second observation lease");
-        assert!(state.has_observers());
+        assert!(state.has_subscribers());
         assert_eq!(notifications.get(), 1);
 
         drop(first);
-        assert!(state.has_observers());
+        assert!(state.has_subscribers());
         drop(second);
-        assert!(!state.has_observers());
+        assert!(!state.has_subscribers());
 
         let third = StateObject::observation_lease(&*state).expect("third observation lease");
         assert_eq!(notifications.get(), 2);
