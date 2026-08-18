@@ -874,6 +874,11 @@ mod tests {
         assert!(id.compose(&id.invert().unwrap()).is_identity_for_sampling());
         assert!(!similarity(c, 0.01, 1.0).is_identity_for_sampling());
         assert!(!similarity(c, 0.0, 1.001).is_identity_for_sampling());
+        assert!(!Affine2 {
+            l: [[1.0, 0.0], [0.0, 1.0]],
+            t: [1.0 / 128.0, 0.0],
+        }
+        .is_identity_for_sampling());
     }
 
     #[test]
