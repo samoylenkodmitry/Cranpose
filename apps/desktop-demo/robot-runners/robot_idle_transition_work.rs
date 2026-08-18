@@ -64,29 +64,6 @@ fn main() {
                 unread_runtime.runtime_stats.frame_callbacks_len,
             );
 
-            click_mode(&robot, "Draw-only transition");
-            robot.reset_fps_stats().expect("reset draw-only FPS stats");
-            let root_after_draw_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
-            std::thread::sleep(Duration::from_millis(350));
-            let draw_only = robot.fps_stats().expect("read draw-only FPS stats");
-            let draw_only_runtime = robot
-                .get_runtime_leak_debug_stats()
-                .expect("read draw-only runtime stats");
-            let draw_only_render = robot
-                .get_render_stats()
-                .expect("read draw-only render stats")
-                .expect("draw-only render stats available");
-            let root_after_draw_interval = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
-            println!(
-                "IDLE-TRANSITION mode=draw-only frames={} recompositions={} work_fps={:.1} callbacks={} draws={} uploads={}",
-                draw_only.frame_count,
-                draw_only.recompositions,
-                draw_only.work_fps,
-                draw_only_runtime.runtime_stats.frame_callbacks_len,
-                draw_only_render.draw_calls,
-                draw_only_render.upload_bytes,
-            );
-
             click_mode(&robot, "Consumed transition");
             robot.reset_fps_stats().expect("reset consumed interval stats");
             let root_after_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
@@ -109,6 +86,29 @@ fn main() {
                 consumed_render.upload_bytes,
                 consumed_render.layer_cache_hits,
                 consumed_render.layer_cache_misses,
+            );
+
+            click_mode(&robot, "Draw-only transition");
+            robot.reset_fps_stats().expect("reset draw-only FPS stats");
+            let root_after_draw_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(350));
+            let draw_only = robot.fps_stats().expect("read draw-only FPS stats");
+            let draw_only_runtime = robot
+                .get_runtime_leak_debug_stats()
+                .expect("read draw-only runtime stats");
+            let draw_only_render = robot
+                .get_render_stats()
+                .expect("read draw-only render stats")
+                .expect("draw-only render stats available");
+            let root_after_draw_interval = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
+            println!(
+                "IDLE-TRANSITION mode=draw-only frames={} recompositions={} work_fps={:.1} callbacks={} draws={} uploads={}",
+                draw_only.frame_count,
+                draw_only.recompositions,
+                draw_only.work_fps,
+                draw_only_runtime.runtime_stats.frame_callbacks_len,
+                draw_only_render.draw_calls,
+                draw_only_render.upload_bytes,
             );
 
             assert_eq!(
