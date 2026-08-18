@@ -533,6 +533,87 @@ impl AudioPlayer for NoopAudioPlayer {
 
 static PLATFORM_AUDIO: ServiceRegistry<dyn AudioPlayer> = ServiceRegistry::new();
 static NOOP_AUDIO: OnceLock<AudioPlayerRef> = OnceLock::new();
+static DEFAULT_AUDIO: OnceLock<AudioPlayerRef> = OnceLock::new();
+
+struct PlatformAudioPlayer;
+
+fn registered_audio() -> AudioPlayerRef {
+    PLATFORM_AUDIO.get_or_warn("audio").unwrap_or_else(|| {
+        NOOP_AUDIO
+            .get_or_init(|| Arc::new(NoopAudioPlayer::new()))
+            .clone()
+    })
+}
+
+impl AudioPlayer for PlatformAudioPlayer {
+    fn load_clip(&self, clip: AudioClip) -> Result<SoundId, AudioError> {
+        registered_audio().load_clip(clip)
+    }
+
+    fn unload(&self, id: SoundId) {
+        registered_audio().unload(id);
+    }
+
+    fn play(&self, id: SoundId, params: PlaybackParams) {
+        registered_audio().play(id, params);
+    }
+
+    fn play_loop(&self, id: SoundId, params: PlaybackParams) -> VoiceId {
+        registered_audio().play_loop(id, params)
+    }
+
+    fn stop(&self, id: SoundId) {
+        registered_audio().stop(id);
+    }
+
+    fn stop_voice(&self, voice: VoiceId) {
+        registered_audio().stop_voice(voice);
+    }
+
+    fn stop_all(&self) {
+        registered_audio().stop_all();
+    }
+
+    fn set_voice_params(&self, voice: VoiceId, params: PlaybackParams) {
+        registered_audio().set_voice_params(voice, params);
+    }
+
+    fn set_master_volume(&self, volume: f32) {
+        registered_audio().set_master_volume(volume);
+    }
+
+    fn master_volume(&self) -> f32 {
+        registered_audio().master_volume()
+    }
+
+    fn set_bus_volume(&self, bus: AudioBus, volume: f32) {
+        registered_audio().set_bus_volume(bus, volume);
+    }
+
+    fn bus_volume(&self, bus: AudioBus) -> f32 {
+        registered_audio().bus_volume(bus)
+    }
+
+    fn set_bus_enabled(&self, bus: AudioBus, enabled: bool) {
+        registered_audio().set_bus_enabled(bus, enabled);
+    }
+
+    fn bus_enabled(&self, bus: AudioBus) -> bool {
+        registered_audio().bus_enabled(bus)
+    }
+
+    fn suspend(&self) {
+        registered_audio().suspend();
+    }
+
+    fn resume(&self) {
+        registered_audio().resume();
+    }
+
+    fn is_available(&self) -> bool {
+        registered_audio().is_available()
+    }
+}
 
 /// Installs a platform audio player, replacing any previous one.
 pub fn set_platform_audio(player: AudioPlayerRef) {
@@ -546,11 +627,9 @@ pub fn clear_platform_audio() {
 
 /// The installed platform player, or a no-op one.
 pub fn default_audio() -> AudioPlayerRef {
-    PLATFORM_AUDIO.get_or_warn("audio").unwrap_or_else(|| {
-        NOOP_AUDIO
-            .get_or_init(|| Arc::new(NoopAudioPlayer::new()))
-            .clone()
-    })
+    DEFAULT_AUDIO
+        .get_or_init(|| Arc::new(PlatformAudioPlayer))
+        .clone()
 }
 
 /// The CompositionLocal descendants read to reach the audio player.

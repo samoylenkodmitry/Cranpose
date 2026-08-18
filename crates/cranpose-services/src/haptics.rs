@@ -298,6 +298,41 @@ impl Haptics for NoopHaptics {
 
 static PLATFORM_HAPTICS: ServiceRegistry<dyn Haptics> = ServiceRegistry::new();
 static NOOP_HAPTICS: OnceLock<HapticsRef> = OnceLock::new();
+static DEFAULT_HAPTICS: OnceLock<HapticsRef> = OnceLock::new();
+
+struct PlatformHaptics;
+
+fn registered_haptics() -> HapticsRef {
+    PLATFORM_HAPTICS
+        .get_or_warn("haptics")
+        .unwrap_or_else(|| NOOP_HAPTICS.get_or_init(|| Arc::new(NoopHaptics)).clone())
+}
+
+impl Haptics for PlatformHaptics {
+    fn perform(&self, feedback: HapticFeedback) {
+        registered_haptics().perform(feedback);
+    }
+
+    fn vibrate(&self, duration_ms: u32, amplitude: u8) {
+        registered_haptics().vibrate(duration_ms, amplitude);
+    }
+
+    fn play_pattern(&self, pattern: &HapticPattern) {
+        registered_haptics().play_pattern(pattern);
+    }
+
+    fn perform_effect(&self, effect: HapticEffect) {
+        registered_haptics().perform_effect(effect);
+    }
+
+    fn cancel(&self) {
+        registered_haptics().cancel();
+    }
+
+    fn has_amplitude_control(&self) -> bool {
+        registered_haptics().has_amplitude_control()
+    }
+}
 
 /// Installs a platform haptics implementation, replacing any previous one.
 pub fn set_platform_haptics(haptics: HapticsRef) {
@@ -310,9 +345,9 @@ pub fn clear_platform_haptics() {
 }
 
 pub fn default_haptics() -> HapticsRef {
-    PLATFORM_HAPTICS
-        .get_or_warn("haptics")
-        .unwrap_or_else(|| NOOP_HAPTICS.get_or_init(|| Arc::new(NoopHaptics)).clone())
+    DEFAULT_HAPTICS
+        .get_or_init(|| Arc::new(PlatformHaptics))
+        .clone()
 }
 
 pub fn local_haptics() -> CompositionLocal<HapticsRef> {

@@ -240,7 +240,56 @@ impl Purchases for NoPurchases {
 
 static PLATFORM_PURCHASES: ServiceRegistry<dyn Purchases> = ServiceRegistry::new();
 static NO_PURCHASES: OnceLock<PurchasesRef> = OnceLock::new();
+static DEFAULT_PURCHASES: OnceLock<PurchasesRef> = OnceLock::new();
 static PURCHASE_RECOVERY: RecoveryGate = RecoveryGate::new();
+
+struct PlatformPurchases;
+
+fn registered_purchases() -> PurchasesRef {
+    PLATFORM_PURCHASES
+        .get_or_warn("purchases")
+        .unwrap_or_else(|| NO_PURCHASES.get_or_init(|| Arc::new(NoPurchases)).clone())
+}
+
+fn active_purchases() -> PurchasesRef {
+    let purchases = registered_purchases();
+    if purchases.is_connected() {
+        PURCHASE_RECOVERY.succeeded();
+    } else if PURCHASE_RECOVERY.try_start() {
+        purchases.reconnect();
+    }
+    purchases
+}
+
+impl Purchases for PlatformPurchases {
+    fn configure(&self, product_ids: &[&str]) {
+        active_purchases().configure(product_ids);
+    }
+
+    fn state(&self) -> StoreState {
+        active_purchases().state()
+    }
+
+    fn purchase(&self, product_id: &str) {
+        active_purchases().purchase(product_id);
+    }
+
+    fn restore(&self) {
+        active_purchases().restore();
+    }
+
+    fn take_event(&self) -> Option<PurchaseEvent> {
+        active_purchases().take_event()
+    }
+
+    fn is_connected(&self) -> bool {
+        registered_purchases().is_connected()
+    }
+
+    fn reconnect(&self) {
+        registered_purchases().reconnect();
+    }
+}
 
 /// Installs a platform purchase backend, replacing any previous one.
 static STORE_LISTENER: ServiceRegistry<dyn Fn() + Send + Sync> = ServiceRegistry::new();
@@ -280,15 +329,9 @@ pub fn clear_platform_purchases() {
 /// The active backend: the platform one if installed, else the no-store
 /// backend.
 pub fn purchases() -> PurchasesRef {
-    let purchases = PLATFORM_PURCHASES
-        .get_or_warn("purchases")
-        .unwrap_or_else(|| NO_PURCHASES.get_or_init(|| Arc::new(NoPurchases)).clone());
-    if purchases.is_connected() {
-        PURCHASE_RECOVERY.succeeded();
-    } else if PURCHASE_RECOVERY.try_start() {
-        purchases.reconnect();
-    }
-    purchases
+    DEFAULT_PURCHASES
+        .get_or_init(|| Arc::new(PlatformPurchases))
+        .clone()
 }
 
 /// Whether a real store backend is installed on this platform.

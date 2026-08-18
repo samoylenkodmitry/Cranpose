@@ -106,18 +106,11 @@ impl Notifier for NoopNotifier {
 }
 
 static PLATFORM_NOTIFIER: ServiceRegistry<dyn Notifier> = ServiceRegistry::new();
+static DEFAULT_NOTIFIER: OnceLock<NotifierRef> = OnceLock::new();
 
-/// Installs a platform notifier, replacing any previously installed one.
-pub fn set_platform_notifier(notifier: NotifierRef) {
-    PLATFORM_NOTIFIER.set(notifier);
-}
+struct PlatformNotifier;
 
-/// Removes any registered platform notifier (tests and teardown).
-pub fn clear_platform_notifier() {
-    PLATFORM_NOTIFIER.clear();
-}
-
-pub fn default_notifier() -> NotifierRef {
+fn registered_notifier() -> NotifierRef {
     PLATFORM_NOTIFIER
         .get_or_warn("notifier")
         .unwrap_or_else(|| {
@@ -140,6 +133,36 @@ pub fn default_notifier() -> NotifierRef {
                 Arc::new(NoopNotifier)
             }
         })
+}
+
+impl Notifier for PlatformNotifier {
+    fn request_permission(&self) {
+        registered_notifier().request_permission();
+    }
+
+    fn notify(&self, request: NotifyRequest) {
+        registered_notifier().notify(request);
+    }
+
+    fn cancel(&self, id: &str) {
+        registered_notifier().cancel(id);
+    }
+}
+
+/// Installs a platform notifier, replacing any previously installed one.
+pub fn set_platform_notifier(notifier: NotifierRef) {
+    PLATFORM_NOTIFIER.set(notifier);
+}
+
+/// Removes any registered platform notifier (tests and teardown).
+pub fn clear_platform_notifier() {
+    PLATFORM_NOTIFIER.clear();
+}
+
+pub fn default_notifier() -> NotifierRef {
+    DEFAULT_NOTIFIER
+        .get_or_init(|| Arc::new(PlatformNotifier))
+        .clone()
 }
 
 /// Zero-dependency desktop notifications through the OS-native CLI surface:

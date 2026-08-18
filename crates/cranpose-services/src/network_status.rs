@@ -51,7 +51,44 @@ impl NetworkMonitor for DefaultNetworkMonitor {
 
 static PLATFORM_NETWORK_MONITOR: ServiceRegistry<dyn NetworkMonitor> = ServiceRegistry::new();
 static DEFAULT_NETWORK_MONITOR: OnceLock<NetworkMonitorRef> = OnceLock::new();
+static NETWORK_MONITOR_HANDLE: OnceLock<NetworkMonitorRef> = OnceLock::new();
 static NETWORK_RECOVERY: RecoveryGate = RecoveryGate::new();
+
+struct PlatformNetworkMonitor;
+
+fn registered_network_monitor() -> NetworkMonitorRef {
+    PLATFORM_NETWORK_MONITOR
+        .get_or_warn("network monitor")
+        .unwrap_or_else(|| {
+            DEFAULT_NETWORK_MONITOR
+                .get_or_init(|| Arc::new(DefaultNetworkMonitor))
+                .clone()
+        })
+}
+
+fn active_network_monitor() -> NetworkMonitorRef {
+    let monitor = registered_network_monitor();
+    if monitor.is_alive() {
+        NETWORK_RECOVERY.succeeded();
+    } else if NETWORK_RECOVERY.try_start() {
+        monitor.reconnect();
+    }
+    monitor
+}
+
+impl NetworkMonitor for PlatformNetworkMonitor {
+    fn status(&self) -> NetworkStatus {
+        active_network_monitor().status()
+    }
+
+    fn is_alive(&self) -> bool {
+        registered_network_monitor().is_alive()
+    }
+
+    fn reconnect(&self) {
+        registered_network_monitor().reconnect();
+    }
+}
 
 /// Installs a platform network monitor, replacing any previous one.
 pub fn set_platform_network_monitor(monitor: NetworkMonitorRef) {
@@ -67,13 +104,9 @@ pub fn clear_platform_network_monitor() {
 /// The active network monitor: the platform one if installed, else the default
 /// (online, unmetered).
 pub fn network_monitor() -> NetworkMonitorRef {
-    PLATFORM_NETWORK_MONITOR
-        .get_or_warn("network monitor")
-        .unwrap_or_else(|| {
-            DEFAULT_NETWORK_MONITOR
-                .get_or_init(|| Arc::new(DefaultNetworkMonitor))
-                .clone()
-        })
+    NETWORK_MONITOR_HANDLE
+        .get_or_init(|| Arc::new(PlatformNetworkMonitor))
+        .clone()
 }
 
 /// Convenience: the current network status.
