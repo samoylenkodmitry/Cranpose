@@ -10,9 +10,8 @@
 //! `None` where live capture is unsupported, so the app can fall back to the
 //! image picker.
 
+use crate::registry::ServiceRegistry;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 
 /// A single captured frame as tightly-packed RGBA8 (`width * height * 4` bytes,
 /// row-major, no padding).
@@ -135,28 +134,21 @@ pub trait Camera: Send + Sync {
 
 pub type CameraRef = Arc<dyn Camera>;
 
-fn slot() -> &'static Mutex<Option<CameraRef>> {
-    static SLOT: OnceLock<Mutex<Option<CameraRef>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
+static PLATFORM_CAMERA: ServiceRegistry<dyn Camera> = ServiceRegistry::new();
 
 /// Installs the platform live camera, replacing any previous one.
 pub fn set_platform_camera(camera: CameraRef) {
-    if let Ok(mut s) = slot().lock() {
-        *s = Some(camera);
-    }
+    PLATFORM_CAMERA.set(camera);
 }
 
 /// Removes any registered platform camera (tests/teardown).
 pub fn clear_platform_camera() {
-    if let Ok(mut s) = slot().lock() {
-        *s = None;
-    }
+    PLATFORM_CAMERA.clear();
 }
 
 /// The registered live camera, or `None` where live capture is unsupported.
 pub fn camera() -> Option<CameraRef> {
-    slot().lock().ok().and_then(|s| s.clone())
+    PLATFORM_CAMERA.get()
 }
 
 #[cfg(test)]
@@ -165,6 +157,7 @@ mod tests {
 
     #[test]
     fn registration_round_trips() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_camera();
         assert!(camera().is_none());
         struct Fake;
@@ -190,6 +183,7 @@ mod tests {
 
     #[test]
     fn a_backend_that_lists_no_lens_and_no_flash_says_so() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_camera();
         struct Bare;
         impl Camera for Bare {
@@ -213,6 +207,7 @@ mod tests {
 
     #[test]
     fn a_backend_that_lists_two_lenses_hands_them_over_in_order() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_camera();
         struct Two;
         impl Camera for Two {
