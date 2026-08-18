@@ -426,14 +426,13 @@ pub fn markdown_viewer_tab() {
     let request_counter = cranpose_core::useState(|| 0u64);
     let http_client = local_http_client().current();
 
-    let url_state_for_effect = url_state;
     cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
         let tick = request_counter.get();
         if tick == 0 {
             return;
         }
 
-        let url = url_state_for_effect.text();
+        let url = url_state.text();
         let url = url.trim().to_string();
         fetch_state.set(FetchState::Loading);
 
@@ -470,7 +469,6 @@ pub fn markdown_viewer_tab() {
             .fill_max_size(),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
         {
-            let url_state_for_row = url_state;
             move || {
                 // ---- URL input row ----
                 Row(
@@ -479,10 +477,9 @@ pub fn markdown_viewer_tab() {
                         .horizontal_arrangement(LinearArrangement::SpacedBy(8.0))
                         .vertical_alignment(VerticalAlignment::CenterVertically),
                     {
-                        let url_row = url_state_for_row;
                         move || {
                             cranpose_ui::BasicTextField(
-                                url_row,
+                                url_state,
                                 Modifier::empty()
                                     .weight(1.0)
                                     .padding(10.0)

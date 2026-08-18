@@ -1954,7 +1954,6 @@ pub fn LiquidUiTab() {
             super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
                 *cell.borrow_mut() = Some(scroll);
             });
-            let scroll_for_bar = scroll;
             // The menu anchors to the REAL composited rects of the Featured
             // videos card's trailing circles (window coords via
             // report_window_rect) — never guessed offsets.
@@ -2357,7 +2356,7 @@ pub fn LiquidUiTab() {
                     LiquidNavBar(
                         Modifier::empty().fill_max_width(),
                         LiquidNavBarSpec::new("WWDC"),
-                        scroll_for_bar,
+                        scroll,
                         || {},
                         || {},
                     );

@@ -728,18 +728,15 @@ fn text_input_example() {
             });
 
             // Text field with background styling
-            {
-                let state = text_state1;
-                BasicTextField(
-                    state,
-                    Modifier::empty()
-                        .fill_max_width()
-                        .padding(12.0)
-                        .background(Color(0.15, 0.18, 0.25, 1.0))
-                        .rounded_corners(8.0),
-                    TextStyle::default(),
-                );
-            }
+            BasicTextField(
+                text_state1,
+                Modifier::empty()
+                    .fill_max_width()
+                    .padding(12.0)
+                    .background(Color(0.15, 0.18, 0.25, 1.0))
+                    .rounded_corners(8.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -777,18 +774,15 @@ fn text_input_example() {
                 height: 8.0,
             });
 
-            {
-                let state = text_state2;
-                BasicTextField(
-                    state,
-                    Modifier::empty()
-                        .fill_max_width()
-                        .padding(12.0)
-                        .background(Color(0.18, 0.15, 0.22, 1.0))
-                        .rounded_corners(8.0),
-                    TextStyle::default(),
-                );
-            }
+            BasicTextField(
+                text_state2,
+                Modifier::empty()
+                    .fill_max_width()
+                    .padding(12.0)
+                    .background(Color(0.18, 0.15, 0.22, 1.0))
+                    .rounded_corners(8.0),
+                TextStyle::default(),
+            );
 
             Spacer(Size {
                 width: 0.0,
@@ -811,12 +805,9 @@ fn text_input_example() {
                 Modifier::empty().fill_max_width(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 {
-                    let state1 = text_state1;
-                    let state2 = text_state2;
                     move || {
                         // Clear button
                         {
-                            let state = state1;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -829,7 +820,7 @@ fn text_input_example() {
                                     .padding(10.0),
                                 ButtonSpec::default(),
                                 move || {
-                                    state.set_text("");
+                                    text_state1.set_text("");
                                 },
                                 || {
                                     Text(
@@ -843,7 +834,6 @@ fn text_input_example() {
 
                         // Add text button
                         {
-                            let state = state1;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -856,7 +846,7 @@ fn text_input_example() {
                                     .padding(10.0),
                                 ButtonSpec::default(),
                                 move || {
-                                    state.edit(|buffer| {
+                                    text_state1.edit(|buffer| {
                                         buffer.place_cursor_at_end();
                                         buffer.insert("!");
                                     });
@@ -874,8 +864,6 @@ fn text_input_example() {
 
                         // Copy to second field
                         {
-                            let from = state1;
-                            let to = state2;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -888,8 +876,8 @@ fn text_input_example() {
                                     .padding(10.0),
                                 ButtonSpec::default(),
                                 move || {
-                                    let text = from.text();
-                                    to.set_text(text);
+                                    let text = text_state1.text();
+                                    text_state2.set_text(text);
                                     // No version.set() needed - TextFieldState triggers recomposition
                                 },
                                 || {
