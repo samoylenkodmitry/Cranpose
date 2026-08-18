@@ -1054,7 +1054,7 @@ fn measure_wear_scaling_list(
         // cursor then drops by only what the row was shrunk to.
         let top = bottom - item.height;
         let placed = place(top, item.height);
-        edge = bottom - placed.reported_height;
+        edge = bottom - item.height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
@@ -1065,7 +1065,7 @@ fn measure_wear_scaling_list(
     }
 
     // Downward, the same walk against the bottom edge.
-    let mut edge = anchored_top + anchored_placed.reported_height;
+    let mut edge = anchored_top + anchored_height;
     let mut budget = spec.beyond_bounds_item_count;
     for index in (start + 1)..count {
         let top = edge + spacing;
@@ -1085,7 +1085,7 @@ fn measure_wear_scaling_list(
             child_constraints,
         );
         let placed = place(top, item.height);
-        edge = top + placed.reported_height;
+        edge = top + item.height;
         window.push(WindowedRow {
             index,
             roots: item.roots,
