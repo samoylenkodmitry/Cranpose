@@ -229,6 +229,23 @@ fn composite_dest_viewport(
     (dest_rect.x.round(), dest_rect.y.round(), width, height)
 }
 
+fn exact_translation_sample_mode(
+    dest_rect: Rect,
+    source_width: u32,
+    source_height: u32,
+    sample_mode: CompositeSampleMode,
+) -> CompositeSampleMode {
+    if sample_mode != CompositeSampleMode::Box4
+        || dest_rect.x.fract() != 0.0
+        || dest_rect.y.fract() != 0.0
+        || dest_rect.width != source_width as f32
+        || dest_rect.height != source_height as f32
+    {
+        return sample_mode;
+    }
+    CompositeSampleMode::Nearest
+}
+
 fn layer_surface_dest_quad(
     child_logical_rect: Rect,
     child_dest_quad: [[f32; 2]; 4],
@@ -5747,6 +5764,8 @@ pub(crate) fn composite_surface_to_view<B: SurfaceExecutionBackend>(
     sample_mode: CompositeSampleMode,
 ) -> Result<(), String> {
     if let Some(dest_rect) = axis_aligned_quad_rect(dest_quad) {
+        let sample_mode =
+            exact_translation_sample_mode(dest_rect, source.width, source.height, sample_mode);
         backend.composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(
             source,
             dest_view,
@@ -5968,7 +5987,7 @@ mod tests {
         child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
         direct_scene_range_cache_chunk_end, direct_scene_range_cache_enabled_for_policy,
         direct_scene_range_cache_key, direct_scene_range_chunk_fits_cache_entry,
-        direct_scene_range_snapped_bounds, layer_source_cache_key,
+        direct_scene_range_snapped_bounds, exact_translation_sample_mode, layer_source_cache_key,
         layer_source_uses_external_backdrop_underlay, layer_surface_dest_quad,
         layer_surface_translation_context, minimum_surface_scale_for_composite, quad_bounds_rect,
         rects_intersect, render_string_scene_hash, retained_render_effect_hash,
@@ -8198,6 +8217,38 @@ mod tests {
                 surface_capture_active: false,
                 ..TranslationRenderContext::default()
             }
+        );
+    }
+
+    #[test]
+    fn one_to_one_integer_translation_uses_texel_sampling() {
+        assert_eq!(
+            exact_translation_sample_mode(
+                Rect {
+                    x: 12.0,
+                    y: -1.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+                100,
+                40,
+                CompositeSampleMode::Box4,
+            ),
+            CompositeSampleMode::Nearest
+        );
+        assert_eq!(
+            exact_translation_sample_mode(
+                Rect {
+                    x: 12.5,
+                    y: -1.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+                100,
+                40,
+                CompositeSampleMode::Box4,
+            ),
+            CompositeSampleMode::Box4
         );
     }
 }
