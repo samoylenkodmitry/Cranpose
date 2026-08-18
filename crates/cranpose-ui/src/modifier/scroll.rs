@@ -674,7 +674,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             if let Some(old_fling) = existing_fling {
                 old_fling.cancel();
             }
-            self.start_overscroll_settle(fling_velocity);
+            self.start_overscroll_settle(-fling_velocity);
         } else if let Some(target) = settle_target {
             if let Some(old_fling) = existing_fling {
                 old_fling.cancel();
@@ -720,11 +720,16 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
             },
             move || {
                 scroll_target_for_end.invalidate();
-                if detector_for_end.overscroll.offset().abs() > 0.001 {
+                let settle_running = detector_for_end
+                    .gesture_state
+                    .borrow()
+                    .settle_animation
+                    .as_ref()
+                    .is_some_and(SettleAnimation::is_running);
+                if detector_for_end.overscroll.offset().abs() > 0.001 && !settle_running {
                     detector_for_end.start_overscroll_settle(0.0);
-                } else {
-                    motion_context.set_active(false);
                 }
+                detector_for_end.update_motion_active(&motion_context);
             },
         );
 
@@ -773,24 +778,21 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let settle = SettleAnimation::new(runtime);
         let overscroll_for_settle = self.overscroll.clone();
         let overscroll_for_end = self.overscroll.clone();
+        let detector_for_end = self.clone_for_watcher();
         let motion_context = self.motion_context.clone();
         let initial = self.overscroll.offset();
-        let transfer_velocity = initial_velocity;
-        let detector_for_transfer = self.clone_for_watcher();
-        let transfer_to_target = transfer_velocity.abs() > MIN_FLING_VELOCITY
-            && initial.signum() != transfer_velocity.signum();
         settle.start_settle(
             initial,
             initial_velocity,
             0.0,
             move |delta| overscroll_for_settle.apply_settle_delta(delta),
-            move || {
+            move |end| {
                 let current = overscroll_for_end.offset();
                 overscroll_for_end.apply_settle_delta(-current);
-                if transfer_to_target {
-                    detector_for_transfer.start_fling_animation(transfer_velocity);
+                if end.hit_boundary && end.velocity.abs() > MIN_FLING_VELOCITY {
+                    detector_for_end.start_fling_animation(-end.velocity);
                 } else {
-                    motion_context.set_active(false);
+                    detector_for_end.update_motion_active(&motion_context);
                 }
             },
         );

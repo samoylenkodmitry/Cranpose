@@ -92,12 +92,12 @@ fn schedule_next_frame<F, G>(
                 0.0
             };
 
-            let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
-            if hit_boundary {
+            let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
+            if boundary_hit {
                 anim_state.is_running.set(false);
             }
 
-            !is_finished && !hit_boundary
+            !is_finished && !boundary_hit
         };
 
         if should_continue {
@@ -271,6 +271,11 @@ struct SettleAnimationState {
     is_running: Cell<bool>,
 }
 
+pub(crate) struct SettleEnd {
+    pub(crate) velocity: f32,
+    pub(crate) hit_boundary: bool,
+}
+
 /// Drives a critically-damped spring toward a settle target on a scroll
 /// container, taking over the gesture's release velocity so a policy-adjusted
 /// rest position still reads as one continuous deceleration.
@@ -291,7 +296,7 @@ impl SettleAnimation {
     /// offset units/sec) toward `target`. `on_scroll` receives per-frame
     /// deltas and returns the consumed amount; `on_end` fires once when the
     /// spring rests or the target stops consuming (boundary hit).
-    pub fn start_settle<F, G>(
+    pub(crate) fn start_settle<F, G>(
         &self,
         initial_value: f32,
         initial_velocity: f32,
@@ -300,7 +305,7 @@ impl SettleAnimation {
         on_end: G,
     ) where
         F: Fn(f32) -> f32 + 'static,
-        G: FnOnce() + 'static,
+        G: FnOnce(SettleEnd) + 'static,
     {
         self.cancel();
         *self.state.borrow_mut() = Some(SettleAnimationState {
@@ -350,11 +355,12 @@ fn schedule_next_settle_frame<F, G>(
     on_end: G,
 ) where
     F: Fn(f32) -> f32 + 'static,
-    G: FnOnce() + 'static,
+    G: FnOnce(SettleEnd) + 'static,
 {
     let state_for_closure = state.clone();
     let frame_clock_for_closure = frame_clock.clone();
     let on_end = RefCell::new(Some(on_end));
+    let hit_boundary = Cell::new(false);
 
     let registration = frame_clock.with_frame_nanos(move |frame_time_nanos| {
         let should_continue = {
@@ -397,12 +403,13 @@ fn schedule_next_settle_frame<F, G>(
             } else {
                 delta
             };
-            let hit_boundary = (delta - consumed).abs() > BOUNDARY_EPSILON;
-            if hit_boundary {
+            let boundary_hit = (delta - consumed).abs() > BOUNDARY_EPSILON;
+            if boundary_hit {
                 anim_state.is_running.set(false);
+                hit_boundary.set(true);
             }
 
-            !is_finished && !hit_boundary
+            !is_finished && !boundary_hit
         };
 
         if should_continue {
@@ -415,7 +422,14 @@ fn schedule_next_settle_frame<F, G>(
                 );
             }
         } else if let Some(end_fn) = on_end.borrow_mut().take() {
-            end_fn();
+            let state_guard = state_for_closure.borrow();
+            let velocity = state_guard
+                .as_ref()
+                .map_or(0.0, |anim_state| anim_state.velocity.get());
+            end_fn(SettleEnd {
+                velocity,
+                hit_boundary: hit_boundary.get(),
+            });
         }
     });
 
@@ -455,7 +469,7 @@ mod tests {
                 position_for_scroll.set(position_for_scroll.get() + delta);
                 delta
             },
-            move || ended_for_end.set(true),
+            move |_| ended_for_end.set(true),
         );
         for frame in 0..240u64 {
             handle.drain_frame_callbacks(frame * 16_000_000);
@@ -469,6 +483,40 @@ mod tests {
             "settle must land on the target, got {}",
             position.get()
         );
+    }
+
+    #[test]
+    fn settle_reports_reduced_velocity_when_crossing_boundary() {
+        let runtime = Runtime::new(Arc::new(DefaultScheduler));
+        let handle = runtime.handle();
+        let settle = SettleAnimation::new(handle.clone());
+        let position = Rc::new(Cell::new(30.0f32));
+        let ended = Rc::new(Cell::new(None::<(f32, bool)>));
+        let position_for_scroll = Rc::clone(&position);
+        let ended_for_end = Rc::clone(&ended);
+        settle.start_settle(
+            30.0,
+            -1_200.0,
+            0.0,
+            move |delta| {
+                let previous = position_for_scroll.get();
+                let next = (previous + delta).max(0.0);
+                position_for_scroll.set(next);
+                next - previous
+            },
+            move |end| ended_for_end.set(Some((end.velocity, end.hit_boundary))),
+        );
+        for frame in 0..240u64 {
+            handle.drain_frame_callbacks(frame * 16_000_000);
+            if ended.get().is_some() {
+                break;
+            }
+        }
+
+        let (velocity, hit_boundary) = ended.get().expect("settle must finish");
+        assert!(hit_boundary);
+        assert!(velocity < 0.0 && velocity.abs() < 1_200.0);
+        assert_eq!(position.get(), 0.0);
     }
 
     #[test]

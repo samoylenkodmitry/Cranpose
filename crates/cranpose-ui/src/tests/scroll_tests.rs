@@ -87,7 +87,7 @@ fn scroll_motion_callback_ids_restart_per_instance() {
 #[test]
 fn overscroll_scroll_releases_before_consuming_target_delta() {
     let effect = OverscrollEffect::new();
-    effect.apply_settle_delta(60.0);
+    effect.apply_drag_delta(60.0);
     let target_delta = Cell::new(0.0);
 
     let consumed = effect.apply_to_scroll(-100.0, |delta| {
@@ -95,7 +95,7 @@ fn overscroll_scroll_releases_before_consuming_target_delta() {
         delta
     });
 
-    assert_eq!(target_delta.get(), -40.0);
+    assert_eq!(target_delta.get(), -70.0);
     assert_eq!(effect.offset(), 0.0);
     assert_eq!(consumed, -100.0);
 }
