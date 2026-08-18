@@ -2729,7 +2729,6 @@ struct ReplaySlot {
     /// for the life of the capture, so bundle keys need nothing beyond the
     /// capture epoch they already carry.
     has_gradient: bool,
-    segment_surface_safe: bool,
     /// Per-shape capture-space fill records for the `CRANPOSE_FILL_DIAG`
     /// instrument (`shape_count` entries): submitted area (mesh triangles
     /// when this slot replays its arc mesh, bounding quads otherwise),
@@ -4885,6 +4884,25 @@ struct InstancedQuadPipelines {
     index_buffer: wgpu::Buffer,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+struct SegmentCapturePipelines {
+    expanded: PassPipeline,
+    expanded_solid: PassPipeline,
+    mesh: PassPipeline,
+    instanced: PassPipeline,
+    instanced_solid: PassPipeline,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+enum RetainedPipelineKind {
+    Expanded,
+    ExpandedSolid,
+    Mesh,
+    Instanced,
+    InstancedSolid,
+}
+
 /// One command of a retained op's draw walk, emitted by
 /// [`GpuRenderer::encode_retained_op`] — the SINGLE place the walk exists.
 /// The two sinks (the fused pass on the direct path, a
@@ -4898,7 +4916,7 @@ struct InstancedQuadPipelines {
 /// borrowed for the whole pass.
 #[cfg(not(target_arch = "wasm32"))]
 enum RetainedCmd<'r> {
-    Pipeline(&'r wgpu::RenderPipeline),
+    Pipeline(RetainedPipelineKind),
     /// Bind group 0, no dynamic offsets.
     Uniforms(&'r wgpu::BindGroup),
     /// Bind group 1 with the retained draw's dynamic transform offset.
@@ -5820,6 +5838,8 @@ pub struct GpuRenderer {
     /// [`instanced_quads_enabled`]).
     #[cfg(not(target_arch = "wasm32"))]
     instanced_quads: Option<InstancedQuadPipelines>,
+    #[cfg(not(target_arch = "wasm32"))]
+    segment_capture_pipelines: SegmentCapturePipelines,
     uniform_bind_group_layout: wgpu::BindGroupLayout,
     shape_bind_group_layout: wgpu::BindGroupLayout,
     /// `Some` exactly in storage mode: the 16-byte stand-in every fresh
@@ -6438,6 +6458,20 @@ impl GpuRenderer {
                     index_buffer,
                 }
             });
+        #[cfg(not(target_arch = "wasm32"))]
+        let segment_capture_pipelines = SegmentCapturePipelines {
+            expanded: PassPipeline::new("segment/expanded", "segment/expanded-depth"),
+            expanded_solid: PassPipeline::new(
+                "segment/expanded-solid",
+                "segment/expanded-solid-depth",
+            ),
+            mesh: PassPipeline::new("segment/mesh", "segment/mesh-depth"),
+            instanced: PassPipeline::new("segment/instanced", "segment/instanced-depth"),
+            instanced_solid: PassPipeline::new(
+                "segment/instanced-solid",
+                "segment/instanced-solid-depth",
+            ),
+        };
 
         let image_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -6612,6 +6646,8 @@ impl GpuRenderer {
             mesh_pipeline,
             #[cfg(not(target_arch = "wasm32"))]
             instanced_quads,
+            #[cfg(not(target_arch = "wasm32"))]
+            segment_capture_pipelines,
             uniform_bind_group_layout,
             shape_bind_group_layout,
             dummy_paint_buffer,
@@ -7044,6 +7080,140 @@ impl GpuRenderer {
             })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn segment_capture_pipeline(&self, kind: RetainedPipelineKind) -> &wgpu::RenderPipeline {
+        let format = wgpu::TextureFormat::Rgba16Float;
+        match kind {
+            RetainedPipelineKind::Mesh => {
+                self.segment_capture_pipelines
+                    .mesh
+                    .get_or_init(self.adapter_backend, false, |_| {
+                        create_mesh_shape_pipeline(
+                            &self.device,
+                            self.pipeline_cache.as_ref(),
+                            format,
+                            &self.uniform_bind_group_layout,
+                            &self.shape_bind_group_layout,
+                            self.shape_batch_limits,
+                            false,
+                        )
+                    })
+            }
+            RetainedPipelineKind::Expanded => self.segment_capture_pipelines.expanded.get_or_init(
+                self.adapter_backend,
+                false,
+                |_| {
+                    create_shape_pipeline(
+                        &self.device,
+                        self.pipeline_cache.as_ref(),
+                        format,
+                        &self.uniform_bind_group_layout,
+                        &self.shape_bind_group_layout,
+                        BlendMode::SrcOver,
+                        self.shape_batch_limits,
+                        false,
+                        "vs_main",
+                        "fs_main",
+                        false,
+                    )
+                },
+            ),
+            RetainedPipelineKind::ExpandedSolid => self
+                .segment_capture_pipelines
+                .expanded_solid
+                .get_or_init(self.adapter_backend, false, |_| {
+                    let solid_trim = solid_trim_varyings_enabled();
+                    let (vertex_entry, fragment_entry) = if solid_trim {
+                        ("vs_solid", "fs_solid_trim")
+                    } else {
+                        ("vs_main", "fs_solid")
+                    };
+                    create_shape_pipeline(
+                        &self.device,
+                        self.pipeline_cache.as_ref(),
+                        format,
+                        &self.uniform_bind_group_layout,
+                        &self.shape_bind_group_layout,
+                        BlendMode::SrcOver,
+                        self.shape_batch_limits,
+                        solid_trim,
+                        vertex_entry,
+                        fragment_entry,
+                        false,
+                    )
+                }),
+            RetainedPipelineKind::Instanced | RetainedPipelineKind::InstancedSolid => {
+                let Some(_) = self.instanced_quads.as_ref() else {
+                    return self.segment_capture_pipeline(match kind {
+                        RetainedPipelineKind::Instanced => RetainedPipelineKind::Expanded,
+                        RetainedPipelineKind::InstancedSolid => RetainedPipelineKind::ExpandedSolid,
+                        _ => unreachable!(),
+                    });
+                };
+                let (resource, solid_trim, vertex_entry, fragment_entry) = match kind {
+                    RetainedPipelineKind::Instanced => (
+                        &self.segment_capture_pipelines.instanced,
+                        false,
+                        "vs_shape_instanced",
+                        "fs_main",
+                    ),
+                    RetainedPipelineKind::InstancedSolid => {
+                        let solid_trim = solid_trim_varyings_enabled();
+                        (
+                            &self.segment_capture_pipelines.instanced_solid,
+                            solid_trim,
+                            if solid_trim {
+                                "vs_solid_instanced"
+                            } else {
+                                "vs_shape_instanced"
+                            },
+                            if solid_trim {
+                                "fs_solid_trim"
+                            } else {
+                                "fs_solid"
+                            },
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                resource.get_or_init(self.adapter_backend, false, |_| {
+                    create_instanced_shape_pipeline(
+                        &self.device,
+                        self.pipeline_cache.as_ref(),
+                        format,
+                        &self.uniform_bind_group_layout,
+                        &self.shape_bind_group_layout,
+                        BlendMode::SrcOver,
+                        self.shape_batch_limits,
+                        solid_trim,
+                        vertex_entry,
+                        fragment_entry,
+                        false,
+                    )
+                })
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retained_pipeline(&self, kind: RetainedPipelineKind) -> &wgpu::RenderPipeline {
+        match kind {
+            RetainedPipelineKind::Mesh => self.mesh_pipeline(),
+            RetainedPipelineKind::Expanded => self.shape_pipeline(BlendMode::SrcOver),
+            RetainedPipelineKind::ExpandedSolid => self.shape_pipeline_solid(),
+            RetainedPipelineKind::Instanced => self
+                .instanced_quads
+                .as_ref()
+                .map(|instanced| self.instanced_pipeline(instanced, BlendMode::SrcOver))
+                .unwrap_or_else(|| self.shape_pipeline(BlendMode::SrcOver)),
+            RetainedPipelineKind::InstancedSolid => self
+                .instanced_quads
+                .as_ref()
+                .map(|instanced| self.instanced_pipeline_solid(instanced))
+                .unwrap_or_else(|| self.shape_pipeline_solid()),
+        }
+    }
+
     fn image_pipeline(&self, blend_mode: BlendMode) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
             BlendMode::DstOut => &self.image_pipeline_dst_out,
@@ -7202,6 +7372,16 @@ impl GpuRenderer {
 
     fn acquire_retained_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
         self.acquire_offscreen(width, height)
+    }
+
+    fn acquire_segment_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
+        let max_texture_dim = self.max_texture_dim();
+        OffscreenTarget::new(
+            &self.device,
+            wgpu::TextureFormat::Rgba16Float,
+            width.min(max_texture_dim).max(1),
+            height.min(max_texture_dim).max(1),
+        )
     }
 
     fn transient_offscreen_descriptor(
@@ -10354,7 +10534,9 @@ impl GpuRenderer {
                         RetainedCmd::Uniforms(_) => {
                             capture_pass.set_bind_group(0, uniform_group, &[])
                         }
-                        RetainedCmd::Pipeline(pipeline) => capture_pass.set_pipeline(pipeline),
+                        RetainedCmd::Pipeline(pipeline) => {
+                            capture_pass.set_pipeline(self.segment_capture_pipeline(pipeline))
+                        }
                         RetainedCmd::SlotBindings(group, offset) => {
                             capture_pass.set_bind_group(1, group, &[offset])
                         }
@@ -12899,9 +13081,6 @@ impl GpuRenderer {
         // Seed the mutable paint from the converted colors, so an unpatched
         // replay renders bit-identically to the capture frame.
         let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
-        let segment_surface_safe = shape_data
-            .iter()
-            .all(|shape| shape.brush_type == 0 && shape.color[3] == 1.0);
         let paint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Replay Paint Buffer"),
             size: (std::mem::size_of::<[f32; 4]>() * shape_count) as u64,
@@ -12961,7 +13140,6 @@ impl GpuRenderer {
                 mesh,
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
-                segment_surface_safe,
                 fill_diag_shapes,
                 shape_aabbs,
                 area_prefix,
@@ -13093,9 +13271,6 @@ impl GpuRenderer {
                     let Some(slot) = self.replay_slots.slots.get(&retained.slot) else {
                         continue;
                     };
-                    if !slot.segment_surface_safe {
-                        continue;
-                    }
                     let first = retained.first_shape.min(slot.shape_count);
                     let last = retained
                         .first_shape
@@ -13129,13 +13304,7 @@ impl GpuRenderer {
                     let texture = segment_surfaces
                         .take_texture_for_recapture(&key, &plan.rect)
                         .unwrap_or_else(|| {
-                            let device = self.device.clone();
-                            self.effect_renderer.acquire_offscreen(
-                                &device,
-                                plan.rect.width,
-                                plan.rect.height,
-                                Some(&self.frame_stats),
-                            )
+                            self.acquire_segment_surface(plan.rect.width, plan.rect.height)
                         });
                     segment_surfaces.install_entry(
                         key,
@@ -13289,7 +13458,9 @@ impl GpuRenderer {
                 last,
                 retained_index as u32,
                 &mut |cmd| match cmd {
-                    RetainedCmd::Pipeline(pipeline) => render_pass.set_pipeline(pipeline),
+                    RetainedCmd::Pipeline(pipeline) => {
+                        render_pass.set_pipeline(self.retained_pipeline(pipeline))
+                    }
                     RetainedCmd::Uniforms(group) => render_pass.set_bind_group(0, group, &[]),
                     RetainedCmd::SlotBindings(group, offset) => {
                         render_pass.set_bind_group(1, group, &[offset])
@@ -13364,7 +13535,7 @@ impl GpuRenderer {
                 end += 1;
             }
             if run_meshed {
-                sink(RetainedCmd::Pipeline(self.mesh_pipeline()));
+                sink(RetainedCmd::Pipeline(RetainedPipelineKind::Mesh));
                 sink(RetainedCmd::Index(
                     &mesh.index_buffer,
                     wgpu::IndexFormat::Uint32,
@@ -13397,13 +13568,9 @@ impl GpuRenderer {
         match &self.instanced_quads {
             Some(instanced) => {
                 if slot.has_gradient {
-                    sink(RetainedCmd::Pipeline(
-                        self.instanced_pipeline(instanced, BlendMode::SrcOver),
-                    ));
+                    sink(RetainedCmd::Pipeline(RetainedPipelineKind::Instanced));
                 } else {
-                    sink(RetainedCmd::Pipeline(
-                        self.instanced_pipeline_solid(instanced),
-                    ));
+                    sink(RetainedCmd::Pipeline(RetainedPipelineKind::InstancedSolid));
                 }
                 sink(RetainedCmd::Index(
                     &instanced.index_buffer,
@@ -13413,11 +13580,9 @@ impl GpuRenderer {
             }
             None => {
                 if slot.has_gradient {
-                    sink(RetainedCmd::Pipeline(
-                        self.shape_pipeline(BlendMode::SrcOver),
-                    ));
+                    sink(RetainedCmd::Pipeline(RetainedPipelineKind::Expanded));
                 } else {
-                    sink(RetainedCmd::Pipeline(self.shape_pipeline_solid()));
+                    sink(RetainedCmd::Pipeline(RetainedPipelineKind::ExpandedSolid));
                 }
                 sink(RetainedCmd::Draw(range.start * 6..range.end * 6));
             }
@@ -13524,7 +13689,9 @@ impl GpuRenderer {
                 op.last,
                 op.retained_index,
                 &mut |cmd| match cmd {
-                    RetainedCmd::Pipeline(pipeline) => encoder.set_pipeline(pipeline),
+                    RetainedCmd::Pipeline(pipeline) => {
+                        encoder.set_pipeline(self.retained_pipeline(pipeline))
+                    }
                     RetainedCmd::Uniforms(group) => encoder.set_bind_group(0, group, &[]),
                     RetainedCmd::SlotBindings(group, offset) => {
                         encoder.set_bind_group(1, group, &[offset])

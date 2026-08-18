@@ -53,13 +53,17 @@ fn record_frame(
             width: SIZE as f32,
             height: SIZE as f32,
         },
-        Brush::solid(Color(0.02, 0.02, 0.05, 1.0)),
+        Brush::solid(if fractional_grid {
+            Color(0.0, 0.0, 0.0, 1.0)
+        } else {
+            Color(0.02, 0.02, 0.05, 1.0)
+        }),
     );
     if fractional_grid {
         for y in 0..23 {
             for x in 0..23 {
                 scope.draw_circle(
-                    Brush::solid(Color(47.0 / 255.0, 168.0 / 255.0, 245.0 / 255.0, 0.82)),
+                    Brush::solid(Color(0.5, 0.5, 1.0, 0.4)),
                     Point::new(9.0 + x as f32 * 17.0, 9.0 + y as f32 * 17.0),
                     9.5,
                 );
@@ -375,7 +379,7 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
 
 #[test]
 fn fractional_alpha_retained_surface_matches_float_blending() {
-    let mut renderer = match support::headless_renderer() {
+    let mut renderer = match support::headless_renderer_unencoded() {
         Ok(renderer) => renderer,
         Err(err) => {
             eprintln!(
@@ -391,12 +395,20 @@ fn fractional_alpha_retained_surface_matches_float_blending() {
     let baseline = render_sequence(&mut renderer, &graphs);
     std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
     let cached = render_sequence(&mut renderer, &graphs);
+    let (captures, composites, _, _, _) = renderer.segment_surface_stats();
     clear_env();
+    assert!(captures > 0 && composites > 0);
     let center = ((94 * SIZE + 94) * 4) as usize;
     assert_eq!(
         &cached.last().expect("cached frame")[center..center + 3],
         &baseline.last().expect("baseline frame")[center..center + 3],
         "retaining a fractional-alpha fill must preserve the direct float blend"
+    );
+    let edge = ((9 * SIZE + 18) * 4) as usize;
+    assert_eq!(
+        &cached.last().expect("cached frame")[edge..edge + 3],
+        &baseline.last().expect("baseline frame")[edge..edge + 3],
+        "retaining an antialiased fractional-alpha edge must preserve the direct float blend"
     );
 }
 
