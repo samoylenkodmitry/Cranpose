@@ -132,9 +132,9 @@ fn direct_scene_range_hash_detail_z() -> Option<usize> {
 
 const MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 2;
 const MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS: usize = 64;
-const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 256 * 1024;
-const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 1_048_576;
-const DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 1024 * 1024;
+const MIN_SINGLE_DRAW_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 512 * 1024;
+const MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES: u64 = 2_097_152;
+const DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_DIRECT_SCENE_RANGE_CACHE_BYTES: u64 = MAX_SCENE_RANGE_CACHE_ENTRY_BYTES;
 const RENDER_STRING_HASH_CACHE_CAPACITY: usize = 2048;
 
@@ -6890,8 +6890,10 @@ mod tests {
     fn direct_scene_range_cache_chunks_isolate_large_motion_sensitive_draw_ops() {
         let mut scene = CompositorScene::new();
         let root_scale = 1.0;
-        let large_side =
-            ((MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES / 4) as f32).sqrt() + 16.0;
+        let large_side = (MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES as f32
+            / crate::offscreen::composition_bytes_per_pixel() as f32)
+            .sqrt()
+            + 16.0;
         let motion_z = MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS;
         let suffix_start = motion_z + 1;
         let total = suffix_start + MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS;

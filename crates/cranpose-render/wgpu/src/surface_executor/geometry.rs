@@ -5,7 +5,7 @@ use crate::surface_plan::TranslatedContentAxes;
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_ui_graphics::{Point, Rect};
 
-pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 16 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
 const COMPOSITE_DEST_SNAP_TOLERANCE: f32 = 1e-4;
 const DEVICE_SNAP_SUBPIXEL_STEPS: f64 = 16.0;
@@ -930,7 +930,7 @@ mod tests {
     }
 
     /// Raising a zoomed layer's surface density must stay inside the existing
-    /// 8 MB budget: `clamp_effect_surface_scale` only clamps downward, so the
+    /// 16 MB budget: `clamp_effect_surface_scale` only clamps downward, so the
     /// larger desired scale is bounded, not honoured.
     #[test]
     fn zoom_raised_surface_scale_stays_inside_the_byte_budget() {

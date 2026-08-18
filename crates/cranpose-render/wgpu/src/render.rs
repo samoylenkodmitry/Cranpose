@@ -274,7 +274,7 @@ const MAX_SHADOW_SURFACE_CACHE_ITEMS: usize = 512;
 // Sized for HiDPI: a 4K fractional-scale screen full of shadowed panels needs
 // ~10-15 rasters of 4-12MB each; a 64MB budget made the large entries evict
 // each other every frame during scroll, re-blurring tens of megapixels.
-const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 192 * 1024 * 1024;
+const MAX_SHADOW_SURFACE_CACHE_BYTES: u64 = 384 * 1024 * 1024;
 const MAX_TEXT_IMAGE_CACHE_ITEMS: usize = 1024;
 const MAX_TEXT_GLYPH_MASK_CACHE_ITEMS: usize = 8192;
 const MAX_TEXT_GLYPH_ATLAS_ITEMS: usize = 8192;

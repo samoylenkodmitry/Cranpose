@@ -101,13 +101,13 @@ pub(crate) const SEGMENT_CAPTURE_UNIFORM_STRIDE: u64 = 256;
 
 /// Total cached-surface byte budget. Mega-scale ring segments measure
 /// ~0.3-0.5 MB each at watch resolution, so this holds a whole scene of
-/// them with room while staying far below the layer-surface cache's 64 MiB.
-const MAX_SEGMENT_SURFACE_BYTES: u64 = 16 * 1024 * 1024;
+/// them with room while staying far below the layer-surface cache's 128 MiB.
+const MAX_SEGMENT_SURFACE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Per-entry byte cap: a segment whose padded capture rect exceeds this
 /// would also fail the economics gate for any plausible member set; the cap
 /// just fails it before a texture is sized.
-const MAX_SEGMENT_SURFACE_ENTRY_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_SEGMENT_SURFACE_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Frames a key must be observed before its churn window is trusted. Below
 /// this the segment draws direct — a segment that dies young never pays a
