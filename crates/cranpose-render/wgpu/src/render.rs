@@ -5828,6 +5828,7 @@ pub struct GpuRenderer {
     #[cfg(not(target_arch = "wasm32"))]
     store_feed_generation: u64,
     composition_format: wgpu::TextureFormat,
+    #[cfg(not(target_arch = "wasm32"))]
     display_format: wgpu::TextureFormat,
     composition_target: Option<CompositionTarget>,
     output_converter: OutputConverter,
@@ -6658,6 +6659,7 @@ impl GpuRenderer {
             #[cfg(not(target_arch = "wasm32"))]
             store_feed_generation,
             composition_format,
+            #[cfg(not(target_arch = "wasm32"))]
             display_format,
             composition_target: None,
             output_converter,
