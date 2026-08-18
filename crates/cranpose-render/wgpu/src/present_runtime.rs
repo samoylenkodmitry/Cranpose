@@ -508,9 +508,10 @@ impl PresentState {
             }
         };
         let after_acquire_ns = self.now();
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.gpu_renderer.surface_format().remove_srgb_suffix()),
+            ..Default::default()
+        });
         let mut returns = RenderReturns::default();
         let result = self.gpu_renderer.render(
             &view,

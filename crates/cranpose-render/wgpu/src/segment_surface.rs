@@ -267,6 +267,14 @@ impl Affine2 {
     pub(crate) fn is_identity_for_sampling(&self) -> bool {
         self.l == [[1.0, 0.0], [0.0, 1.0]] && self.t == [0.0, 0.0]
     }
+
+    pub(crate) fn is_integer_translation_for_sampling(&self) -> bool {
+        self.l == [[1.0, 0.0], [0.0, 1.0]]
+            && self
+                .t
+                .iter()
+                .all(|value| value.is_finite() && value.fract() == 0.0)
+    }
 }
 
 /// Integer-snapped, padded capture rect in capture device space.
@@ -869,6 +877,21 @@ mod tests {
             t: [1.0 / 128.0, 0.0],
         }
         .is_identity_for_sampling());
+    }
+
+    #[test]
+    fn integer_translation_is_texel_exact_for_sampling() {
+        let translated = Affine2 {
+            l: [[1.0, 0.0], [0.0, 1.0]],
+            t: [3.0, -2.0],
+        };
+        assert!(translated.is_integer_translation_for_sampling());
+        assert!(!Affine2 {
+            l: [[1.0, 0.0], [0.0, 1.0]],
+            t: [3.25, -2.0],
+        }
+        .is_integer_translation_for_sampling());
+        assert!(!similarity([204.0, 204.0], 0.01, 1.0).is_integer_translation_for_sampling());
     }
 
     #[test]

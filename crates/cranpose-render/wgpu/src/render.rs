@@ -10442,9 +10442,7 @@ impl GpuRenderer {
                     inverse: plan.inverse,
                     alpha: 1.0,
                     blend_mode: BlendMode::SrcOver,
-                    // An identity effective transform samples through the
-                    // exact textureLoad path; motion samples bilinear.
-                    sample_mode: if plan.identity {
+                    sample_mode: if plan.identity || plan.integer_translation {
                         CompositeSampleMode::Nearest
                     } else {
                         CompositeSampleMode::Linear
@@ -13363,6 +13361,7 @@ impl GpuRenderer {
                             dest_quad: segment_identity_quad(&plan.rect),
                             inverse: segment_identity_inverse(&plan.rect),
                             identity: true,
+                            integer_translation: true,
                         },
                     ));
                 } else {
@@ -13387,6 +13386,7 @@ impl GpuRenderer {
                             dest_quad: segment_identity_quad(&rect),
                             inverse: segment_identity_inverse(&rect),
                             identity: true,
+                            integer_translation: true,
                         }
                     } else {
                         let Some(inverse) = effective.invert() else {
@@ -13410,6 +13410,7 @@ impl GpuRenderer {
                                 [0.0, 0.0, 1.0],
                             ],
                             identity: false,
+                            integer_translation: effective.is_integer_translation_for_sampling(),
                         }
                     };
                     composites.push((*index, plan));
@@ -16163,6 +16164,7 @@ struct SegmentCompositePlan {
     dest_quad: [[f32; 2]; 4],
     inverse: [[f32; 3]; 3],
     identity: bool,
+    integer_translation: bool,
 }
 
 /// The capture rect's corners in capture space — also the dest quad under
