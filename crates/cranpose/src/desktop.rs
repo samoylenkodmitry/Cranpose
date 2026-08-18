@@ -5849,7 +5849,9 @@ fn resolve_robot_screenshot_params_with_scale(
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "robot")]
-    use super::{bound_park_for_robot, ControlFlow, ROBOT_PARKED_COMMAND_POLL_INTERVAL};
+    use super::{
+        bound_park_for_robot, ControlFlow, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
+    };
     use super::{
         clamp_rect_to_monitor_delta, frame_interval_for_mode, free_running_frame,
         initial_present_redraw_needed, native_window_graph_position,
@@ -6132,6 +6134,7 @@ mod tests {
         assert!(!controller.awaiting_progress());
     }
 
+    #[cfg(feature = "robot")]
     #[test]
     fn robot_idle_timeout_tracks_elapsed_time_instead_of_loop_iterations() {
         let (mut controller, _robot) = RobotController::new(|| {});
