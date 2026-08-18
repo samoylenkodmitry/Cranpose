@@ -2088,6 +2088,14 @@ fn storekit_bridge_exposes_listener_liveness_and_rebuilds_it() {
     assert!(swift.contains("if !_listenerActive"));
 }
 
+#[test]
+fn android_service_registration_replaces_the_relaunch_waker() {
+    let services = crate_source("src/android_services.rs");
+    assert!(services.contains("LOOP_WAKER.get_or_init"));
+    assert!(services.contains("*waker = Some(app.create_waker())"));
+    assert!(!services.contains("let _ = LOOP_WAKER.set"));
+}
+
 /// Every Gradle task that runs `cargo ndk` must declare the directory it writes
 /// as an output.
 ///
