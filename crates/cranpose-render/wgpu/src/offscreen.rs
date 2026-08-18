@@ -7,6 +7,8 @@
 use crate::gpu_stats::FrameStats;
 use std::cell::OnceCell;
 
+pub(crate) const COMPOSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
 /// A GPU texture that can serve as both a render target and a texture source.
 pub(crate) struct OffscreenTarget {
     // Texture kept alive for the view's lifetime; the view borrows from it implicitly.
@@ -14,6 +16,7 @@ pub(crate) struct OffscreenTarget {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    bytes_per_pixel: u64,
     /// Lazily-cached bind group for sampling this target as a texture.
     /// Valid as long as the underlying texture is alive (i.e. while this target exists).
     cached_bind_group: OnceCell<wgpu::BindGroup>,
@@ -59,6 +62,7 @@ impl OffscreenTarget {
             view,
             width,
             height,
+            bytes_per_pixel: crate::frame_graph::texture_format_bytes_per_pixel(format),
             cached_bind_group: OnceCell::new(),
         }
     }
@@ -103,44 +107,10 @@ impl OffscreenTarget {
     pub(crate) fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
-
-    pub(crate) fn from_readable_texture(
-        texture: &wgpu::Texture,
-        view: &wgpu::TextureView,
-    ) -> Option<Self> {
-        if !texture_supports_backdrop_reads(texture.usage()) {
-            return None;
-        }
-        Some(Self {
-            texture: texture.clone(),
-            view: view.clone(),
-            width: texture.width(),
-            height: texture.height(),
-            cached_bind_group: OnceCell::new(),
-        })
-    }
 }
 
-pub(crate) fn texture_supports_backdrop_reads(usage: wgpu::TextureUsages) -> bool {
-    usage.contains(wgpu::TextureUsages::COPY_SRC)
-        && usage.contains(wgpu::TextureUsages::TEXTURE_BINDING)
-}
-
-pub(crate) fn capture_root_target_reads() -> bool {
-    cranpose_core::env_flag!("CRANPOSE_CAPTURE_ROOT_TARGET_READS")
-}
-
-pub fn display_surface_usages(supported: wgpu::TextureUsages) -> wgpu::TextureUsages {
-    let mut usages = wgpu::TextureUsages::RENDER_ATTACHMENT;
-    for read in [
-        wgpu::TextureUsages::COPY_SRC,
-        wgpu::TextureUsages::TEXTURE_BINDING,
-    ] {
-        if supported.contains(read) {
-            usages |= read;
-        }
-    }
-    usages
+pub(crate) fn composition_bytes_per_pixel() -> u64 {
+    crate::frame_graph::texture_format_bytes_per_pixel(COMPOSITION_FORMAT)
 }
 
 /// Pool of reusable offscreen render targets.
@@ -168,8 +138,8 @@ const MAX_POOLED_TARGETS: usize = 64;
 /// with room for the blur scratch.
 const MAX_POOLED_BYTES: u64 = 64 * 1024 * 1024;
 
-fn target_bytes(width: u32, height: u32) -> u64 {
-    u64::from(width) * u64::from(height) * 4
+fn target_bytes(width: u32, height: u32, bytes_per_pixel: u64) -> u64 {
+    u64::from(width) * u64::from(height) * bytes_per_pixel
 }
 
 impl OffscreenPool {
@@ -204,7 +174,11 @@ impl OffscreenPool {
     pub fn estimated_bytes(&self) -> usize {
         self.available
             .iter()
-            .map(|t| (t.width as usize) * (t.height as usize) * 4)
+            .map(|t| {
+                (t.width as u64)
+                    .saturating_mul(t.height as u64)
+                    .saturating_mul(t.bytes_per_pixel) as usize
+            })
             .sum()
     }
 
@@ -227,12 +201,12 @@ impl OffscreenPool {
             .position(|t| t.matches_size(width, height))
         {
             if let Some(s) = stats {
-                s.record_offscreen_acquire(width, height, false);
+                s.record_offscreen_acquire(width, height, self.format, false);
             }
             self.available.swap_remove(idx)
         } else {
             if let Some(s) = stats {
-                s.record_offscreen_acquire(width, height, true);
+                s.record_offscreen_acquire(width, height, self.format, true);
             }
             OffscreenTarget::new(device, self.format, width, height)
         }
@@ -255,8 +229,12 @@ impl OffscreenPool {
     fn pooled_bytes(&self) -> u64 {
         self.available
             .iter()
-            .map(|t| target_bytes(t.width, t.height))
+            .map(|t| target_bytes(t.width, t.height, self.bytes_per_pixel()))
             .sum()
+    }
+
+    fn bytes_per_pixel(&self) -> u64 {
+        crate::frame_graph::texture_format_bytes_per_pixel(self.format)
     }
 
     /// The bind group layout for sampling offscreen textures.
@@ -316,7 +294,7 @@ mod tests {
     /// for.
     #[test]
     fn a_frame_worth_of_small_surfaces_stays_pooled() {
-        let bytes: u64 = (0..20).map(|_| target_bytes(132, 132)).sum();
+        let bytes: u64 = (0..20).map(|_| target_bytes(132, 132, 4)).sum();
         assert!(
             bytes < MAX_POOLED_BYTES,
             "twenty control surfaces must fit the pool budget"
@@ -328,46 +306,12 @@ mod tests {
 
     #[test]
     fn the_budget_bounds_full_screen_surfaces() {
-        let full_screen = target_bytes(1080, 2244);
+        let full_screen = target_bytes(1080, 2244, 4);
         let held = MAX_POOLED_BYTES / full_screen;
         assert!(
             (2..=8).contains(&held),
             "the budget should hold a few full-screen surfaces, not dozens: {held}"
         );
-    }
-
-    #[test]
-    fn a_surface_asks_for_the_reads_the_adapter_offers() {
-        let all = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_DST;
-        let asked = display_surface_usages(all);
-        assert!(asked.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
-        assert!(asked.contains(wgpu::TextureUsages::COPY_SRC));
-        assert!(asked.contains(wgpu::TextureUsages::TEXTURE_BINDING));
-        assert!(!asked.contains(wgpu::TextureUsages::COPY_DST));
-        assert!(texture_supports_backdrop_reads(asked));
-    }
-
-    #[test]
-    fn a_surface_that_offers_no_read_keeps_the_attachment_alone() {
-        let asked = display_surface_usages(wgpu::TextureUsages::RENDER_ATTACHMENT);
-        assert_eq!(asked, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        assert!(!texture_supports_backdrop_reads(asked));
-    }
-
-    #[test]
-    fn one_read_alone_is_not_enough_for_a_backdrop() {
-        let copy_only = display_surface_usages(
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        );
-        assert!(copy_only.contains(wgpu::TextureUsages::COPY_SRC));
-        assert!(!texture_supports_backdrop_reads(copy_only));
-        let sample_only = display_surface_usages(
-            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-        );
-        assert!(!texture_supports_backdrop_reads(sample_only));
     }
 
     #[test]

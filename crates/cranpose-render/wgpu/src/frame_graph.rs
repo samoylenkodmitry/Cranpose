@@ -334,7 +334,7 @@ pub(crate) struct PassContext<'pass> {
     pass_count: u32,
 }
 
-fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
+pub(crate) fn texture_format_bytes_per_pixel(format: wgpu::TextureFormat) -> u64 {
     match format {
         wgpu::TextureFormat::R8Unorm
         | wgpu::TextureFormat::R8Snorm

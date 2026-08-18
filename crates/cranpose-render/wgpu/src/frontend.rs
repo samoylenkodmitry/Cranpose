@@ -101,7 +101,7 @@ impl RendererFrontend {
             layer_surface_requirements_cache: HashMap::new(),
             overlay_surface_requirements_cache: HashMap::new(),
             changed_nodes: Vec::new(),
-            root_target_reads: false,
+            root_target_reads: true,
         }
     }
 

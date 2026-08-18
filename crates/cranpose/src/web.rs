@@ -228,7 +228,7 @@ pub async fn run(
 
     let present_mode = crate::present_mode::select_present_mode(&surface_caps);
     let surface_config = wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::display_surface_usages(surface_caps.usages),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width: buffer_width,
         height: buffer_height,
@@ -870,7 +870,6 @@ pub async fn run(
                     {
                         let mut app_mut = app.borrow_mut();
                         if let Err(err) = app_mut.renderer().render_surface_texture(
-                            &output.texture,
                             &view,
                             render_width,
                             render_height,

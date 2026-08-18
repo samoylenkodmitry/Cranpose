@@ -31,7 +31,8 @@ use crate::normalized_scene::{
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
 use crate::normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer};
-use crate::offscreen::{capture_root_target_reads, OffscreenTarget};
+use crate::offscreen::{composition_bytes_per_pixel, OffscreenTarget, COMPOSITION_FORMAT};
+use crate::output_conversion::OutputConverter;
 use crate::rect_to_quad;
 use crate::scene::{
     BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
@@ -5794,6 +5795,17 @@ impl ImageBatchBuffers {
 
 // Text image cache keys are local to rasterized WGPU text batches
 
+struct CompositionTarget {
+    target: OffscreenTarget,
+    output_bind_group: wgpu::BindGroup,
+}
+
+#[derive(Clone, Copy)]
+enum OutputMode {
+    Display,
+    Screenshot,
+}
+
 pub struct GpuRenderer {
     pub(crate) device: Arc<wgpu::Device>,
     pub(crate) queue: Arc<wgpu::Queue>,
@@ -5815,7 +5827,11 @@ pub struct GpuRenderer {
     /// thread-local — this field is its only generation authority.
     #[cfg(not(target_arch = "wasm32"))]
     store_feed_generation: u64,
-    surface_format: wgpu::TextureFormat,
+    composition_format: wgpu::TextureFormat,
+    display_format: wgpu::TextureFormat,
+    composition_target: Option<CompositionTarget>,
+    output_converter: OutputConverter,
+    screenshot_converter: OutputConverter,
     adapter_backend: wgpu::Backend,
     shape_batch_limits: ShapeBatchLimits,
     /// `Some` exactly when the device granted [`wgpu::Features::PIPELINE_CACHE`]
@@ -6271,6 +6287,8 @@ impl GpuRenderer {
     ) -> Self {
         #[cfg(target_arch = "wasm32")]
         let _ = store_feed_generation;
+        let display_format = surface_format;
+        let composition_format = COMPOSITION_FORMAT;
         // Construction time is worth a line of its own. Before pipelines were
         // built lazily this call linked every pipeline the frontend could ever
         // need, and on a GL device each link ended in a blocking
@@ -6612,7 +6630,7 @@ impl GpuRenderer {
             spawn_pipeline_prewarm(PipelinePrewarmInputs {
                 device: Arc::clone(&device),
                 cache: pipeline_cache.clone(),
-                surface_format,
+                surface_format: composition_format,
                 uniform_layout: uniform_bind_group_layout.clone(),
                 shape_layout: shape_bind_group_layout.clone(),
                 image_layout: image_bind_group_layout.clone(),
@@ -6625,9 +6643,11 @@ impl GpuRenderer {
         let effect_renderer = EffectRenderer::new(
             &device,
             pipeline_cache.clone(),
-            surface_format,
+            composition_format,
             adapter_backend,
         );
+        let output_converter = OutputConverter::new(&device, display_format);
+        let screenshot_converter = OutputConverter::new(&device, wgpu::TextureFormat::Rgba8Unorm);
         let effects_ms = instant_ms(effects_started, Instant::now());
 
         let renderer = Self {
@@ -6637,7 +6657,11 @@ impl GpuRenderer {
             renderer_epoch,
             #[cfg(not(target_arch = "wasm32"))]
             store_feed_generation,
-            surface_format,
+            composition_format,
+            display_format,
+            composition_target: None,
+            output_converter,
+            screenshot_converter,
             adapter_backend,
             shape_batch_limits,
             pipeline_cache,
@@ -6941,7 +6965,7 @@ impl GpuRenderer {
                     create_display_clip_occluder_pipeline(
                         &self.device,
                         self.pipeline_cache.as_ref(),
-                        self.surface_format,
+                        self.composition_format,
                     )
                 });
         render_pass.set_scissor_rect(0, 0, width, height);
@@ -6960,7 +6984,7 @@ impl GpuRenderer {
             create_shape_pipeline(
                 &self.device,
                 self.pipeline_cache.as_ref(),
-                self.surface_format,
+                self.composition_format,
                 &self.uniform_bind_group_layout,
                 &self.shape_bind_group_layout,
                 blend_mode,
@@ -6993,7 +7017,7 @@ impl GpuRenderer {
                 create_shape_pipeline(
                     &self.device,
                     self.pipeline_cache.as_ref(),
-                    self.surface_format,
+                    self.composition_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
                     BlendMode::SrcOver,
@@ -7013,7 +7037,7 @@ impl GpuRenderer {
                 create_mesh_shape_pipeline(
                     &self.device,
                     self.pipeline_cache.as_ref(),
-                    self.surface_format,
+                    self.composition_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
                     self.shape_batch_limits,
@@ -7036,7 +7060,7 @@ impl GpuRenderer {
             create_instanced_shape_pipeline(
                 &self.device,
                 self.pipeline_cache.as_ref(),
-                self.surface_format,
+                self.composition_format,
                 &self.uniform_bind_group_layout,
                 &self.shape_bind_group_layout,
                 blend_mode,
@@ -7069,7 +7093,7 @@ impl GpuRenderer {
                 create_instanced_shape_pipeline(
                     &self.device,
                     self.pipeline_cache.as_ref(),
-                    self.surface_format,
+                    self.composition_format,
                     &self.uniform_bind_group_layout,
                     &self.shape_bind_group_layout,
                     BlendMode::SrcOver,
@@ -7084,7 +7108,7 @@ impl GpuRenderer {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn segment_capture_pipeline(&self, kind: RetainedPipelineKind) -> &wgpu::RenderPipeline {
-        let format = wgpu::TextureFormat::Rgba16Float;
+        let format = COMPOSITION_FORMAT;
         match kind {
             RetainedPipelineKind::Mesh => {
                 self.segment_capture_pipelines
@@ -7225,7 +7249,7 @@ impl GpuRenderer {
             create_image_pipeline(
                 &self.device,
                 self.pipeline_cache.as_ref(),
-                self.surface_format,
+                self.composition_format,
                 &self.uniform_bind_group_layout,
                 &self.image_bind_group_layout,
                 blend_mode,
@@ -7240,7 +7264,7 @@ impl GpuRenderer {
                 create_glyph_atlas_pipeline(
                     &self.device,
                     self.pipeline_cache.as_ref(),
-                    self.surface_format,
+                    self.composition_format,
                     &self.uniform_bind_group_layout,
                     &self.image_bind_group_layout,
                     depth,
@@ -7257,7 +7281,7 @@ impl GpuRenderer {
                 create_glyph_atlas_pipeline(
                     &self.device,
                     self.pipeline_cache.as_ref(),
-                    self.surface_format,
+                    self.composition_format,
                     &self.retained_glyph_uniform_bind_group_layout,
                     &self.image_bind_group_layout,
                     depth,
@@ -7376,12 +7400,26 @@ impl GpuRenderer {
         self.acquire_offscreen(width, height)
     }
 
+    fn take_composition_target(&mut self, width: u32, height: u32) -> CompositionTarget {
+        if let Some(target) = self.composition_target.take() {
+            if target.target.width == width && target.target.height == height {
+                return target;
+            }
+        }
+        let target = OffscreenTarget::new(&self.device, self.composition_format, width, height);
+        let output_bind_group = self.output_converter.bind_group(&self.device, &target.view);
+        CompositionTarget {
+            target,
+            output_bind_group,
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn acquire_segment_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
         let max_texture_dim = self.max_texture_dim();
         OffscreenTarget::new(
             &self.device,
-            wgpu::TextureFormat::Rgba16Float,
+            COMPOSITION_FORMAT,
             width.min(max_texture_dim).max(1),
             height.min(max_texture_dim).max(1),
         )
@@ -7398,7 +7436,7 @@ impl GpuRenderer {
             label,
             width.min(max_texture_dim),
             height.min(max_texture_dim),
-            self.surface_format,
+            self.composition_format,
         )
     }
 
@@ -7914,7 +7952,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 first_effect,
                 source.width,
                 source.height,
-                self.renderer.surface_format,
+                self.renderer.composition_format,
             );
         let first_passes = {
             let mut effect_scratch_refs = effect_scratch_targets.refs();
@@ -8095,7 +8133,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 effect,
                 source.width,
                 source.height,
-                self.renderer.surface_format,
+                self.renderer.composition_format,
             );
         let effect_passes = {
             let mut effect_scratch_refs = effect_scratch_targets.refs();
@@ -8183,7 +8221,7 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
                 effect,
                 source.width,
                 source.height,
-                self.renderer.surface_format,
+                self.renderer.composition_format,
             );
         let effect_passes = {
             let mut effect_scratch_refs = effect_scratch_targets.refs();
@@ -8945,12 +8983,33 @@ impl GpuRenderer {
     pub fn render(
         &mut self,
         view: &wgpu::TextureView,
-        root_target: Option<&OffscreenTarget>,
+        width: u32,
+        height: u32,
+        packet: FramePacket,
+        surface_epoch: u64,
+        returns: &mut RenderReturns,
+    ) -> Result<(), String> {
+        self.render_internal(
+            width,
+            height,
+            packet,
+            surface_epoch,
+            returns,
+            OutputMode::Display,
+            Some(view),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_internal(
+        &mut self,
         width: u32,
         height: u32,
         mut packet: FramePacket,
         surface_epoch: u64,
         returns: &mut RenderReturns,
+        output_mode: OutputMode,
+        output_view: Option<&wgpu::TextureView>,
     ) -> Result<(), String> {
         // Threaded mode rides the emptied ack-confirmations buffer back to
         // the store inside the next packet ([`FramePacket::recycled_confirmations`]);
@@ -9018,14 +9077,39 @@ impl GpuRenderer {
             // The frame's root target, held for the graph walk only: the
             // display clip cull compares fused-pass targets against it so
             // nothing but the real surface pass is ever culled.
-            self.display_clip.frame_root_view = Some(view.clone());
         }
 
         // Producer-side text layout cache size, carried by the packet — the
         // present call tree holds no text layout state, and no layout runs
         // between packet build and the stats block below.
         let text_cache_len = packet.text_cache_len;
-        let result = self.render_graph(view, root_target, packet, returns);
+        let composition = self.take_composition_target(width.max(1), height.max(1));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.display_clip.frame_root_view = Some(composition.target.view.clone());
+        }
+        let composition_root = Some(&composition.target);
+        let screenshot_bind_group = output_view.and_then(|_| {
+            matches!(output_mode, OutputMode::Screenshot).then(|| {
+                self.screenshot_converter
+                    .bind_group(&self.device, &composition.target.view)
+            })
+        });
+        let output = output_view.map(|view| {
+            let bind_group = screenshot_bind_group
+                .as_ref()
+                .unwrap_or(&composition.output_bind_group);
+            (view, bind_group)
+        });
+        let result = self.render_graph(
+            &composition.target.view,
+            composition_root,
+            packet,
+            returns,
+            output_mode,
+            output,
+        );
+        self.composition_target = Some(composition);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.display_clip.frame_root_view = None;
@@ -9075,11 +9159,21 @@ impl GpuRenderer {
             self.effect_renderer
                 .retained_offscreen_count()
                 .saturating_add(self.frame_graph_executor.retained_texture_count())
-                as u32,
+                .saturating_add(usize::from(self.composition_target.is_some())) as u32,
         );
         self.frame_stats.offscreen_pool_bytes.set(
             (self.effect_renderer.retained_offscreen_bytes() as u64)
-                .saturating_add(self.frame_graph_executor.retained_texture_bytes()),
+                .saturating_add(self.frame_graph_executor.retained_texture_bytes())
+                .saturating_add(
+                    self.composition_target
+                        .as_ref()
+                        .map(|target| {
+                            u64::from(target.target.width)
+                                .saturating_mul(u64::from(target.target.height))
+                                .saturating_mul(composition_bytes_per_pixel())
+                        })
+                        .unwrap_or(0),
+                ),
         );
         self.frame_stats
             .text_pool_size
@@ -9249,27 +9343,19 @@ impl GpuRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: self.surface_format,
-            usage: if capture_root_target_reads() {
-                wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-            } else {
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
-            },
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let output_view = output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let root_target = OffscreenTarget::from_readable_texture(&output_texture, &output_view);
-
-        self.render(
-            &output_view,
-            root_target.as_ref(),
+        self.render_internal(
             width,
             height,
             packet,
             surface_epoch,
             returns,
+            OutputMode::Screenshot,
+            Some(&output_view),
         )?;
 
         let bytes_per_pixel = 4u32;
@@ -9355,8 +9441,7 @@ impl GpuRenderer {
         drop(mapped);
         output_buffer.unmap();
 
-        self.convert_surface_pixels_to_rgba(&mut pixels)?;
-        Ok(pixels)
+        self.convert_surface_pixels_to_rgba(&pixels)
     }
 
     fn render_graph(
@@ -9365,6 +9450,8 @@ impl GpuRenderer {
         root_target: Option<&OffscreenTarget>,
         packet: FramePacket,
         returns: &mut RenderReturns,
+        output_mode: OutputMode,
+        output: Option<(&wgpu::TextureView, &wgpu::BindGroup)>,
     ) -> Result<(), String> {
         let device = self.device.clone();
         let queue = self.queue.clone();
@@ -9386,7 +9473,22 @@ impl GpuRenderer {
                         packet,
                         returns,
                         frame_encoder,
-                    )
+                    )?;
+                    if let Some((output_view, bind_group)) = output {
+                        match output_mode {
+                            OutputMode::Display => &self.output_converter,
+                            OutputMode::Screenshot => &self.screenshot_converter,
+                        }
+                        .encode(
+                            &self.device,
+                            frame_encoder.encoder(),
+                            output_view,
+                            bind_group,
+                            self.adapter_backend,
+                        );
+                        frame_encoder.record_pass();
+                    }
+                    Ok(())
                 },
             );
             let after_build = Instant::now();
@@ -9427,6 +9529,22 @@ impl GpuRenderer {
                     returns,
                     &mut frame_encoder,
                 );
+                if result.is_ok() {
+                    if let Some((output_view, bind_group)) = output {
+                        match output_mode {
+                            OutputMode::Display => &self.output_converter,
+                            OutputMode::Screenshot => &self.screenshot_converter,
+                        }
+                        .encode(
+                            &self.device,
+                            frame_encoder.encoder(),
+                            output_view,
+                            bind_group,
+                            self.adapter_backend,
+                        );
+                        frame_encoder.record_pass();
+                    }
+                }
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {
                         Some(frame_encoder.finish())
@@ -12551,7 +12669,7 @@ impl GpuRenderer {
     /// runtime's offscreen test target must match it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
+        self.display_format
     }
 
     /// Test inspector for the threaded confirmations round-trip: the
@@ -13657,10 +13775,7 @@ impl GpuRenderer {
             self.device
                 .create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
                     label: Some("Retained Stretch Bundle"),
-                    // Every fused-pass target — the swapchain, screenshot
-                    // textures, pooled layer surfaces — is created with the
-                    // renderer's one surface format.
-                    color_formats: &[Some(self.surface_format)],
+                    color_formats: &[Some(self.composition_format)],
                     // A display-clip culled pass carries the depth
                     // attachment; the bundle only reads it (content
                     // pipelines test `Less`, write off), hence read-only on
@@ -16012,19 +16127,11 @@ fn align_usize_to(value: usize, alignment: usize) -> usize {
 }
 
 impl GpuRenderer {
-    fn convert_surface_pixels_to_rgba(&self, pixels: &mut [u8]) -> Result<(), String> {
-        match self.surface_format {
-            wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => Ok(()),
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb => {
-                for pixel in pixels.as_chunks_mut::<4>().0 {
-                    pixel.swap(0, 2);
-                }
-                Ok(())
-            }
-            format => Err(format!(
-                "Screenshot readback unsupported for texture format: {format:?}"
-            )),
+    fn convert_surface_pixels_to_rgba(&self, pixels: &[u8]) -> Result<Vec<u8>, String> {
+        if !pixels.len().is_multiple_of(4) {
+            return Err("Screenshot readback has an incomplete pixel".to_string());
         }
+        Ok(pixels.to_vec())
     }
 }
 
