@@ -111,7 +111,8 @@ private final class BridgeState: @unchecked Sendable {
     private let lock = NSLock()
     private var _sink: Sink?
     private var _productIds: [String] = []
-    private var _started = false
+    private var _listenerActive = false
+    private var _listenerGeneration: UInt64 = 0
 
     static let shared = BridgeState()
 
@@ -127,16 +128,34 @@ private final class BridgeState: @unchecked Sendable {
         return _productIds
     }
 
-    /// Records the sink and ids. Returns true the first time only, so the
-    /// `Transaction.updates` listener is spawned exactly once.
-    func start(sink: Sink, productIds: [String]) -> Bool {
+    func start(sink: Sink, productIds: [String]) -> UInt64? {
         lock.lock()
         defer { lock.unlock() }
         _sink = sink
         _productIds = productIds
-        let first = !_started
-        _started = true
-        return first
+        let generation: UInt64?
+        if !_listenerActive {
+            _listenerGeneration &+= 1
+            generation = _listenerGeneration
+            _listenerActive = true
+        } else {
+            generation = nil
+        }
+        return generation
+    }
+
+    func listenerEnded(_ generation: UInt64) {
+        lock.lock()
+        if _listenerGeneration == generation {
+            _listenerActive = false
+        }
+        lock.unlock()
+    }
+
+    var listenerActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _listenerActive
     }
 }
 
@@ -148,8 +167,7 @@ private final class BridgeState: @unchecked Sendable {
 /// `[A-Za-z0-9._-]`, so a newline cannot occur inside one and no escaping or
 /// JSON parser is needed on either side.
 ///
-/// Safe to call again (a relaunch of the app's configure step); the
-/// transaction listener is still spawned only once.
+/// Safe to call again after the transaction listener exits.
 @_cdecl("cranpose_storekit_start")
 public func cranpose_storekit_start(
     _ productIdsJoined: UnsafePointer<CChar>,
@@ -161,7 +179,7 @@ public func cranpose_storekit_start(
         .map(String.init)
         .filter { !$0.isEmpty }
     let sink = Sink(callback: callback, ctx: ctx)
-    let first = BridgeState.shared.start(sink: sink, productIds: ids)
+    let generation = BridgeState.shared.start(sink: sink, productIds: ids)
 
     guard #available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *) else {
         // Below the StoreKit 2 floor. The app's deployment target should make
@@ -169,12 +187,15 @@ public func cranpose_storekit_start(
         // `blocked`, not `unavailable`: the OS version cannot change while the
         // app runs, so there is nothing here for a retry to reach.
         sink.send(.phase, PhaseCode.blocked.rawValue, 0, "StoreKit 2 requires iOS 15 / macOS 12")
+        if let generation {
+            BridgeState.shared.listenerEnded(generation)
+        }
         return
     }
 
     sink.send(.phase, PhaseCode.connecting.rawValue)
 
-    if first {
+    if let generation {
         // Long-running: transactions that arrive without a purchase call —
         // Ask to Buy approvals, purchases made on another device, subscription
         // renewals, and anything the App Store retried after a crash. Apple
@@ -186,12 +207,18 @@ public func cranpose_storekit_start(
                 }
                 await refreshSnapshot()
             }
+            BridgeState.shared.listenerEnded(generation)
         }
     }
 
     Task.detached(priority: .userInitiated) {
         await refreshSnapshot()
     }
+}
+
+@_cdecl("cranpose_storekit_is_connected")
+public func cranpose_storekit_is_connected() -> Bool {
+    BridgeState.shared.listenerActive
 }
 
 /// Begin a purchase for `productId`. Presents the App Store payment sheet.

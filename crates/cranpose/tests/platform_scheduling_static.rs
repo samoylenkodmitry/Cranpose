@@ -530,7 +530,7 @@ fn android_play_billing_reaches_the_purchase_registry() {
         "the Android backend should install the Play Billing purchase backend alongside the other platform services"
     );
     assert!(
-        backend_source.contains("set_platform_purchases(Rc::new(AndroidPurchases { app }))")
+        backend_source.contains("set_platform_purchases(Arc::new(AndroidPurchases {")
             && backend_source.contains("load_cranpose_java_class(env, &activity, BILLING_CLASS)"),
         "the Play Billing backend should reach its Java bridge through the activity class loader and register itself into cranpose_services::purchases"
     );
@@ -2074,6 +2074,18 @@ fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
             "{entry_point} decodes store news and must announce it, not only wake the loop"
         );
     }
+}
+
+#[test]
+fn storekit_bridge_exposes_listener_liveness_and_rebuilds_it() {
+    let apple = workspace_source("crates/cranpose-storekit/src/apple.rs");
+    let swift = workspace_source("crates/cranpose-storekit/swift/storekit.swift");
+    assert!(apple.contains("cranpose_storekit_is_connected"));
+    assert!(apple.contains("fn is_connected(&self) -> bool"));
+    assert!(swift.contains("cranpose_storekit_is_connected"));
+    assert!(swift.contains("_listenerActive"));
+    assert!(swift.contains("_listenerActive = false"));
+    assert!(swift.contains("if !_listenerActive"));
 }
 
 /// Every Gradle task that runs `cargo ndk` must declare the directory it writes

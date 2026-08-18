@@ -18,7 +18,7 @@ mod cpal_device;
 
 /// A running output device. Dropping it stops the stream and drops the mixer
 /// (and with it every clip the mixer still held) on the thread that opened it.
-pub trait AudioSink {
+pub trait AudioSink: Send + Sync {
     /// Pauses the stream without discarding it, for an app going away.
     fn suspend(&self) {}
     /// Starts the stream again: after [`suspend`](AudioSink::suspend), and

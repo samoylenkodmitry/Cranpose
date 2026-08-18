@@ -1,9 +1,7 @@
 //! Sound effects and music — the audio analogue of [`haptics`](crate::haptics).
 //!
-//! The shape mirrors the rest of the service registry: a capability trait, an
-//! `Rc` handle, a thread-local platform slot a backend installs into, and a
-//! CompositionLocal descendants read. The compiled-in default is a no-op that
-//! still hands out real [`SoundId`]s, so an app composes and runs unchanged on
+//! The compiled-in default is a no-op that still hands out real [`SoundId`]s,
+//! so an app composes and runs unchanged on
 //! a target with no audio backend.
 //!
 //! ```rust,ignore
@@ -24,23 +22,23 @@
 //!
 //! # Threading
 //!
-//! [`AudioPlayer`] is a UI-thread handle (`Rc`, like every other service here).
 //! A real backend owns a real-time audio thread; the handle only enqueues
 //! commands for it. Decoding happens in [`AudioPlayer::load`], never during
 //! playback, so a cue that fires every few frames costs one queue push.
 
 mod wav;
 
+use crate::registry::ServiceRegistry;
 use cranpose_core::compositionLocalOfWithPolicy;
 use cranpose_core::CompositionLocal;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_macros::composable;
-use std::cell::Cell;
+use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::fmt;
 use std::ops::Index;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Identifies a decoded clip held by the audio engine.
 ///
@@ -375,7 +373,7 @@ pub enum AudioError {
 /// [`stop_voice`](AudioPlayer::stop_voice) and
 /// [`set_master_volume`](AudioPlayer::set_master_volume) must be implemented;
 /// everything else has a defaulted body so a partial backend still compiles.
-pub trait AudioPlayer {
+pub trait AudioPlayer: Send + Sync {
     /// Hands an already-decoded clip to the engine.
     fn load_clip(&self, clip: AudioClip) -> Result<SoundId, AudioError>;
 
@@ -452,7 +450,7 @@ pub trait AudioPlayer {
 }
 
 /// Shared handle to the installed [`AudioPlayer`].
-pub type AudioPlayerRef = Rc<dyn AudioPlayer>;
+pub type AudioPlayerRef = Arc<dyn AudioPlayer>;
 
 /// The player used when no backend is installed.
 ///
@@ -461,31 +459,31 @@ pub type AudioPlayerRef = Rc<dyn AudioPlayer>;
 /// behave identically with and without a device.
 #[derive(Default)]
 pub struct NoopAudioPlayer {
-    next_sound: Cell<u32>,
-    next_voice: Cell<u64>,
-    master: Cell<f32>,
-    bus_volumes: Cell<[f32; 2]>,
-    bus_enabled: Cell<[bool; 2]>,
+    next_sound: Mutex<u32>,
+    next_voice: Mutex<u64>,
+    master: Mutex<f32>,
+    bus_volumes: Mutex<[f32; 2]>,
+    bus_enabled: Mutex<[bool; 2]>,
 }
 
 impl NoopAudioPlayer {
     /// Creates a player that accepts everything and produces no sound.
     pub fn new() -> NoopAudioPlayer {
         NoopAudioPlayer {
-            next_sound: Cell::new(0),
-            next_voice: Cell::new(0),
-            master: Cell::new(1.0),
-            bus_volumes: Cell::new([1.0, 1.0]),
-            bus_enabled: Cell::new([true, true]),
+            next_sound: Mutex::new(0),
+            next_voice: Mutex::new(0),
+            master: Mutex::new(1.0),
+            bus_volumes: Mutex::new([1.0, 1.0]),
+            bus_enabled: Mutex::new([true, true]),
         }
     }
 }
 
 impl AudioPlayer for NoopAudioPlayer {
     fn load_clip(&self, _clip: AudioClip) -> Result<SoundId, AudioError> {
-        let next = self.next_sound.get().saturating_add(1);
-        self.next_sound.set(next);
-        Ok(SoundId::from_raw(next))
+        let mut next = self.next_sound.lock();
+        *next = next.saturating_add(1);
+        Ok(SoundId::from_raw(*next))
     }
 
     fn play(&self, _id: SoundId, _params: PlaybackParams) {}
@@ -494,9 +492,9 @@ impl AudioPlayer for NoopAudioPlayer {
         if !id.is_valid() {
             return VoiceId::NONE;
         }
-        let next = self.next_voice.get().saturating_add(1);
-        self.next_voice.set(next);
-        VoiceId::from_raw(next)
+        let mut next = self.next_voice.lock();
+        *next = next.saturating_add(1);
+        VoiceId::from_raw(*next)
     }
 
     fn stop(&self, _id: SoundId) {}
@@ -504,61 +502,59 @@ impl AudioPlayer for NoopAudioPlayer {
     fn stop_voice(&self, _voice: VoiceId) {}
 
     fn set_master_volume(&self, volume: f32) {
-        self.master.set(if volume.is_finite() {
+        *self.master.lock() = if volume.is_finite() {
             volume.clamp(0.0, 1.0)
         } else {
             1.0
-        });
+        };
     }
 
     fn master_volume(&self) -> f32 {
-        self.master.get()
+        *self.master.lock()
     }
 
     fn set_bus_volume(&self, bus: AudioBus, volume: f32) {
-        let mut volumes = self.bus_volumes.get();
+        let mut volumes = self.bus_volumes.lock();
         volumes[bus.index()] = if volume.is_finite() {
             volume.clamp(0.0, 1.0)
         } else {
             1.0
         };
-        self.bus_volumes.set(volumes);
     }
 
     fn bus_volume(&self, bus: AudioBus) -> f32 {
-        self.bus_volumes.get()[bus.index()]
+        self.bus_volumes.lock()[bus.index()]
     }
 
     fn set_bus_enabled(&self, bus: AudioBus, enabled: bool) {
-        let mut flags = self.bus_enabled.get();
-        flags[bus.index()] = enabled;
-        self.bus_enabled.set(flags);
+        self.bus_enabled.lock()[bus.index()] = enabled;
     }
 
     fn bus_enabled(&self, bus: AudioBus) -> bool {
-        self.bus_enabled.get()[bus.index()]
+        self.bus_enabled.lock()[bus.index()]
     }
 }
 
-thread_local! {
-    static PLATFORM_AUDIO: RefCell<Option<AudioPlayerRef>> = const { RefCell::new(None) };
-}
+static PLATFORM_AUDIO: ServiceRegistry<dyn AudioPlayer> = ServiceRegistry::new();
+static NOOP_AUDIO: OnceLock<AudioPlayerRef> = OnceLock::new();
 
 /// Installs a platform audio player, replacing any previous one.
 pub fn set_platform_audio(player: AudioPlayerRef) {
-    PLATFORM_AUDIO.with(|cell| *cell.borrow_mut() = Some(player));
+    PLATFORM_AUDIO.set(player);
 }
 
 /// Removes any registered platform audio player (tests and teardown).
 pub fn clear_platform_audio() {
-    PLATFORM_AUDIO.with(|cell| *cell.borrow_mut() = None);
+    PLATFORM_AUDIO.clear();
 }
 
 /// The installed platform player, or a no-op one.
 pub fn default_audio() -> AudioPlayerRef {
-    PLATFORM_AUDIO
-        .with(|cell| cell.borrow().clone())
-        .unwrap_or_else(|| Rc::new(NoopAudioPlayer::new()))
+    PLATFORM_AUDIO.get_or_warn("audio").unwrap_or_else(|| {
+        NOOP_AUDIO
+            .get_or_init(|| Arc::new(NoopAudioPlayer::new()))
+            .clone()
+    })
 }
 
 /// The CompositionLocal descendants read to reach the audio player.
@@ -570,7 +566,7 @@ pub fn local_audio() -> CompositionLocal<AudioPlayerRef> {
     LOCAL_AUDIO.with(|cell| {
         let mut local = cell.borrow_mut();
         local
-            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_audio, Rc::ptr_eq))
+            .get_or_insert_with(|| compositionLocalOfWithPolicy(default_audio, Arc::ptr_eq))
             .clone()
     })
 }
@@ -734,7 +730,7 @@ impl SoundBank {
 
     /// The player the bank loaded through.
     pub fn player(&self) -> AudioPlayerRef {
-        Rc::clone(&self.inner.player)
+        Arc::clone(&self.inner.player)
     }
 
     /// The handle at `index`, or [`SoundId::NONE`] when out of range.
@@ -842,8 +838,8 @@ impl Index<usize> for SoundBank {
 pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {
     let key = sound_bank_key(specs);
     let player = local_audio().current();
-    cranpose_core::remember_keyed((key, Rc::as_ptr(&player) as *const () as usize), |_| {
-        SoundBank::load(Rc::clone(&player), specs)
+    cranpose_core::remember_keyed((key, Arc::as_ptr(&player) as *const () as usize), |_| {
+        SoundBank::load(Arc::clone(&player), specs)
     })
 }
 
@@ -866,6 +862,8 @@ fn sound_bank_key(specs: &[SoundSpec<'_>]) -> (usize, u64) {
 mod tests {
     use super::*;
     use crate::run_test_composition;
+    use parking_lot::Mutex;
+    use std::cell::Cell;
 
     /// A minimal single-frame mono WAVE stream.
     fn tiny_wav() -> Vec<u8> {
@@ -890,19 +888,19 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingPlayer {
-        played: RefCell<Vec<(SoundId, PlaybackParams)>>,
-        unloaded: RefCell<Vec<SoundId>>,
-        next: Cell<u32>,
+        played: Mutex<Vec<(SoundId, PlaybackParams)>>,
+        unloaded: Mutex<Vec<SoundId>>,
+        next: Mutex<u32>,
     }
 
     impl AudioPlayer for RecordingPlayer {
         fn load_clip(&self, _clip: AudioClip) -> Result<SoundId, AudioError> {
-            let next = self.next.get() + 1;
-            self.next.set(next);
-            Ok(SoundId::from_raw(next))
+            let mut next = self.next.lock();
+            *next += 1;
+            Ok(SoundId::from_raw(*next))
         }
         fn play(&self, id: SoundId, params: PlaybackParams) {
-            self.played.borrow_mut().push((id, params));
+            self.played.lock().push((id, params));
         }
         fn play_loop(&self, _id: SoundId, _params: PlaybackParams) -> VoiceId {
             VoiceId::from_raw(7)
@@ -911,7 +909,7 @@ mod tests {
         fn stop_voice(&self, _voice: VoiceId) {}
         fn set_master_volume(&self, _volume: f32) {}
         fn unload(&self, id: SoundId) {
-            self.unloaded.borrow_mut().push(id);
+            self.unloaded.lock().push(id);
         }
         fn is_available(&self) -> bool {
             true
@@ -983,6 +981,7 @@ mod tests {
 
     #[test]
     fn noop_player_hands_out_handles_and_keeps_settings() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_audio();
         let player = default_audio();
         assert!(!player.is_available());
@@ -1017,6 +1016,7 @@ mod tests {
 
     #[test]
     fn noop_player_rejects_invalid_loop_handle() {
+        let _guard = crate::registry::test_service_guard();
         let player = NoopAudioPlayer::new();
         assert_eq!(
             player.play_loop(SoundId::NONE, PlaybackParams::new()),
@@ -1026,9 +1026,10 @@ mod tests {
 
     #[test]
     fn registered_player_replaces_the_default() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_audio();
         assert!(!default_audio().is_available());
-        let player: AudioPlayerRef = Rc::new(RecordingPlayer::default());
+        let player: AudioPlayerRef = Arc::new(RecordingPlayer::default());
         set_platform_audio(player);
         assert!(default_audio().is_available());
         clear_platform_audio();
@@ -1076,7 +1077,7 @@ mod tests {
 
     #[test]
     fn sound_bank_loads_applies_base_volume_and_unloads_on_drop() {
-        let player = Rc::new(RecordingPlayer::default());
+        let player = Arc::new(RecordingPlayer::default());
         let wav = tiny_wav();
         let specs = [
             SoundSpec::new("hit", &wav).volume(0.5),
@@ -1108,7 +1109,7 @@ mod tests {
         bank.stop(0);
         bank.stop(2);
 
-        let played = player.played.borrow().clone();
+        let played = player.played.lock().clone();
         assert_eq!(played.len(), 3);
         assert!((played[0].1.volume - 0.5).abs() < 1e-6);
         assert_eq!(played[0].1.bus, AudioBus::Effects);
@@ -1117,7 +1118,7 @@ mod tests {
         assert!((played[2].1.pan - 1.0).abs() < 1e-6);
 
         drop(bank);
-        assert_eq!(player.unloaded.borrow().len(), 3);
+        assert_eq!(player.unloaded.lock().len(), 3);
     }
 
     #[test]
@@ -1144,8 +1145,9 @@ mod tests {
 
     #[test]
     fn provide_audio_publishes_the_platform_player() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_audio();
-        let player: AudioPlayerRef = Rc::new(RecordingPlayer::default());
+        let player: AudioPlayerRef = Arc::new(RecordingPlayer::default());
         set_platform_audio(player);
 
         let captured = Rc::new(RefCell::new(None));
@@ -1165,6 +1167,7 @@ mod tests {
 
     #[test]
     fn local_audio_defaults_to_the_noop_player() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_audio();
         let captured = Rc::new(RefCell::new(None));
         {
@@ -1181,8 +1184,9 @@ mod tests {
 
     #[test]
     fn remember_sound_bank_loads_once_across_recompositions() {
+        let _guard = crate::registry::test_service_guard();
         clear_platform_audio();
-        let player = Rc::new(RecordingPlayer::default());
+        let player = Arc::new(RecordingPlayer::default());
         let player_ref: AudioPlayerRef = player.clone();
         set_platform_audio(player_ref);
 
@@ -1201,7 +1205,11 @@ mod tests {
         composition.render(key, &mut build).expect("second render");
 
         assert_eq!(bank_len.get(), 2);
-        assert_eq!(player.next.get(), 2, "the bank decodes once across renders");
+        assert_eq!(
+            *player.next.lock(),
+            2,
+            "the bank decodes once across renders"
+        );
         clear_platform_audio();
     }
 }

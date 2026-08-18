@@ -29,7 +29,7 @@ use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::jint;
 use jni::{jni_sig, jni_str, Env, EnvUnowned, Outcome};
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::{Mutex, MutexGuard};
 
 /// The Java bridge, in JNI slash notation. It lives in
@@ -74,7 +74,10 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
         load_cranpose_java_class(env, &activity, BILLING_CLASS).map(|_| ())
     });
     match bridge {
-        Ok(()) => set_platform_purchases(Rc::new(AndroidPurchases { app })),
+        Ok(()) => set_platform_purchases(Arc::new(AndroidPurchases {
+            app,
+            product_ids: Mutex::new(Vec::new()),
+        })),
         Err(error) => log::warn!(
             "Play Billing is unavailable and nothing can be bought; \
              add cranpose/android/java-billing to the Android source set \
@@ -87,6 +90,7 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
 /// immediately; answers arrive later through the callbacks below.
 struct AndroidPurchases {
     app: android_activity::AndroidApp,
+    product_ids: Mutex<Vec<String>>,
 }
 
 impl AndroidPurchases {
@@ -111,6 +115,11 @@ impl AndroidPurchases {
 
 impl Purchases for AndroidPurchases {
     fn configure(&self, product_ids: &[&str]) {
+        *self
+            .product_ids
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) =
+            product_ids.iter().map(|id| (*id).to_owned()).collect();
         // Newline-separated: Play product ids are `[a-z0-9._]`, so a newline
         // cannot occur inside one and no escaping is needed on the way out.
         let joined = product_ids.join("\n");
@@ -165,7 +174,7 @@ impl Purchases for AndroidPurchases {
                 class,
                 jni_str!("cranposeBillingRestore"),
                 jni_sig!("(Landroid/app/Activity;)V"),
-                &[JValue::Object(activity)],
+                &[JValue::Object(&activity)],
             )
             .map_err(|error| {
                 clear_pending_android_jni_exception(env);
@@ -177,6 +186,34 @@ impl Purchases for AndroidPurchases {
 
     fn take_event(&self) -> Option<PurchaseEvent> {
         events().pop_front()
+    }
+
+    fn is_connected(&self) -> bool {
+        with_android_activity_env(&self.app, |env, activity| {
+            let class = load_cranpose_java_class(env, &activity, BILLING_CLASS)?;
+            env.call_static_method(
+                class,
+                jni_str!("cranposeBillingIsConnected"),
+                jni_sig!("(Landroid/app/Activity;)Z"),
+                &[JValue::Object(&activity)],
+            )
+            .and_then(|value| value.z())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        })
+        .unwrap_or(false)
+    }
+
+    fn reconnect(&self) {
+        let ids = self
+            .product_ids
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        let refs = ids.iter().map(String::as_str).collect::<Vec<_>>();
+        self.configure(&refs);
     }
 }
 

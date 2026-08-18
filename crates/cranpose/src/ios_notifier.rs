@@ -23,7 +23,7 @@ use objc2_user_notifications::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
@@ -40,7 +40,7 @@ fn deeplink_map() -> &'static Mutex<HashMap<String, String>> {
 /// Installs the iOS notifier as the platform notifier and its presentation /
 /// tap delegate.
 pub(crate) fn register() {
-    set_platform_notifier(Rc::new(IosNotifier));
+    set_platform_notifier(Arc::new(IosNotifier));
     install_delegate();
 }
 

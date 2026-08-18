@@ -21,6 +21,7 @@ pub mod notifier;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer;
 pub mod purchases;
+mod registry;
 pub mod share_sheet;
 pub mod theme;
 pub mod uri_handler;

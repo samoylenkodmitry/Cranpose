@@ -962,6 +962,7 @@ dependencies = [
  "cranpose-services",
  "log",
  "ndk",
+ "parking_lot",
 ]
 
 [[package]]
@@ -1105,7 +1106,9 @@ dependencies = [
  "cranpose-macros",
  "futures-util",
  "js-sys",
+ "log",
  "open",
+ "parking_lot",
  "pollster",
  "reqwest",
  "rfd",
@@ -1113,6 +1116,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
  "webbrowser",
  "webpki-root-certs",
 ]
