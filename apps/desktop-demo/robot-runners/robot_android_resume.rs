@@ -30,9 +30,9 @@ fn lifecycle_hook(name: String, argument: String) -> Result<Option<String>, Stri
 }
 
 fn android_resume_contract_is_fixed() {
-    let source_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src/android.rs");
-    let source = std::fs::read_to_string(source_path).expect("read Android runtime source");
+    let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src");
+    let source =
+        std::fs::read_to_string(source_root.join("android.rs")).expect("read Android runtime source");
     assert!(
         !source.contains(
             "drop_present_surface(&mut gpu_resources, &mut app_shell);\n                            } else {\n                                gpu_resources = None;"
@@ -46,6 +46,18 @@ fn android_resume_contract_is_fixed() {
     assert!(
         source.contains("setup.resources.surface_dirty = true;\n            shell.mark_dirty();"),
         "InitWindow must schedule a fresh update before the first resumed present"
+    );
+    let vsync = std::fs::read_to_string(source_root.join("android_vsync.rs"))
+        .expect("read Android vsync source");
+    assert!(
+        !vsync.contains("OnceLock<Box<dyn Fn() + Send + Sync>>"),
+        "android_main relaunch must replace the vsync waker"
+    );
+    let accessibility = std::fs::read_to_string(source_root.join("android_accessibility.rs"))
+        .expect("read Android accessibility source");
+    assert!(
+        !accessibility.contains("OnceLock<android_activity::AndroidAppWaker>"),
+        "android_main relaunch must replace the accessibility waker"
     );
 }
 
