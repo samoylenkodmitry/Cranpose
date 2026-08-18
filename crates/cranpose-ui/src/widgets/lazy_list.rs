@@ -14,7 +14,9 @@ use web_time::Instant;
 use crate::composable;
 use crate::layout::MeasuredNode;
 use crate::modifier::{Modifier, Size};
-use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
+use crate::scroll::{
+    scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey,
+};
 use crate::subcompose_layout::{
     MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
@@ -1049,12 +1051,12 @@ fn LazyColumnImpl(
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
             .with(|cache| cache.clone());
-    let overscroll = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
         is_vertical: true,
         reverse_scrolling: spec.reverse_layout,
-    })
-    .overscroll();
+    });
+    let overscroll = motion_context.overscroll();
 
     // Create measure policy with stable identity using remember.
     // The policy reads latest values via state references, so it can be memoized.
@@ -1092,7 +1094,7 @@ fn LazyColumnImpl(
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
         .clip_to_bounds()
-        .lazy_vertical_scroll(state, spec.reverse_layout);
+        .lazy_vertical_scroll_with_context(state, spec.reverse_layout, motion_context);
 
     // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1171,12 +1173,12 @@ fn LazyRowImpl(
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
             .with(|cache| cache.clone());
-    let overscroll = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
         state_identity: lazy_list_state_identity(&state),
         is_vertical: false,
         reverse_scrolling: spec.reverse_layout,
-    })
-    .overscroll();
+    });
+    let overscroll = motion_context.overscroll();
 
     // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
@@ -1213,7 +1215,7 @@ fn LazyRowImpl(
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
         .clip_to_bounds()
-        .lazy_horizontal_scroll(state, spec.reverse_layout);
+        .lazy_horizontal_scroll_with_context(state, spec.reverse_layout, motion_context);
 
     // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {

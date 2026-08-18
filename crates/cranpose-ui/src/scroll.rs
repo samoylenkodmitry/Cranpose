@@ -18,7 +18,7 @@ use cranpose_ui_layout::LayoutModifierMeasureResult;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 /// State object for scroll position tracking.
 ///
@@ -101,7 +101,16 @@ impl OverscrollEffect {
 
     pub(crate) fn apply_settle_delta(&self, delta: f32) -> f32 {
         let offset = self.offset();
-        let next = (offset + delta).clamp(-self.inner.limit.get(), self.inner.limit.get());
+        if offset.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let proposed = offset + delta;
+        let crosses_edge = offset.abs() > f32::EPSILON && proposed.signum() != offset.signum();
+        let next = if crosses_edge {
+            0.0
+        } else {
+            proposed.clamp(-self.inner.limit.get(), self.inner.limit.get())
+        };
         let applied = next - offset;
         self.set_offset(next);
         applied
@@ -352,7 +361,7 @@ struct ScrollMotionContextInner {
 }
 
 pub(crate) struct ScrollMotionContextStore {
-    contexts: RefCell<HashMap<ScrollMotionContextKey, ScrollMotionContext>>,
+    contexts: RefCell<HashMap<ScrollMotionContextKey, Weak<ScrollMotionContextInner>>>,
 }
 
 impl ScrollMotionContextStore {
@@ -364,22 +373,28 @@ impl ScrollMotionContextStore {
 
     fn context_for_key(&self, key: ScrollMotionContextKey) -> ScrollMotionContext {
         let mut contexts = self.contexts.borrow_mut();
-        if let Some(context) = contexts.get(&key) {
-            return context.clone();
+        if let Some(inner) = contexts.get(&key).and_then(Weak::upgrade) {
+            return ScrollMotionContext { inner };
         }
 
         let context = ScrollMotionContext::new();
-        contexts.insert(key, context.clone());
+        contexts.insert(key, Rc::downgrade(&context.inner));
+        contexts.retain(|_, weak| weak.strong_count() > 0);
         context
     }
 
     pub(crate) fn clear_transient_after_frame(&self) {
         let contexts = {
-            let contexts = self.contexts.borrow();
-            contexts.values().cloned().collect::<Vec<_>>()
+            let mut contexts = self.contexts.borrow_mut();
+            let live = contexts
+                .values()
+                .filter_map(Weak::upgrade)
+                .collect::<Vec<_>>();
+            contexts.retain(|_, weak| weak.strong_count() > 0);
+            live
         };
-        for context in contexts {
-            context.clear_transient_after_frame();
+        for inner in contexts {
+            ScrollMotionContext { inner }.clear_transient_after_frame();
         }
     }
 }

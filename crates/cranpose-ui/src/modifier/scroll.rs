@@ -743,6 +743,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let settle = SettleAnimation::new(runtime);
         let scroll_target_for_settle = self.scroll_target.clone();
         let scroll_target_for_end = self.scroll_target.clone();
+        let detector_for_end = self.clone_for_watcher();
         let motion_context = self.motion_context.clone();
         settle.start_settle(
             self.scroll_target.current_offset(),
@@ -753,9 +754,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 scroll_target_for_settle.invalidate();
                 consumed
             },
-            move || {
+            move |_| {
                 scroll_target_for_end.invalidate();
-                motion_context.set_active(false);
+                detector_for_end.update_motion_active(&motion_context);
             },
         );
         let mut gs = self.gesture_state.borrow_mut();
@@ -796,6 +797,22 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let mut gs = self.gesture_state.borrow_mut();
         gs.is_overscrolling = false;
         gs.settle_animation = Some(settle);
+    }
+
+    fn update_motion_active(&self, motion_context: &ScrollMotionContext) {
+        let running = {
+            let gs = self.gesture_state.borrow();
+            gs.fling_animation
+                .as_ref()
+                .is_some_and(FlingAnimation::is_running)
+                || gs
+                    .settle_animation
+                    .as_ref()
+                    .is_some_and(SettleAnimation::is_running)
+        };
+        if !running {
+            motion_context.set_active(false);
+        }
     }
 
     /// Handles pointer up event.
@@ -1551,25 +1568,53 @@ impl Modifier {
     /// Unlike regular vertical_scroll, no layout offset is applied here
     /// since LazyListState manages item positioning internally.
     pub fn lazy_vertical_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
-        self.then(lazy_scroll_impl(state, true, reverse_scrolling))
+        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+            state_identity: state.inner_ptr() as usize,
+            is_vertical: true,
+            reverse_scrolling,
+        });
+        self.lazy_vertical_scroll_with_context(state, reverse_scrolling, motion_context)
+    }
+
+    pub(crate) fn lazy_vertical_scroll_with_context(
+        self,
+        state: LazyListState,
+        reverse_scrolling: bool,
+        motion_context: ScrollMotionContext,
+    ) -> Self {
+        self.then(lazy_scroll_impl(state, true, reverse_scrolling, motion_context))
     }
 
     /// Creates a horizontally scrollable modifier for lazy lists.
     pub fn lazy_horizontal_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
-        self.then(lazy_scroll_impl(state, false, reverse_scrolling))
+        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+            state_identity: state.inner_ptr() as usize,
+            is_vertical: false,
+            reverse_scrolling,
+        });
+        self.lazy_horizontal_scroll_with_context(state, reverse_scrolling, motion_context)
+    }
+
+    pub(crate) fn lazy_horizontal_scroll_with_context(
+        self,
+        state: LazyListState,
+        reverse_scrolling: bool,
+        motion_context: ScrollMotionContext,
+    ) -> Self {
+        self.then(lazy_scroll_impl(state, false, reverse_scrolling, motion_context))
     }
 }
 
 /// Internal implementation for lazy scroll modifiers.
-fn lazy_scroll_impl(state: LazyListState, is_vertical: bool, reverse_scrolling: bool) -> Modifier {
+fn lazy_scroll_impl(
+    state: LazyListState,
+    is_vertical: bool,
+    reverse_scrolling: bool,
+    motion_context: ScrollMotionContext,
+) -> Modifier {
     let gesture_state = Rc::new(RefCell::new(ScrollGestureState::default()));
     let list_state = state;
     let state_id = state.inner_ptr() as usize;
-    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
-        state_identity: state_id,
-        is_vertical,
-        reverse_scrolling,
-    });
     let key = (state_id, is_vertical, reverse_scrolling);
     let overscroll = motion_context.overscroll();
     let translated_content_modifier = Modifier::with_element(TranslatedContentContextElement::new(

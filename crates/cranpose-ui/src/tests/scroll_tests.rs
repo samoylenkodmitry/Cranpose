@@ -101,6 +101,20 @@ fn overscroll_scroll_releases_before_consuming_target_delta() {
 }
 
 #[test]
+fn overscroll_settle_stops_at_edge_without_flipping_sign() {
+    let effect = OverscrollEffect::new();
+    effect.apply_drag_delta(30.0);
+    let initial = effect.offset();
+
+    let consumed = effect.apply_settle_delta(-80.0);
+
+    assert_eq!(consumed, -initial);
+    assert_eq!(effect.offset(), 0.0);
+    assert_eq!(effect.apply_settle_delta(-1.0), 0.0);
+    assert_eq!(effect.offset(), 0.0);
+}
+
+#[test]
 fn overscroll_fling_reports_target_consumption_at_edge() {
     let effect = OverscrollEffect::new();
     let target_delta = Cell::new(0.0);
@@ -208,10 +222,31 @@ fn scroll_motion_context_keeps_effect_identity_for_layout_and_gesture_owners() {
         is_vertical: true,
         reverse_scrolling: false,
     };
-    let effect = scroll_motion_context_for_key(key).overscroll();
+    let owner = scroll_motion_context_for_key(key);
+    let effect = owner.overscroll();
     let context = scroll_motion_context_for_key(key);
 
     assert!(effect.ptr_eq(&context.overscroll()));
+}
+
+#[test]
+fn scroll_motion_context_store_reclaims_disposed_contexts() {
+    let store = crate::scroll::ScrollMotionContextStore::new();
+    let first_key = ScrollMotionContextKey::LazyList {
+        state_identity: 92,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let second_key = ScrollMotionContextKey::LazyList {
+        state_identity: 93,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let first_effect = store.context_for_key(first_key).overscroll();
+    drop(first_effect);
+    let _second_context = store.context_for_key(second_key);
+
+    assert_eq!(store.contexts.borrow().len(), 1);
 }
 
 fn scroll_wheel_event(dx: f32, dy: f32) -> PointerEvent {
