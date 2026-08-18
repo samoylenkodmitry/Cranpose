@@ -512,6 +512,11 @@ path = "robot-runners/robot_fling_edge_cases.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_overscroll_bounce"
+path = "robot-runners/robot_overscroll_bounce.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_scroll_visual"
 path = "robot-runners/robot_scroll_visual.rs"
 required-features = ["robot-app"]
