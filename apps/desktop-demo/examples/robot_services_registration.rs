@@ -13,10 +13,11 @@ use std::sync::Arc;
 static AUDIO_CALLS: AtomicUsize = AtomicUsize::new(0);
 static HAPTIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static NOTIFIER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static REPLACEMENT_NOTIFIER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static FIRST_STORE_LISTENER_CALLS: AtomicUsize = AtomicUsize::new(0);
 static SECOND_STORE_LISTENER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-struct RegisteredAudio;
+struct RegisteredAudio(bool);
 
 impl AudioPlayer for RegisteredAudio {
     fn load_clip(&self, _clip: AudioClip) -> Result<SoundId, AudioError> {
@@ -34,22 +35,22 @@ impl AudioPlayer for RegisteredAudio {
     fn stop_voice(&self, _voice: VoiceId) {}
     fn set_master_volume(&self, _volume: f32) {}
     fn is_available(&self) -> bool {
-        true
+        self.0
     }
 }
 
-struct RegisteredHaptics;
+struct RegisteredHaptics(bool);
 
 impl Haptics for RegisteredHaptics {
     fn perform(&self, _feedback: HapticFeedback) {
         HAPTIC_CALLS.fetch_add(1, Ordering::Relaxed);
     }
     fn has_amplitude_control(&self) -> bool {
-        true
+        self.0
     }
 }
 
-struct RegisteredPurchases;
+struct RegisteredPurchases(&'static str);
 
 impl Purchases for RegisteredPurchases {
     fn configure(&self, _product_ids: &[&str]) {}
@@ -57,10 +58,10 @@ impl Purchases for RegisteredPurchases {
         StoreState {
             phase: StorePhase::Ready,
             products: vec![Product {
-                id: "registered".to_string(),
+                id: self.0.to_string(),
                 display_price: "free".to_string(),
-                title: "registered".to_string(),
-                description: "registered".to_string(),
+                title: self.0.to_string(),
+                description: self.0.to_string(),
             }],
             ..StoreState::default()
         }
@@ -76,12 +77,12 @@ impl Purchases for RegisteredPurchases {
     fn reconnect(&self) {}
 }
 
-struct RegisteredNetwork;
+struct RegisteredNetwork(bool);
 
 impl NetworkMonitor for RegisteredNetwork {
     fn status(&self) -> NetworkStatus {
         NetworkStatus {
-            online: false,
+            online: self.0,
             metered: true,
         }
     }
@@ -153,7 +154,17 @@ impl Notifier for RegisteredNotifier {
     fn cancel(&self, _id: &str) {}
 }
 
-struct RegisteredImagePicker;
+struct ReplacementNotifier;
+
+impl Notifier for ReplacementNotifier {
+    fn request_permission(&self) {}
+    fn notify(&self, _request: NotifyRequest) {
+        REPLACEMENT_NOTIFIER_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+    fn cancel(&self, _id: &str) {}
+}
+
+struct RegisteredImagePicker(u8);
 
 impl ImagePicker for RegisteredImagePicker {
     fn pick_image(
@@ -161,7 +172,8 @@ impl ImagePicker for RegisteredImagePicker {
         _source: ImageSource,
     ) -> cranpose_services::file_picker::PickerFuture<Result<Option<Vec<u8>>, ImagePickerError>>
     {
-        Box::pin(async { Ok(Some(vec![7])) })
+        let byte = self.0;
+        Box::pin(async move { Ok(Some(vec![byte])) })
     }
 }
 
@@ -169,12 +181,15 @@ fn register_services() {
     AUDIO_CALLS.store(0, Ordering::Relaxed);
     HAPTIC_CALLS.store(0, Ordering::Relaxed);
     NOTIFIER_CALLS.store(0, Ordering::Relaxed);
-    cranpose_services::set_platform_audio(std::sync::Arc::new(RegisteredAudio));
-    cranpose_services::set_platform_haptics(std::sync::Arc::new(RegisteredHaptics));
-    cranpose_services::set_platform_purchases(std::sync::Arc::new(RegisteredPurchases));
-    cranpose_services::set_platform_network_monitor(std::sync::Arc::new(RegisteredNetwork));
+    REPLACEMENT_NOTIFIER_CALLS.store(0, Ordering::Relaxed);
+    cranpose_services::set_platform_audio(std::sync::Arc::new(RegisteredAudio(true)));
+    cranpose_services::set_platform_haptics(std::sync::Arc::new(RegisteredHaptics(true)));
+    cranpose_services::set_platform_purchases(std::sync::Arc::new(RegisteredPurchases(
+        "registered",
+    )));
+    cranpose_services::set_platform_network_monitor(std::sync::Arc::new(RegisteredNetwork(false)));
     cranpose_services::set_platform_notifier(std::sync::Arc::new(RegisteredNotifier));
-    cranpose_services::set_platform_image_picker(std::sync::Arc::new(RegisteredImagePicker));
+    cranpose_services::set_platform_image_picker(std::sync::Arc::new(RegisteredImagePicker(7)));
 }
 
 fn main() {
@@ -243,6 +258,30 @@ fn main() {
             cranpose_services::note_store_news();
             assert_eq!(FIRST_STORE_LISTENER_CALLS.load(Ordering::Relaxed), 1);
             assert_eq!(SECOND_STORE_LISTENER_CALLS.load(Ordering::Relaxed), 1);
+
+            let cached_audio = cranpose_services::default_audio();
+            let cached_haptics = cranpose_services::default_haptics();
+            let cached_purchases = cranpose_services::purchases();
+            let cached_network = cranpose_services::network_monitor();
+            let cached_notifier = cranpose_services::default_notifier();
+            let cached_image_picker = cranpose_services::default_image_picker();
+            cranpose_services::set_platform_audio(Arc::new(RegisteredAudio(false)));
+            cranpose_services::set_platform_haptics(Arc::new(RegisteredHaptics(false)));
+            cranpose_services::set_platform_purchases(Arc::new(RegisteredPurchases("replacement")));
+            cranpose_services::set_platform_network_monitor(Arc::new(RegisteredNetwork(true)));
+            cranpose_services::set_platform_notifier(Arc::new(ReplacementNotifier));
+            cranpose_services::set_platform_image_picker(Arc::new(RegisteredImagePicker(9)));
+            assert!(!cached_audio.is_available());
+            assert!(!cached_haptics.has_amplitude_control());
+            assert_eq!(cached_purchases.state().products[0].id, "replacement");
+            assert!(cached_network.status().online);
+            cached_notifier.notify(NotifyRequest::new("replacement", "", ""));
+            assert_eq!(REPLACEMENT_NOTIFIER_CALLS.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                pollster::block_on(cached_image_picker.pick_image(ImageSource::Camera))
+                    .expect("replacement image picker"),
+                Some(vec![9])
+            );
             robot.exit().expect("exit robot app");
         })
         .try_run(desktop_app::app::DesktopApp)
