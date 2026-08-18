@@ -49,6 +49,7 @@ type StoreCallback = unsafe extern "C" fn(
 
 extern "C" {
     fn cranpose_storekit_start(product_ids: *const c_char, ctx: *mut c_void, cb: StoreCallback);
+    fn cranpose_storekit_is_connected() -> bool;
     fn cranpose_storekit_purchase(product_id: *const c_char);
     fn cranpose_storekit_restore();
 }
@@ -253,10 +254,7 @@ impl Purchases for StoreKitPurchases {
     }
 
     fn is_connected(&self) -> bool {
-        matches!(
-            self.state().phase,
-            StorePhase::Connecting | StorePhase::Ready
-        )
+        unsafe { cranpose_storekit_is_connected() }
     }
 
     fn reconnect(&self) {

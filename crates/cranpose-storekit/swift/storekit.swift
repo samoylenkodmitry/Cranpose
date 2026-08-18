@@ -111,7 +111,7 @@ private final class BridgeState: @unchecked Sendable {
     private let lock = NSLock()
     private var _sink: Sink?
     private var _productIds: [String] = []
-    private var _started = false
+    private var _listenerActive = false
 
     static let shared = BridgeState()
 
@@ -127,16 +127,31 @@ private final class BridgeState: @unchecked Sendable {
         return _productIds
     }
 
-    /// Records the sink and ids. Returns true the first time only, so the
-    /// `Transaction.updates` listener is spawned exactly once.
     func start(sink: Sink, productIds: [String]) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         _sink = sink
         _productIds = productIds
-        let first = !_started
-        _started = true
-        return first
+        let shouldStart: Bool
+        if !_listenerActive {
+            shouldStart = true
+            _listenerActive = true
+        } else {
+            shouldStart = false
+        }
+        return shouldStart
+    }
+
+    func listenerEnded() {
+        lock.lock()
+        _listenerActive = false
+        lock.unlock()
+    }
+
+    var listenerActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return _listenerActive
     }
 }
 
@@ -148,8 +163,7 @@ private final class BridgeState: @unchecked Sendable {
 /// `[A-Za-z0-9._-]`, so a newline cannot occur inside one and no escaping or
 /// JSON parser is needed on either side.
 ///
-/// Safe to call again (a relaunch of the app's configure step); the
-/// transaction listener is still spawned only once.
+/// Safe to call again after the transaction listener exits.
 @_cdecl("cranpose_storekit_start")
 public func cranpose_storekit_start(
     _ productIdsJoined: UnsafePointer<CChar>,
@@ -186,12 +200,18 @@ public func cranpose_storekit_start(
                 }
                 await refreshSnapshot()
             }
+            BridgeState.shared.listenerEnded()
         }
     }
 
     Task.detached(priority: .userInitiated) {
         await refreshSnapshot()
     }
+}
+
+@_cdecl("cranpose_storekit_is_connected")
+public func cranpose_storekit_is_connected() -> Bool {
+    BridgeState.shared.listenerActive
 }
 
 /// Begin a purchase for `productId`. Presents the App Store payment sheet.
