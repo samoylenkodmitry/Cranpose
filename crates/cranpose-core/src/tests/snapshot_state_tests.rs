@@ -221,6 +221,60 @@ fn state_subscriber_callback_does_not_retain_dropped_callback() {
 }
 
 #[test]
+fn state_subscriber_callback_keeps_reentrant_registration() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let nested_notifications = Rc::new(Cell::new(0));
+    let nested_callback: Rc<dyn Fn()> = {
+        let nested_notifications = Rc::clone(&nested_notifications);
+        Rc::new(move || nested_notifications.set(nested_notifications.get() + 1))
+    };
+    let nested_lifetime = Rc::new(RefCell::new(Some(Rc::clone(&nested_callback))));
+    let registered = Rc::new(Cell::new(false));
+    let callback: Rc<dyn Fn()> = {
+        let registered = Rc::clone(&registered);
+        let nested_lifetime = Rc::clone(&nested_lifetime);
+        Rc::new(move || {
+            if !registered.replace(true) {
+                state.as_state().on_subscriber(
+                    nested_lifetime
+                        .borrow()
+                        .as_ref()
+                        .expect("nested callback")
+                        .clone(),
+                );
+            }
+        })
+    };
+    state.as_state().on_subscriber(callback.clone());
+
+    let first = RecomposeScope::new_for_test(handle.clone());
+    state.subscribe_scope_for_test(&first);
+    assert_eq!(nested_notifications.get(), 1);
+    drop(first);
+
+    let second = RecomposeScope::new_for_test(handle);
+    state.subscribe_scope_for_test(&second);
+    assert_eq!(nested_notifications.get(), 2);
+}
+
+#[test]
+fn state_subscriber_callback_prunes_dead_registrations_while_subscribed() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let scope = RecomposeScope::new_for_test(handle);
+    state.subscribe_scope_for_test(&scope);
+
+    for _ in 0..256 {
+        state.as_state().on_subscriber(Rc::new(|| {}));
+    }
+
+    assert_eq!(state.subscriber_callback_count(), 0);
+}
+
+#[test]
 fn dropping_scope_unregisters_watchers_without_global_prune() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();

@@ -1630,6 +1630,11 @@ impl<T: Clone + 'static> MutableState<T> {
     }
 
     #[cfg(test)]
+    pub(crate) fn subscriber_callback_count(&self) -> usize {
+        self.with_inner(|inner| inner.subscriber_callbacks.borrow().len())
+    }
+
+    #[cfg(test)]
     pub(crate) fn state_id_for_test(&self) -> StateId {
         self.state_id()
     }
