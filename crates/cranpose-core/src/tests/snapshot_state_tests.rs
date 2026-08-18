@@ -203,6 +203,11 @@ fn state_subscriber_callback_tracks_first_live_scope() {
     assert_eq!(notifications.get(), 2);
 }
 
+#[composable]
+fn subscriber_callback_reader(state: MutableState<i32>) {
+    let _ = state.get();
+}
+
 #[test]
 fn state_subscriber_callback_fires_once_for_a_composition_read() {
     let mut composition = test_composition();
@@ -216,9 +221,36 @@ fn state_subscriber_callback_fires_once_for_a_composition_read() {
 
     composition
         .render(location_key(file!(), line!(), column!()), move || {
-            let _ = state.get();
+            subscriber_callback_reader(state);
         })
         .expect("composition read");
+    assert_eq!(notifications.get(), 1);
+
+    state.set(1);
+    while composition
+        .process_invalid_scopes()
+        .expect("process state invalidation")
+    {}
+    assert_eq!(notifications.get(), 1);
+}
+
+#[test]
+fn state_subscriber_callback_treats_scope_and_read_observers_as_one_subscription() {
+    let runtime = TestRuntime::new();
+    let state = MutableState::with_runtime(0i32, runtime.handle());
+    let notifications = Rc::new(Cell::new(0));
+    let notifications_for_callback = Rc::clone(&notifications);
+    let callback: Rc<dyn Fn()> = Rc::new(move || {
+        notifications_for_callback.set(notifications_for_callback.get() + 1);
+    });
+    state.as_state().on_subscriber(callback.clone());
+
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.observe_reads(1usize, |_| {}, || state.get());
+    let scope = RecomposeScope::new_for_test(runtime.handle());
+    state.subscribe_scope_for_test(&scope);
+    observer.clear(&1usize);
+    observer.observe_reads(2usize, |_| {}, || state.get());
 
     assert_eq!(notifications.get(), 1);
 }

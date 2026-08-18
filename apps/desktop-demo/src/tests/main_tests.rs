@@ -139,6 +139,8 @@ fn async_runtime_freezes_without_conditional_key() {
     let mut frames_before = None;
     let mut frames_after = None;
     let mut time = 0u64;
+    let mut highest_progress = 0.0f32;
+    let mut lowest_progress_after_peak = 1.0f32;
 
     for _ in 0..2400 {
         time += 16_666_667;
@@ -146,8 +148,12 @@ fn async_runtime_freezes_without_conditional_key() {
         drain_all(&mut composition).expect("drain after frame");
 
         let anim = animation.value();
+        highest_progress = highest_progress.max(anim.progress);
         if anim.progress >= 0.95 {
             reached_upper_peak = true;
+        }
+        if reached_upper_peak {
+            lowest_progress_after_peak = lowest_progress_after_peak.min(anim.progress);
         }
         if reached_upper_peak && anim.progress <= 0.05 {
             returned_to_zero = true;
@@ -169,7 +175,9 @@ fn async_runtime_freezes_without_conditional_key() {
 
     assert!(
         second_forward_run,
-        "did not observe async runtime return to zero and climb forward again"
+        "did not observe async runtime return to zero and climb forward again: highest={highest_progress} lowest_after_peak={lowest_progress_after_peak} frames={} animation={:?}",
+        stats.value().frames,
+        animation.value(),
     );
     let before = frames_before.expect("frames before flip");
     let after = frames_after.expect("frames after flip");
