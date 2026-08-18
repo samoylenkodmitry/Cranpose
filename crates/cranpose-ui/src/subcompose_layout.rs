@@ -6,6 +6,7 @@ use web_time::Instant;
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
+use smallvec::SmallVec;
 
 use crate::layout::MeasuredNode;
 use crate::modifier::{
@@ -1172,6 +1173,11 @@ impl cranpose_core::Node for SubcomposeLayoutNode {
         current_subcompose_children(&self.inner.borrow())
     }
 
+    fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
+        out.clear();
+        out.extend(self.inner.borrow().children.iter().copied());
+    }
+
     fn set_node_id(&mut self, id: NodeId) {
         self.id.set(Some(id));
         self.inner.borrow_mut().modifier_chain.set_node_id(Some(id));
@@ -1437,17 +1443,13 @@ impl SubcomposeLayoutNodeHandle {
         I: IntoIterator<Item = NodeId>,
     {
         let mut inner = self.inner.borrow_mut();
-        inner.children.clear();
-        inner.children.extend(children);
+        inner.last_placements.clear();
+        inner.last_placements.extend(children);
     }
 }
 
 fn current_subcompose_children(inner: &SubcomposeLayoutNodeInner) -> Vec<NodeId> {
-    if !inner.last_placements.is_empty() {
-        inner.last_placements.clone()
-    } else {
-        inner.children.clone()
-    }
+    inner.last_placements.clone()
 }
 
 struct SubcomposeLayoutNodeInner {
