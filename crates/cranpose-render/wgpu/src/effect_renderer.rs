@@ -91,11 +91,13 @@ pub(crate) struct EffectRenderer {
     blit_shader_source: String,
     blit_pipeline_layout: wgpu::PipelineLayout,
     blit_pipeline: PassPipeline,
+    blit_pipeline_src: PassPipeline,
     blit_pipeline_dst_out: PassPipeline,
     blit_uniform_bind_group_layout: wgpu::BindGroupLayout,
     projective_blit_shader: wgpu::ShaderModule,
     projective_blit_pipeline_layout: wgpu::PipelineLayout,
     projective_blit_pipeline: PassPipeline,
+    projective_blit_pipeline_src: PassPipeline,
     projective_blit_pipeline_dst_out: PassPipeline,
 
     // Shared bind group layouts for effect texture + uniform access
@@ -724,6 +726,7 @@ impl EffectRenderer {
         });
 
         let blit_pipeline = PassPipeline::new("effect/blit-src-over", "effect/blit-src-over-depth");
+        let blit_pipeline_src = PassPipeline::new("effect/blit-src", "effect/blit-src-depth");
         let blit_pipeline_dst_out =
             PassPipeline::new("effect/blit-dst-out", "effect/blit-dst-out-depth");
 
@@ -744,6 +747,8 @@ impl EffectRenderer {
             "effect/projective-src-over",
             "effect/projective-src-over-depth",
         );
+        let projective_blit_pipeline_src =
+            PassPipeline::new("effect/projective-src", "effect/projective-src-depth");
         let projective_blit_pipeline_dst_out = PassPipeline::new(
             "effect/projective-dst-out",
             "effect/projective-dst-out-depth",
@@ -775,11 +780,13 @@ impl EffectRenderer {
             blit_shader_source,
             blit_pipeline_layout,
             blit_pipeline,
+            blit_pipeline_src,
             blit_pipeline_dst_out,
             blit_uniform_bind_group_layout,
             projective_blit_shader,
             projective_blit_pipeline_layout,
             projective_blit_pipeline,
+            projective_blit_pipeline_src,
             projective_blit_pipeline_dst_out,
             effect_texture_bind_group_layout,
             effect_uniform_bind_group_layout,
@@ -911,6 +918,11 @@ impl EffectRenderer {
         depth: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
+            BlendMode::Src => (
+                &self.blit_pipeline_src,
+                "Blit Pipeline Src",
+                wgpu::BlendState::REPLACE,
+            ),
             BlendMode::DstOut => (
                 &self.blit_pipeline_dst_out,
                 "Blit Pipeline DstOut",
@@ -952,6 +964,7 @@ impl EffectRenderer {
         depth: bool,
     ) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
+            BlendMode::Src => &self.blit_pipeline_src,
             BlendMode::DstOut => &self.blit_pipeline_dst_out,
             _ => &self.blit_pipeline,
         };
@@ -972,6 +985,11 @@ impl EffectRenderer {
         depth: bool,
     ) -> &wgpu::RenderPipeline {
         let (resource, label, blend) = match blend_mode {
+            BlendMode::Src => (
+                &self.projective_blit_pipeline_src,
+                "Projective Blit Pipeline Src",
+                wgpu::BlendState::REPLACE,
+            ),
             BlendMode::DstOut => (
                 &self.projective_blit_pipeline_dst_out,
                 "Projective Blit Pipeline DstOut",
@@ -1015,6 +1033,7 @@ impl EffectRenderer {
         depth: bool,
     ) -> &wgpu::RenderPipeline {
         let resource = match blend_mode {
+            BlendMode::Src => &self.projective_blit_pipeline_src,
             BlendMode::DstOut => &self.projective_blit_pipeline_dst_out,
             _ => &self.projective_blit_pipeline,
         };
