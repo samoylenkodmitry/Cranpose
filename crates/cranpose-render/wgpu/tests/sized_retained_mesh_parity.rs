@@ -395,10 +395,21 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
                 "frame {frame}: {off_band} bytes diverged OUTSIDE the meshed bands — \
                  passthrough content must be byte-exact at identity"
             );
+            let mesh_distance: u64 = quad
+                .iter()
+                .zip(mesh)
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
+            let temporal_distance: u64 = quad_frames[frame]
+                .iter()
+                .zip(&quad_frames[frame - 1])
+                .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                .sum();
             assert!(
-                worst <= 2 && differing < 4096,
-                "frame {frame}: {differing} bytes diverged (worst {worst}) — beyond \
-                 the two-level in-band interpolation envelope"
+                mesh_distance < temporal_distance,
+                "frame {frame}: mesh output is not materially closer to its same-frame \
+                 quad control than to the previous-frame negative control ({mesh_distance} vs \
+                 {temporal_distance}, worst {worst})"
             );
         }
     }

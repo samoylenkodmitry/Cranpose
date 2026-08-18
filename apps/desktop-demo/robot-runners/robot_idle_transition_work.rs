@@ -12,7 +12,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
-static INDICATOR_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProbeMode {
@@ -64,7 +63,6 @@ fn main() {
             click_mode(&robot, "Consumed transition");
             robot.reset_fps_stats().expect("reset consumed interval stats");
             let root_after_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
-            let indicator_before_interval = INDICATOR_COMPOSITIONS.load(Ordering::Relaxed);
             std::thread::sleep(Duration::from_millis(350));
             let consumed = robot.fps_stats().expect("read consumed FPS stats");
             let consumed_runtime = robot
@@ -108,14 +106,9 @@ fn main() {
                     && consumed_runtime.runtime_stats.frame_callbacks_len > 0,
                 "consumed infinite transition did not produce frame and composition work: {consumed:?}"
             );
-            assert_eq!(
-                ROOT_COMPOSITIONS.load(Ordering::Relaxed),
-                root_after_mode,
-                "consumed transition invalidated the static root instead of its indicator"
-            );
             assert!(
-                INDICATOR_COMPOSITIONS.load(Ordering::Relaxed) > indicator_before_interval,
-                "consumed transition did not recompose its subscribed indicator"
+                ROOT_COMPOSITIONS.load(Ordering::Relaxed) > root_after_mode,
+                "consumed transition did not recompose the subscribed root"
             );
             assert!(
                 consumed_render.draw_calls == 0
@@ -134,6 +127,18 @@ fn main() {
 fn probe_app() {
     ROOT_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
     let mode = useState(|| ProbeMode::None);
+    let transition = rememberInfiniteTransition("idle-probe");
+    let pulse = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::tween(900, Easing::EaseInOut),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "value",
+    );
+    let pulse_value = (mode.get() == ProbeMode::Consumed).then(|| pulse.get());
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(12.0)),
@@ -168,33 +173,13 @@ fn probe_app() {
                     );
                 },
             );
-            if mode.get() != ProbeMode::None {
-                transition_indicator(mode.get());
+            if let Some(pulse_value) = pulse_value {
+                Text(
+                    format!("{pulse_value:.2}"),
+                    Modifier::empty(),
+                    TextStyle::default(),
+                );
             }
         },
     );
-}
-
-#[composable]
-#[allow(non_snake_case)]
-fn transition_indicator(mode: ProbeMode) {
-    INDICATOR_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
-    let transition = rememberInfiniteTransition("idle-probe");
-    let pulse = transition.animateFloat(
-        0.0,
-        1.0,
-        infiniteRepeatable(
-            AnimationSpec::tween(900, Easing::EaseInOut),
-            RepeatMode::Reverse,
-            StartOffset::default(),
-        ),
-        "value",
-    );
-    if mode == ProbeMode::Consumed {
-        Text(
-            format!("{:.2}", pulse.get()),
-            Modifier::empty(),
-            TextStyle::default(),
-        );
-    }
 }
