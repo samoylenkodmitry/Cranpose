@@ -1,8 +1,7 @@
 //! Sound effects and music — the audio analogue of [`haptics`](crate::haptics).
 //!
 //! The shape mirrors the rest of the service registry: a capability trait, an
-//! `Arc` handle, a process-global platform slot a backend installs into, and a
-//! CompositionLocal descendants read. The compiled-in default is a no-op that
+//! The compiled-in default is a no-op that
 //! still hands out real [`SoundId`]s, so an app composes and runs unchanged on
 //! a target with no audio backend.
 //!
@@ -24,7 +23,7 @@
 //!
 //! # Threading
 //!
-//! [`AudioPlayer`] is a process-safe handle. A real backend owns a real-time audio thread; the handle only enqueues
+//! A real backend owns a real-time audio thread; the handle only enqueues
 //! commands for it. Decoding happens in [`AudioPlayer::load`], never during
 //! playback, so a cue that fires every few frames costs one queue push.
 
