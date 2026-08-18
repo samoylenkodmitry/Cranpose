@@ -76,6 +76,7 @@ fn main() {
                 .get_render_stats()
                 .expect("read draw-only render stats")
                 .expect("draw-only render stats available");
+            let root_after_draw_interval = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
             println!(
                 "IDLE-TRANSITION mode=draw-only frames={} recompositions={} work_fps={:.1} callbacks={} draws={} uploads={}",
                 draw_only.frame_count,
@@ -133,7 +134,7 @@ fn main() {
                 "draw-only infinite transition did not animate without composition work: {draw_only:?}"
             );
             assert_eq!(
-                ROOT_COMPOSITIONS.load(Ordering::Relaxed),
+                root_after_draw_interval,
                 root_after_draw_mode,
                 "draw-only infinite transition recomposed the root"
             );
