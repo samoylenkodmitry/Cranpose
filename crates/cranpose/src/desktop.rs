@@ -3738,6 +3738,16 @@ fn robot_visible_pump_present_target(
         .then(|| presented_frame_generation.saturating_add(frame_count as u64))
 }
 
+#[cfg(feature = "robot")]
+fn robot_frame_present_pending(
+    visible_surface_dirty: bool,
+    app_needs_redraw: bool,
+    app_needs_frame: bool,
+    app_has_active_animations: bool,
+) -> bool {
+    visible_surface_dirty || app_needs_redraw || app_needs_frame || app_has_active_animations
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PointerButtonFrameRequest {
     request_redraw: bool,
@@ -5287,8 +5297,13 @@ impl ApplicationHandler for App {
                         }
                     }
                     RobotCommand::WaitForPresentFrame => {
-                        let visual_frame_pending =
-                            self.robot_visible_surface_dirty || app.needs_redraw();
+                        let schedule = app.frame_schedule();
+                        let visual_frame_pending = robot_frame_present_pending(
+                            self.robot_visible_surface_dirty,
+                            app.needs_redraw(),
+                            schedule.needs_frame,
+                            app.has_active_animations(),
+                        );
                         let present_target = visual_frame_pending
                             .then(|| {
                                 robot_visible_pump_present_target(
@@ -6352,6 +6367,14 @@ mod tests {
         assert_eq!(robot_visible_present_target(true, false, false, 7), None);
         assert_eq!(robot_visible_present_target(true, true, true, 7), None);
         assert_eq!(robot_visible_present_target(false, false, true, 7), None);
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn visible_robot_wait_requires_present_for_active_animation_frame() {
+        assert!(robot_frame_present_pending(false, false, true, false));
+        assert!(robot_frame_present_pending(false, false, false, true));
+        assert!(!robot_frame_present_pending(false, false, false, false));
     }
 
     #[cfg(feature = "robot")]
