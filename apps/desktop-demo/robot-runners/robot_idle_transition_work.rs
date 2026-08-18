@@ -4,10 +4,12 @@ use cranpose_animation::{
 };
 use cranpose_core::useState;
 use cranpose_testing::find_button_in_semantics;
+use cranpose_ui::widgets::{
+    CircularProgressIndicator, CIRCULAR_INDICATOR_STROKE_WIDTH, PROGRESS_INDICATOR_COLOR,
+};
 use cranpose_ui::{
-    composable, Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec,
-    LinearArrangement, Modifier, Text, TextStyle, CIRCULAR_INDICATOR_STROKE_WIDTH,
-    PROGRESS_INDICATOR_COLOR,
+    composable, Button, ButtonSpec, Column, ColumnSpec, LinearArrangement, Modifier, Text,
+    TextStyle,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
