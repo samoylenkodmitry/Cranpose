@@ -7,7 +7,8 @@ use cranpose_services::image_picker::{ImagePicker, ImagePickerError, ImageSource
 use cranpose_services::network_status::{NetworkMonitor, NetworkStatus};
 use cranpose_services::notifier::{Notifier, NotifyRequest};
 use cranpose_services::purchases::{Product, PurchaseEvent, Purchases, StorePhase, StoreState};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 static AUDIO_CALLS: AtomicUsize = AtomicUsize::new(0);
 static HAPTIC_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -80,6 +81,58 @@ impl NetworkMonitor for RegisteredNetwork {
     }
 }
 
+struct RecoveringPurchases {
+    connected: AtomicBool,
+    reconnects: AtomicUsize,
+}
+
+impl Purchases for RecoveringPurchases {
+    fn configure(&self, _product_ids: &[&str]) {}
+    fn state(&self) -> StoreState {
+        StoreState {
+            phase: if self.connected.load(Ordering::Acquire) {
+                StorePhase::Ready
+            } else {
+                StorePhase::Disconnected
+            },
+            ..StoreState::default()
+        }
+    }
+    fn purchase(&self, _product_id: &str) {}
+    fn restore(&self) {}
+    fn take_event(&self) -> Option<PurchaseEvent> {
+        None
+    }
+    fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+    fn reconnect(&self) {
+        self.reconnects.fetch_add(1, Ordering::AcqRel);
+        self.connected.store(true, Ordering::Release);
+    }
+}
+
+struct RecoveringNetwork {
+    online: AtomicBool,
+    reconnects: AtomicUsize,
+}
+
+impl NetworkMonitor for RecoveringNetwork {
+    fn status(&self) -> NetworkStatus {
+        NetworkStatus {
+            online: self.online.load(Ordering::Acquire),
+            metered: false,
+        }
+    }
+    fn is_alive(&self) -> bool {
+        self.online.load(Ordering::Acquire)
+    }
+    fn reconnect(&self) {
+        self.reconnects.fetch_add(1, Ordering::AcqRel);
+        self.online.store(true, Ordering::Release);
+    }
+}
+
 struct RegisteredNotifier;
 
 impl Notifier for RegisteredNotifier {
@@ -106,12 +159,12 @@ fn register_services() {
     AUDIO_CALLS.store(0, Ordering::Relaxed);
     HAPTIC_CALLS.store(0, Ordering::Relaxed);
     NOTIFIER_CALLS.store(0, Ordering::Relaxed);
-    cranpose_services::set_platform_audio(std::rc::Rc::new(RegisteredAudio));
-    cranpose_services::set_platform_haptics(std::rc::Rc::new(RegisteredHaptics));
-    cranpose_services::set_platform_purchases(std::rc::Rc::new(RegisteredPurchases));
-    cranpose_services::set_platform_network_monitor(std::rc::Rc::new(RegisteredNetwork));
-    cranpose_services::set_platform_notifier(std::rc::Rc::new(RegisteredNotifier));
-    cranpose_services::set_platform_image_picker(std::rc::Rc::new(RegisteredImagePicker));
+    cranpose_services::set_platform_audio(std::sync::Arc::new(RegisteredAudio));
+    cranpose_services::set_platform_haptics(std::sync::Arc::new(RegisteredHaptics));
+    cranpose_services::set_platform_purchases(std::sync::Arc::new(RegisteredPurchases));
+    cranpose_services::set_platform_network_monitor(std::sync::Arc::new(RegisteredNetwork));
+    cranpose_services::set_platform_notifier(std::sync::Arc::new(RegisteredNotifier));
+    cranpose_services::set_platform_image_picker(std::sync::Arc::new(RegisteredImagePicker));
 }
 
 fn main() {
@@ -153,6 +206,22 @@ fn main() {
             assert_eq!(AUDIO_CALLS.load(Ordering::Relaxed), 0);
             assert_eq!(HAPTIC_CALLS.load(Ordering::Relaxed), 0);
             assert_eq!(NOTIFIER_CALLS.load(Ordering::Relaxed), 2);
+
+            let purchases = Arc::new(RecoveringPurchases {
+                connected: AtomicBool::new(false),
+                reconnects: AtomicUsize::new(0),
+            });
+            cranpose_services::set_platform_purchases(purchases.clone());
+            assert_eq!(cranpose_services::store_state().phase, StorePhase::Ready);
+            assert_eq!(purchases.reconnects.load(Ordering::Acquire), 1);
+
+            let network = Arc::new(RecoveringNetwork {
+                online: AtomicBool::new(false),
+                reconnects: AtomicUsize::new(0),
+            });
+            cranpose_services::set_platform_network_monitor(network.clone());
+            assert!(cranpose_services::network_status().online);
+            assert_eq!(network.reconnects.load(Ordering::Acquire), 1);
             robot.exit().expect("exit robot app");
         })
         .try_run(desktop_app::app::DesktopApp)
