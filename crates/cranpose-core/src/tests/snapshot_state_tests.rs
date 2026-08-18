@@ -187,22 +187,40 @@ fn state_subscriber_callback_tracks_first_live_scope() {
         notifications_for_callback.set(notifications_for_callback.get() + 1);
     });
     state.as_state().on_subscriber(callback.clone());
+    let observer = SnapshotStateObserver::new(|callback| callback());
 
-    let first = RecomposeScope::new_for_test(handle.clone());
-    state.subscribe_scope_for_test(&first);
+    observer.observe_reads(1usize, |_| {}, || state.get());
     assert_eq!(notifications.get(), 1);
 
-    let second = RecomposeScope::new_for_test(handle.clone());
-    state.subscribe_scope_for_test(&second);
+    observer.observe_reads(2usize, |_| {}, || state.get());
     assert_eq!(notifications.get(), 1);
 
-    drop(first);
-    drop(second);
+    observer.clear(&1usize);
+    observer.clear(&2usize);
     assert!(!state.as_state().has_subscribers());
 
-    let third = RecomposeScope::new_for_test(handle);
-    state.subscribe_scope_for_test(&third);
+    observer.observe_reads(3usize, |_| {}, || state.get());
     assert_eq!(notifications.get(), 2);
+}
+
+#[test]
+fn state_subscriber_callback_fires_once_for_a_composition_read() {
+    let mut composition = test_composition();
+    let state = MutableState::with_runtime(0i32, composition.runtime_handle());
+    let notifications = Rc::new(Cell::new(0));
+    let notifications_for_callback = Rc::clone(&notifications);
+    let callback: Rc<dyn Fn()> = Rc::new(move || {
+        notifications_for_callback.set(notifications_for_callback.get() + 1);
+    });
+    state.as_state().on_subscriber(callback.clone());
+
+    composition
+        .render(location_key(file!(), line!(), column!()), move || {
+            let _ = state.get();
+        })
+        .expect("composition read");
+
+    assert_eq!(notifications.get(), 1);
 }
 
 #[test]
@@ -215,8 +233,8 @@ fn state_subscriber_callback_does_not_retain_dropped_callback() {
     state.as_state().on_subscriber(callback.clone());
     drop(callback);
 
-    let scope = RecomposeScope::new_for_test(handle);
-    state.subscribe_scope_for_test(&scope);
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.observe_reads(1usize, |_| {}, || state.get());
     assert!(weak.upgrade().is_none());
 }
 
@@ -248,14 +266,13 @@ fn state_subscriber_callback_keeps_reentrant_registration() {
         })
     };
     state.as_state().on_subscriber(callback.clone());
+    let observer = SnapshotStateObserver::new(|callback| callback());
 
-    let first = RecomposeScope::new_for_test(handle.clone());
-    state.subscribe_scope_for_test(&first);
+    observer.observe_reads(1usize, |_| {}, || state.get());
     assert_eq!(nested_notifications.get(), 1);
-    drop(first);
+    observer.clear(&1usize);
 
-    let second = RecomposeScope::new_for_test(handle);
-    state.subscribe_scope_for_test(&second);
+    observer.observe_reads(2usize, |_| {}, || state.get());
     assert_eq!(nested_notifications.get(), 2);
 }
 
@@ -264,8 +281,8 @@ fn state_subscriber_callback_prunes_dead_registrations_while_subscribed() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
     let state = MutableState::with_runtime(0i32, handle.clone());
-    let scope = RecomposeScope::new_for_test(handle);
-    state.subscribe_scope_for_test(&scope);
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.observe_reads(1usize, |_| {}, || state.get());
 
     for _ in 0..256 {
         state.as_state().on_subscriber(Rc::new(|| {}));
