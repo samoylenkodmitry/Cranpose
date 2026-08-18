@@ -63,6 +63,7 @@ pub(crate) struct TestServiceGuard {
 impl Drop for TestServiceGuard {
     fn drop(&mut self) {
         crate::audio::clear_platform_audio();
+        crate::camera::clear_platform_camera();
         crate::haptics::clear_platform_haptics();
         crate::image_picker::clear_platform_image_picker();
         crate::network_status::clear_platform_network_monitor();
