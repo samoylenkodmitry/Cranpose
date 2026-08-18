@@ -747,6 +747,11 @@ path = "robot-runners/robot_renderer_micro_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_renderer_pixel_precision"
+path = "robot-runners/robot_renderer_pixel_precision.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_liquid_visual"
 path = "examples/robot_liquid_visual.rs"
 required-features = ["desktop", "robot-app"]
