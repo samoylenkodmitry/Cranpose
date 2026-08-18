@@ -2117,7 +2117,7 @@ mod tests {
         let callback: Rc<dyn Fn()> = Rc::new(move || {
             notifications_for_callback.set(notifications_for_callback.get() + 1);
         });
-        state.subscriber_callback(callback, false);
+        state.subscriber_callback(callback.clone(), false);
 
         let first = StateObject::observation_lease(&*state).expect("first observation lease");
         let second = StateObject::observation_lease(&*state).expect("second observation lease");
