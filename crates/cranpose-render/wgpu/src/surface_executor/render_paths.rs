@@ -240,8 +240,8 @@ fn exact_translation_sample_mode(
 ) -> CompositeSampleMode {
     if dest_rect.x.fract() != 0.0
         || dest_rect.y.fract() != 0.0
-        || dest_rect.width != source_width as f32
-        || dest_rect.height != source_height as f32
+        || (dest_rect.width - source_width as f32).abs() > 1.0
+        || (dest_rect.height - source_height as f32).abs() > 1.0
     {
         return sample_mode;
     }
@@ -8235,6 +8235,20 @@ mod tests {
                 100,
                 40,
                 CompositeSampleMode::Box4,
+            ),
+            CompositeSampleMode::Nearest
+        );
+        assert_eq!(
+            exact_translation_sample_mode(
+                Rect {
+                    x: 12.0,
+                    y: -1.0,
+                    width: 100.0,
+                    height: 40.2,
+                },
+                100,
+                40,
+                CompositeSampleMode::Linear,
             ),
             CompositeSampleMode::Nearest
         );
