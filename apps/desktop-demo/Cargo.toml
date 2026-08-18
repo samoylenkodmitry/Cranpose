@@ -880,3 +880,8 @@ required-features = ["desktop", "robot-app"]
 name = "robot_services_registration"
 path = "examples/robot_services_registration.rs"
 required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_android_resume"
+path = "robot-runners/robot_android_resume.rs"
+required-features = ["desktop", "robot-app"]

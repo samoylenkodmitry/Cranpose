@@ -262,6 +262,26 @@ fn android_first_frame_is_forced_through_surface_dirty() {
 }
 
 #[test]
+fn android_resume_robot_contract_retains_gpu_and_marks_shell_dirty() {
+    let source = crate_source("src/android.rs");
+
+    assert!(
+        !source.contains(
+            "drop_present_surface(&mut gpu_resources, &mut app_shell);\n                            } else {\n                                gpu_resources = None;"
+        ),
+        "the resume robot must not discard the device and renderer on TerminateWindow"
+    );
+    assert!(
+        source.contains("resources.surface = None;"),
+        "the resume robot must detach only the native surface"
+    );
+    assert!(
+        source.contains("setup.resources.surface_dirty = true;\n            shell.mark_dirty();"),
+        "the resume robot must force a composition before the first resumed present"
+    );
+}
+
+#[test]
 fn web_idle_does_not_request_recursive_raf() {
     let source = crate_source("src/web.rs");
 
