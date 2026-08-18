@@ -64,8 +64,12 @@ fn main() {
 fn verify_text_drag_release_contract(robot: &cranpose::Robot) {
     println!("\n--- Text drag/release contract ---");
     open_text_tab(robot);
-    let start_bounds = scroll_text_into_view(robot, "Decorated shadow text", 18)
+    let initial_bounds = scroll_text_into_view(robot, "Decorated shadow text", 18)
         .expect("decorated text bounds before drag");
+    let start_center = center(initial_bounds);
+    scroll_at(robot, start_center, -80.0);
+    let start_bounds = find_bounds_by_text(robot, "Decorated shadow text")
+        .expect("decorated text bounds after moving into scroll interior");
     let drag_center = center(start_bounds);
 
     robot
@@ -230,7 +234,10 @@ fn verify_lazy_list_drag_release_contract(robot: &cranpose::Robot) {
     click_tab(robot, "Lazy List");
     wait_for_text(robot, "Lazy List Demo");
 
-    let before_row = lazy_item_region(robot, 2).expect("lazy item region before drag");
+    let initial_row = lazy_item_region(robot, 2).expect("lazy item region before drag");
+    scroll_at(robot, center(initial_row.row_bounds), -80.0);
+    let before_row =
+        lazy_item_region(robot, 2).expect("lazy item region after moving into scroll interior");
     let drag_center = center(before_row.row_bounds);
     robot
         .mouse_move(drag_center.0, drag_center.1)
