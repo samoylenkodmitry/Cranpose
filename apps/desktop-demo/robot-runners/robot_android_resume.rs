@@ -53,6 +53,12 @@ fn android_resume_contract_is_fixed() {
         !vsync.contains("OnceLock<Box<dyn Fn() + Send + Sync>>"),
         "android_main relaunch must replace the vsync waker"
     );
+    assert!(
+        vsync.contains(
+            "pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {\n    CALLBACK_POSTED.store(false, Ordering::Release);\n    UNAVAILABLE.store(false, Ordering::Release);"
+        ),
+        "android_main relaunch must reset pending and unavailable vsync state"
+    );
     let accessibility = std::fs::read_to_string(source_root.join("android_accessibility.rs"))
         .expect("read Android accessibility source");
     assert!(
