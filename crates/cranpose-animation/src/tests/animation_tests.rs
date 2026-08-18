@@ -267,6 +267,7 @@ fn infinite_transition_animates_float_over_time() {
                             ),
                             "pulse",
                         );
+                        let _ = state.get();
                         state_slot.borrow_mut().replace(state);
                     });
                 });

@@ -463,6 +463,7 @@ impl Default for AnimationType {
 
 trait InfiniteTransitionAnimation {
     fn on_frame(&self, play_time_nanos: u64);
+    fn has_subscribers(&self) -> bool;
 }
 
 struct TransitionAnimationState<T: Lerp + Clone + PartialEq + 'static> {
@@ -472,6 +473,8 @@ struct TransitionAnimationState<T: Lerp + Clone + PartialEq + 'static> {
     spec: RefCell<InfiniteRepeatableSpec<T>>,
     start_on_next_frame: Cell<bool>,
     play_time_offset_nanos: Cell<u64>,
+    subscriber_callback_installed: Cell<bool>,
+    subscriber_callback: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
 impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
@@ -488,6 +491,8 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
             spec: RefCell::new(spec),
             start_on_next_frame: Cell::new(true),
             play_time_offset_nanos: Cell::new(0),
+            subscriber_callback_installed: Cell::new(false),
+            subscriber_callback: RefCell::new(None),
         }
     }
 
@@ -527,6 +532,15 @@ impl<T: Lerp + Clone + PartialEq + 'static> TransitionAnimationState<T> {
         let target = self.target_value.borrow();
         compute_repeatable_value(local_play_time, &initial, &target, spec)
     }
+
+    fn install_subscriber_callback(&self, callback: Rc<dyn Fn()>) {
+        if !self.subscriber_callback_installed.replace(true) {
+            self.subscriber_callback
+                .borrow_mut()
+                .replace(callback.clone());
+            self.value_state.as_state().on_subscriber(callback);
+        }
+    }
 }
 
 impl<T: Lerp + Clone + PartialEq + 'static> InfiniteTransitionAnimation
@@ -535,6 +549,10 @@ impl<T: Lerp + Clone + PartialEq + 'static> InfiniteTransitionAnimation
     fn on_frame(&self, play_time_nanos: u64) {
         let value = self.compute_value(play_time_nanos);
         self.value_state.set(value);
+    }
+
+    fn has_subscribers(&self) -> bool {
+        self.value_state.as_state().has_subscribers()
     }
 }
 
@@ -590,6 +608,7 @@ struct InfiniteTransitionInner {
     label: String,
     animations: RefCell<Vec<Rc<dyn InfiniteTransitionAnimation>>>,
     run_token: OwnedMutableState<u64>,
+    runtime: RuntimeHandle,
 }
 
 impl InfiniteTransition {
@@ -598,7 +617,8 @@ impl InfiniteTransition {
             inner: Rc::new(InfiniteTransitionInner {
                 label: label.to_string(),
                 animations: RefCell::new(Vec::new()),
-                run_token: OwnedMutableState::with_runtime(0u64, runtime),
+                run_token: OwnedMutableState::with_runtime(0u64, runtime.clone()),
+                runtime,
             }),
         }
     }
@@ -625,7 +645,7 @@ impl InfiniteTransition {
                         break;
                     };
 
-                    if inner.animations.borrow().is_empty() {
+                    if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
                         break;
                     }
 
@@ -687,6 +707,12 @@ impl InfiniteTransition {
 
         let animation_any: Rc<dyn InfiniteTransitionAnimation> = animation_state.clone();
         let transition_inner = Rc::clone(&self.inner);
+        let transition_for_subscriber = Rc::downgrade(&transition_inner);
+        animation_state.install_subscriber_callback(Rc::new(move || {
+            if let Some(transition) = transition_for_subscriber.upgrade() {
+                transition.request_restart();
+            }
+        }));
         let animation_id = Rc::as_ptr(&animation_state) as usize;
         cranpose_core::DisposableEffect!(animation_id, move |_scope| {
             transition_inner.add_animation(animation_any.clone());
@@ -735,6 +761,21 @@ impl InfiniteTransitionInner {
         for animation in animations {
             animation.on_frame(play_time_nanos);
         }
+    }
+
+    fn has_subscribers(&self) -> bool {
+        self.animations
+            .borrow()
+            .iter()
+            .any(|animation| animation.has_subscribers())
+    }
+
+    fn request_restart(self: Rc<Self>) {
+        let runtime = self.runtime.clone();
+        runtime.enqueue_ui_task(Box::new(move || {
+            self.run_token
+                .update(|value| *value = value.wrapping_add(1));
+        }));
     }
 }
 

@@ -8,7 +8,11 @@ use cranpose_ui::{
     composable, Button, ButtonSpec, Column, ColumnSpec, LinearArrangement, Modifier, Text,
     TextStyle,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+
+static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
+static INDICATOR_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ProbeMode {
@@ -34,6 +38,11 @@ fn main() {
         .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
+            robot.screenshot().expect("capture baseline frame");
+            let baseline_render = robot
+                .get_render_stats()
+                .expect("read baseline render stats")
+                .expect("baseline render stats available");
             click_mode(&robot, "Unread transition");
             robot.reset_fps_stats().expect("reset unread FPS stats");
             std::thread::sleep(Duration::from_millis(350));
@@ -52,17 +61,29 @@ fn main() {
                 unread_runtime.runtime_stats.frame_callbacks_len,
             );
 
-            robot.reset_fps_stats().expect("reset consumed FPS stats");
             click_mode(&robot, "Consumed transition");
+            robot.reset_fps_stats().expect("reset consumed interval stats");
+            let root_after_mode = ROOT_COMPOSITIONS.load(Ordering::Relaxed);
+            let indicator_before_interval = INDICATOR_COMPOSITIONS.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(350));
             let consumed = robot.fps_stats().expect("read consumed FPS stats");
+            let consumed_runtime = robot
+                .get_runtime_leak_debug_stats()
+                .expect("read consumed runtime stats");
             let consumed_render = robot
                 .get_render_stats()
-                .expect("read consumed render stats");
+                .expect("read consumed render stats")
+                .expect("consumed render stats available");
             println!(
-                "IDLE-TRANSITION mode=consumed frames={} recompositions={} work_fps={:.1} render={consumed_render:?}",
+                "IDLE-TRANSITION mode=consumed frames={} recompositions={} work_fps={:.1} callbacks={} draws={} uploads={} layer_hits={} layer_misses={}",
                 consumed.frame_count,
                 consumed.recompositions,
                 consumed.work_fps,
+                consumed_runtime.runtime_stats.frame_callbacks_len,
+                consumed_render.draw_calls,
+                consumed_render.upload_bytes,
+                consumed_render.layer_cache_hits,
+                consumed_render.layer_cache_misses,
             );
 
             assert_eq!(
@@ -70,12 +91,38 @@ fn main() {
                 "unread infinite transition scheduled unnecessary presented frames: {unread:?}"
             );
             assert_eq!(
+                unread.recompositions, 0,
+                "unread infinite transition recomposed without a reader: {unread:?}"
+            );
+            assert_eq!(
+                unread.work_fps, 0.0,
+                "unread infinite transition performed frame work without a reader: {unread:?}"
+            );
+            assert_eq!(
                 unread_runtime.runtime_stats.frame_callbacks_len, 0,
                 "unread infinite transition left a frame callback queued: {unread_runtime:?}"
             );
             assert!(
-                consumed.frame_count > 0 && consumed.recompositions > 0,
+                consumed.frame_count > 0
+                    && consumed.recompositions > 0
+                    && consumed_runtime.runtime_stats.frame_callbacks_len > 0,
                 "consumed infinite transition did not produce frame and composition work: {consumed:?}"
+            );
+            assert_eq!(
+                ROOT_COMPOSITIONS.load(Ordering::Relaxed),
+                root_after_mode,
+                "consumed transition invalidated the static root instead of its indicator"
+            );
+            assert!(
+                INDICATOR_COMPOSITIONS.load(Ordering::Relaxed) > indicator_before_interval,
+                "consumed transition did not recompose its subscribed indicator"
+            );
+            assert!(
+                consumed_render.draw_calls == 0
+                    && consumed_render.upload_bytes < baseline_render.upload_bytes
+                    && consumed_render.layer_cache_hits > 0
+                    && consumed_render.layer_cache_misses == 0,
+                "consumed indicator expanded retained rendering work: baseline={baseline_render:?} consumed={consumed_render:?}"
             );
             robot.exit().expect("exit idle transition work robot");
         })
@@ -85,6 +132,7 @@ fn main() {
 #[composable]
 #[allow(non_snake_case)]
 fn probe_app() {
+    ROOT_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
     let mode = useState(|| ProbeMode::None);
     Column(
         Modifier::empty().fill_max_size(),
@@ -95,13 +143,15 @@ fn probe_app() {
                 Modifier::empty(),
                 TextStyle::default(),
             );
+            Text(
+                "static retained content ".repeat(32),
+                Modifier::empty(),
+                TextStyle::default(),
+            );
             Button(
                 Modifier::empty(),
                 ButtonSpec::default(),
-                {
-                    let mode = mode.clone();
-                    move || mode.set(ProbeMode::Unread)
-                },
+                move || mode.set(ProbeMode::Unread),
                 || {
                     Text("Unread transition", Modifier::empty(), TextStyle::default());
                 },
@@ -109,10 +159,7 @@ fn probe_app() {
             Button(
                 Modifier::empty(),
                 ButtonSpec::default(),
-                {
-                    let mode = mode.clone();
-                    move || mode.set(ProbeMode::Consumed)
-                },
+                move || mode.set(ProbeMode::Consumed),
                 || {
                     Text(
                         "Consumed transition",
@@ -121,38 +168,33 @@ fn probe_app() {
                     );
                 },
             );
-            match mode.get() {
-                ProbeMode::None => {}
-                ProbeMode::Unread => {
-                    let _ = rememberInfiniteTransition("idle-probe").animateFloat(
-                        0.0,
-                        1.0,
-                        infiniteRepeatable(
-                            AnimationSpec::tween(900, Easing::EaseInOut),
-                            RepeatMode::Reverse,
-                            StartOffset::default(),
-                        ),
-                        "value",
-                    );
-                }
-                ProbeMode::Consumed => {
-                    let pulse = rememberInfiniteTransition("idle-probe").animateFloat(
-                        0.0,
-                        1.0,
-                        infiniteRepeatable(
-                            AnimationSpec::tween(900, Easing::EaseInOut),
-                            RepeatMode::Reverse,
-                            StartOffset::default(),
-                        ),
-                        "value",
-                    );
-                    Text(
-                        format!("{:.2}", pulse.get()),
-                        Modifier::empty(),
-                        TextStyle::default(),
-                    );
-                }
+            if mode.get() != ProbeMode::None {
+                transition_indicator(mode.get());
             }
         },
     );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn transition_indicator(mode: ProbeMode) {
+    INDICATOR_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
+    let transition = rememberInfiniteTransition("idle-probe");
+    let pulse = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::tween(900, Easing::EaseInOut),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "value",
+    );
+    if mode == ProbeMode::Consumed {
+        Text(
+            format!("{:.2}", pulse.get()),
+            Modifier::empty(),
+            TextStyle::default(),
+        );
+    }
 }

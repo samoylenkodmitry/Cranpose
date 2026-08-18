@@ -177,6 +177,50 @@ fn state_write_prunes_dropped_watchers() {
 }
 
 #[test]
+fn state_subscriber_callback_tracks_first_live_scope() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let notifications = Rc::new(Cell::new(0));
+    let notifications_for_callback = Rc::clone(&notifications);
+    let callback = Rc::new(move || {
+        notifications_for_callback.set(notifications_for_callback.get() + 1);
+    });
+    state.as_state().on_subscriber(callback.clone());
+
+    let first = RecomposeScope::new_for_test(handle.clone());
+    state.subscribe_scope_for_test(&first);
+    assert_eq!(notifications.get(), 1);
+
+    let second = RecomposeScope::new_for_test(handle.clone());
+    state.subscribe_scope_for_test(&second);
+    assert_eq!(notifications.get(), 1);
+
+    drop(first);
+    drop(second);
+    assert!(!state.as_state().has_subscribers());
+
+    let third = RecomposeScope::new_for_test(handle);
+    state.subscribe_scope_for_test(&third);
+    assert_eq!(notifications.get(), 2);
+}
+
+#[test]
+fn state_subscriber_callback_does_not_retain_dropped_callback() {
+    let runtime = TestRuntime::new();
+    let handle = runtime.handle();
+    let state = MutableState::with_runtime(0i32, handle.clone());
+    let callback = Rc::new(|| {});
+    let weak = Rc::downgrade(&callback);
+    state.as_state().on_subscriber(callback.clone());
+    drop(callback);
+
+    let scope = RecomposeScope::new_for_test(handle);
+    state.subscribe_scope_for_test(&scope);
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
 fn dropping_scope_unregisters_watchers_without_global_prune() {
     let runtime = TestRuntime::new();
     let handle = runtime.handle();
