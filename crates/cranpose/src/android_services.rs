@@ -51,9 +51,7 @@ fn loop_waker() -> &'static Mutex<Option<android_activity::AndroidAppWaker>> {
 }
 
 pub(crate) fn wake_native_loop() {
-    let waker = loop_waker()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let waker = loop_waker().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(waker) = waker.as_ref() {
         waker.wake();
     }
@@ -62,9 +60,7 @@ pub(crate) fn wake_native_loop() {
 /// Registers the Android service backends. Called once at startup with the
 /// activity handle.
 pub(crate) fn register(app: android_activity::AndroidApp) {
-    let mut waker = loop_waker()
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
+    let mut waker = loop_waker().lock().unwrap_or_else(PoisonError::into_inner);
     *waker = Some(app.create_waker());
     drop(waker);
     let haptics_queue = if async_haptics_enabled() {

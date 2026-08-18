@@ -31,8 +31,8 @@ fn lifecycle_hook(name: String, argument: String) -> Result<Option<String>, Stri
 
 fn android_resume_contract_is_fixed() {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src");
-    let source =
-        std::fs::read_to_string(source_root.join("android.rs")).expect("read Android runtime source");
+    let source = std::fs::read_to_string(source_root.join("android.rs"))
+        .expect("read Android runtime source");
     assert!(
         !source.contains(
             "drop_present_surface(&mut gpu_resources, &mut app_shell);\n                            } else {\n                                gpu_resources = None;"
