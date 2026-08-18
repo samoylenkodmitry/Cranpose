@@ -13,6 +13,8 @@ use std::sync::Arc;
 static AUDIO_CALLS: AtomicUsize = AtomicUsize::new(0);
 static HAPTIC_CALLS: AtomicUsize = AtomicUsize::new(0);
 static NOTIFIER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static FIRST_STORE_LISTENER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static SECOND_STORE_LISTENER_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 struct RegisteredAudio;
 
@@ -230,6 +232,17 @@ fn main() {
             cranpose_services::set_platform_network_monitor(network.clone());
             assert!(cranpose_services::network_status().online);
             assert_eq!(network.reconnects.load(Ordering::Acquire), 1);
+
+            cranpose_services::set_store_listener(|| {
+                FIRST_STORE_LISTENER_CALLS.fetch_add(1, Ordering::Relaxed);
+            });
+            cranpose_services::note_store_news();
+            cranpose_services::set_store_listener(|| {
+                SECOND_STORE_LISTENER_CALLS.fetch_add(1, Ordering::Relaxed);
+            });
+            cranpose_services::note_store_news();
+            assert_eq!(FIRST_STORE_LISTENER_CALLS.load(Ordering::Relaxed), 1);
+            assert_eq!(SECOND_STORE_LISTENER_CALLS.load(Ordering::Relaxed), 1);
             robot.exit().expect("exit robot app");
         })
         .try_run(desktop_app::app::DesktopApp)
