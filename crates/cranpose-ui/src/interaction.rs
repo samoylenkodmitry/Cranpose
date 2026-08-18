@@ -2,7 +2,7 @@
 
 use crate::composable;
 use crate::modifier::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
-use cranpose_core::{remember, with_current_composer, OwnedMutableState, RuntimeHandle, State};
+use cranpose_core::{remember, with_current_composer, MutableState, RuntimeHandle, State};
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerInputNode,
@@ -12,16 +12,17 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct MutableInteractionSource {
-    inner: Rc<MutableInteractionSourceInner>,
+    interactions: MutableState<InteractionState>,
+    pressed: MutableState<bool>,
+    last_interaction: MutableState<Option<Interaction>>,
 }
 
-struct MutableInteractionSourceInner {
-    next_press_id: RefCell<u64>,
-    active_presses: RefCell<HashSet<u64>>,
-    pressed: OwnedMutableState<bool>,
-    last_interaction: OwnedMutableState<Option<Interaction>>,
+#[derive(Clone, Default)]
+struct InteractionState {
+    next_press_id: u64,
+    active_presses: HashSet<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,26 +61,30 @@ impl MutableInteractionSource {
 
     pub fn with_runtime(runtime: RuntimeHandle) -> Self {
         Self {
-            inner: Rc::new(MutableInteractionSourceInner {
-                next_press_id: RefCell::new(1),
-                active_presses: RefCell::new(HashSet::new()),
-                pressed: OwnedMutableState::with_runtime(false, runtime.clone()),
-                last_interaction: OwnedMutableState::with_runtime(None, runtime),
-            }),
+            interactions: MutableState::with_runtime(
+                InteractionState {
+                    next_press_id: 1,
+                    active_presses: HashSet::new(),
+                },
+                runtime.clone(),
+            ),
+            pressed: MutableState::with_runtime(false, runtime.clone()),
+            last_interaction: MutableState::with_runtime(None, runtime),
         }
     }
 
     pub fn id(&self) -> u64 {
-        Rc::as_ptr(&self.inner) as usize as u64
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.interactions.runtime_state_id().hash(&mut hasher);
+        hasher.finish()
     }
 
     pub fn press(&self, press_position: Point) -> PressInteractionPress {
-        let id = {
-            let mut next_press_id = self.inner.next_press_id.borrow_mut();
-            let id = *next_press_id;
-            *next_press_id = next_press_id.saturating_add(1);
+        let id = self.interactions.update(|state| {
+            let id = state.next_press_id;
+            state.next_press_id = id.saturating_add(1);
             id
-        };
+        });
         let press = PressInteractionPress { id, press_position };
         self.emit(Interaction::Press(PressInteraction::Press(press)));
         press
@@ -98,25 +103,24 @@ impl MutableInteractionSource {
     }
 
     pub fn emit(&self, interaction: Interaction) {
-        self.inner.last_interaction.set(Some(interaction));
-        let is_pressed = {
-            let mut active_presses = self.inner.active_presses.borrow_mut();
+        self.last_interaction.set(Some(interaction));
+        let is_pressed = self.interactions.update(|state| {
             match interaction {
                 Interaction::Press(PressInteraction::Press(press)) => {
-                    active_presses.insert(press.id);
+                    state.active_presses.insert(press.id);
                 }
                 Interaction::Press(PressInteraction::Release(release)) => {
-                    active_presses.remove(&release.press.id);
+                    state.active_presses.remove(&release.press.id);
                 }
                 Interaction::Press(PressInteraction::Cancel(cancel)) => {
-                    active_presses.remove(&cancel.press.id);
+                    state.active_presses.remove(&cancel.press.id);
                 }
             }
-            !active_presses.is_empty()
-        };
+            !state.active_presses.is_empty()
+        });
 
-        if self.inner.pressed.get_non_reactive() != is_pressed {
-            self.inner.pressed.set(is_pressed);
+        if self.pressed.get_non_reactive() != is_pressed {
+            self.pressed.set(is_pressed);
         }
     }
 
@@ -131,11 +135,11 @@ impl MutableInteractionSource {
     /// returned state inside a composable subscribes the enclosing recompose
     /// scope, so the composable recomposes whenever the pressed state changes.
     pub fn collectIsPressedAsState(&self) -> State<bool> {
-        self.inner.pressed.as_state()
+        self.pressed.as_state()
     }
 
     pub fn collectLastInteractionAsState(&self) -> State<Option<Interaction>> {
-        self.inner.last_interaction.as_state()
+        self.last_interaction.as_state()
     }
 }
 
@@ -155,7 +159,7 @@ impl std::fmt::Debug for MutableInteractionSource {
 
 impl PartialEq for MutableInteractionSource {
     fn eq(&self, other: &Self) -> bool {
-        self.id() == other.id()
+        self.interactions == other.interactions
     }
 }
 
@@ -170,8 +174,7 @@ impl Default for MutableInteractionSource {
 #[composable]
 pub fn rememberMutableInteractionSource() -> MutableInteractionSource {
     let runtime = with_current_composer(|composer| composer.runtime_handle());
-    remember(move || MutableInteractionSource::with_runtime(runtime.clone()))
-        .with(|source| source.clone())
+    remember(move || MutableInteractionSource::with_runtime(runtime.clone())).with(|source| *source)
 }
 
 /// Free-function form of
@@ -235,11 +238,11 @@ impl ModifierNodeElement for PressInteractionElement {
     type Node = PressInteractionNode;
 
     fn create(&self) -> Self::Node {
-        PressInteractionNode::new(self.interaction_source.clone())
+        PressInteractionNode::new(self.interaction_source)
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.update(self.interaction_source.clone());
+        node.update(self.interaction_source);
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -257,7 +260,7 @@ struct PressInteractionNode {
 impl PressInteractionNode {
     fn new(interaction_source: MutableInteractionSource) -> Self {
         let active_press = Rc::new(RefCell::new(None));
-        let cached_handler = Self::create_handler(interaction_source.clone(), active_press.clone());
+        let cached_handler = Self::create_handler(interaction_source, active_press.clone());
         Self {
             interaction_source,
             active_press,
@@ -275,7 +278,7 @@ impl PressInteractionNode {
         }
         self.interaction_source = interaction_source;
         self.cached_handler =
-            Self::create_handler(self.interaction_source.clone(), self.active_press.clone());
+            Self::create_handler(self.interaction_source, self.active_press.clone());
     }
 
     fn create_handler(

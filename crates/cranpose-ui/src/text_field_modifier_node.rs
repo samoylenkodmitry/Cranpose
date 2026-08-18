@@ -476,10 +476,9 @@ impl TextFieldModifierNode {
         let refs_line_height = refs.line_height.clone();
         let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
-        let cached_handler =
-            Self::create_handler(state.clone(), refs.clone(), line_limits, style.clone());
+        let cached_handler = Self::create_handler(state, refs.clone(), line_limits, style.clone());
         let cached_pan_resolver =
-            Self::create_pan_resolver(state.clone(), refs.clone(), line_limits, style.clone());
+            Self::create_pan_resolver(state, refs.clone(), line_limits, style.clone());
 
         Self {
             state,
@@ -510,7 +509,7 @@ impl TextFieldModifierNode {
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
         self.cached_pan_resolver = Self::create_pan_resolver(
-            self.state.clone(),
+            self.state,
             self.refs.clone(),
             line_limits,
             self.style.clone(),
@@ -638,7 +637,7 @@ impl TextFieldModifierNode {
                     // layout keeps fresh, so coordinate-based platform text input
                     // (iOS caret positioning) can read the caret's window rect.
                     let handler = TextFieldHandler::new(
-                        state.clone(),
+                        state,
                         refs.node_id.get(),
                         line_limits,
                         crate::text_field_handler::CaretGeometryRefs {
@@ -919,7 +918,7 @@ impl TextFieldModifierNode {
     /// Returns a clone of the text field state for use in draw closures.
     /// This allows reading selection at DRAW time rather than LAYOUT time.
     pub fn get_state(&self) -> cranpose_foundation::text::TextFieldState {
-        self.state.clone()
+        self.state
     }
 
     /// Updates the content offset (padding.left) for accurate click-to-position cursor placement.
@@ -1165,7 +1164,7 @@ impl DrawModifierNode for TextFieldModifierNode {
 
         // Capture state via Rc clone (cheap) for draw-time evaluation
         let is_focused = self.refs.is_focused.clone();
-        let state = self.state.clone();
+        let state = self.state;
         let content_offset = self.refs.content_offset.clone();
         let content_y_offset = self.refs.content_y_offset.clone();
         let cursor_brush = self.cursor_brush.clone();
@@ -1355,7 +1354,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _};
 
         let is_focused = self.refs.is_focused.clone();
-        let state = self.state.clone();
+        let state = self.state;
         let content_offset = self.refs.content_offset.clone();
         let content_y_offset = self.refs.content_y_offset.clone();
         let selection_brush = self.selection_brush.clone();
@@ -1537,7 +1536,7 @@ impl Hash for TextFieldElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Hash by state Rc pointer identity - matches PartialEq
         // This ensures equal elements hash equal (correctness requirement)
-        std::ptr::hash(std::rc::Rc::as_ptr(&self.state.inner), state);
+        self.state.id().hash(state);
         // Hash cursor color
         self.cursor_color.0.to_bits().hash(state);
         self.cursor_color.1.to_bits().hash(state);
@@ -1566,7 +1565,7 @@ impl ModifierNodeElement for TextFieldElement {
     type Node = TextFieldModifierNode;
 
     fn create(&self) -> Self::Node {
-        let mut node = TextFieldModifierNode::new(self.state.clone(), self.style.clone())
+        let mut node = TextFieldModifierNode::new(self.state, self.style.clone())
             .with_cursor_color(self.cursor_color)
             .with_line_limits(self.line_limits);
         if let Some(controller) = self.handle_controller.clone() {
@@ -1577,7 +1576,7 @@ impl ModifierNodeElement for TextFieldElement {
 
     fn update(&self, node: &mut Self::Node) {
         // Update the state reference
-        node.state = self.state.clone();
+        node.state = self.state;
         node.style = self.style.clone();
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
@@ -1585,7 +1584,7 @@ impl ModifierNodeElement for TextFieldElement {
 
         // Recreate the cached handler with the new state but same refs
         node.cached_handler = TextFieldModifierNode::create_handler(
-            node.state.clone(),
+            node.state,
             node.refs.clone(),
             node.line_limits,
             self.style.clone(),
@@ -1593,7 +1592,7 @@ impl ModifierNodeElement for TextFieldElement {
 
         // Recreate the pan resolver so it captures the new state/style/limits
         node.cached_pan_resolver = TextFieldModifierNode::create_pan_resolver(
-            node.state.clone(),
+            node.state,
             node.refs.clone(),
             node.line_limits,
             self.style.clone(),

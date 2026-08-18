@@ -4,8 +4,10 @@
 //! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldState.kt`.
 
 use super::{TextFieldBuffer, TextRange};
+use cranpose_core::MutableState;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 /// Immutable snapshot of text field content.
@@ -127,15 +129,15 @@ impl Drop for EditGuard<'_> {
 ///
 /// `TextFieldState` uses `Rc<RefCell<...>>` internally and is not thread-safe.
 /// It should only be used from the main thread.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct TextFieldState {
     /// Internal state for editing machinery.
     /// Public for cross-crate pointer-based identity comparison (Hash).
-    pub inner: Rc<RefCell<TextFieldStateInner>>,
+    pub inner: MutableState<Rc<RefCell<TextFieldStateInner>>>,
 
     /// Value storage - the SINGLE source of truth for text field value.
     /// Uses MutableState for reactive composition integration.
-    value: Rc<cranpose_core::OwnedMutableState<TextFieldValue>>,
+    value: MutableState<TextFieldValue>,
 }
 
 impl std::fmt::Debug for TextFieldState {
@@ -153,47 +155,67 @@ impl TextFieldState {
     /// Creates a new text field state with the given initial text.
     pub fn new(initial_text: impl Into<String>) -> Self {
         let initial_value = TextFieldValue::new(initial_text);
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("TextFieldState::new requires an active runtime");
         Self {
-            inner: Rc::new(RefCell::new(TextFieldStateInner {
-                is_editing: false,
-                listeners: Vec::new(),
-                undo_stack: VecDeque::new(),
-                redo_stack: VecDeque::new(),
-                desired_column: Cell::new(None),
-                last_edit_time: Cell::new(None),
-                pending_undo_snapshot: RefCell::new(None),
-                line_offsets_cache: RefCell::new(None),
-            })),
-            value: Rc::new(cranpose_core::ownedMutableStateOf(initial_value)),
+            inner: MutableState::with_runtime(
+                Rc::new(RefCell::new(TextFieldStateInner {
+                    is_editing: false,
+                    listeners: Vec::new(),
+                    undo_stack: VecDeque::new(),
+                    redo_stack: VecDeque::new(),
+                    desired_column: Cell::new(None),
+                    last_edit_time: Cell::new(None),
+                    pending_undo_snapshot: RefCell::new(None),
+                    line_offsets_cache: RefCell::new(None),
+                })),
+                runtime.clone(),
+            ),
+            value: MutableState::with_runtime(initial_value, runtime),
         }
     }
 
     /// Creates a state with initial text and selection.
     pub fn with_selection(initial_text: impl Into<String>, selection: TextRange) -> Self {
         let initial_value = TextFieldValue::with_selection(initial_text, selection);
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("TextFieldState::with_selection requires an active runtime");
         Self {
-            inner: Rc::new(RefCell::new(TextFieldStateInner {
-                is_editing: false,
-                listeners: Vec::new(),
-                undo_stack: VecDeque::new(),
-                redo_stack: VecDeque::new(),
-                desired_column: Cell::new(None),
-                last_edit_time: Cell::new(None),
-                pending_undo_snapshot: RefCell::new(None),
-                line_offsets_cache: RefCell::new(None),
-            })),
-            value: Rc::new(cranpose_core::ownedMutableStateOf(initial_value)),
+            inner: MutableState::with_runtime(
+                Rc::new(RefCell::new(TextFieldStateInner {
+                    is_editing: false,
+                    listeners: Vec::new(),
+                    undo_stack: VecDeque::new(),
+                    redo_stack: VecDeque::new(),
+                    desired_column: Cell::new(None),
+                    last_edit_time: Cell::new(None),
+                    pending_undo_snapshot: RefCell::new(None),
+                    line_offsets_cache: RefCell::new(None),
+                })),
+                runtime.clone(),
+            ),
+            value: MutableState::with_runtime(initial_value, runtime),
         }
+    }
+
+    fn inner(&self) -> Rc<RefCell<TextFieldStateInner>> {
+        self.inner.get_non_reactive()
+    }
+
+    pub fn id(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.inner.runtime_state_id().hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Gets the desired column for up/down navigation.
     pub fn desired_column(&self) -> Option<usize> {
-        self.inner.borrow().desired_column.get()
+        self.inner().borrow().desired_column.get()
     }
 
     /// Sets the desired column for up/down navigation.
     pub fn set_desired_column(&self, col: Option<usize>) {
-        self.inner.borrow().desired_column.set(col);
+        self.inner().borrow().desired_column.set(col);
     }
 
     /// Returns the current text content.
@@ -221,7 +243,8 @@ impl TextFieldState {
     /// The cache is lazily computed on first access and invalidated on text change.
     /// This avoids O(n) string splitting on every frame during selection rendering.
     pub fn line_offsets(&self) -> Vec<usize> {
-        let inner = self.inner.borrow();
+        let inner_state = self.inner();
+        let inner = inner_state.borrow();
 
         // Check if cached
         if let Some(ref offsets) = *inner.line_offsets_cache.borrow() {
@@ -246,7 +269,7 @@ impl TextFieldState {
 
     /// Invalidates the cached line offsets. Called internally on text change.
     fn invalidate_line_cache(&self) {
-        self.inner.borrow().line_offsets_cache.borrow_mut().take();
+        self.inner().borrow().line_offsets_cache.borrow_mut().take();
     }
 
     /// Copies the selected text without modifying the clipboard.
@@ -273,7 +296,8 @@ impl TextFieldState {
     ///
     /// Returns the listener index for removal.
     pub fn add_listener(&self, listener: impl Fn(&TextFieldValue) + 'static) -> usize {
-        let mut inner = self.inner.borrow_mut();
+        let inner_state = self.inner();
+        let mut inner = inner_state.borrow_mut();
         let index = inner.listeners.len();
         inner.listeners.push(Box::new(listener));
         index
@@ -295,12 +319,12 @@ impl TextFieldState {
 
     /// Returns true if undo is available.
     pub fn can_undo(&self) -> bool {
-        !self.inner.borrow().undo_stack.is_empty()
+        !self.inner().borrow().undo_stack.is_empty()
     }
 
     /// Returns true if redo is available.
     pub fn can_redo(&self) -> bool {
-        !self.inner.borrow().redo_stack.is_empty()
+        !self.inner().borrow().redo_stack.is_empty()
     }
 
     /// Undoes the last edit.
@@ -309,7 +333,8 @@ impl TextFieldState {
         // First, flush any pending coalescing snapshot so it becomes the undo target
         self.flush_undo_group();
 
-        let mut inner = self.inner.borrow_mut();
+        let inner_state = self.inner();
+        let mut inner = inner_state.borrow_mut();
         if let Some(previous_state) = inner.undo_stack.pop_back() {
             // Save current state to redo stack
             let current = self.value.with(|v| v.clone());
@@ -328,7 +353,8 @@ impl TextFieldState {
     /// Redoes the last undone edit.
     /// Returns true if redo was performed.
     pub fn redo(&self) -> bool {
-        let mut inner = self.inner.borrow_mut();
+        let inner_state = self.inner();
+        let mut inner = inner_state.borrow_mut();
         if let Some(redo_state) = inner.redo_stack.pop_back() {
             // Save current state to undo stack
             let current = self.value.with(|v| v.clone());
@@ -362,7 +388,8 @@ impl TextFieldState {
     where
         F: FnOnce(&mut TextFieldBuffer),
     {
-        let Ok(guard) = EditGuard::new(&self.inner) else {
+        let inner = self.inner();
+        let Ok(guard) = EditGuard::new(&inner) else {
             return false;
         };
 
@@ -397,7 +424,8 @@ impl TextFieldState {
 
             // Determine if we should break the undo coalescing group
             let should_break_group = {
-                let inner = self.inner.borrow();
+                let inner_state = self.inner();
+                let inner = inner_state.borrow();
 
                 // Check timeout
                 let timeout_expired = inner
@@ -426,14 +454,16 @@ impl TextFieldState {
             };
 
             {
-                let inner = self.inner.borrow();
+                let inner_state = self.inner();
+                let inner = inner_state.borrow();
 
                 if should_break_group {
                     // Push pending snapshot (if any) to undo stack, then start new group
                     let pending = inner.pending_undo_snapshot.take();
                     drop(inner);
 
-                    let mut inner = self.inner.borrow_mut();
+                    let inner_state = self.inner();
+                    let mut inner = inner_state.borrow_mut();
                     if let Some(snapshot) = pending {
                         if inner.undo_stack.len() >= UNDO_CAPACITY {
                             inner.undo_stack.pop_front();
@@ -444,7 +474,7 @@ impl TextFieldState {
                     inner.redo_stack.clear();
                     // Start new coalescing group with current state as pending snapshot
                     drop(inner);
-                    self.inner
+                    self.inner()
                         .borrow()
                         .pending_undo_snapshot
                         .replace(Some(current.clone()));
@@ -456,11 +486,11 @@ impl TextFieldState {
                     }
                     drop(inner);
                     // Clear redo stack on new edit
-                    self.inner.borrow_mut().redo_stack.clear();
+                    self.inner().borrow_mut().redo_stack.clear();
                 }
 
                 // Update last edit time
-                self.inner.borrow().last_edit_time.set(Some(now));
+                self.inner().borrow().last_edit_time.set(Some(now));
             }
 
             // Update value via MutableState (triggers recomposition)
@@ -473,9 +503,10 @@ impl TextFieldState {
 
         // Notify listeners outside of borrow
         if changed {
-            let listener_count = self.inner.borrow().listeners.len();
+            let listener_count = self.inner().borrow().listeners.len();
             for i in 0..listener_count {
-                let inner = self.inner.borrow();
+                let inner_state = self.inner();
+                let inner = inner_state.borrow();
                 if i < inner.listeners.len() {
                     (inner.listeners[i])(&new_value);
                 }
@@ -487,10 +518,12 @@ impl TextFieldState {
     /// Flushes any pending undo snapshot to the undo stack.
     /// Call this when a coalescing break is desired (e.g., focus lost).
     pub fn flush_undo_group(&self) {
-        let inner = self.inner.borrow();
+        let inner_state = self.inner();
+        let inner = inner_state.borrow();
         if let Some(snapshot) = inner.pending_undo_snapshot.take() {
             drop(inner);
-            let mut inner = self.inner.borrow_mut();
+            let inner_state = self.inner();
+            let mut inner = inner_state.borrow_mut();
             if inner.undo_stack.len() >= UNDO_CAPACITY {
                 inner.undo_stack.pop_front();
             }
@@ -526,8 +559,7 @@ impl Default for TextFieldState {
 
 impl PartialEq for TextFieldState {
     fn eq(&self, other: &Self) -> bool {
-        // Compare by Rc pointer identity - same state instance
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self.inner == other.inner
     }
 }
 
