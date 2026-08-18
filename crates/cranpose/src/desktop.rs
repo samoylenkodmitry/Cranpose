@@ -1451,7 +1451,7 @@ impl App {
             context.text_system.clone(),
             Arc::clone(&context.device),
             Arc::clone(&context.queue),
-            surface_format,
+            crate::surface_format::display_surface_view_format(surface_format),
             context.adapter_backend,
             context.adapter.get_downlevel_capabilities().flags,
             scale_factor,
@@ -2616,9 +2616,12 @@ impl App {
         };
         let after_acquire = Instant::now();
 
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(crate::surface_format::display_surface_view_format(
+                native.surface_config.format,
+            )),
+            ..Default::default()
+        });
         if let Err(error) = native.app.renderer().render_surface_texture(
             &output.texture,
             &view,
@@ -3016,7 +3019,7 @@ fn surface_config_for_window(
         height,
         present_mode,
         alpha_mode: select_alpha_mode(surface_caps, transparent)?,
-        view_formats: vec![],
+        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency: desired_frame_latency(frame_pacing_mode),
     })
 }
@@ -4222,7 +4225,7 @@ impl ApplicationHandler for App {
             text_system.clone(),
             Arc::clone(&device),
             Arc::clone(&queue),
-            surface_format,
+            crate::surface_format::display_surface_view_format(surface_format),
             adapter_info.backend,
             adapter.get_downlevel_capabilities().flags,
             initial_scale,
@@ -4676,9 +4679,12 @@ impl ApplicationHandler for App {
                     };
                     let after_acquire = Instant::now();
 
-                    let view = output
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+                        format: Some(crate::surface_format::display_surface_view_format(
+                            surface_config.format,
+                        )),
+                        ..Default::default()
+                    });
 
                     if let Err(err) = app.renderer().render_surface_texture(
                         &output.texture,

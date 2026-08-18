@@ -264,9 +264,12 @@ impl<F: FnMut() + 'static> IosApp<F> {
 
         match current_surface_texture(&gpu.surface, "ios") {
             SurfaceFrame::Ready(frame) => {
-                let view = frame
-                    .texture
-                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                    format: Some(crate::surface_format::display_surface_view_format(
+                        gpu.config.format,
+                    )),
+                    ..Default::default()
+                });
                 let (width, height) = shell.buffer_size();
                 if let Err(error) =
                     shell
@@ -386,7 +389,7 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
         renderer.init_gpu(
             Arc::clone(&device),
             Arc::clone(&queue),
-            config.format,
+            crate::surface_format::display_surface_view_format(config.format),
             backend,
             adapter.get_downlevel_capabilities().flags,
         );
@@ -626,7 +629,7 @@ fn ios_surface_config(
         height,
         present_mode,
         alpha_mode,
-        view_formats: vec![],
+        view_formats: crate::surface_format::display_surface_view_formats(format),
         desired_maximum_frame_latency: 2,
     })
 }

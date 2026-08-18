@@ -234,7 +234,7 @@ pub async fn run(
         height: buffer_height,
         present_mode,
         alpha_mode,
-        view_formats: vec![],
+        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency: 2,
     };
 
@@ -292,7 +292,7 @@ pub async fn run(
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),
-        surface_format,
+        crate::surface_format::display_surface_view_format(surface_format),
         adapter_info.backend,
         // The real capabilities of this adapter, as every other host passes:
         // the GL path gates vertex storage on them, and WebGL2 is exactly the
@@ -858,9 +858,12 @@ pub async fn run(
             let config = surface_config.borrow();
             match current_surface_texture(&surface, "web") {
                 SurfaceFrame::Ready(output) => {
-                    let view = output
-                        .texture
-                        .create_view(&wgpu::TextureViewDescriptor::default());
+                    let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+                        format: Some(crate::surface_format::display_surface_view_format(
+                            config.format,
+                        )),
+                        ..Default::default()
+                    });
                     let render_width = output.texture.width();
                     let render_height = output.texture.height();
 

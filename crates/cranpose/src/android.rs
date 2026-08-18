@@ -831,9 +831,12 @@ fn render_once(
     match current_surface_texture(surface, "android") {
         SurfaceFrame::Ready(frame) => {
             timings.after_acquire_ns = telemetry.now();
-            let view = frame
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(crate::surface_format::display_surface_view_format(
+                    resources.config.format,
+                )),
+                ..Default::default()
+            });
             let (width, height) = shell.buffer_size();
 
             if let Err(e) =
@@ -1430,7 +1433,7 @@ fn create_android_gpu_resources(
             adapter,
             device,
             queue,
-            surface_format: config.format,
+            surface_format: crate::surface_format::display_surface_view_format(config.format),
             backend: adapter_info.backend,
             config,
             _native_window: native_window_owner,
@@ -1451,7 +1454,8 @@ fn create_android_gpu_resources_for_existing_device(
 ) -> Result<AndroidGpuSetup, AndroidSurfaceError> {
     let surface = create_android_wgpu_surface(instance, native_window_ptr)?;
     let config = create_android_surface_config(&surface, &existing.adapter, width, height)?;
-    let renderer_needs_init = config.format != existing.surface_format;
+    let renderer_needs_init = crate::surface_format::display_surface_view_format(config.format)
+        != existing.surface_format;
 
     Ok(AndroidGpuSetup {
         resources: GpuResources {
@@ -1462,7 +1466,7 @@ fn create_android_gpu_resources_for_existing_device(
             adapter: existing.adapter.clone(),
             device: existing.device.clone(),
             queue: existing.queue.clone(),
-            surface_format: config.format,
+            surface_format: crate::surface_format::display_surface_view_format(config.format),
             backend: existing.backend,
             config,
             _native_window: native_window_owner,
@@ -1508,7 +1512,7 @@ fn create_android_surface_config(
         height,
         present_mode,
         alpha_mode,
-        view_formats: vec![],
+        view_formats: crate::surface_format::display_surface_view_formats(surface_format),
         desired_maximum_frame_latency,
     })
 }
