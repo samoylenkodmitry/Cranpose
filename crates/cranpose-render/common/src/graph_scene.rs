@@ -372,6 +372,14 @@ impl RenderScene for Scene {
             .and_then(|&index| self.hits.get(index))
             .cloned()
     }
+
+    fn retained_draw_nodes(&self) -> Option<Vec<NodeId>> {
+        Some(
+            self.graph
+                .as_ref()
+                .map_or_else(Vec::new, RenderGraph::retained_draw_nodes),
+        )
+    }
 }
 
 fn point_in_rounded_rect(point: Point, rect: Rect, shape: RoundedCornerShape) -> bool {

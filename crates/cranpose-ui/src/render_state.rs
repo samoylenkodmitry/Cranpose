@@ -103,6 +103,18 @@ pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
     });
 }
 
+pub fn prune_draw_observations_to_nodes(nodes: &[NodeId]) {
+    let retained: HashSet<NodeId> = nodes.iter().copied().collect();
+    with_draw_observer(|observer| {
+        observer.clear_if(|scope| {
+            let remove = scope
+                .downcast_ref::<DrawObservationScope>()
+                .is_some_and(|scope| !retained.contains(&scope.node_id));
+            remove
+        });
+    });
+}
+
 impl RenderState {
     fn new_with_density(density: f32) -> Self {
         Self {

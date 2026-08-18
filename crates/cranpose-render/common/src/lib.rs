@@ -96,6 +96,10 @@ pub trait RenderScene {
     ///
     /// Returns None if the node no longer exists in the scene (e.g., removed during gesture).
     fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget>;
+
+    fn retained_draw_nodes(&self) -> Option<Vec<cranpose_core::NodeId>> {
+        None
+    }
 }
 
 /// Abstraction implemented by concrete renderer backends.

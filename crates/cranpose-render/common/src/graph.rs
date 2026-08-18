@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::mem::size_of;
 use std::rc::Rc;
 
@@ -557,6 +558,26 @@ impl RenderGraph {
 
     pub fn heap_bytes(&self) -> usize {
         layer_heap_bytes(&self.root)
+    }
+
+    pub fn retained_draw_nodes(&self) -> Vec<NodeId> {
+        fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
+            for child in &layer.children {
+                match child {
+                    RenderNode::DrawRun(run) => {
+                        if let Some(command) = run.command {
+                            nodes.insert(command.node_id);
+                        }
+                    }
+                    RenderNode::Layer(child) => collect(child, nodes),
+                    RenderNode::Primitive(_) => {}
+                }
+            }
+        }
+
+        let mut nodes = HashSet::default();
+        collect(&self.root, &mut nodes);
+        nodes.into_iter().collect()
     }
 }
 

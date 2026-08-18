@@ -634,6 +634,9 @@ where
         } else {
             self.renderer.scene_mut().clear();
         }
+        if let Some(retained_draw_nodes) = self.renderer.scene().retained_draw_nodes() {
+            cranpose_ui::prune_draw_observations_to_nodes(&retained_draw_nodes);
+        }
 
         // Draw FPS overlay if enabled (directly by renderer, no composition)
         if self.dev_options.fps_counter {

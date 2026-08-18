@@ -772,6 +772,11 @@ path = "robot-runners/robot_draw_only_transition_work.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_offscreen_draw_transition"
+path = "robot-runners/robot_offscreen_draw_transition.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_liquid_visual"
 path = "examples/robot_liquid_visual.rs"
 required-features = ["desktop", "robot-app"]

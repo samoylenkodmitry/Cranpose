@@ -142,12 +142,13 @@ pub use render_state::{
     has_current_app_context, has_pending_draw_repasses, has_pending_layout_repasses,
     has_pending_measure_repasses, peek_focus_invalidation, peek_layout_invalidation,
     peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
-    request_focus_invalidation, request_layout_invalidation, request_pointer_invalidation,
-    request_render_invalidation, scale_sp, schedule_draw_repass, schedule_layout_repass,
-    schedule_measure_repass, set_density, set_font_scale, set_font_scale_curve,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_layout_repass_nodes, take_measure_repass_nodes, take_pointer_invalidation,
-    take_render_invalidation, AppContext, AppContextScope, MAX_FONT_SCALE, MIN_FONT_SCALE,
+    prune_draw_observations_to_nodes, request_focus_invalidation, request_layout_invalidation,
+    request_pointer_invalidation, request_render_invalidation, scale_sp, schedule_draw_repass,
+    schedule_layout_repass, schedule_measure_repass, set_density, set_font_scale,
+    set_font_scale_curve, take_draw_repass_nodes, take_focus_invalidation,
+    take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
+    take_pointer_invalidation, take_render_invalidation, AppContext, AppContextScope,
+    MAX_FONT_SCALE, MIN_FONT_SCALE,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollNode, ScrollSettlePolicy, ScrollState};

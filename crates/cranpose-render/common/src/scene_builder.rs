@@ -1242,6 +1242,19 @@ fn draw_nodes(
         // capacity is still published so the buffer waits for the frame this
         // command draws again.
         if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
+            let placement_matches = matches!(
+                (placement, command),
+                (DrawPlacement::Behind, DrawCommand::Behind(_))
+                    | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
+                    | (_, DrawCommand::WithContent(_))
+            );
+            if placement_matches {
+                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
+                    phase,
+                    Some(id),
+                    Vec::new(),
+                )));
+            }
             continue;
         }
         let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
@@ -1268,6 +1281,19 @@ fn draw_nodes(
             store_saved_emission(id, saved);
         }
         if shared.is_empty() && !has_replay_spans {
+            let placement_matches = matches!(
+                (placement, command),
+                (DrawPlacement::Behind, DrawCommand::Behind(_))
+                    | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
+                    | (_, DrawCommand::WithContent(_))
+            );
+            if placement_matches {
+                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
+                    phase,
+                    Some(id),
+                    Vec::new(),
+                )));
+            }
             continue;
         }
         // The frame owns a pinned handle to the exact recording it was
