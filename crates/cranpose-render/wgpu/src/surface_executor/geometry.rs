@@ -1,4 +1,5 @@
 use crate::effect_renderer::CompositeSampleMode;
+use crate::offscreen::composition_bytes_per_pixel;
 use crate::scene::SnapAnchor;
 use crate::surface_plan::TranslatedContentAxes;
 use cranpose_render_common::primitive_emit::resolve_clip;
@@ -60,7 +61,7 @@ pub(crate) fn device_pixel_exact_surface_rect(
 }
 
 pub(crate) fn offscreen_byte_size(width: u32, height: u32) -> u64 {
-    (width as u64) * (height as u64) * 4
+    (width as u64) * (height as u64) * composition_bytes_per_pixel()
 }
 
 pub(crate) fn surface_pixel_rect(rect: Rect, root_scale: f32) -> Rect {
@@ -150,7 +151,9 @@ pub(crate) fn clamp_effect_surface_scale(
         .min(max_texture_dim as f32 / rect.height.max(1.0));
 
     let area = rect.width.max(1.0) * rect.height.max(1.0);
-    let max_scale_by_bytes = ((MAX_EFFECT_LAYER_SURFACE_BYTES as f32) / (area * 4.0)).sqrt();
+    let max_scale_by_bytes = ((MAX_EFFECT_LAYER_SURFACE_BYTES as f32)
+        / (area * composition_bytes_per_pixel() as f32))
+        .sqrt();
     scale = scale.min(max_scale_by_bytes);
 
     scale.max(safe_minimum_scale)
@@ -194,7 +197,7 @@ fn fit_capture_rect_to_scale_budget_with_axis_trimming(
     };
 
     let max_target_extent = max_texture_dim as f32 / target_scale;
-    let max_target_pixels = (MAX_EFFECT_LAYER_SURFACE_BYTES / 4) as f32;
+    let max_target_pixels = (MAX_EFFECT_LAYER_SURFACE_BYTES / composition_bytes_per_pixel()) as f32;
     let mut fitted = rect;
 
     let target_width = (fitted.width.max(1.0) * target_scale).ceil().max(1.0);
@@ -499,9 +502,10 @@ pub(crate) fn quantize_motion_stable_target_scale(
 mod tests {
     use super::{
         axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
-        canonicalized_scaled_rect, clamp_effect_surface_scale, content_effect_pixel_rect,
-        device_pixel_exact_surface_rect, fit_capture_rect_to_scale_budget_for_axes,
-        offscreen_byte_size, quantize_motion_stable_target_scale, snap_dest_quad_to_stable_point,
+        canonicalized_scaled_rect, clamp_effect_surface_scale, composition_bytes_per_pixel,
+        content_effect_pixel_rect, device_pixel_exact_surface_rect,
+        fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
+        quantize_motion_stable_target_scale, snap_dest_quad_to_stable_point,
         snap_motion_stable_dest_quad, surface_target_size,
         translation_stable_anchored_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
     };
@@ -947,7 +951,7 @@ mod tests {
             "a full-screen layer is already budget-bound, so the zoom scale must be clamped"
         );
         // `surface_target_size` ceils each axis, so allow that one row/column.
-        let ceil_slack = ((width as u64) + (height as u64) + 1) * 4;
+        let ceil_slack = ((width as u64) + (height as u64) + 1) * composition_bytes_per_pixel();
         assert!(
             offscreen_byte_size(width, height) <= MAX_EFFECT_LAYER_SURFACE_BYTES + ceil_slack,
             "{width}x{height} = {} bytes exceeds the surface budget",

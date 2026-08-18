@@ -209,7 +209,10 @@ fn composite_dest_viewport(
     source_height: u32,
     sample_mode: CompositeSampleMode,
 ) -> (f32, f32, f32, f32) {
-    if sample_mode != CompositeSampleMode::Box4 {
+    if !matches!(
+        sample_mode,
+        CompositeSampleMode::Box4 | CompositeSampleMode::Nearest
+    ) {
         return (dest_rect.x, dest_rect.y, dest_rect.width, dest_rect.height);
     }
 
@@ -235,8 +238,7 @@ fn exact_translation_sample_mode(
     source_height: u32,
     sample_mode: CompositeSampleMode,
 ) -> CompositeSampleMode {
-    if sample_mode != CompositeSampleMode::Box4
-        || dest_rect.x.fract() != 0.0
+    if dest_rect.x.fract() != 0.0
         || dest_rect.y.fract() != 0.0
         || dest_rect.width != source_width as f32
         || dest_rect.height != source_height as f32
@@ -8249,6 +8251,20 @@ mod tests {
                 CompositeSampleMode::Box4,
             ),
             CompositeSampleMode::Box4
+        );
+        assert_eq!(
+            exact_translation_sample_mode(
+                Rect {
+                    x: 12.0,
+                    y: -1.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+                100,
+                40,
+                CompositeSampleMode::Linear,
+            ),
+            CompositeSampleMode::Nearest
         );
     }
 }

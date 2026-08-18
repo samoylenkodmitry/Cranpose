@@ -271,10 +271,9 @@ impl<F: FnMut() + 'static> IosApp<F> {
                     ..Default::default()
                 });
                 let (width, height) = shell.buffer_size();
-                if let Err(error) =
-                    shell
-                        .renderer()
-                        .render_surface_texture(&frame.texture, &view, width, height)
+                if let Err(error) = shell
+                    .renderer()
+                    .render_surface_texture(&view, width, height)
                 {
                     log::error!("iOS render error: {error:?}");
                 }
@@ -623,7 +622,7 @@ fn ios_surface_config(
         .ok_or(LaunchError::NoSurfaceAlphaMode)?;
     let present_mode = crate::present_mode::select_present_mode(&caps);
     Ok(wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::display_surface_usages(caps.usages),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
         width,
         height,

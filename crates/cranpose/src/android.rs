@@ -839,10 +839,9 @@ fn render_once(
             });
             let (width, height) = shell.buffer_size();
 
-            if let Err(e) =
-                shell
-                    .renderer()
-                    .render_surface_texture(&frame.texture, &view, width, height)
+            if let Err(e) = shell
+                .renderer()
+                .render_surface_texture(&view, width, height)
             {
                 log::error!("Render error: {:?}", e);
             }
@@ -1506,7 +1505,7 @@ fn create_android_surface_config(
         desired_maximum_frame_latency,
     );
     Ok(wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::display_surface_usages(surface_caps.usages),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width,
         height,

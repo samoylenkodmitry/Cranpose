@@ -18,7 +18,7 @@ mod layer_surface_cache;
 mod lazy_resource;
 mod normalized_scene;
 mod offscreen;
-pub use offscreen::display_surface_usages;
+mod output_conversion;
 mod pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 mod pipeline_disk_cache;
@@ -651,24 +651,21 @@ impl WgpuRenderer {
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        self.render_frame(view, None, width, height)
+        self.render_frame(view, width, height)
     }
 
     pub fn render_surface_texture(
         &mut self,
-        texture: &wgpu::Texture,
         view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
-        let root_target = offscreen::OffscreenTarget::from_readable_texture(texture, view);
-        self.render_frame(view, root_target.as_ref(), width, height)
+        self.render_frame(view, width, height)
     }
 
     fn render_frame(
         &mut self,
         view: &wgpu::TextureView,
-        root_target: Option<&offscreen::OffscreenTarget>,
         width: u32,
         height: u32,
     ) -> Result<(), WgpuRendererError> {
@@ -678,7 +675,7 @@ impl WgpuRenderer {
                     .to_string(),
             ));
         };
-        self.frontend.root_target_reads = root_target.is_some();
+        self.frontend.root_target_reads = true;
         let packet = self
             .frontend
             .build_frame_packet(
@@ -696,7 +693,6 @@ impl WgpuRenderer {
         // must never need the context — running bare proves it every frame.
         let result = gpu_renderer.render(
             view,
-            root_target,
             width,
             height,
             packet,
@@ -733,7 +729,7 @@ impl WgpuRenderer {
                     .to_string(),
             ));
         };
-        self.frontend.root_target_reads = offscreen::capture_root_target_reads();
+        self.frontend.root_target_reads = true;
         let packet = self
             .frontend
             .build_frame_packet_with_scale(
@@ -1272,7 +1268,6 @@ impl WgpuRenderer {
         let mut returns = RenderReturns::default();
         let result = gpu_renderer.render(
             view,
-            None,
             width,
             height,
             packet.0,

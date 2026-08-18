@@ -433,14 +433,24 @@ impl FrameStats {
         );
     }
 
-    pub fn record_offscreen_acquire(&self, width: u32, height: u32, is_new: bool) {
+    pub fn record_offscreen_acquire(
+        &self,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        is_new: bool,
+    ) {
         self.offscreen_acquires
             .set(self.offscreen_acquires.get() + 1);
         if is_new {
             self.offscreen_news.set(self.offscreen_news.get() + 1);
         }
-        self.offscreen_total_bytes
-            .set(self.offscreen_total_bytes.get() + (width as u64) * (height as u64) * 4);
+        self.offscreen_total_bytes.set(
+            self.offscreen_total_bytes.get()
+                + (width as u64)
+                    * (height as u64)
+                    * crate::frame_graph::texture_format_bytes_per_pixel(format),
+        );
     }
 
     pub fn record_upload_bytes(&self, bytes: u64) {

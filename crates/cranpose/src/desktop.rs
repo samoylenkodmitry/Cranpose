@@ -2607,7 +2607,6 @@ impl App {
             ..Default::default()
         });
         if let Err(error) = native.app.renderer().render_surface_texture(
-            &output.texture,
             &view,
             native.surface_config.width,
             native.surface_config.height,
@@ -2997,7 +2996,7 @@ fn surface_config_for_window(
     frame_pacing_mode: FramePacingMode,
 ) -> Result<wgpu::SurfaceConfiguration, LaunchError> {
     Ok(wgpu::SurfaceConfiguration {
-        usage: cranpose_render_wgpu::display_surface_usages(surface_caps.usages),
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format: surface_format,
         width,
         height,
@@ -4671,7 +4670,6 @@ impl ApplicationHandler for App {
                     });
 
                     if let Err(err) = app.renderer().render_surface_texture(
-                        &output.texture,
                         &view,
                         surface_config.width,
                         surface_config.height,
