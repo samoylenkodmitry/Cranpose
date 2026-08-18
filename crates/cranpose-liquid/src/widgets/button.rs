@@ -311,7 +311,7 @@ pub fn GlassButton(
     let colors = liquid_colors();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.18);
+        liquid_press_scale(Modifier::empty(), interaction, 1.18);
 
     let material = spec.resolve_material(&colors, spec.content_color(&colors));
     let mut base = Modifier::empty();
@@ -450,7 +450,7 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
     let colors = liquid_colors();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.20);
+        liquid_press_scale(Modifier::empty(), interaction, 1.20);
 
     let material = spec
         .resolve_material(&colors, spec.icon_color(&colors))

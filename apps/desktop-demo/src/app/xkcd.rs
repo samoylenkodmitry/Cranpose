@@ -243,9 +243,9 @@ pub(crate) fn xkcd_tab() {
                         let description =
                             Some(format!("xkcd #{} {}", loaded.comic.num, loaded.comic.title));
                         let h_scroll =
-                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
                         let v_scroll =
-                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+                            cranpose_core::remember(|| ScrollState::new(0.0)).with(|s| *s);
                         Box(
                             Modifier::empty()
                                 .fill_max_width()

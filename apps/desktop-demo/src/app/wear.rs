@@ -163,7 +163,7 @@ pub fn wear_tab() {
     let list = rememberWearScalingListState(CentreAnchor::default());
 
     let tick_state = state.clone();
-    let tick_list = list.clone();
+    let tick_list = list;
     LaunchedEffectAsync!((), move |scope| {
         Box::pin(async move {
             let clock = scope.runtime().frame_clock();
@@ -180,14 +180,14 @@ pub fn wear_tab() {
         })
     });
 
-    let screen_state = list.clone();
+    let screen_state = list;
     let toggle_state = state.clone();
     CranposeBox(
         Modifier::empty().fill_max_size(),
         BoxSpec::default().content_alignment(Alignment::CENTER),
         move || {
-            let list = screen_state.clone();
-            let inner = list.clone();
+            let list = screen_state;
+            let inner = list;
             let toggle_state = toggle_state.clone();
             ScreenScaffold(
                 Modifier::empty()
@@ -200,7 +200,7 @@ pub fn wear_tab() {
                     let toggle_state = toggle_state.clone();
                     WearScalingLazyColumn(
                         Modifier::empty().fill_max_size(),
-                        inner.clone(),
+                        inner,
                         WearScalingLazyColumnSpec::default().content_padding(SIDE, VERTICAL),
                         move |scope| {
                             let rows = rows();

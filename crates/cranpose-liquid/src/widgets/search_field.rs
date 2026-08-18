@@ -58,7 +58,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
         move || {
             let placeholder = placeholder.clone();
             let typography = typography.clone();
-            let state = state.clone();
+            let state = state;
             Row(
                 Modifier::empty().fill_max_width(),
                 RowSpec::default().vertical_alignment(VerticalAlignment::CenterVertically),
@@ -76,7 +76,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                     };
                     let placeholder = placeholder.clone();
                     let placeholder_typography = typography.clone();
-                    let state = state.clone();
+                    let state = state;
                     // The field must fill the pill so it has a non-zero width
                     // (and stays hit-testable) even when empty — otherwise an
                     // empty search field measures to 0px and rejects every tap,
@@ -96,7 +96,7 @@ pub fn LiquidSearchField(modifier: Modifier, state: TextFieldState, spec: Liquid
                                 Text(placeholder.clone(), Modifier::empty(), placeholder_style);
                             }
                             BasicTextField(
-                                state.clone(),
+                                state,
                                 Modifier::empty().fill_max_width(),
                                 field_style.clone(),
                             );

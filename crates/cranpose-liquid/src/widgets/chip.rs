@@ -32,7 +32,7 @@ pub fn LiquidChip(
     let typography = liquid_typography();
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, _pressed, content_alpha) =
-        liquid_press_scale(Modifier::empty(), interaction.clone(), 1.18);
+        liquid_press_scale(Modifier::empty(), interaction, 1.18);
 
     let label_color = animateColorAsState(
         if selected {

@@ -1950,11 +1950,11 @@ pub fn LiquidUiTab() {
         move || {
             let menu_gesture = menu_gesture.clone();
             let colors = liquid_colors();
-            let scroll = remember(|| ScrollState::new(0.0)).with(|s| s.clone());
+            let scroll = remember(|| ScrollState::new(0.0)).with(|s| *s);
             super::TEST_LIQUID_SCROLL_STATE.with(|cell| {
-                *cell.borrow_mut() = Some(scroll.clone());
+                *cell.borrow_mut() = Some(scroll);
             });
-            let scroll_for_bar = scroll.clone();
+            let scroll_for_bar = scroll;
             // The menu anchors to the REAL composited rects of the Featured
             // videos card's trailing circles (window coords via
             // report_window_rect) — never guessed offsets.
@@ -2018,7 +2018,7 @@ pub fn LiquidUiTab() {
                     Column(
                         Modifier::empty()
                             .fill_max_size()
-                            .vertical_scroll(scroll.clone(), false)
+                            .vertical_scroll(scroll, false)
                             .padding_each(
                                 PAGE_PADDING,
                                 liquid_nav_bar_expanded_height() + 8.0,
@@ -2357,7 +2357,7 @@ pub fn LiquidUiTab() {
                     LiquidNavBar(
                         Modifier::empty().fill_max_width(),
                         LiquidNavBarSpec::new("WWDC"),
-                        scroll_for_bar.clone(),
+                        scroll_for_bar,
                         || {},
                         || {},
                     );

@@ -827,7 +827,7 @@ pub fn LiquidMenuIconButton(
 ) {
     let interaction = rememberMutableInteractionSource();
     let (pressed_modifier, _, content_alpha) =
-        crate::motion::liquid_press_scale(Modifier::empty(), interaction.clone(), 1.12);
+        crate::motion::liquid_press_scale(Modifier::empty(), interaction, 1.12);
     let trigger_visual = cranpose_animation::animate_float_as_state_with_initial(
         1.0,
         if covered { 0.0 } else { 1.0 },
@@ -864,12 +864,10 @@ pub fn LiquidMenuIconButton(
         .pointer_input(gesture.id(), {
             let gesture = gesture.clone();
             let gate = Rc::clone(&gate);
-            let interaction = interaction.clone();
             let on_open = Rc::clone(&on_open);
             move |scope: PointerInputScope| {
                 let gesture = gesture.clone();
                 let gate = Rc::clone(&gate);
-                let interaction = interaction.clone();
                 let on_open = Rc::clone(&on_open);
                 async move {
                     scope

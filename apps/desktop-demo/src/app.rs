@@ -359,8 +359,7 @@ fn cached_current_depth_text(depth: usize) -> Rc<cranpose_ui::text::AnnotatedStr
 #[allow(non_snake_case)]
 #[composable]
 pub(crate) fn ScrollableTab(content: impl FnMut() + 'static) {
-    let scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| s.clone());
+    let scroll_state = cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|s| *s);
     let modifier = Modifier::empty()
         .fill_max_size()
         .vertical_scroll(scroll_state, false);
@@ -410,7 +409,7 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 #[composable]
 fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
     let tabs_scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
         Modifier::empty()
             .fill_max_width()
@@ -691,9 +690,8 @@ fn picker_button(label: &'static str, on_click: impl FnMut() + 'static) {
 fn text_input_example() {
     // Create text field states using cranpose_core::remember
     let text_state1 =
-        cranpose_core::remember(|| TextFieldState::new("Type here...")).with(|state| state.clone());
-    let text_state2 =
-        cranpose_core::remember(|| TextFieldState::new("")).with(|state| state.clone());
+        cranpose_core::remember(|| TextFieldState::new("Type here...")).with(|state| *state);
+    let text_state2 = cranpose_core::remember(|| TextFieldState::new("")).with(|state| *state);
 
     Column(
         Modifier::empty()
@@ -731,7 +729,7 @@ fn text_input_example() {
 
             // Text field with background styling
             {
-                let state = text_state1.clone();
+                let state = text_state1;
                 BasicTextField(
                     state,
                     Modifier::empty()
@@ -780,7 +778,7 @@ fn text_input_example() {
             });
 
             {
-                let state = text_state2.clone();
+                let state = text_state2;
                 BasicTextField(
                     state,
                     Modifier::empty()
@@ -813,12 +811,12 @@ fn text_input_example() {
                 Modifier::empty().fill_max_width(),
                 RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(8.0)),
                 {
-                    let state1 = text_state1.clone();
-                    let state2 = text_state2.clone();
+                    let state1 = text_state1;
+                    let state2 = text_state2;
                     move || {
                         // Clear button
                         {
-                            let state = state1.clone();
+                            let state = state1;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -845,7 +843,7 @@ fn text_input_example() {
 
                         // Add text button
                         {
-                            let state = state1.clone();
+                            let state = state1;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -876,8 +874,8 @@ fn text_input_example() {
 
                         // Copy to second field
                         {
-                            let from = state1.clone();
-                            let to = state2.clone();
+                            let from = state1;
+                            let to = state2;
                             Button(
                                 Modifier::empty()
                                     .rounded_corners(8.0)
@@ -930,7 +928,7 @@ fn text_input_example() {
                         "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
                     )
                 })
-                .with(|state| state.clone());
+                .with(|state| *state);
                 let mut style = TextStyle::default();
                 style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
                 style.paragraph_style.line_height = cranpose_ui::text::TextUnit::Sp(24.0);
@@ -980,7 +978,7 @@ fn text_input_example() {
                             "Silence. Melody. Then beats. Subtle electronics                          weave through mantra trance, pulsing, catching                          melodies that rise and dissolve like glass.",
                         )
                     })
-                    .with(|state| state.clone());
+                    .with(|state| *state);
                     let mut style = TextStyle::default();
                     style.span_style.font_size = cranpose_ui::text::TextUnit::Sp(16.0);
                     style.span_style.color = Some(Color(0.1, 0.1, 0.12, 1.0));
