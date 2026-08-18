@@ -166,8 +166,6 @@ private final class BridgeState: @unchecked Sendable {
 /// `productIdsJoined` is a newline-separated list — product ids are
 /// `[A-Za-z0-9._-]`, so a newline cannot occur inside one and no escaping or
 /// JSON parser is needed on either side.
-///
-/// Safe to call again after the transaction listener exits.
 @_cdecl("cranpose_storekit_start")
 public func cranpose_storekit_start(
     _ productIdsJoined: UnsafePointer<CChar>,

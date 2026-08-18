@@ -1,9 +1,5 @@
 //! Sound effects and music — the audio analogue of [`haptics`](crate::haptics).
 //!
-//! The compiled-in default is a no-op that still hands out real [`SoundId`]s,
-//! so an app composes and runs unchanged on
-//! a target with no audio backend.
-//!
 //! ```rust,ignore
 //! # use cranpose_services::*;
 //! const CUES: &[SoundSpec] = &[
