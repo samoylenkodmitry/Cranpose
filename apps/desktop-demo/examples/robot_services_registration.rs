@@ -68,6 +68,10 @@ impl Purchases for RegisteredPurchases {
     fn take_event(&self) -> Option<PurchaseEvent> {
         None
     }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    fn reconnect(&self) {}
 }
 
 struct RegisteredNetwork;
@@ -79,6 +83,10 @@ impl NetworkMonitor for RegisteredNetwork {
             metered: true,
         }
     }
+    fn is_alive(&self) -> bool {
+        true
+    }
+    fn reconnect(&self) {}
 }
 
 struct RecoveringPurchases {
@@ -93,7 +101,7 @@ impl Purchases for RecoveringPurchases {
             phase: if self.connected.load(Ordering::Acquire) {
                 StorePhase::Ready
             } else {
-                StorePhase::Disconnected
+                StorePhase::Unavailable
             },
             ..StoreState::default()
         }
