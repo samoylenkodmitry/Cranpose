@@ -104,18 +104,27 @@ fn log_desktop_frame_telemetry(
 fn pump_robot_frame(
     app: &mut AppShell<WgpuRenderer>,
     registry: &Rc<native_window::NativeWindowRegistry>,
-) {
+) -> FrameUpdateResult {
+    let mut result = FrameUpdateResult::default();
     for _ in 0..3 {
         if !robot_query_should_drain_frame(app) {
             break;
         }
-        update_app_with_native_window_registry(app, registry);
+        let frame_result = update_app_with_native_window_registry(app, registry);
+        result.visual_changed |= frame_result.visual_changed;
+        result.structure_changed |= frame_result.structure_changed;
     }
+    result
 }
 
 #[cfg(feature = "robot")]
 fn robot_query_should_drain_frame(app: &AppShell<WgpuRenderer>) -> bool {
     app.needs_redraw()
+}
+
+#[cfg(feature = "robot")]
+fn robot_query_visual_dirty(update_result: FrameUpdateResult, needs_redraw: bool) -> bool {
+    update_result.visual_changed || needs_redraw
 }
 
 /// Robot controller for the event loop
@@ -2632,6 +2641,7 @@ impl App {
         }
         let after_render = Instant::now();
 
+        native.window.pre_present_notify();
         output.present();
         let after_present = Instant::now();
         native.surface_dirty = false;
@@ -4695,6 +4705,7 @@ impl ApplicationHandler for App {
                     }
                     let after_render = Instant::now();
 
+                    window.pre_present_notify();
                     output.present();
                     let after_present = Instant::now();
                     record_pacing_event(|diag| &mut diag.presents);
@@ -4972,22 +4983,30 @@ impl ApplicationHandler for App {
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
                     RobotCommand::GetSemantics => {
-                        pump_robot_frame(app, &registry);
+                        let update_result = pump_robot_frame(app, &registry);
+                        robot_visual_dirty |=
+                            robot_query_visual_dirty(update_result, app.needs_redraw());
                         let semantics = extract_semantics(app);
                         let _ = controller.tx.send(RobotResponse::Semantics(semantics));
                     }
                     RobotCommand::FindText { text, match_kind } => {
-                        pump_robot_frame(app, &registry);
+                        let update_result = pump_robot_frame(app, &registry);
+                        robot_visual_dirty |=
+                            robot_query_visual_dirty(update_result, app.needs_redraw());
                         let result = find_text_in_app(app, &text, match_kind);
                         let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
                     }
                     RobotCommand::FindButton { text, match_kind } => {
-                        pump_robot_frame(app, &registry);
+                        let update_result = pump_robot_frame(app, &registry);
+                        robot_visual_dirty |=
+                            robot_query_visual_dirty(update_result, app.needs_redraw());
                         let result = find_button_in_app(app, &text, match_kind);
                         let _ = controller.tx.send(RobotResponse::SemanticQuery(result));
                     }
                     RobotCommand::GetScreenshot => {
-                        pump_robot_frame(app, &registry);
+                        let update_result = pump_robot_frame(app, &registry);
+                        robot_visual_dirty |=
+                            robot_query_visual_dirty(update_result, app.needs_redraw());
                         match capture_screenshot(app) {
                             Ok(screenshot) => {
                                 let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
@@ -4998,7 +5017,9 @@ impl ApplicationHandler for App {
                         }
                     }
                     RobotCommand::GetScreenshotWithScale(scale) => {
-                        pump_robot_frame(app, &registry);
+                        let update_result = pump_robot_frame(app, &registry);
+                        robot_visual_dirty |=
+                            robot_query_visual_dirty(update_result, app.needs_redraw());
                         match capture_screenshot_with_scale(app, scale) {
                             Ok(screenshot) => {
                                 let _ = controller.tx.send(RobotResponse::Screenshot(screenshot));
@@ -5876,9 +5897,11 @@ mod tests {
     #[cfg(feature = "robot")]
     use super::{
         parse_robot_capture_scale, resolve_robot_screenshot_params,
-        resolve_robot_screenshot_params_with_scale, robot_visible_present_target,
-        robot_visible_pump_present_target, RobotController,
+        resolve_robot_screenshot_params_with_scale, robot_query_visual_dirty,
+        robot_visible_present_target, robot_visible_pump_present_target, RobotController,
     };
+    #[cfg(feature = "robot")]
+    use cranpose_app_shell::FrameUpdateResult;
 
     #[test]
     fn native_window_screen_position_is_declarative() {
@@ -6012,6 +6035,26 @@ mod tests {
             source.contains("app.needs_redraw()"),
             "robot query drains should apply visible redraw work without advancing update-only frames"
         );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn desktop_robot_queries_schedule_presentation_for_drained_visual_updates() {
+        assert!(robot_query_visual_dirty(
+            FrameUpdateResult {
+                visual_changed: true,
+                structure_changed: false,
+            },
+            false,
+        ));
+        assert!(robot_query_visual_dirty(FrameUpdateResult::default(), true,));
+        assert!(!robot_query_visual_dirty(
+            FrameUpdateResult {
+                visual_changed: false,
+                structure_changed: true,
+            },
+            false,
+        ));
     }
 
     #[test]
