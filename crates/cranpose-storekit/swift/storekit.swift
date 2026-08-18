@@ -187,6 +187,9 @@ public func cranpose_storekit_start(
         // `blocked`, not `unavailable`: the OS version cannot change while the
         // app runs, so there is nothing here for a retry to reach.
         sink.send(.phase, PhaseCode.blocked.rawValue, 0, "StoreKit 2 requires iOS 15 / macOS 12")
+        if let generation {
+            BridgeState.shared.listenerEnded(generation)
+        }
         return
     }
 
