@@ -2076,6 +2076,18 @@ fn every_store_backend_tells_the_app_rather_than_leaving_it_to_ask() {
     }
 }
 
+#[test]
+fn storekit_bridge_exposes_listener_liveness_and_rebuilds_it() {
+    let apple = workspace_source("crates/cranpose-storekit/src/apple.rs");
+    let swift = workspace_source("crates/cranpose-storekit/swift/storekit.swift");
+    assert!(apple.contains("cranpose_storekit_is_connected"));
+    assert!(apple.contains("fn is_connected(&self) -> bool"));
+    assert!(swift.contains("cranpose_storekit_is_connected"));
+    assert!(swift.contains("_listenerActive"));
+    assert!(swift.contains("_listenerActive = false"));
+    assert!(swift.contains("if !_listenerActive"));
+}
+
 /// Every Gradle task that runs `cargo ndk` must declare the directory it writes
 /// as an output.
 ///
