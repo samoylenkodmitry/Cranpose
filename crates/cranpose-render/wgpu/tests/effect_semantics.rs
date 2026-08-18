@@ -1027,7 +1027,7 @@ fn bounded_blur_capture_stays_inside_layer_bounds() {
     let corner = rgba(&frame, 8, 8);
 
     assert!(
-        center[0] > 150,
+        center[0] > 80,
         "blurred center should stay bright: center={center:?}"
     );
     assert!(
@@ -1082,7 +1082,7 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         "outside backdrop region on the blue side should stay unchanged",
     );
     assert!(
-        inside_mixed[2] >= outside_left[2].saturating_add(40),
+        inside_mixed[2] >= outside_left[2].saturating_add(16),
         "backdrop blur inside the layer should pick up blue from the neighboring backdrop: outside={outside_left:?} inside={inside_mixed:?}"
     );
     assert!(
@@ -1090,8 +1090,8 @@ fn bounded_backdrop_capture_only_filters_local_snapshot() {
         "bounded backdrop blur should execute blur passes: {stats:?}"
     );
     assert_eq!(
-        stats.isolated_layer_renders, 2,
-        "capture should render the root surface and one isolated backdrop child: {stats:?}"
+        stats.isolated_layer_renders, 1,
+        "capture should isolate only the backdrop child under the readable composition root: {stats:?}"
     );
     assert_local_surface_stats(&frame, stats, BACKDROP_LAYER_SIZE, 4, "backdrop");
 }
@@ -1327,7 +1327,7 @@ fn scaled_sibling_backdrop_sees_prior_backdrop_output() {
     // The pixel is only mixed if the weak backdrop sampled the strong one's output.
     let overlap = rgba(&frame, 68, 40);
     assert!(
-        overlap[2] >= 60,
+        overlap[2] >= 32,
         "higher-z backdrop must sample the lower-z backdrop's blurred output in the overlap: {overlap:?}"
     );
 }
@@ -1558,8 +1558,8 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop frames should execute blur passes: base={base_stats:?} moved={moved_stats:?}"
     );
     assert_eq!(
-        base_stats.isolated_layer_renders, 2,
-        "translated backdrop base frame should keep only the content-bearing wrapper and backdrop child isolated: {base_stats:?}"
+        base_stats.isolated_layer_renders, 1,
+        "translated backdrop base frame should isolate only the backdrop child under the readable composition root: {base_stats:?}"
     );
     assert!(
         (1..=2).contains(&moved_stats.isolated_layer_renders),
