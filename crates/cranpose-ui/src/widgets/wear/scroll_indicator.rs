@@ -168,7 +168,7 @@ pub fn ScrollIndicator(
     state: WearScalingListState,
     spec: ScrollIndicatorSpec,
 ) -> NodeId {
-    let draw_state = state.clone();
+    let draw_state = state;
     Canvas(
         modifier.fill_max_size(),
         move |scope: &mut dyn DrawScope| {

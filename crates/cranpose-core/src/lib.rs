@@ -1127,6 +1127,9 @@ pub trait Node: Any {
         out.clear();
         out.extend(self.children());
     }
+    fn collect_owned_children_into(&self, out: &mut SmallVec<[NodeId; 8]>) {
+        self.collect_children_into(out);
+    }
     /// Called after the node is created to record its own ID.
     /// Useful for nodes that need to store their ID for later operations.
     fn set_node_id(&mut self, _id: NodeId) {}
@@ -3436,15 +3439,6 @@ impl MemoryApplier {
             .ok_or(NodeError::Missing { id })
     }
 
-    fn collect_node_children_into(
-        &self,
-        id: NodeId,
-        out: &mut SmallVec<[NodeId; 8]>,
-    ) -> Result<(), NodeError> {
-        self.get_ref(id)?.collect_children_into(out);
-        Ok(())
-    }
-
     fn node_parent(&self, id: NodeId) -> Result<Option<NodeId>, NodeError> {
         Ok(self.get_ref(id)?.parent())
     }
@@ -3454,7 +3448,7 @@ impl MemoryApplier {
         node_id: NodeId,
         out: &mut SmallVec<[NodeId; 8]>,
     ) -> Result<(), NodeError> {
-        self.collect_node_children_into(node_id, out)?;
+        self.get_ref(node_id)?.collect_owned_children_into(out);
         out.retain(|child_id| {
             self.node_parent(*child_id)
                 .map(|parent| parent == Some(node_id))

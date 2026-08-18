@@ -265,7 +265,7 @@ pub fn BasicTextFieldWithOptions(
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
 
     // Build the text field element with line limits + the handle controller.
-    let text_field_element = TextFieldElement::new(state.clone(), options.text_style.clone())
+    let text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits)
         .with_handle_controller(controller.clone());
@@ -287,11 +287,7 @@ pub fn BasicTextFieldWithOptions(
     // nearest scroll container's `BringIntoViewResponder` to reveal the caret on
     // focus / caret move / keyboard animation. No-op without a scrollable
     // ancestor or when the caret already fits.
-    BringCaretIntoView(
-        state.clone(),
-        options.text_style.clone(),
-        controller.clone(),
-    );
+    BringCaretIntoView(state, options.text_style.clone(), controller.clone());
 
     // Direct-manipulation selection handles: a caret handle for a collapsed
     // selection, start/end lollipops for a range. Mouse, touch and pen share
@@ -457,7 +453,7 @@ fn SelectionHandles(
                 press_watcher.set(Some(key));
                 let watcher = Rc::new(LongPressWatcher {
                     controller: controller.clone(),
-                    state: state.clone(),
+                    state,
                     style: style.clone(),
                     start: press.start,
                     start_nanos: Cell::new(None),
@@ -527,7 +523,7 @@ fn SelectionHandles(
             LineAffinity::Upstream,
         );
         let on_drag = drag_caret_closure(
-            state.clone(),
+            state,
             style.clone(),
             controller.clone(),
             Rc::clone(&drag_bias),
@@ -536,7 +532,6 @@ fn SelectionHandles(
         // the caret's current offset so it auto-dismisses when the caret moves.
         let open_caret_menu = {
             let caret_menu_offset = Rc::clone(&caret_menu_offset);
-            let state = state.clone();
             move || {
                 caret_menu_offset.set(state.selection().start);
                 caret_menu_open.set(true);
@@ -578,8 +573,8 @@ fn SelectionHandles(
             let can_paste = clipboard_can_paste();
             let can_undo = state.can_undo();
             let can_redo = state.can_redo();
-            let undo_state = state.clone();
-            let redo_state = state.clone();
+            let undo_state = state;
+            let redo_state = state;
             CaretActionMenu(
                 tip.x,
                 tip.y - metrics.glyph_box.1,
@@ -619,7 +614,7 @@ fn SelectionHandles(
         let last_dragged_end = Rc::clone(&last_dragged);
         let on_drag_start = drag_edge_closure(
             HandleKind::SelectionStart,
-            state.clone(),
+            state,
             style.clone(),
             controller.clone(),
             Rc::clone(&drag_bias),
@@ -659,7 +654,7 @@ fn SelectionHandles(
 
         let on_drag_end = drag_edge_closure(
             HandleKind::SelectionEnd,
-            state.clone(),
+            state,
             style.clone(),
             controller.clone(),
             Rc::clone(&drag_bias),

@@ -2729,6 +2729,7 @@ struct ReplaySlot {
     /// for the life of the capture, so bundle keys need nothing beyond the
     /// capture epoch they already carry.
     has_gradient: bool,
+    segment_surface_safe: bool,
     /// Per-shape capture-space fill records for the `CRANPOSE_FILL_DIAG`
     /// instrument (`shape_count` entries): submitted area (mesh triangles
     /// when this slot replays its arc mesh, bounding quads otherwise),
@@ -12898,6 +12899,9 @@ impl GpuRenderer {
         // Seed the mutable paint from the converted colors, so an unpatched
         // replay renders bit-identically to the capture frame.
         let paint: Vec<[f32; 4]> = shape_data.iter().map(|shape| shape.color).collect();
+        let segment_surface_safe = shape_data
+            .iter()
+            .all(|shape| shape.brush_type == 0 && shape.color[3] == 1.0);
         let paint_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Replay Paint Buffer"),
             size: (std::mem::size_of::<[f32; 4]>() * shape_count) as u64,
@@ -12957,6 +12961,7 @@ impl GpuRenderer {
                 mesh,
                 capture_epoch,
                 has_gradient: total_gradient_stops > 0,
+                segment_surface_safe,
                 fill_diag_shapes,
                 shape_aabbs,
                 area_prefix,
@@ -13088,6 +13093,9 @@ impl GpuRenderer {
                     let Some(slot) = self.replay_slots.slots.get(&retained.slot) else {
                         continue;
                     };
+                    if !slot.segment_surface_safe {
+                        continue;
+                    }
                     let first = retained.first_shape.min(slot.shape_count);
                     let last = retained
                         .first_shape

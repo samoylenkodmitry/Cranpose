@@ -323,7 +323,7 @@ pub fn place_rows_with(
     let mut cursor = run.anchor_top;
     for (index, &height) in heights.iter().enumerate().skip(anchor) {
         let row = place(cursor, height);
-        cursor += row.reported_height + run.gap;
+        cursor += height + run.gap;
         out[index] = row;
     }
     // Upward the cursor is the next row's BOTTOM, and the ramp is still read
@@ -333,7 +333,7 @@ pub fn place_rows_with(
         let height = heights[index];
         bottom -= run.gap;
         let row = place(bottom - height, height);
-        bottom -= row.reported_height;
+        bottom -= height;
         out[index] = row;
     }
 }

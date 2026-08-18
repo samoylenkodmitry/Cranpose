@@ -5,6 +5,7 @@ use std::rc::Rc;
 use cranpose_core::{
     self, Applier, ConcreteApplierHost, MutableState, SlotTable, SlotsHost, SnapshotStateObserver,
 };
+use smallvec::SmallVec;
 
 #[derive(Default)]
 struct DummyNode;
@@ -451,6 +452,13 @@ fn active_children_follow_last_rendered_placements() {
 
     assert_eq!(node.active_children(), vec![33, 44]);
     assert_eq!(cranpose_core::Node::children(&node), vec![33, 44]);
+
+    node.handle().set_active_children(Vec::<NodeId>::new());
+    assert!(node.active_children().is_empty());
+
+    let mut owned = SmallVec::<[NodeId; 8]>::new();
+    cranpose_core::Node::collect_owned_children_into(&node, &mut owned);
+    assert_eq!(owned.as_slice(), &[11, 22]);
 }
 
 #[test]

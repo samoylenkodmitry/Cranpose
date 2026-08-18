@@ -945,7 +945,6 @@ fn task_counts_across_subcompose_swap(shape: usize) -> Vec<usize> {
 }
 
 #[test]
-#[ignore = "issue 433: loops two subcompose levels deep never stop"]
 fn a_swipe_row_that_leaves_the_screen_stops_the_loops_it_showed() {
     assert_eq!(
         task_counts_across_swipe_swap(),
@@ -964,7 +963,6 @@ fn a_box_with_constraints_that_leaves_the_screen_stops_the_loops_it_showed() {
 }
 
 #[test]
-#[ignore = "issue 433: loops two subcompose levels deep never stop"]
 fn two_nested_boxes_with_constraints_stop_the_loops_they_showed() {
     assert_eq!(
         task_counts_across_two_constraints_swap(),
@@ -1046,7 +1044,6 @@ fn task_counts_across_screen_swaps(rounds: usize) -> Vec<usize> {
 }
 
 #[test]
-#[ignore = "issue 433: loops two subcompose levels deep never stop"]
 fn a_lazy_list_that_leaves_the_screen_stops_the_loops_of_its_rows() {
     assert_eq!(
         task_counts_across_screen_swaps(1),
@@ -1056,7 +1053,6 @@ fn a_lazy_list_that_leaves_the_screen_stops_the_loops_of_its_rows() {
 }
 
 #[test]
-#[ignore = "issue 433: loops two subcompose levels deep never stop"]
 fn a_lazy_list_that_comes_back_keeps_one_pair_of_loops() {
     assert_eq!(
         task_counts_across_screen_swaps(4),

@@ -42,11 +42,12 @@
 //! window origin (the fullscreen viewer case) and approximate otherwise.
 
 use crate::modifier::{Modifier, PointerEventKind};
-use cranpose_core::{ownedMutableStateOf, OwnedMutableState};
+use cranpose_core::{MutableState, OwnedMutableState};
 use cranpose_foundation::nodes::input::gestures::{TransformGesture, TransformGestureEvent};
 use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
 use std::cell::{Cell, RefCell};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use web_time::Instant;
 
@@ -70,9 +71,9 @@ fn distance(a: Point, b: Point) -> f32 {
 /// Shared zoom/pan transform state for `Modifier::zoomable`.
 ///
 /// Cloning shares the same underlying state (like `ScrollState`).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct ZoomState {
-    inner: Rc<ZoomStateInner>,
+    inner: MutableState<Rc<ZoomStateInner>>,
 }
 
 struct ZoomStateInner {
@@ -105,54 +106,70 @@ impl ZoomState {
             min_scale > 0.0 && max_scale >= min_scale,
             "invalid zoom range {min_scale}..{max_scale}"
         );
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("ZoomState::with_scale_range requires an active runtime");
         Self {
-            inner: Rc::new(ZoomStateInner {
-                scale: ownedMutableStateOf(1.0f32.clamp(min_scale, max_scale)),
-                offset_x: ownedMutableStateOf(0.0f32),
-                offset_y: ownedMutableStateOf(0.0f32),
-                min_scale: Cell::new(min_scale),
-                max_scale: Cell::new(max_scale),
-            }),
+            inner: MutableState::with_runtime(
+                Rc::new(ZoomStateInner {
+                    scale: OwnedMutableState::with_runtime(
+                        1.0f32.clamp(min_scale, max_scale),
+                        runtime.clone(),
+                    ),
+                    offset_x: OwnedMutableState::with_runtime(0.0f32, runtime.clone()),
+                    offset_y: OwnedMutableState::with_runtime(0.0f32, runtime.clone()),
+                    min_scale: Cell::new(min_scale),
+                    max_scale: Cell::new(max_scale),
+                }),
+                runtime,
+            ),
         }
+    }
+
+    fn inner(&self) -> Rc<ZoomStateInner> {
+        self.inner.get_non_reactive()
     }
 
     /// Stable identity of this state (shared across clones).
     pub fn id(&self) -> u64 {
-        Rc::as_ptr(&self.inner) as usize as u64
+        let mut hasher = DefaultHasher::new();
+        self.inner.runtime_state_id().hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Current scale (reactive — subscribes the caller to changes).
     pub fn scale(&self) -> f32 {
-        self.inner.scale.with(|s| *s)
+        self.inner().scale.with(|s| *s)
     }
 
     /// Current scale without snapshot subscription.
     pub fn scale_non_reactive(&self) -> f32 {
-        self.inner.scale.get_non_reactive()
+        self.inner().scale.get_non_reactive()
     }
 
     /// Current pan offset in dp (reactive).
     pub fn offset(&self) -> Point {
+        let inner = self.inner();
         Point {
-            x: self.inner.offset_x.with(|v| *v),
-            y: self.inner.offset_y.with(|v| *v),
+            x: inner.offset_x.with(|v| *v),
+            y: inner.offset_y.with(|v| *v),
         }
     }
 
     /// Current pan offset without snapshot subscription.
     pub fn offset_non_reactive(&self) -> Point {
+        let inner = self.inner();
         Point {
-            x: self.inner.offset_x.get_non_reactive(),
-            y: self.inner.offset_y.get_non_reactive(),
+            x: inner.offset_x.get_non_reactive(),
+            y: inner.offset_y.get_non_reactive(),
         }
     }
 
     pub fn min_scale(&self) -> f32 {
-        self.inner.min_scale.get()
+        self.inner().min_scale.get()
     }
 
     pub fn max_scale(&self) -> f32 {
-        self.inner.max_scale.get()
+        self.inner().max_scale.get()
     }
 
     /// Whether the content is currently transformed away from identity.
@@ -175,13 +192,14 @@ impl ZoomState {
     /// Sets the scale directly (clamped to the configured range).
     pub fn set_scale(&self, scale: f32) {
         let clamped = scale.clamp(self.min_scale(), self.max_scale());
-        self.inner.scale.set(clamped);
+        self.inner().scale.set(clamped);
     }
 
     /// Sets the pan offset directly.
     pub fn set_offset(&self, offset: Point) {
-        self.inner.offset_x.set(offset.x);
-        self.inner.offset_y.set(offset.y);
+        let inner = self.inner();
+        inner.offset_x.set(offset.x);
+        inner.offset_y.set(offset.y);
     }
 
     /// Resets to identity (scale clamped into range, zero offset).
@@ -222,7 +240,7 @@ impl ZoomState {
         };
 
         if new_scale != old_scale {
-            self.inner.scale.set(new_scale);
+            self.inner().scale.set(new_scale);
         }
         if new_offset != old_offset {
             self.set_offset(new_offset);
@@ -305,7 +323,6 @@ impl Modifier {
         let key = state.id();
 
         self.pointer_input(key, move |scope| {
-            let state = state.clone();
             let gesture_state = gesture_state.clone();
 
             async move {

@@ -1353,14 +1353,14 @@ fn scroll_impl(
     });
 
     // Set up pointer input handler
-    let scroll_state = state.clone();
+    let scroll_state = state;
     let pointer_motion_context = motion_context.clone();
     let key = (state.id(), is_vertical);
     let pointer_input = Modifier::empty().pointer_input(key, move |scope| {
         // Create detector inside the async closure to capture the cloned state
         let detector = ScrollGestureDetector::new(
             gesture_state.clone(),
-            scroll_state.clone(),
+            scroll_state,
             is_vertical,
             false, // ScrollState handles reversing in layout, not input
             pointer_motion_context.clone(),
@@ -1440,7 +1440,7 @@ fn scroll_impl(
     });
 
     // Create layout modifier for applying scroll offset to content
-    let element = ScrollElement::new(state.clone(), is_vertical, reverse_scrolling);
+    let element = ScrollElement::new(state, is_vertical, reverse_scrolling);
     let layout_modifier =
         Modifier::with_element(element).with_inspector_metadata(inspector_metadata(
             if is_vertical {

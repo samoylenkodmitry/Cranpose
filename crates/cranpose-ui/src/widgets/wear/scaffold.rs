@@ -66,7 +66,7 @@ where
         move || {
             content();
             if spec.show_indicator {
-                ScrollIndicator(Modifier::empty(), state.clone(), spec.indicator);
+                ScrollIndicator(Modifier::empty(), state, spec.indicator);
             }
         },
     )

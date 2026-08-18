@@ -632,6 +632,11 @@ path = "robot-runners/robot_pressed_state.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_reactive_handle_copy"
+path = "robot-runners/robot_reactive_handle_copy.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_scroll_bug"
 path = "robot-runners/robot_scroll_bug.rs"
 required-features = ["robot-app"]
@@ -752,6 +757,16 @@ path = "robot-runners/robot_renderer_micro_contract.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_renderer_pixel_precision"
+path = "robot-runners/robot_renderer_pixel_precision.rs"
+required-features = ["robot-app"]
+
+[[example]]
+name = "robot_idle_transition_work"
+path = "robot-runners/robot_idle_transition_work.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_liquid_visual"
 path = "examples/robot_liquid_visual.rs"
 required-features = ["desktop", "robot-app"]
@@ -859,4 +874,9 @@ required-features = ["desktop", "robot-app"]
 [[example]]
 name = "idle_burn_probe"
 path = "examples/idle_burn_probe.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_subcompose_loop_disposal"
+path = "examples/robot_subcompose_loop_disposal.rs"
 required-features = ["desktop", "robot-app"]

@@ -42,6 +42,7 @@ fn record_frame(
     breathe: bool,
     twinkle_churn: bool,
     recolor_at: Option<usize>,
+    fractional_grid: bool,
 ) -> DrawScopeDefault {
     let mut scope =
         DrawScopeDefault::new(cranpose_ui_graphics::Size::new(SIZE as f32, SIZE as f32));
@@ -54,6 +55,17 @@ fn record_frame(
         },
         Brush::solid(Color(0.02, 0.02, 0.05, 1.0)),
     );
+    if fractional_grid {
+        for y in 0..23 {
+            for x in 0..23 {
+                scope.draw_circle(
+                    Brush::solid(Color(47.0 / 255.0, 168.0 / 255.0, 245.0 / 255.0, 0.82)),
+                    Point::new(9.0 + x as f32 * 17.0, 9.0 + y as f32 * 17.0),
+                    9.5,
+                );
+            }
+        }
+    }
     // Leading dynamic span: movers whose count changes every frame.
     for m in 0..(2 + frame % 3) {
         let x = 30.0 + frame as f32 * 7.0 + m as f32 * 15.0;
@@ -135,6 +147,7 @@ fn build_sequence(
     breathe: bool,
     twinkle_churn: bool,
     recolor_at: Option<usize>,
+    fractional_grid: bool,
 ) -> Vec<RenderGraph> {
     let mut state = CommandReplayState::default();
     let command = DrawCommandId {
@@ -144,7 +157,14 @@ fn build_sequence(
     };
     (0..frames)
         .map(|frame| {
-            let scope = record_frame(frame, rotate, breathe, twinkle_churn, recolor_at);
+            let scope = record_frame(
+                frame,
+                rotate,
+                breathe,
+                twinkle_churn,
+                recolor_at,
+                fractional_grid,
+            );
             let outcome = state.advance(scope.recorded());
             let center = state.center();
             let (finished, replay) = scope.finish_replay(center, outcome, &mut |_| false);
@@ -296,7 +316,7 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
     const FRAMES: usize = 24;
     const RECOLOR_AT: usize = 16;
     set_common_env();
-    let graphs = build_sequence(FRAMES, false, false, false, Some(RECOLOR_AT));
+    let graphs = build_sequence(FRAMES, false, false, false, Some(RECOLOR_AT), false);
     // First run warms the flat detector's pass-position state; the CONTROL
     // is the second run, exactly as command_feed_parity compares bypassed
     // frames against `fed2`, not the first fed run — the detector renders
@@ -353,6 +373,33 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
     }
 }
 
+#[test]
+fn fractional_alpha_retained_surface_matches_float_blending() {
+    let mut renderer = match support::headless_renderer() {
+        Ok(renderer) => renderer,
+        Err(err) => {
+            eprintln!(
+                "skipping fractional retained surface probe: headless WGPU init failed: {err}"
+            );
+            return;
+        }
+    };
+    set_common_env();
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", "6.0");
+    let graphs = build_sequence(16, false, false, false, None, true);
+    let _ = render_sequence(&mut renderer, &graphs);
+    let baseline = render_sequence(&mut renderer, &graphs);
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
+    let cached = render_sequence(&mut renderer, &graphs);
+    clear_env();
+    let center = ((94 * SIZE + 94) * 4) as usize;
+    assert_eq!(
+        &cached.last().expect("cached frame")[center..center + 3],
+        &baseline.last().expect("baseline frame")[center..center + 3],
+        "retaining a fractional-alpha fill must preserve the direct float blend"
+    );
+}
+
 /// Rings rotating at distinct speeds, translucent sparks interleaved
 /// between two cached rings in z with overlapping footprint, twinkles
 /// recoloring EVERY frame. Bars: churn is rejected (twinkles never
@@ -371,7 +418,7 @@ fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected()
     };
     const FRAMES: usize = 24;
     set_common_env();
-    let graphs = build_sequence(FRAMES, true, false, true, None);
+    let graphs = build_sequence(FRAMES, true, false, true, None, false);
     // Warmed control — see the identity test.
     let _warmup = render_sequence(&mut renderer, &graphs);
     let baseline = render_sequence(&mut renderer, &graphs);
@@ -450,7 +497,7 @@ fn scale_drift_beyond_the_threshold_recaptures() {
     // scale s0 the drift crosses 0.004 roughly every four frames.
     std::env::set_var("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", "0.004");
     std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
-    let graphs = build_sequence(FRAMES, false, true, false, None);
+    let graphs = build_sequence(FRAMES, false, true, false, None, false);
     let _ = render_sequence(&mut renderer, &graphs);
     let stats = renderer.segment_surface_stats();
     std::env::remove_var("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS");
