@@ -560,8 +560,11 @@ impl RenderGraph {
         layer_heap_bytes(&self.root)
     }
 
-    pub fn retained_draw_nodes(&self) -> HashSet<NodeId> {
+    pub fn retained_visual_observation_nodes(&self) -> HashSet<NodeId> {
         fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
+            if let Some(node_id) = layer.node_id {
+                nodes.insert(node_id);
+            }
             for child in &layer.children {
                 match child {
                     RenderNode::DrawRun(run) => {
@@ -875,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn retained_draw_nodes_collect_command_owners_across_layers() {
+    fn retained_visual_observation_nodes_collect_layers_and_command_owners() {
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -887,7 +890,7 @@ mod tests {
             command_index: 0,
             placement: DrawPlacement::Behind,
         };
-        let child = test_layer(
+        let mut child = test_layer(
             bounds,
             vec![RenderNode::DrawRun(DrawRunNode::for_command(
                 PrimitivePhase::BeforeChildren,
@@ -895,7 +898,8 @@ mod tests {
                 Vec::new(),
             ))],
         );
-        let root = test_layer(
+        child.node_id = Some(13);
+        let mut root = test_layer(
             bounds,
             vec![
                 RenderNode::DrawRun(DrawRunNode::for_command(
@@ -908,9 +912,11 @@ mod tests {
             ],
         );
 
+        root.node_id = Some(5);
+
         assert_eq!(
-            RenderGraph::new(root).retained_draw_nodes(),
-            HashSet::from([9, 17])
+            RenderGraph::new(root).retained_visual_observation_nodes(),
+            HashSet::from([5, 9, 13, 17])
         );
     }
 
