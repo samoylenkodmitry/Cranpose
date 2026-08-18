@@ -47,9 +47,6 @@ struct GpuResources {
     /// The synchronous path's surface. `None` in threaded present mode
     /// (the present runtime owns it) — the modes never mix within one run.
     surface: Option<wgpu::Surface<'static>>,
-    /// The window the current surface belongs to; `None` after
-    /// `TerminateWindow`/`SurfaceDestroyed`, when the surface is detached but
-    /// the device lives on for the next window.
     native_window_ptr: Option<NonNull<c_void>>,
     adapter: Arc<wgpu::Adapter>,
     device: Arc<wgpu::Device>,
@@ -1079,8 +1076,6 @@ fn init_gpu_threaded_for_android(
         .map_err(|error| AndroidSurfaceError::PresentRuntime(format!("{error:?}")))
 }
 
-/// `TerminateWindow`/`SurfaceDestroyed` detach the surface while the device,
-/// queue and present runtime survive for the next window.
 fn drop_android_surface(
     gpu_resources: &mut Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
@@ -1990,8 +1985,6 @@ pub fn run(
         // A frame deadline with no surface asks for a frame nothing will draw,
         // and an app with a running animation asks for one every turn of the
         // loop, which is a spun core for as long as the app is off screen.
-        // A surfaceless window retains the device and renderer while
-        // `native_window_ptr` is cleared — both modes count as "no surface".
         let no_surface = gpu_resources
             .as_ref()
             .is_none_or(|resources| !resources.has_surface());
@@ -2715,13 +2708,6 @@ pub fn run(
             break;
         }
 
-        // With the activity off screen the window is gone (`TerminateWindow`
-        // detaches the surface), so the render block below is skipped and
-        // composition stops. Anything the app posted to the UI dispatcher then
-        // waits for the user to come back. An app that holds a foreground
-        // service has told the OS it has work to finish, so keep composition
-        // turning; there is no surface, so nothing is presented.
-        //
         // Work waiting on the UI thread earns a pass. A running animation does
         // not: nothing is drawn, and paying for a composition per animation
         // frame off screen is how an app burns a core behind the user's back.
