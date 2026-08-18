@@ -30,11 +30,18 @@ fn lifecycle_hook(name: String, argument: String) -> Result<Option<String>, Stri
 }
 
 fn android_resume_contract_is_fixed() {
-    let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src/android.rs");
+    let source_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../crates/cranpose/src/android.rs");
     let source = std::fs::read_to_string(source_path).expect("read Android runtime source");
     assert!(
-        !source.contains("gpu_resources = None;"),
+        !source.contains(
+            "drop_present_surface(&mut gpu_resources, &mut app_shell);\n                            } else {\n                                gpu_resources = None;"
+        ),
         "TerminateWindow must retain the Android GPU device and renderer warm state"
+    );
+    assert!(
+        source.contains("resources.surface = None;"),
+        "TerminateWindow must detach only the native surface"
     );
     assert!(
         source.contains("setup.resources.surface_dirty = true;\n            shell.mark_dirty();"),
@@ -56,14 +63,14 @@ fn main() {
                 .invoke_app_hook("terminate-window", "")
                 .expect("terminate window event");
             robot.wait_for_idle().expect("background update");
-            robot.validate_content("Background").expect("background content");
+            robot
+                .validate_content("Background")
+                .expect("background content");
 
             robot
                 .invoke_app_hook("init-window", "")
                 .expect("init window event");
-            robot
-                .wait_for_present_frame()
-                .expect("first resumed frame");
+            robot.wait_for_present_frame().expect("first resumed frame");
             robot.validate_content("Resumed").expect("resumed content");
 
             android_resume_contract_is_fixed();

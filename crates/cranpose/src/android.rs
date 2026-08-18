@@ -48,9 +48,8 @@ struct GpuResources {
     /// (the present runtime owns it) — the modes never mix within one run.
     surface: Option<wgpu::Surface<'static>>,
     /// The window the current surface belongs to; `None` after
-    /// `TerminateWindow`/`SurfaceDestroyed` in threaded mode, when the
-    /// runtime dropped the surface but the device lives on for the next
-    /// window (the sync path drops the whole resources struct instead).
+    /// `TerminateWindow`/`SurfaceDestroyed`, when the surface is detached but
+    /// the device lives on for the next window.
     native_window_ptr: Option<NonNull<c_void>>,
     adapter: Arc<wgpu::Adapter>,
     device: Arc<wgpu::Device>,
@@ -1080,21 +1079,21 @@ fn init_gpu_threaded_for_android(
         .map_err(|error| AndroidSurfaceError::PresentRuntime(format!("{error:?}")))
 }
 
-/// `TerminateWindow`/`SurfaceDestroyed`: the surface dies but the device,
-/// queue and present runtime (with its warmed caches) survive for the next
-/// window — the same-device recreation path. The epoch bump comes first so
-/// any in-flight packet cancels, and `DropSurface` is acked only after a
-/// waiting packet's returns were sent. Without a shell there is no runtime
-/// holding a surface, so the resources just drop (as before 7b).
-fn drop_present_surface(
+/// `TerminateWindow`/`SurfaceDestroyed` detach the surface while the device,
+/// queue and present runtime survive for the next window.
+fn drop_android_surface(
     gpu_resources: &mut Option<GpuResources>,
     app_shell: &mut Option<AppShell<WgpuRenderer>>,
+    present_thread: bool,
 ) {
     match (gpu_resources.as_mut(), app_shell.as_mut()) {
         (Some(resources), Some(shell)) => {
-            let renderer = shell.renderer();
-            renderer.note_surface_reconfigured();
-            renderer.present_drop_surface();
+            if present_thread {
+                let renderer = shell.renderer();
+                renderer.note_surface_reconfigured();
+                renderer.present_drop_surface();
+            }
+            resources.surface = None;
             resources.native_window_ptr = None;
             resources._native_window = None;
             resources.surface_dirty = true;
@@ -1213,6 +1212,7 @@ where
                 }
             }
             setup.resources.surface_dirty = true;
+            shell.mark_dirty();
         }
     } else {
         // Synchronous mode: the surface stays on this thread, configured
@@ -1231,6 +1231,11 @@ where
                     surface.configure(&setup.resources.device, &setup.resources.config);
                 }
             }
+        }
+
+        if let Some(shell) = app_shell.as_mut() {
+            setup.resources.surface_dirty = true;
+            shell.mark_dirty();
         }
     }
 
@@ -1985,9 +1990,8 @@ pub fn run(
         // A frame deadline with no surface asks for a frame nothing will draw,
         // and an app with a running animation asks for one every turn of the
         // loop, which is a spun core for as long as the app is off screen.
-        // In sync mode a surfaceless window drops the whole resources
-        // struct; in threaded mode the device survives `TerminateWindow`
-        // with `native_window_ptr` cleared — both count as "no surface".
+        // A surfaceless window retains the device and renderer while
+        // `native_window_ptr` is cleared — both modes count as "no surface".
         let no_surface = gpu_resources
             .as_ref()
             .is_none_or(|resources| !resources.has_surface());
@@ -2210,11 +2214,11 @@ pub fn run(
                     MainEvent::TerminateWindow { .. } => {
                         log::info!("Window terminated");
                         if overlay_window_options.is_none() {
-                            if present_thread {
-                                drop_present_surface(&mut gpu_resources, &mut app_shell);
-                            } else {
-                                gpu_resources = None;
-                            }
+                            drop_android_surface(
+                                &mut gpu_resources,
+                                &mut app_shell,
+                                present_thread,
+                            );
                         }
                     }
                     MainEvent::WindowResized { .. } => {
@@ -2485,11 +2489,7 @@ pub fn run(
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::SurfaceDestroyed => {
                     if overlay_window_options.is_some() {
-                        if present_thread {
-                            drop_present_surface(&mut gpu_resources, &mut app_shell);
-                        } else {
-                            gpu_resources = None;
-                        }
+                        drop_android_surface(&mut gpu_resources, &mut app_shell, present_thread);
                     }
                 }
                 android_overlay_window::AndroidOverlayWindowEvent::Pointer { action, x, y } => {
@@ -2716,7 +2716,7 @@ pub fn run(
         }
 
         // With the activity off screen the window is gone (`TerminateWindow`
-        // drops the GPU resources), so the render block below is skipped and
+        // detaches the surface), so the render block below is skipped and
         // composition stops. Anything the app posted to the UI dispatcher then
         // waits for the user to come back. An app that holds a foreground
         // service has told the OS it has work to finish, so keep composition
