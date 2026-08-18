@@ -1,9 +1,10 @@
 use cranpose::AppLauncher;
 use cranpose_core::remember;
 use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
-use cranpose_testing::find_text_in_semantics;
+use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
-    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Spacer, Text,
+    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
+    Spacer, Text,
 };
 use cranpose_ui::{composable, Modifier, ScrollState, Size, TextStyle};
 use std::time::Duration;
@@ -12,6 +13,8 @@ use std::time::Duration;
 fn overscroll_reproduction() {
     let state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     let lazy_state = remember_lazy_list_state();
+    let outer_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
+    let inner_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     Row(
         Modifier::empty().fill_max_size().height(600.0),
         RowSpec::default(),
@@ -61,6 +64,55 @@ fn overscroll_reproduction() {
                     );
                 },
             );
+            Box(
+                Modifier::empty().fill_max_height().width(200.0),
+                BoxSpec::default(),
+                move || {
+                    Column(
+                        Modifier::empty()
+                            .fill_max_size()
+                            .vertical_scroll(outer_state, false),
+                        ColumnSpec::default(),
+                        move || {
+                            Text(
+                                "Nested Outer Marker",
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            Button(
+                                Modifier::empty().height(48.0),
+                                ButtonSpec::default(),
+                                move || inner_state.scroll_to(inner_state.max_value()),
+                                || {
+                                    Text("Pin Inner", Modifier::empty(), TextStyle::default());
+                                },
+                            );
+                            Column(
+                                Modifier::empty()
+                                    .fill_max_width()
+                                    .height(300.0)
+                                    .vertical_scroll(inner_state, false),
+                                ColumnSpec::default(),
+                                || {
+                                    Spacer(Size {
+                                        width: 0.0,
+                                        height: 700.0,
+                                    });
+                                    Text(
+                                        "Nested Inner Marker",
+                                        Modifier::empty(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 800.0,
+                            });
+                        },
+                    );
+                },
+            );
         },
     );
 }
@@ -68,7 +120,7 @@ fn overscroll_reproduction() {
 fn main() {
     AppLauncher::new()
         .with_title("Overscroll Bounce Reproduction")
-        .with_size(400, 600)
+        .with_size(600, 600)
         .with_headless(true)
         .with_test_driver(|robot| {
             std::thread::sleep(Duration::from_millis(500));
@@ -128,6 +180,38 @@ fn main() {
             assert!(
                 (lazy_settled_y - lazy_initial_y).abs() < 4.0,
                 "lazy overscroll must spring back to the edge, initial_y={lazy_initial_y}, settled_y={lazy_settled_y}"
+            );
+
+            let (button_x, button_y, button_width, button_height) =
+                find_button_in_semantics(&robot, "Pin Inner").expect("pin button missing");
+            robot
+                .click(
+                    button_x + button_width * 0.5,
+                    button_y + button_height * 0.5,
+                )
+                .expect("pin inner list");
+            std::thread::sleep(Duration::from_millis(300));
+            let (_, outer_initial_y, _, _) =
+                find_text_in_semantics(&robot, "Nested Outer Marker")
+                    .expect("outer marker missing");
+            let (inner_x, inner_y, inner_width, inner_height) =
+                find_text_in_semantics(&robot, "Nested Inner Marker")
+                    .expect("inner marker missing");
+            let drag_x = inner_x + inner_width * 0.5;
+            let drag_y = inner_y + inner_height * 0.5;
+            robot.mouse_move(drag_x, drag_y).expect("move to inner list");
+            robot.mouse_down().expect("press inner list");
+            robot
+                .mouse_move(drag_x, drag_y - 120.0)
+                .expect("drag exhausted inner list");
+            robot.mouse_up().expect("release inner list");
+            std::thread::sleep(Duration::from_millis(300));
+            let (_, outer_scrolled_y, _, _) =
+                find_text_in_semantics(&robot, "Nested Outer Marker")
+                    .expect("outer marker missing after drag");
+            assert!(
+                outer_scrolled_y < outer_initial_y - 40.0,
+                "an exhausted nested scrollable must yield to its parent, initial_y={outer_initial_y}, scrolled_y={outer_scrolled_y}"
             );
             robot.exit().expect("exit");
         })
