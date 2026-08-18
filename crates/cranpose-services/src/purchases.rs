@@ -243,8 +243,7 @@ static NO_PURCHASES: OnceLock<PurchasesRef> = OnceLock::new();
 static PURCHASE_RECOVERY: RecoveryGate = RecoveryGate::new();
 
 /// Installs a platform purchase backend, replacing any previous one.
-static STORE_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
-    std::sync::OnceLock::new();
+static STORE_LISTENER: ServiceRegistry<dyn Fn() + Send + Sync> = ServiceRegistry::new();
 
 /// Registers a callback run whenever the store has news, so an app can be told
 /// rather than having to ask.
@@ -258,7 +257,7 @@ static STORE_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
 /// Called from whatever thread the platform reports on, so the callback must be
 /// `Send + Sync` and should do as little as possible.
 pub fn set_store_listener(listener: impl Fn() + Send + Sync + 'static) {
-    let _ = STORE_LISTENER.set(Box::new(listener));
+    STORE_LISTENER.set(Arc::new(listener));
 }
 
 /// Tells the app that the store has news. Called by a purchase backend.
