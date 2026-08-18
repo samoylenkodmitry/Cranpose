@@ -25,7 +25,7 @@ use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 // --- Cross-thread signal parking (UI thread → native loop) -------------------
 
@@ -46,20 +46,27 @@ static PENDING_LAUNCH_ARGS: Mutex<Option<String>> = Mutex::new(None);
 /// Wakes the native event loop so parked signals are applied promptly.
 static LOOP_WAKER: OnceLock<Mutex<Option<android_activity::AndroidAppWaker>>> = OnceLock::new();
 
+fn loop_waker() -> &'static Mutex<Option<android_activity::AndroidAppWaker>> {
+    LOOP_WAKER.get_or_init(|| Mutex::new(None))
+}
+
 pub(crate) fn wake_native_loop() {
-    if let Some(waker) = LOOP_WAKER.get() {
-        if let Ok(waker) = waker.lock() {
-            if let Some(waker) = waker.as_ref() {
-                waker.wake();
-            }
-        }
+    let waker = loop_waker()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(waker) = waker.as_ref() {
+        waker.wake();
     }
 }
 
 /// Registers the Android service backends. Called once at startup with the
 /// activity handle.
 pub(crate) fn register(app: android_activity::AndroidApp) {
-    let _ = LOOP_WAKER.set(Mutex::new(Some(app.create_waker())));
+    let mut waker = loop_waker()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    *waker = Some(app.create_waker());
+    drop(waker);
     let haptics_queue = if async_haptics_enabled() {
         spawn_haptics_thread(app.clone())
     } else {
