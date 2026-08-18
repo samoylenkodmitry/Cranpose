@@ -231,6 +231,7 @@ impl AudioEngine {
                 true
             }
             Err(error) => {
+                log::warn!("cranpose audio device unavailable: {error}");
                 self.streaming.store(false, Ordering::SeqCst);
                 *self.last_error.borrow_mut() = Some(error);
                 self.device_unavailable.set(true);
@@ -282,7 +283,6 @@ impl AudioEngine {
         self.publish_settings();
         if let Some(sink) = self.sink.borrow().as_ref() {
             sink.resume();
-        } else {
         }
     }
 
@@ -1084,6 +1084,7 @@ mod tests {
 
         rig.engine.play(id, PlaybackParams::new());
         assert!(rig.engine.is_streaming());
+        assert_eq!(rig.opens.get(), 1, "an idle stream is resumed in place");
         assert_eq!(rig.sink.resumes.get(), resumes + 1, "the stream restarted");
 
         let out = rig.render(16);
