@@ -103,8 +103,7 @@ pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
     });
 }
 
-pub fn prune_draw_observations_to_nodes(nodes: &[NodeId]) {
-    let retained: HashSet<NodeId> = nodes.iter().copied().collect();
+pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
     with_draw_observer(|observer| {
         observer.clear_if(|scope| {
             let remove = scope

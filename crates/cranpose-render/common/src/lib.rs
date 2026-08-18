@@ -36,6 +36,7 @@ use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
+use std::collections::HashSet;
 
 pub use cranpose_ui_graphics::Brush;
 
@@ -97,7 +98,7 @@ pub trait RenderScene {
     /// Returns None if the node no longer exists in the scene (e.g., removed during gesture).
     fn find_target(&self, node_id: cranpose_core::NodeId) -> Option<Self::HitTarget>;
 
-    fn retained_draw_nodes(&self) -> Option<Vec<cranpose_core::NodeId>> {
+    fn retained_draw_nodes(&self) -> Option<HashSet<cranpose_core::NodeId>> {
         None
     }
 }

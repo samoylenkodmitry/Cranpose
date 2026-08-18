@@ -1242,19 +1242,7 @@ fn draw_nodes(
         // capacity is still published so the buffer waits for the frame this
         // command draws again.
         if primitives.is_empty() && primitives.capacity() == 0 && !has_replay_spans {
-            let placement_matches = matches!(
-                (placement, command),
-                (DrawPlacement::Behind, DrawCommand::Behind(_))
-                    | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
-                    | (_, DrawCommand::WithContent(_))
-            );
-            if placement_matches {
-                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
-                    phase,
-                    Some(id),
-                    Vec::new(),
-                )));
-            }
+            retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
         let (shared, published_recording) = publish_recording(id, recording, primitives, replay);
@@ -1281,19 +1269,7 @@ fn draw_nodes(
             store_saved_emission(id, saved);
         }
         if shared.is_empty() && !has_replay_spans {
-            let placement_matches = matches!(
-                (placement, command),
-                (DrawPlacement::Behind, DrawCommand::Behind(_))
-                    | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
-                    | (_, DrawCommand::WithContent(_))
-            );
-            if placement_matches {
-                nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
-                    phase,
-                    Some(id),
-                    Vec::new(),
-                )));
-            }
+            retain_empty_draw_command(&mut nodes, phase, id, placement, command);
             continue;
         }
         // The frame owns a pinned handle to the exact recording it was
@@ -1315,6 +1291,27 @@ fn draw_nodes(
         )));
     }
     nodes
+}
+
+fn retain_empty_draw_command(
+    nodes: &mut Vec<RenderNode>,
+    phase: PrimitivePhase,
+    id: DrawCommandId,
+    placement: DrawPlacement,
+    command: &DrawCommand,
+) {
+    if matches!(
+        (placement, command),
+        (DrawPlacement::Behind, DrawCommand::Behind(_))
+            | (DrawPlacement::Overlay, DrawCommand::Overlay(_))
+            | (_, DrawCommand::WithContent(_))
+    ) {
+        nodes.push(RenderNode::DrawRun(DrawRunNode::for_command(
+            phase,
+            Some(id),
+            Vec::new(),
+        )));
+    }
 }
 
 /// The real [`draw_nodes`] path — acquire, record, verify, publish, and

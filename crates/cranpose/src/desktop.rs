@@ -44,6 +44,8 @@ const NATIVE_WINDOW_POSITION_SETTLE_TIMEOUT: Duration = Duration::from_millis(36
 const NATIVE_WINDOW_POSITION_SETTLE_POLL: Duration = Duration::from_millis(1);
 const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
 #[cfg(feature = "robot")]
+const ROBOT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(feature = "robot")]
 const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 const DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
@@ -123,6 +125,7 @@ struct RobotController {
     tx: mpsc::Sender<RobotResponse>,
     pending_command: Option<RobotCommand>,
     waiting_for_idle: bool,
+    idle_started_at: Option<Instant>,
     idle_iterations: u32,
     idle_structure_clean_frames: u32,
     waiting_for_present_generation: Option<u64>,
@@ -150,6 +153,7 @@ impl RobotController {
             tx,
             pending_command: None,
             waiting_for_idle: false,
+            idle_started_at: None,
             idle_iterations: 0,
             idle_structure_clean_frames: 0,
             waiting_for_present_generation: None,
@@ -174,9 +178,20 @@ impl RobotController {
     }
 
     fn start_idle_wait(&mut self) {
+        self.start_idle_wait_at(Instant::now());
+    }
+
+    fn start_idle_wait_at(&mut self, started_at: Instant) {
         self.waiting_for_idle = true;
+        self.idle_started_at = Some(started_at);
         self.idle_iterations = 0;
         self.idle_structure_clean_frames = 0;
+    }
+
+    fn idle_wait_timed_out(&self, now: Instant) -> bool {
+        self.idle_started_at.is_some_and(|started_at| {
+            now.saturating_duration_since(started_at) >= ROBOT_IDLE_TIMEOUT
+        })
     }
 
     fn stage_pending_command(&mut self) -> bool {
@@ -194,6 +209,7 @@ impl RobotController {
 
     fn finish_idle_wait(&mut self) {
         self.waiting_for_idle = false;
+        self.idle_started_at = None;
         self.waiting_for_present_generation = None;
         self.idle_structure_clean_frames = 0;
     }
@@ -5339,8 +5355,6 @@ impl ApplicationHandler for App {
 
             // Handle ongoing wait_for_idle
             if controller.waiting_for_idle {
-                const MAX_IDLE_ITERATIONS: u32 = 600;
-
                 let frame_schedule = app.frame_schedule();
                 let needs_update = frame_schedule.needs_update;
                 let needs_frame = frame_schedule.needs_frame;
@@ -5427,11 +5441,11 @@ impl ApplicationHandler for App {
                         );
                     }
 
-                    if controller.idle_iterations >= MAX_IDLE_ITERATIONS {
+                    if controller.idle_wait_timed_out(Instant::now()) {
                         controller.finish_idle_wait();
                         let _ = controller.tx.send(RobotResponse::Error(format!(
                             "wait_for_idle: timed out after {} iterations; needs_update={}, needs_redraw={}, has_animations={}, waiting_for_present={}",
-                            MAX_IDLE_ITERATIONS,
+                            controller.idle_iterations,
                             needs_update,
                             app.needs_redraw(),
                             has_active_animations,
@@ -6104,6 +6118,20 @@ mod tests {
         assert!(controller.awaiting_progress());
         controller.end_synthetic_primary_gesture();
         assert!(!controller.awaiting_progress());
+    }
+
+    #[test]
+    fn robot_idle_timeout_tracks_elapsed_time_instead_of_loop_iterations() {
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = u32::MAX;
+
+        assert!(!controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT / 2));
+        assert!(controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT));
+        controller.finish_idle_wait();
+        assert!(!controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT * 2));
     }
 
     #[test]

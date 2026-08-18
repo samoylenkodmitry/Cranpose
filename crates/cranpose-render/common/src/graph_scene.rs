@@ -373,11 +373,11 @@ impl RenderScene for Scene {
             .cloned()
     }
 
-    fn retained_draw_nodes(&self) -> Option<Vec<NodeId>> {
+    fn retained_draw_nodes(&self) -> Option<HashSet<NodeId>> {
         Some(
             self.graph
                 .as_ref()
-                .map_or_else(Vec::new, RenderGraph::retained_draw_nodes),
+                .map_or_else(HashSet::new, RenderGraph::retained_draw_nodes),
         )
     }
 }

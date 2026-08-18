@@ -560,7 +560,7 @@ impl RenderGraph {
         layer_heap_bytes(&self.root)
     }
 
-    pub fn retained_draw_nodes(&self) -> Vec<NodeId> {
+    pub fn retained_draw_nodes(&self) -> HashSet<NodeId> {
         fn collect(layer: &LayerNode, nodes: &mut HashSet<NodeId>) {
             for child in &layer.children {
                 match child {
@@ -575,9 +575,9 @@ impl RenderGraph {
             }
         }
 
-        let mut nodes = HashSet::default();
+        let mut nodes = HashSet::new();
         collect(&self.root, &mut nodes);
-        nodes.into_iter().collect()
+        nodes
     }
 }
 
@@ -871,6 +871,46 @@ mod tests {
         assert_eq!(
             transform.matrix(),
             [[3.0, 0.0, 8.0], [0.0, 3.0, 0.0], [0.0, 0.0, 1.0]]
+        );
+    }
+
+    #[test]
+    fn retained_draw_nodes_collect_command_owners_across_layers() {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 20.0,
+        };
+        let command = |node_id| DrawCommandId {
+            node_id,
+            command_index: 0,
+            placement: DrawPlacement::Behind,
+        };
+        let child = test_layer(
+            bounds,
+            vec![RenderNode::DrawRun(DrawRunNode::for_command(
+                PrimitivePhase::BeforeChildren,
+                Some(command(17)),
+                Vec::new(),
+            ))],
+        );
+        let root = test_layer(
+            bounds,
+            vec![
+                RenderNode::DrawRun(DrawRunNode::for_command(
+                    PrimitivePhase::BeforeChildren,
+                    Some(command(9)),
+                    Vec::new(),
+                )),
+                RenderNode::DrawRun(DrawRunNode::new(PrimitivePhase::BeforeChildren, Vec::new())),
+                RenderNode::Layer(Box::new(child)),
+            ],
+        );
+
+        assert_eq!(
+            RenderGraph::new(root).retained_draw_nodes(),
+            HashSet::from([9, 17])
         );
     }
 
