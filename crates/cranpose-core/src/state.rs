@@ -1246,9 +1246,19 @@ impl<T: Clone + 'static> MutableStateInner<T> {
                 continue;
             };
             callback();
-            live.push(Rc::downgrade(&callback));
+            live.push(callback);
         }
-        *self.subscriber_callbacks.borrow_mut() = live;
+        let mut registered = self.subscriber_callbacks.borrow_mut();
+        registered.retain(|callback| callback.upgrade().is_some());
+        for callback in live {
+            let callback = Rc::downgrade(&callback);
+            if !registered
+                .iter()
+                .any(|registered| registered.ptr_eq(&callback))
+            {
+                registered.push(callback);
+            }
+        }
     }
 
     fn has_subscribers(&self) -> bool {
@@ -1259,12 +1269,23 @@ impl<T: Clone + 'static> MutableStateInner<T> {
 
     fn subscriber_callback(&self, callback: Rc<dyn Fn()>) {
         let notify = self.has_subscribers();
-        self.subscriber_callbacks
-            .borrow_mut()
-            .push(Rc::downgrade(&callback));
+        let callback_weak = Rc::downgrade(&callback);
+        let mut callbacks = self.subscriber_callbacks.borrow_mut();
+        callbacks.retain(|callback| callback.upgrade().is_some());
+        if !callbacks
+            .iter()
+            .any(|registered| registered.ptr_eq(&callback_weak))
+        {
+            callbacks.push(callback_weak);
+        }
+        drop(callbacks);
         if notify {
             callback();
         }
+        drop(callback);
+        self.subscriber_callbacks
+            .borrow_mut()
+            .retain(|callback| callback.upgrade().is_some());
     }
 
     pub(crate) fn unregister_scope(&self, scope_id: ScopeId) {
