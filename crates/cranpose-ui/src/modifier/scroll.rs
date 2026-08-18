@@ -911,8 +911,11 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
         let overscroll = self.overscroll.clone();
         let consumed =
             overscroll.apply_to_scroll(delta, |delta| self.scroll_target.apply_wheel_delta(delta));
+        let overscroll_active = self.overscroll.offset().abs() > 0.001;
         if consumed.abs() > 0.001 {
             self.scroll_target.invalidate();
+        }
+        if consumed.abs() > 0.001 || overscroll_active {
             self.ensure_wheel_settle_watcher();
             true
         } else {

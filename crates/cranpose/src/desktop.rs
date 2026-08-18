@@ -5359,6 +5359,7 @@ impl ApplicationHandler for App {
                 let needs_update = frame_schedule.needs_update;
                 let needs_frame = frame_schedule.needs_frame;
                 let has_active_animations = app.has_active_animations();
+                let has_transient_frame_callbacks = app.has_transient_frame_callbacks();
                 let visible_redraw_pending = self.robot_visible_surface_dirty || app.needs_redraw();
                 if controller.waiting_for_present_generation.is_none()
                     && self.primary_redraw_pending
@@ -5376,19 +5377,22 @@ impl ApplicationHandler for App {
                     && controller
                         .waiting_for_present_generation
                         .is_some_and(|target| self.presented_frame_generation < target);
-                let frame_only = needs_frame && !needs_update && !waiting_for_present;
+                let frame_only = needs_frame
+                    && !needs_update
+                    && !has_transient_frame_callbacks
+                    && !waiting_for_present;
                 let animation_loop_only = robot_wait_for_idle_animation_loop_only(
                     has_active_animations,
+                    has_transient_frame_callbacks,
                     waiting_for_present,
                     controller.idle_iterations,
                     controller.idle_structure_clean_frames,
                 );
-
                 if frame_only || animation_loop_only {
                     controller.finish_idle_wait();
                     self.robot_visible_surface_dirty = false;
                     let _ = controller.tx.send(RobotResponse::Ok);
-                } else if !needs_frame && !waiting_for_present {
+                } else if !needs_frame && !has_transient_frame_callbacks && !waiting_for_present {
                     let mut finish_idle = true;
                     if needs_update {
                         let update_result = update_app_with_native_window_registry(app, &registry);
@@ -5931,7 +5935,9 @@ mod tests {
             "robot wait_for_idle must read update-only scheduler state"
         );
         assert!(
-            source.contains("if !needs_frame && !waiting_for_present"),
+            source.contains(
+                "if !needs_frame && !has_transient_frame_callbacks && !waiting_for_present"
+            ),
             "robot wait_for_idle must not finish while update-only work is pending"
         );
     }
@@ -5941,7 +5947,9 @@ mod tests {
         let source = include_str!("desktop.rs");
 
         assert!(
-            source.contains("let frame_only = needs_frame && !needs_update && !waiting_for_present;"),
+            source.contains(
+                "let frame_only = needs_frame\n                    && !needs_update\n                    && !has_transient_frame_callbacks\n                    && !waiting_for_present;",
+            ),
             "robot wait_for_idle must not block on frame-only renderer or animation loops after pending UI work has drained"
         );
     }

@@ -1361,11 +1361,13 @@ pub(crate) fn panic_payload_message(payload: Box<dyn Any + Send>) -> String {
 /// visual frame has been observed.
 pub(crate) fn robot_wait_for_idle_animation_loop_only(
     has_active_animations: bool,
+    has_transient_frame_callbacks: bool,
     waiting_for_present: bool,
     idle_iterations: u32,
     idle_structure_clean_frames: u32,
 ) -> bool {
     has_active_animations
+        && !has_transient_frame_callbacks
         && !waiting_for_present
         && idle_iterations > 0
         && idle_structure_clean_frames > 0
@@ -2090,11 +2092,24 @@ mod tests {
 
     #[test]
     fn robot_idle_wait_animation_loop_only_requires_settled_frames() {
-        assert!(robot_wait_for_idle_animation_loop_only(true, false, 1, 1));
-        assert!(!robot_wait_for_idle_animation_loop_only(true, true, 1, 1));
-        assert!(!robot_wait_for_idle_animation_loop_only(true, false, 0, 1));
-        assert!(!robot_wait_for_idle_animation_loop_only(true, false, 1, 0));
-        assert!(!robot_wait_for_idle_animation_loop_only(false, false, 1, 1));
+        assert!(robot_wait_for_idle_animation_loop_only(
+            true, false, false, 1, 1
+        ));
+        assert!(!robot_wait_for_idle_animation_loop_only(
+            true, true, false, 1, 1
+        ));
+        assert!(!robot_wait_for_idle_animation_loop_only(
+            true, false, true, 1, 1
+        ));
+        assert!(!robot_wait_for_idle_animation_loop_only(
+            true, false, false, 0, 1
+        ));
+        assert!(!robot_wait_for_idle_animation_loop_only(
+            true, false, false, 1, 0
+        ));
+        assert!(!robot_wait_for_idle_animation_loop_only(
+            false, false, false, 1, 1
+        ));
     }
 
     #[test]

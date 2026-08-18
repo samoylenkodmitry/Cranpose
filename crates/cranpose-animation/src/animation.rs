@@ -652,7 +652,7 @@ impl InfiniteTransition {
                         break;
                     }
 
-                    let now = clock.next_frame().await;
+                    let now = clock.next_perpetual_frame().await;
                     if !scope.is_active() {
                         break;
                     }

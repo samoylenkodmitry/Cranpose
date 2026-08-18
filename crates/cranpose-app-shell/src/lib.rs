@@ -959,6 +959,12 @@ where
         self.composition.should_render()
     }
 
+    pub fn has_transient_frame_callbacks(&self) -> bool {
+        self.composition
+            .runtime_handle()
+            .has_transient_frame_callbacks()
+    }
+
     pub fn has_active_pointer_gesture(&self) -> bool {
         self.buttons_pressed != PointerButtons::NONE
             && self.hit_path_tracker.has_path(PointerId::PRIMARY)

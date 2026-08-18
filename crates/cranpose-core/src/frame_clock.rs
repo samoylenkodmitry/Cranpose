@@ -1,4 +1,4 @@
-use crate::runtime::RuntimeHandle;
+use crate::runtime::{FrameCallbackKind, RuntimeHandle};
 use crate::FrameCallbackId;
 use std::cell::RefCell;
 use std::future::Future;
@@ -24,15 +24,34 @@ impl FrameClock {
         &self,
         callback: impl FnOnce(u64) + 'static,
     ) -> FrameCallbackRegistration {
+        self.with_frame_nanos_kind(FrameCallbackKind::Transient, callback)
+    }
+
+    pub fn with_perpetual_frame_nanos(
+        &self,
+        callback: impl FnOnce(u64) + 'static,
+    ) -> FrameCallbackRegistration {
+        self.with_frame_nanos_kind(FrameCallbackKind::Perpetual, callback)
+    }
+
+    fn with_frame_nanos_kind(
+        &self,
+        kind: FrameCallbackKind,
+        callback: impl FnOnce(u64) + 'static,
+    ) -> FrameCallbackRegistration {
         let mut callback_opt = Some(callback);
         let runtime = self.runtime.clone();
-        match runtime.register_frame_callback(move |time| {
+        let register = move |callback| match kind {
+            FrameCallbackKind::Transient => runtime.register_frame_callback(callback),
+            FrameCallbackKind::Perpetual => runtime.register_perpetual_frame_callback(callback),
+        };
+        match register(Box::new(move |time| {
             if let Some(callback) = callback_opt.take() {
                 callback(time);
             }
-        }) {
-            Some(id) => FrameCallbackRegistration::new(runtime, id),
-            None => FrameCallbackRegistration::inactive(runtime),
+        })) {
+            Some(id) => FrameCallbackRegistration::new(self.runtime.clone(), id),
+            None => FrameCallbackRegistration::inactive(self.runtime.clone()),
         }
     }
 
@@ -47,7 +66,11 @@ impl FrameClock {
     }
 
     pub fn next_frame(&self) -> NextFrame {
-        NextFrame::new(self.clone())
+        NextFrame::new(self.clone(), FrameCallbackKind::Transient)
+    }
+
+    pub fn next_perpetual_frame(&self) -> NextFrame {
+        NextFrame::new(self.clone(), FrameCallbackKind::Perpetual)
     }
 }
 
@@ -74,13 +97,15 @@ impl NextFrameState {
 
 pub struct NextFrame {
     clock: FrameClock,
+    kind: FrameCallbackKind,
     state: Rc<RefCell<NextFrameState>>,
 }
 
 impl NextFrame {
-    fn new(clock: FrameClock) -> Self {
+    fn new(clock: FrameClock, kind: FrameCallbackKind) -> Self {
         Self {
             clock,
+            kind,
             state: Rc::new(RefCell::new(NextFrameState::new())),
         }
     }
@@ -100,7 +125,7 @@ impl Future for NextFrame {
             if state.registration.is_none() {
                 drop(state);
                 let state = Rc::downgrade(&self.state);
-                let registration = self.clock.with_frame_nanos(move |time| {
+                let callback = move |time| {
                     let Some(state) = state.upgrade() else {
                         return;
                     };
@@ -113,7 +138,11 @@ impl Future for NextFrame {
                     if let Some(waker) = waker {
                         waker.wake();
                     }
-                });
+                };
+                let registration = match self.kind {
+                    FrameCallbackKind::Transient => self.clock.with_frame_nanos(callback),
+                    FrameCallbackKind::Perpetual => self.clock.with_perpetual_frame_nanos(callback),
+                };
                 self.state.borrow_mut().registration = Some(registration);
             }
         }
@@ -216,5 +245,31 @@ mod tests {
             "next_frame must release its state borrow before waking the task"
         );
         assert_eq!(next_frame.as_mut().poll(&mut context), Poll::Ready(123));
+    }
+
+    #[test]
+    fn frame_callback_registration_tracks_transient_and_perpetual_work() {
+        let runtime = Runtime::new(Arc::new(DefaultScheduler));
+        let handle = runtime.handle();
+        let clock = runtime.frame_clock();
+        let transient = clock.with_frame_nanos(|_| {});
+        let perpetual_handle = handle.clone();
+        let perpetual = clock.with_perpetual_frame_nanos(move |_| {
+            perpetual_handle.register_perpetual_frame_callback(|_| {});
+        });
+
+        assert!(handle.has_frame_callbacks());
+        assert!(handle.has_transient_frame_callbacks());
+
+        transient.cancel();
+        assert!(handle.has_frame_callbacks());
+        assert!(!handle.has_transient_frame_callbacks());
+
+        handle.drain_frame_callbacks(123);
+        assert!(handle.has_frame_callbacks());
+        assert!(!handle.has_transient_frame_callbacks());
+        drop(perpetual);
+        handle.drain_frame_callbacks(456);
+        assert!(!handle.has_frame_callbacks());
     }
 }

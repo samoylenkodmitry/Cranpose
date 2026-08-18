@@ -19,6 +19,12 @@ use crate::frame_clock::FrameClock;
 use crate::platform::RuntimeScheduler;
 use crate::{Applier, Command, FrameCallbackId, NodeError, RecomposeScopeInner, ScopeId};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FrameCallbackKind {
+    Transient,
+    Perpetual,
+}
+
 enum UiMessage {
     Task(Box<dyn FnOnce() + Send + 'static>),
     Invoke { id: u64, value: Box<dyn Any + Send> },
@@ -545,6 +551,13 @@ impl RuntimeInner {
         !self.frame_callbacks.borrow().is_empty()
     }
 
+    fn has_transient_frame_callbacks(&self) -> bool {
+        self.frame_callbacks
+            .borrow()
+            .iter()
+            .any(|entry| entry.kind == FrameCallbackKind::Transient)
+    }
+
     /// Queues a closure that is already bound to the UI thread's local queue.
     ///
     /// The closure may capture `Rc`/`RefCell` values because it never leaves the
@@ -737,13 +750,18 @@ impl RuntimeInner {
         self.ui_conts.borrow_mut().remove(&id);
     }
 
-    fn register_frame_callback(&self, callback: Box<dyn FnOnce(u64) + 'static>) -> FrameCallbackId {
+    fn register_frame_callback(
+        &self,
+        kind: FrameCallbackKind,
+        callback: Box<dyn FnOnce(u64) + 'static>,
+    ) -> FrameCallbackId {
         let id = self.next_frame_callback_id.get();
         self.next_frame_callback_id.set(id + 1);
         self.frame_callbacks
             .borrow_mut()
             .push_back(FrameCallbackEntry {
                 id,
+                kind,
                 callback: Some(callback),
             });
         self.schedule();
@@ -1169,9 +1187,18 @@ impl RuntimeHandle {
         &self,
         callback: impl FnOnce(u64) + 'static,
     ) -> Option<FrameCallbackId> {
-        self.inner
-            .upgrade()
-            .map(|inner| inner.register_frame_callback(Box::new(callback)))
+        self.inner.upgrade().map(|inner| {
+            inner.register_frame_callback(FrameCallbackKind::Transient, Box::new(callback))
+        })
+    }
+
+    pub fn register_perpetual_frame_callback(
+        &self,
+        callback: impl FnOnce(u64) + 'static,
+    ) -> Option<FrameCallbackId> {
+        self.inner.upgrade().map(|inner| {
+            inner.register_frame_callback(FrameCallbackKind::Perpetual, Box::new(callback))
+        })
     }
 
     pub fn cancel_frame_callback(&self, id: FrameCallbackId) {
@@ -1285,6 +1312,13 @@ impl RuntimeHandle {
             .unwrap_or(false)
     }
 
+    pub fn has_transient_frame_callbacks(&self) -> bool {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.has_transient_frame_callbacks())
+            .unwrap_or(false)
+    }
+
     pub fn assert_ui_thread(&self) {
         debug_assert_eq!(
             std::thread::current().id(),
@@ -1312,6 +1346,7 @@ impl TaskHandle {
 
 pub(crate) struct FrameCallbackEntry {
     id: FrameCallbackId,
+    kind: FrameCallbackKind,
     callback: Option<Box<dyn FnOnce(u64) + 'static>>,
 }
 
