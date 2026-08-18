@@ -1584,7 +1584,12 @@ impl Modifier {
         reverse_scrolling: bool,
         motion_context: ScrollMotionContext,
     ) -> Self {
-        self.then(lazy_scroll_impl(state, true, reverse_scrolling, motion_context))
+        self.then(lazy_scroll_impl(
+            state,
+            true,
+            reverse_scrolling,
+            motion_context,
+        ))
     }
 
     /// Creates a horizontally scrollable modifier for lazy lists.
@@ -1603,7 +1608,12 @@ impl Modifier {
         reverse_scrolling: bool,
         motion_context: ScrollMotionContext,
     ) -> Self {
-        self.then(lazy_scroll_impl(state, false, reverse_scrolling, motion_context))
+        self.then(lazy_scroll_impl(
+            state,
+            false,
+            reverse_scrolling,
+            motion_context,
+        ))
     }
 }
 

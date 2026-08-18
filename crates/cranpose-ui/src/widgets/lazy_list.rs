@@ -14,9 +14,7 @@ use web_time::Instant;
 use crate::composable;
 use crate::layout::MeasuredNode;
 use crate::modifier::{Modifier, Size};
-use crate::scroll::{
-    scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey,
-};
+use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
 use crate::subcompose_layout::{
     MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
@@ -1092,9 +1090,11 @@ fn LazyColumnImpl(
     let list_state_id = lazy_list_state_identity(&state);
 
     // Apply clipping and scroll gesture handling to modifier
-    let scroll_modifier = modifier
-        .clip_to_bounds()
-        .lazy_vertical_scroll_with_context(state, spec.reverse_layout, motion_context);
+    let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
+        state,
+        spec.reverse_layout,
+        motion_context,
+    );
 
     // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
