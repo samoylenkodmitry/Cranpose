@@ -273,12 +273,13 @@ fn scan_full_demo_markdown_scroll(robot: &cranpose::Robot, viewport: (f32, f32, 
             CONTENT_BAND_TOP_FRACTION,
             CONTENT_BAND_BOTTOM_FRACTION,
         );
+        let semantics = markdown_semantics(robot);
         println!(
             "scroll_scan step={step} viewport_metrics={viewport_metrics:?} capture={}",
             capture_path.display()
         );
 
-        let code_bounds = visible_code_text_bounds(robot, viewport);
+        let code_bounds = visible_code_text_bounds(&semantics, viewport);
         for (code_index, bounds) in code_bounds.iter().copied().enumerate() {
             let code_metrics = code_ink_metrics(&image, viewport, bounds);
             println!(
@@ -293,16 +294,21 @@ fn scan_full_demo_markdown_scroll(robot: &cranpose::Robot, viewport: (f32, f32, 
             );
         }
         if viewport_blank_artifact(viewport_metrics) {
-            log_visible_text_nodes(robot, viewport, step);
+            log_visible_text_nodes(&semantics, viewport, step);
         }
-        assert_visible_text_nodes_do_not_leave_blank_tails(robot, &image, viewport, &capture_path);
-        assert_visible_text_nodes_do_not_have_large_blank_gaps(
-            robot,
+        assert_visible_text_nodes_do_not_leave_blank_tails(
+            &semantics,
             &image,
             viewport,
             &capture_path,
         );
-        assert_markdown_section_gaps_are_continuous(robot, viewport, &capture_path);
+        assert_visible_text_nodes_do_not_have_large_blank_gaps(
+            &semantics,
+            &image,
+            viewport,
+            &capture_path,
+        );
+        assert_markdown_section_gaps_are_continuous(&semantics, viewport, &capture_path);
         assert_lower_viewport_band_paints(&image, viewport, &capture_path, step);
         assert_viewport_metrics(viewport_metrics, &capture_path, step);
     }
@@ -322,7 +328,8 @@ fn scan_full_demo_markdown_real_wheel(
     robot
         .reset_fps_stats()
         .expect("reset real-wheel markdown FPS");
-    let initial_signature = visible_text_signature(robot, viewport);
+    let initial_semantics = markdown_semantics(robot);
+    let initial_signature = visible_text_signature(&initial_semantics, viewport);
     let mut moved = false;
 
     for step in 0..REAL_WHEEL_STEPS {
@@ -340,22 +347,28 @@ fn scan_full_demo_markdown_real_wheel(
             CONTENT_BAND_TOP_FRACTION,
             CONTENT_BAND_BOTTOM_FRACTION,
         );
+        let semantics = markdown_semantics(robot);
         println!(
             "real_wheel_scan step={step} viewport_metrics={viewport_metrics:?} capture={}",
             capture_path.display()
         );
         if viewport_blank_artifact(viewport_metrics) {
-            log_visible_text_nodes(robot, viewport, step);
+            log_visible_text_nodes(&semantics, viewport, step);
         }
-        moved |= visible_text_signature(robot, viewport) != initial_signature;
-        assert_visible_text_nodes_do_not_leave_blank_tails(robot, &image, viewport, &capture_path);
-        assert_visible_text_nodes_do_not_have_large_blank_gaps(
-            robot,
+        moved |= visible_text_signature(&semantics, viewport) != initial_signature;
+        assert_visible_text_nodes_do_not_leave_blank_tails(
+            &semantics,
             &image,
             viewport,
             &capture_path,
         );
-        assert_markdown_section_gaps_are_continuous(robot, viewport, &capture_path);
+        assert_visible_text_nodes_do_not_have_large_blank_gaps(
+            &semantics,
+            &image,
+            viewport,
+            &capture_path,
+        );
+        assert_markdown_section_gaps_are_continuous(&semantics, viewport, &capture_path);
         assert_lower_viewport_band_paints(&image, viewport, &capture_path, step);
         assert_viewport_metrics(viewport_metrics, &capture_path, step);
     }
@@ -412,21 +425,27 @@ fn scan_full_demo_markdown_real_wheel_bursts(
             CONTENT_BAND_TOP_FRACTION,
             CONTENT_BAND_BOTTOM_FRACTION,
         );
+        let semantics = markdown_semantics(robot);
         println!(
             "real_wheel_burst_scan step={step} clicks={REAL_WHEEL_BURST_CLICKS} viewport_metrics={viewport_metrics:?} capture={}",
             capture_path.display()
         );
         if viewport_blank_artifact(viewport_metrics) {
-            log_visible_text_nodes(robot, viewport, step);
+            log_visible_text_nodes(&semantics, viewport, step);
         }
-        assert_visible_text_nodes_do_not_leave_blank_tails(robot, &image, viewport, &capture_path);
-        assert_visible_text_nodes_do_not_have_large_blank_gaps(
-            robot,
+        assert_visible_text_nodes_do_not_leave_blank_tails(
+            &semantics,
             &image,
             viewport,
             &capture_path,
         );
-        assert_markdown_section_gaps_are_continuous(robot, viewport, &capture_path);
+        assert_visible_text_nodes_do_not_have_large_blank_gaps(
+            &semantics,
+            &image,
+            viewport,
+            &capture_path,
+        );
+        assert_markdown_section_gaps_are_continuous(&semantics, viewport, &capture_path);
         assert_lower_viewport_band_paints(&image, viewport, &capture_path, step);
         assert_viewport_metrics(viewport_metrics, &capture_path, step);
     }
@@ -465,26 +484,27 @@ fn scan_full_demo_markdown_active_drag(robot: &cranpose::Robot, viewport: (f32, 
                 CONTENT_BAND_TOP_FRACTION,
                 CONTENT_BAND_BOTTOM_FRACTION,
             );
+            let semantics = markdown_semantics(robot);
             println!(
                 "active_drag_scan gesture={gesture} step={step} viewport_metrics={viewport_metrics:?} capture={}",
                 capture_path.display()
             );
             if viewport_blank_artifact(viewport_metrics) {
-                log_visible_text_nodes(robot, viewport, step);
+                log_visible_text_nodes(&semantics, viewport, step);
             }
             assert_visible_text_nodes_do_not_leave_blank_tails(
-                robot,
+                &semantics,
                 &image,
                 viewport,
                 &capture_path,
             );
             assert_visible_text_nodes_do_not_have_large_blank_gaps(
-                robot,
+                &semantics,
                 &image,
                 viewport,
                 &capture_path,
             );
-            assert_markdown_section_gaps_are_continuous(robot, viewport, &capture_path);
+            assert_markdown_section_gaps_are_continuous(&semantics, viewport, &capture_path);
             assert_lower_viewport_band_paints(&image, viewport, &capture_path, step);
             assert_viewport_metrics(viewport_metrics, &capture_path, step);
         }
@@ -511,28 +531,32 @@ fn scroll_text_into_view(
     None
 }
 
+fn markdown_semantics(robot: &cranpose::Robot) -> Vec<cranpose::SemanticElement> {
+    robot
+        .get_semantics()
+        .unwrap_or_else(|err| panic!("failed to get Markdown semantics: {err}"))
+}
+
 fn visible_code_text_bounds(
-    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
     viewport: (f32, f32, f32, f32),
 ) -> Vec<(f32, f32, f32, f32)> {
     let mut out = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot
-        .get_semantics()
-        .unwrap_or_else(|err| panic!("failed to get semantics during Markdown scan: {err}"));
-    for root in &semantics {
+    for root in semantics {
         collect_visible_code_text_bounds(root, content_band, &mut out);
     }
     out
 }
 
-fn log_visible_text_nodes(robot: &cranpose::Robot, viewport: (f32, f32, f32, f32), step: usize) {
+fn log_visible_text_nodes(
+    semantics: &[cranpose::SemanticElement],
+    viewport: (f32, f32, f32, f32),
+    step: usize,
+) {
     let mut out = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot.get_semantics().unwrap_or_else(|err| {
-        panic!("failed to get semantics during Markdown failure scan: {err}")
-    });
-    for root in &semantics {
+    for root in semantics {
         collect_visible_text_debug(root, content_band, &mut out);
     }
     for (index, (bounds, text)) in out.into_iter().take(16).enumerate() {
@@ -545,13 +569,13 @@ fn log_visible_text_nodes(robot: &cranpose::Robot, viewport: (f32, f32, f32, f32
     }
 }
 
-fn visible_text_signature(robot: &cranpose::Robot, viewport: (f32, f32, f32, f32)) -> Vec<String> {
+fn visible_text_signature(
+    semantics: &[cranpose::SemanticElement],
+    viewport: (f32, f32, f32, f32),
+) -> Vec<String> {
     let mut out = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot
-        .get_semantics()
-        .unwrap_or_else(|err| panic!("failed to get semantics during Markdown signature: {err}"));
-    for root in &semantics {
+    for root in semantics {
         collect_visible_text_debug(root, content_band, &mut out);
     }
     out.into_iter()
@@ -564,17 +588,14 @@ fn visible_text_signature(robot: &cranpose::Robot, viewport: (f32, f32, f32, f32
 }
 
 fn assert_visible_text_nodes_do_not_leave_blank_tails(
-    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
     image: &RgbaImage,
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
 ) {
     let mut visible_texts = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot
-        .get_semantics()
-        .unwrap_or_else(|err| panic!("failed to get Markdown semantics: {err}"));
-    for root in &semantics {
+    for root in semantics {
         collect_visible_text_debug(root, content_band, &mut visible_texts);
     }
 
@@ -615,17 +636,14 @@ fn assert_visible_text_nodes_do_not_leave_blank_tails(
 }
 
 fn assert_visible_text_nodes_do_not_have_large_blank_gaps(
-    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
     image: &RgbaImage,
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
 ) {
     let mut visible_texts = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot
-        .get_semantics()
-        .unwrap_or_else(|err| panic!("failed to get Markdown semantics: {err}"));
-    for root in &semantics {
+    for root in semantics {
         collect_visible_text_debug(root, content_band, &mut visible_texts);
     }
 
@@ -696,16 +714,13 @@ fn assert_visible_text_nodes_do_not_have_large_blank_gaps(
 }
 
 fn assert_markdown_section_gaps_are_continuous(
-    robot: &cranpose::Robot,
+    semantics: &[cranpose::SemanticElement],
     viewport: (f32, f32, f32, f32),
     capture_path: &Path,
 ) {
     let mut visible_texts = Vec::new();
     let content_band = content_band_viewport(viewport);
-    let semantics = robot
-        .get_semantics()
-        .unwrap_or_else(|err| panic!("failed to get Markdown semantics: {err}"));
-    for root in &semantics {
+    for root in semantics {
         collect_visible_text_debug(root, content_band, &mut visible_texts);
     }
 
