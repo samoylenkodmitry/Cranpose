@@ -48,6 +48,7 @@ fn infinite_transition_drives_state_updates() {
                             ),
                             "integration_pulse",
                         );
+                        let _ = state.get();
                         state_slot.borrow_mut().replace(state);
                     });
                 });
@@ -182,6 +183,7 @@ fn infinite_transition_inserted_after_state_change_advances() {
                                     ),
                                     "inserted_busy_pulse",
                                 );
+                                let _ = state.get();
                                 state_slot.borrow_mut().replace(state);
                                 composer.emit_node(|| DummyNode);
                             },
@@ -254,6 +256,7 @@ fn infinite_transition_restarts_when_first_animation_is_inserted_later() {
                                 ),
                                 "late_child_pulse",
                             );
+                            let _ = state.get();
                             state_slot.borrow_mut().replace(state);
                         });
                     }

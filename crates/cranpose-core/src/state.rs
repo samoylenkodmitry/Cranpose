@@ -1177,6 +1177,7 @@ impl<T: Clone + 'static> StateObject for SnapshotMutableState<T> {
 pub(crate) struct MutableStateInner<T: Clone + 'static> {
     pub(crate) state: Arc<SnapshotMutableState<T>>,
     pub(crate) watchers: RefCell<HashMap<ScopeId, RcWeak<RecomposeScopeInner>>>,
+    subscriber_callbacks: RefCell<Vec<RcWeak<dyn Fn()>>>,
     runtime: RuntimeHandle,
     state_id: Cell<Option<StateId>>,
 }
@@ -1198,6 +1199,7 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         Self {
             state: SnapshotMutableState::new_in_arc(value, policy),
             watchers: RefCell::new(HashMap::default()),
+            subscriber_callbacks: RefCell::new(Vec::new()),
             runtime,
             state_id: Cell::new(None),
         }
@@ -1223,14 +1225,45 @@ impl<T: Clone + 'static> MutableStateInner<T> {
         f(&value)
     }
 
-    fn register_scope(&self, scope: &RecomposeScope) -> bool {
+    fn register_scope(&self, scope: &RecomposeScope) -> (bool, bool) {
         let mut watchers = self.watchers.borrow_mut();
+        watchers.retain(|_, existing| existing.upgrade().is_some());
+        let was_empty = watchers.is_empty();
         match watchers.get(&scope.id()) {
-            Some(existing) if existing.upgrade().is_some() => false,
+            Some(_) => (false, false),
             _ => {
                 watchers.insert(scope.id(), scope.downgrade());
-                true
+                (true, was_empty)
             }
+        }
+    }
+
+    fn notify_subscriber_callbacks(&self) {
+        let callbacks = std::mem::take(&mut *self.subscriber_callbacks.borrow_mut());
+        let mut live = Vec::with_capacity(callbacks.len());
+        for callback in callbacks {
+            let Some(callback) = callback.upgrade() else {
+                continue;
+            };
+            callback();
+            live.push(Rc::downgrade(&callback));
+        }
+        *self.subscriber_callbacks.borrow_mut() = live;
+    }
+
+    fn has_subscribers(&self) -> bool {
+        let mut watchers = self.watchers.borrow_mut();
+        watchers.retain(|_, existing| existing.upgrade().is_some());
+        !watchers.is_empty()
+    }
+
+    fn subscriber_callback(&self, callback: Rc<dyn Fn()>) {
+        let notify = self.has_subscribers();
+        self.subscriber_callbacks
+            .borrow_mut()
+            .push(Rc::downgrade(&callback));
+        if notify {
+            callback();
         }
     }
 
@@ -1286,9 +1319,13 @@ fn register_current_state_scope<T: Clone + 'static>(inner: &MutableStateInner<T>
     else {
         return;
     };
-    if inner.register_scope(&scope) {
+    let (registered, became_subscribed) = inner.register_scope(&scope);
+    if registered {
         if let Some(state_id) = inner.state_id() {
             scope.record_state_subscription(state_id);
+        }
+        if became_subscribed {
+            inner.notify_subscriber_callbacks();
         }
     }
 }
@@ -1407,6 +1444,14 @@ impl<T: Clone + 'static> State<T> {
 
     pub fn get(&self) -> T {
         self.value()
+    }
+
+    pub fn has_subscribers(&self) -> bool {
+        self.with_inner(MutableStateInner::has_subscribers)
+    }
+
+    pub fn on_subscriber(&self, callback: Rc<dyn Fn()>) {
+        self.with_inner(|inner| inner.subscriber_callback(callback));
     }
 }
 
@@ -1646,9 +1691,13 @@ impl<T: Clone + 'static> Deref for OwnedMutableState<T> {
 impl<T: Clone + 'static> State<T> {
     pub(crate) fn subscribe_scope_for_test(&self, scope: &RecomposeScope) {
         self.with_inner(|inner| {
-            if inner.register_scope(scope) {
+            let (registered, became_subscribed) = inner.register_scope(scope);
+            if registered {
                 if let Some(state_id) = inner.state_id() {
                     scope.record_state_subscription(state_id);
+                }
+                if became_subscribed {
+                    inner.notify_subscriber_callbacks();
                 }
             }
         });

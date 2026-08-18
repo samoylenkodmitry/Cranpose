@@ -121,6 +121,19 @@ pub fn headless_renderer() -> Result<LockedRenderer, String> {
     })
 }
 
+pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
+    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
+    let lock = lock_gpu_test();
+    let mut renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
+    let app_context = AppContext::new();
+    renderer.attach_app_context_services(&app_context);
+    Ok(LockedRenderer {
+        _lock: lock,
+        app_context,
+        renderer,
+    })
+}
+
 pub fn headless_renderer_parts() -> Result<(MutexGuard<'static, ()>, WgpuRenderer), String> {
     let lock = lock_gpu_test();
     let renderer = create_headless_renderer()?;

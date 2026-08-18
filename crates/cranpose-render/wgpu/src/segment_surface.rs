@@ -289,7 +289,7 @@ pub(crate) struct CaptureRect {
 
 impl CaptureRect {
     pub(crate) fn byte_size(&self) -> u64 {
-        self.width as u64 * self.height as u64 * 4
+        self.width as u64 * self.height as u64 * 8
     }
 }
 

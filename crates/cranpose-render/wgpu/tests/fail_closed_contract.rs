@@ -341,7 +341,6 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
 /// generation BEFORE the new renderer exists; in-flight bypassed graphs
 /// rematerialize completely, and after one rebuild the fed output is
 /// byte-identical to a control render.
-#[ignore = "fails on Linux/Vulkan, passes on the macOS runner CI uses; exact-value renderer assertion, see #400"]
 #[test]
 fn renderer_swap_revokes_confirmations_and_rematerializes() {
     let mut renderer = match support::headless_renderer() {
@@ -428,7 +427,6 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
 /// — no longer causes a miss at all. Every bypassed span rebuilds in the
 /// same frame from the recording its frame owns, and the frame renders
 /// complete.
-#[ignore = "fails on Linux/Vulkan, passes on the macOS runner CI uses; exact-value renderer assertion, see #400"]
 #[test]
 fn registry_loss_no_longer_reaches_the_miss_terminal() {
     let mut renderer = match support::headless_renderer() {

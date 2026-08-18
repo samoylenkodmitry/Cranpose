@@ -31,8 +31,24 @@ fn main() {
                 .map(|(x, y)| pixel(&screenshot, x as f32, y as f32))
                 .filter(|value| *value == [184, 241, 254])
                 .count();
+            let mut opaque = 0usize;
+            let mut opaque_bounds = [screenshot.width, screenshot.height, 0, 0];
+            for y in 0..screenshot.height {
+                for x in 0..screenshot.width {
+                    if pixel(&screenshot, x as f32, y as f32) == [185, 242, 255] {
+                        opaque += 1;
+                        opaque_bounds[0] = opaque_bounds[0].min(x);
+                        opaque_bounds[1] = opaque_bounds[1].min(y);
+                        opaque_bounds[2] = opaque_bounds[2].max(x);
+                        opaque_bounds[3] = opaque_bounds[3].max(y);
+                    }
+                }
+            }
             assert_eq!(fractional, [39, 139, 203]);
             assert_eq!(faded, 0);
+            assert!(opaque > 100_000);
+            assert_eq!(opaque_bounds, [179, 68, 595, 386]);
+            assert_eq!(pixel(&screenshot, 300.0, 90.0), [185, 242, 255]);
             robot.exit().expect("exit");
         })
         .run(content);
