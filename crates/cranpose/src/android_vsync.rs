@@ -42,6 +42,8 @@ static UNAVAILABLE: AtomicBool = AtomicBool::new(false);
 static WAKER: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
 pub(crate) fn install_waker(waker: impl Fn() + Send + Sync + 'static) {
+    CALLBACK_POSTED.store(false, Ordering::Release);
+    UNAVAILABLE.store(false, Ordering::Release);
     *WAKER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(waker));
