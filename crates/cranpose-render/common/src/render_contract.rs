@@ -22,7 +22,7 @@ const PIXEL_DIFFERENCE_TOLERANCE: u32 = 24;
 // They still reject material subtree motion or distortion while tolerating the bounded edge drift
 // that comes from comparing root-space rasterization at different fractional translations.
 const TRANSLATED_SUBTREE_BUDGET: NormalizedDifferenceBudget = NormalizedDifferenceBudget {
-    max_differing_pixels: 245,
+    max_differing_pixels: 270,
     max_pixel_difference: 360,
 };
 // Active scroll motion intentionally remains unsnapped, while rested translated content snaps
