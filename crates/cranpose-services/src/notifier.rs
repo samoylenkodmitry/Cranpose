@@ -149,12 +149,10 @@ impl Notifier for PlatformNotifier {
     }
 }
 
-/// Installs a platform notifier, replacing any previously installed one.
 pub fn set_platform_notifier(notifier: NotifierRef) {
     PLATFORM_NOTIFIER.set(notifier);
 }
 
-/// Removes any registered platform notifier (tests and teardown).
 pub fn clear_platform_notifier() {
     PLATFORM_NOTIFIER.clear();
 }
