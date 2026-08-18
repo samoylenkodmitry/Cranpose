@@ -50,6 +50,147 @@ pub(crate) struct ScrollStateInner {
 /// half-faded.
 pub type ScrollSettlePolicy = Rc<dyn Fn(f32, f32) -> f32>;
 
+#[derive(Clone)]
+pub(crate) struct OverscrollEffect {
+    inner: Rc<OverscrollEffectInner>,
+}
+
+struct OverscrollEffectInner {
+    offset: Cell<f32>,
+    limit: Cell<f32>,
+    invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
+    next_callback_id: Cell<u64>,
+}
+
+impl OverscrollEffect {
+    fn new() -> Self {
+        Self {
+            inner: Rc::new(OverscrollEffectInner {
+                offset: Cell::new(0.0),
+                limit: Cell::new(160.0),
+                invalidate_callbacks: RefCell::new(HashMap::new()),
+                next_callback_id: Cell::new(1),
+            }),
+        }
+    }
+
+    pub(crate) fn offset(&self) -> f32 {
+        self.inner.offset.get()
+    }
+
+    pub(crate) fn set_limit(&self, limit: f32) {
+        if !limit.is_finite() || limit <= 0.0 {
+            return;
+        }
+        self.inner.limit.set(limit);
+        self.set_offset(self.offset().clamp(-limit, limit));
+    }
+
+    pub(crate) fn apply_drag_delta(&self, delta: f32) -> f32 {
+        if !delta.is_finite() || delta.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let limit = self.inner.limit.get();
+        let offset = self.offset();
+        let resistance = (1.0 - offset.abs() / limit).clamp(0.12, 1.0) * 0.5;
+        let next = (offset + delta * resistance).clamp(-limit, limit);
+        let applied = next - offset;
+        self.set_offset(next);
+        applied
+    }
+
+    pub(crate) fn apply_settle_delta(&self, delta: f32) -> f32 {
+        let offset = self.offset();
+        if offset.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let proposed = offset + delta;
+        let crosses_edge = offset.abs() > f32::EPSILON && proposed.signum() != offset.signum();
+        let next = if crosses_edge {
+            0.0
+        } else {
+            proposed.clamp(-self.inner.limit.get(), self.inner.limit.get())
+        };
+        let applied = next - offset;
+        self.set_offset(next);
+        applied
+    }
+
+    pub(crate) fn apply_to_scroll<F>(&self, delta: f32, perform_scroll: F) -> f32
+    where
+        F: FnOnce(f32) -> f32,
+    {
+        if !delta.is_finite() || delta.abs() <= f32::EPSILON {
+            return 0.0;
+        }
+        let mut remaining = delta;
+        let mut consumed = 0.0;
+        let offset = self.offset();
+        if offset.abs() > f32::EPSILON && delta.signum() != offset.signum() {
+            let release = delta.abs().min(offset.abs()) * delta.signum();
+            let released = self.apply_settle_delta(release);
+            consumed += released;
+            remaining -= released;
+        }
+        if remaining.abs() > f32::EPSILON {
+            let target_consumed = perform_scroll(remaining);
+            consumed += target_consumed;
+            let unconsumed = remaining - target_consumed;
+            if unconsumed.abs() > f32::EPSILON {
+                consumed += self.apply_drag_delta(unconsumed);
+            }
+        }
+        consumed
+    }
+
+    pub(crate) fn apply_to_fling<F>(&self, delta: f32, perform_scroll: F) -> f32
+    where
+        F: FnOnce(f32) -> f32,
+    {
+        let consumed = perform_scroll(delta);
+        let unconsumed = delta - consumed;
+        if unconsumed.abs() > f32::EPSILON {
+            self.apply_drag_delta(-unconsumed);
+        }
+        consumed
+    }
+
+    pub(crate) fn add_invalidate_callback(&self, callback: Box<dyn Fn()>) -> u64 {
+        let id = self.inner.next_callback_id.get();
+        self.inner.next_callback_id.set(id.saturating_add(1));
+        self.inner
+            .invalidate_callbacks
+            .borrow_mut()
+            .insert(id, Rc::from(callback));
+        id
+    }
+
+    pub(crate) fn remove_invalidate_callback(&self, id: u64) {
+        self.inner.invalidate_callbacks.borrow_mut().remove(&id);
+    }
+
+    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    fn set_offset(&self, offset: f32) {
+        if (offset - self.offset()).abs() <= f32::EPSILON {
+            return;
+        }
+        self.inner.offset.set(offset);
+        let callbacks = self
+            .inner
+            .invalidate_callbacks
+            .borrow()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for callback in callbacks {
+            callback();
+        }
+    }
+}
+
 impl PartialEq for ScrollState {
     /// Two handles are equal when they share the same underlying state
     /// (identity, not value — composable-skip semantics).
@@ -123,7 +264,7 @@ impl ScrollState {
     /// Scrolls by the given delta, clamping to valid range [0, max_value].
     /// Returns the actual amount scrolled.
     pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
-        let current = self.value();
+        let current = self.value_non_reactive();
         let max = self.max_value();
         let new_value = (current + delta).clamp(0.0, max);
         let actual_delta = new_value - current;
@@ -216,6 +357,7 @@ struct ScrollMotionContextInner {
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_invalidate_callback_id: Cell<u64>,
     pending_invalidation: Cell<bool>,
+    overscroll: OverscrollEffect,
 }
 
 pub(crate) struct ScrollMotionContextStore {
@@ -271,6 +413,7 @@ impl ScrollMotionContext {
                 invalidate_callbacks: RefCell::new(HashMap::new()),
                 next_invalidate_callback_id: Cell::new(1),
                 pending_invalidation: Cell::new(false),
+                overscroll: OverscrollEffect::new(),
             }),
         }
     }
@@ -285,6 +428,10 @@ impl ScrollMotionContext {
 
     pub(crate) fn stable_key(&self) -> usize {
         Rc::as_ptr(&self.inner) as usize
+    }
+
+    pub(crate) fn overscroll(&self) -> OverscrollEffect {
+        self.inner.overscroll.clone()
     }
 
     pub(crate) fn set_active(&self, active: bool) {
@@ -363,14 +510,21 @@ impl ScrollMotionContext {
 #[derive(Clone)]
 pub struct ScrollElement {
     state: ScrollState,
+    overscroll: OverscrollEffect,
     is_vertical: bool,
     reverse_scrolling: bool,
 }
 
 impl ScrollElement {
-    pub fn new(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -> Self {
+    pub(crate) fn new(
+        state: ScrollState,
+        overscroll: OverscrollEffect,
+        is_vertical: bool,
+        reverse_scrolling: bool,
+    ) -> Self {
         Self {
             state,
+            overscroll,
             is_vertical,
             reverse_scrolling,
         }
@@ -410,7 +564,12 @@ impl ModifierNodeElement for ScrollElement {
 
     fn create(&self) -> Self::Node {
         // println!("ScrollElement::create");
-        ScrollNode::new(self.state, self.is_vertical, self.reverse_scrolling)
+        ScrollNode::new(
+            self.state,
+            self.overscroll.clone(),
+            self.is_vertical,
+            self.reverse_scrolling,
+        )
     }
 
     fn key(&self) -> Option<u64> {
@@ -424,12 +583,14 @@ impl ModifierNodeElement for ScrollElement {
     fn update(&self, node: &mut Self::Node) {
         let needs_invalidation = node.state != self.state
             || node.is_vertical != self.is_vertical
-            || node.reverse_scrolling != self.reverse_scrolling;
+            || node.reverse_scrolling != self.reverse_scrolling
+            || !node.overscroll.ptr_eq(&self.overscroll);
 
         if needs_invalidation {
             node.state = self.state;
             node.is_vertical = self.is_vertical;
             node.reverse_scrolling = self.reverse_scrolling;
+            node.overscroll = self.overscroll.clone();
         }
     }
 
@@ -442,23 +603,32 @@ impl ModifierNodeElement for ScrollElement {
 /// This is the component that actually reads ScrollState and applies the visual offset.
 pub struct ScrollNode {
     state: ScrollState,
+    overscroll: OverscrollEffect,
     is_vertical: bool,
     reverse_scrolling: bool,
     node_state: NodeState,
     /// ID of the invalidation callback registered with ScrollState
     invalidation_callback_id: Option<u64>,
+    overscroll_callback_id: Option<u64>,
     /// We capture the NodeId when attached to ensure correct invalidation scope
     node_id: Option<NodeId>,
 }
 
 impl ScrollNode {
-    pub fn new(state: ScrollState, is_vertical: bool, reverse_scrolling: bool) -> Self {
+    pub(crate) fn new(
+        state: ScrollState,
+        overscroll: OverscrollEffect,
+        is_vertical: bool,
+        reverse_scrolling: bool,
+    ) -> Self {
         Self {
             state,
+            overscroll,
             is_vertical,
             reverse_scrolling,
             node_state: NodeState::default(),
             invalidation_callback_id: None,
+            overscroll_callback_id: None,
             node_id: None,
         }
     }
@@ -489,6 +659,10 @@ impl ModifierNode for ScrollNode {
                 crate::schedule_layout_repass(node_id);
             }));
             self.invalidation_callback_id = Some(callback_id);
+            let callback_id = self.overscroll.add_invalidate_callback(Box::new(move || {
+                crate::schedule_layout_repass(node_id);
+            }));
+            self.overscroll_callback_id = Some(callback_id);
         } else {
             log::debug!(
                 "ScrollNode attached without a NodeId; deferring invalidation registration."
@@ -503,6 +677,9 @@ impl ModifierNode for ScrollNode {
         // Remove invalidation callback
         if let Some(id) = self.invalidation_callback_id.take() {
             self.state.remove_invalidate_callback(id);
+        }
+        if let Some(id) = self.overscroll_callback_id.take() {
+            self.overscroll.remove_invalidate_callback(id);
         }
     }
 
@@ -557,6 +734,8 @@ impl LayoutModifierNode for ScrollNode {
             || (!self.is_vertical && constraints.max_width.is_finite())
         {
             self.state.set_max_value(max_scroll);
+            self.overscroll
+                .set_limit((if self.is_vertical { height } else { width }) * 0.5);
         }
 
         // Step 6: Read scroll value and calculate offset
@@ -568,6 +747,7 @@ impl LayoutModifierNode for ScrollNode {
         } else {
             -scroll
         };
+        let abs_scroll = abs_scroll + self.overscroll.offset();
 
         let (x_offset, y_offset) = if self.is_vertical {
             (0.0, abs_scroll)

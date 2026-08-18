@@ -1,4 +1,4 @@
-use crate::scroll::{scroll_motion_context_for_key, ScrollMotionContextKey};
+use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
 use crate::{
     collect_modifier_slices, measure_layout, Column, ColumnSpec, LayoutEngine, LazyColumn,
     LazyColumnSpec, Modifier, ScrollState, Size, Spacer,
@@ -82,6 +82,171 @@ fn scroll_motion_callback_ids_restart_per_instance() {
     assert_eq!(first.add_invalidate_callback(Box::new(|| {})), 1);
     assert_eq!(first.add_invalidate_callback(Box::new(|| {})), 2);
     assert_eq!(second.add_invalidate_callback(Box::new(|| {})), 1);
+}
+
+#[test]
+fn overscroll_scroll_releases_before_consuming_target_delta() {
+    let effect = OverscrollEffect::new();
+    effect.apply_drag_delta(60.0);
+    let target_delta = Cell::new(0.0);
+
+    let consumed = effect.apply_to_scroll(-100.0, |delta| {
+        target_delta.set(delta);
+        delta
+    });
+
+    assert_eq!(target_delta.get(), -70.0);
+    assert_eq!(effect.offset(), 0.0);
+    assert_eq!(consumed, -100.0);
+}
+
+#[test]
+fn overscroll_settle_stops_at_edge_without_flipping_sign() {
+    let effect = OverscrollEffect::new();
+    effect.apply_drag_delta(30.0);
+    let initial = effect.offset();
+
+    let consumed = effect.apply_settle_delta(-80.0);
+
+    assert_eq!(consumed, -initial);
+    assert_eq!(effect.offset(), 0.0);
+    assert_eq!(effect.apply_settle_delta(-1.0), 0.0);
+    assert_eq!(effect.offset(), 0.0);
+}
+
+#[test]
+fn overscroll_fling_reports_target_consumption_at_edge() {
+    let effect = OverscrollEffect::new();
+    let target_delta = Cell::new(0.0);
+
+    let consumed = effect.apply_to_fling(80.0, |delta| {
+        target_delta.set(delta * 0.25);
+        delta * 0.25
+    });
+
+    assert_eq!(target_delta.get(), 20.0);
+    assert_eq!(consumed, 20.0);
+    assert!(effect.offset() < 0.0);
+}
+
+#[test]
+fn first_edge_drag_consumes_event_with_effect_motion() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let state = ScrollState::new(0.0);
+        state.set_max_value(100.0);
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().vertical_scroll(state, false));
+
+        handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
+        let move_event = scroll_pointer_event(PointerEventKind::Move, 0.0, 160.0);
+        handler(move_event.clone());
+
+        assert!(move_event.is_consumed());
+    });
+}
+
+#[test]
+fn lazy_edge_drag_updates_shared_effect() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    with_test_runtime(|| {
+        let mut list_state = None;
+        let mut composition = crate::run_test_composition(|| {
+            let state = remember_lazy_list_state();
+            list_state = Some(state);
+            LazyColumn(
+                Modifier::empty().width(320.0).height(240.0),
+                state,
+                LazyColumnSpec::default(),
+                |scope| {
+                    scope.items(
+                        40,
+                        None::<fn(usize) -> u64>,
+                        None::<fn(usize) -> u64>,
+                        |_| {
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 48.0,
+                            });
+                        },
+                    );
+                },
+            );
+        });
+        let state = list_state.expect("lazy list state should be created");
+        let root = composition.root().expect("lazy list root");
+        let handle = composition.runtime_handle();
+        {
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle.clone());
+            applier
+                .compute_layout(
+                    root,
+                    Size {
+                        width: 320.0,
+                        height: 240.0,
+                    },
+                )
+                .expect("layout");
+            applier.clear_runtime_handle();
+        }
+        let _ = crate::render_state::take_measure_repass_nodes();
+        let (handler, _chain) =
+            pointer_handler_for(Modifier::empty().lazy_vertical_scroll(state, false));
+        let context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+            state_identity: state.inner_ptr() as usize,
+            is_vertical: true,
+            reverse_scrolling: false,
+        });
+        let callback_count = Rc::new(Cell::new(0_u32));
+        let callback_count_for_effect = callback_count.clone();
+        context
+            .overscroll()
+            .add_invalidate_callback(Box::new(move || {
+                callback_count_for_effect.set(callback_count_for_effect.get() + 1);
+            }));
+        handler(scroll_pointer_event(PointerEventKind::Down, 160.0, 40.0));
+        handler(scroll_pointer_event(PointerEventKind::Move, 160.0, 100.0));
+
+        assert!(context.overscroll().offset() > 0.0);
+        assert!(callback_count.get() > 0);
+        assert!(crate::render_state::has_pending_measure_repasses());
+    });
+}
+
+#[test]
+fn scroll_motion_context_keeps_effect_identity_for_layout_and_gesture_owners() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let key = ScrollMotionContextKey::LazyList {
+        state_identity: 91,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let owner = scroll_motion_context_for_key(key);
+    let effect = owner.overscroll();
+    let context = scroll_motion_context_for_key(key);
+
+    assert!(effect.ptr_eq(&context.overscroll()));
+}
+
+#[test]
+fn scroll_motion_context_store_reclaims_disposed_contexts() {
+    let store = crate::scroll::ScrollMotionContextStore::new();
+    let first_key = ScrollMotionContextKey::LazyList {
+        state_identity: 92,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let second_key = ScrollMotionContextKey::LazyList {
+        state_identity: 93,
+        is_vertical: true,
+        reverse_scrolling: false,
+    };
+    let first_effect = store.context_for_key(first_key).overscroll();
+    drop(first_effect);
+    let _second_context = store.context_for_key(second_key);
+
+    assert_eq!(store.contexts.borrow().len(), 1);
 }
 
 fn scroll_wheel_event(dx: f32, dy: f32) -> PointerEvent {

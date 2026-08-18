@@ -14,6 +14,7 @@ use web_time::Instant;
 use crate::composable;
 use crate::layout::MeasuredNode;
 use crate::modifier::{Modifier, Size};
+use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
 use crate::subcompose_layout::{
     MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
     SubcomposeMeasureScopeImpl,
@@ -394,15 +395,24 @@ fn recycle_forward_skipped_active_slots(
 }
 
 /// Internal helper to create a lazy list measure policy.
+struct LazyListMeasureContext<'a> {
+    state: &'a LazyListState,
+    config: &'a LazyListMeasureConfig,
+    measured_item_cache: &'a Rc<RefCell<LazyMeasuredItemCache>>,
+    overscroll: &'a OverscrollEffect,
+}
+
 fn measure_lazy_list_internal(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     constraints: Constraints,
     is_vertical: bool,
     content: &LazyListIntervalContent,
-    state: &LazyListState,
-    config: &LazyListMeasureConfig,
-    measured_item_cache: &Rc<RefCell<LazyMeasuredItemCache>>,
+    context: LazyListMeasureContext<'_>,
 ) -> MeasureResult {
+    let state = context.state;
+    let config = context.config;
+    let measured_item_cache = context.measured_item_cache;
+    let overscroll = context.overscroll;
     let raw_viewport_size = if is_vertical {
         constraints.max_height
     } else {
@@ -519,6 +529,7 @@ fn measure_lazy_list_internal(
     );
     log_lazy_cache_telemetry(&result, measured_item_cache);
     let effective_viewport_size = result.viewport_size;
+    overscroll.set_limit(effective_viewport_size * 0.5);
 
     // Cache measured item sizes for better scroll estimation
     state.cache_item_sizes(
@@ -585,6 +596,14 @@ fn measure_lazy_list_internal(
             effective_viewport_size,
             config,
         );
+        let bounce = overscroll.offset();
+        for placement in placements.iter_mut() {
+            if is_vertical {
+                placement.y += bounce;
+            } else {
+                placement.x += bounce;
+            }
+        }
     })
 }
 
@@ -595,7 +614,12 @@ fn get_spacing(arrangement: LinearArrangement) -> f32 {
     }
 }
 
-fn bind_layout_invalidation_callback(state: LazyListState, list_state_id: usize, node_id: NodeId) {
+fn bind_layout_invalidation_callback(
+    state: LazyListState,
+    overscroll: OverscrollEffect,
+    list_state_id: usize,
+    node_id: NodeId,
+) {
     let callback_owner =
         cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
     let app_context_id = crate::render_state::current_app_context_id();
@@ -603,7 +627,7 @@ fn bind_layout_invalidation_callback(state: LazyListState, list_state_id: usize,
         node_id,
         Rc::new(move || {
             let _ = crate::render_state::enter_app_context_by_id(app_context_id, || {
-                crate::schedule_layout_repass(node_id);
+                crate::schedule_measure_repass(node_id);
             });
         }),
     );
@@ -614,13 +638,29 @@ fn bind_layout_invalidation_callback(state: LazyListState, list_state_id: usize,
         }
     }
 
-    cranpose_core::DisposableEffect!((list_state_id, node_id, callback_id), move |scope| {
-        scope.on_dispose(move || {
-            if let Some(callback_id) = callback_id {
-                state.remove_invalidate_callback(callback_id);
-            }
-        })
-    });
+    let overscroll_callback_owner =
+        cranpose_core::remember(|| Rc::new(RefCell::new(None::<u64>))).with(|cell| cell.clone());
+    let overscroll_callback_id = overscroll.add_invalidate_callback(Box::new(move || {
+        let _ = crate::render_state::enter_app_context_by_id(app_context_id, || {
+            crate::schedule_measure_repass(node_id);
+            crate::schedule_semantics_invalidation(node_id);
+        });
+    }));
+    if let Some(previous_id) = overscroll_callback_owner.replace(Some(overscroll_callback_id)) {
+        overscroll.remove_invalidate_callback(previous_id);
+    }
+
+    cranpose_core::DisposableEffect!(
+        (list_state_id, node_id, callback_id, overscroll_callback_id),
+        move |scope| {
+            scope.on_dispose(move || {
+                if let Some(callback_id) = callback_id {
+                    state.remove_invalidate_callback(callback_id);
+                }
+                overscroll.remove_invalidate_callback(overscroll_callback_id);
+            })
+        }
+    );
 }
 
 #[derive(Clone)]
@@ -1009,15 +1049,23 @@ fn LazyColumnImpl(
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
             .with(|cache| cache.clone());
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+        state_identity: lazy_list_state_identity(&state),
+        is_vertical: true,
+        reverse_scrolling: spec.reverse_layout,
+    });
+    let overscroll = motion_context.overscroll();
 
     // Create measure policy with stable identity using remember.
     // The policy reads latest values via state references, so it can be memoized.
     let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
+    let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
         let measured_item_cache = measured_item_cache_for_policy.clone();
+        let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
@@ -1027,9 +1075,12 @@ fn LazyColumnImpl(
                     constraints,
                     true,
                     content.content(),
-                    &state,
-                    &config,
-                    &measured_item_cache,
+                    LazyListMeasureContext {
+                        state: &state,
+                        config: &config,
+                        measured_item_cache: &measured_item_cache,
+                        overscroll: &overscroll,
+                    },
                 )
             },
         );
@@ -1039,9 +1090,11 @@ fn LazyColumnImpl(
     let list_state_id = lazy_list_state_identity(&state);
 
     // Apply clipping and scroll gesture handling to modifier
-    let scroll_modifier = modifier
-        .clip_to_bounds()
-        .lazy_vertical_scroll(state, spec.reverse_layout);
+    let scroll_modifier = modifier.clip_to_bounds().lazy_vertical_scroll_with_context(
+        state,
+        spec.reverse_layout,
+        motion_context,
+    );
 
     // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1071,7 +1124,7 @@ fn LazyColumnImpl(
     }) {
         debug_assert!(false, "failed to update LazyColumn node: {err}");
     }
-    bind_layout_invalidation_callback(state, list_state_id, node_id);
+    bind_layout_invalidation_callback(state, overscroll, list_state_id, node_id);
 
     node_id
 }
@@ -1120,14 +1173,22 @@ fn LazyRowImpl(
     let measured_item_cache =
         cranpose_core::remember(|| Rc::new(RefCell::new(LazyMeasuredItemCache::default())))
             .with(|cache| cache.clone());
+    let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
+        state_identity: lazy_list_state_identity(&state),
+        is_vertical: false,
+        reverse_scrolling: spec.reverse_layout,
+    });
+    let overscroll = motion_context.overscroll();
 
     // Create measure policy with stable identity using remember.
     let content_for_policy = content_cell.clone();
     let measured_item_cache_for_policy = measured_item_cache.clone();
+    let overscroll_for_policy = overscroll.clone();
     let policy: Rc<MeasurePolicy> = cranpose_core::remember(move || {
         let config_ref = config_cell.clone();
         let content_ref = content_for_policy.clone();
         let measured_item_cache = measured_item_cache_for_policy.clone();
+        let overscroll = overscroll_for_policy.clone();
         let policy: Rc<MeasurePolicy> = Rc::new(
             move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
                 let content = content_ref.borrow();
@@ -1137,9 +1198,12 @@ fn LazyRowImpl(
                     constraints,
                     false,
                     content.content(),
-                    &state,
-                    &config,
-                    &measured_item_cache,
+                    LazyListMeasureContext {
+                        state: &state,
+                        config: &config,
+                        measured_item_cache: &measured_item_cache,
+                        overscroll: &overscroll,
+                    },
                 )
             },
         );
@@ -1151,7 +1215,7 @@ fn LazyRowImpl(
     // Apply clipping and scroll gesture handling to modifier
     let scroll_modifier = modifier
         .clip_to_bounds()
-        .lazy_horizontal_scroll(state, spec.reverse_layout);
+        .lazy_horizontal_scroll_with_context(state, spec.reverse_layout, motion_context);
 
     // Create and register the subcompose layout node with the composer
     let node_id = cranpose_core::with_current_composer(|composer| {
@@ -1179,7 +1243,7 @@ fn LazyRowImpl(
     }) {
         debug_assert!(false, "failed to update LazyRow node: {err}");
     }
-    bind_layout_invalidation_callback(state, list_state_id, node_id);
+    bind_layout_invalidation_callback(state, overscroll, list_state_id, node_id);
 
     node_id
 }
