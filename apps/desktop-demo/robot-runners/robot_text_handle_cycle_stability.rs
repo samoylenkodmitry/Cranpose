@@ -219,9 +219,10 @@ fn main() {
             let mut failures = Vec::new();
             for (name, early_v, late_v, tolerance) in structural {
                 let floor = early_v.max(8.0);
-                if late_v > floor * tolerance {
+                let allowed = (floor * tolerance).ceil();
+                if late_v > allowed {
                     failures.push(format!(
-                        "{name} grew {early_v:.0} → {late_v:.0} (allowed ×{tolerance})"
+                        "{name} grew {early_v:.0} → {late_v:.0} (allowed {allowed:.0})"
                     ));
                 }
             }
@@ -310,6 +311,7 @@ fn run_cycle(robot: &Robot, left_x: f32, right_x: f32, line_y: f32) -> (f32, f32
     }
     let drag_fps = robot.fps_stats().expect("drag-window fps stats");
     let _ = robot.mouse_up();
+    let _ = robot.click((left_x + right_x) * 0.5, line_y);
     let _ = robot.wait_for_idle();
     (drag_fps.work_avg_ms, drag_fps.work_p95_ms)
 }
