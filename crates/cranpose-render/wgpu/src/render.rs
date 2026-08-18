@@ -698,11 +698,15 @@ impl RendererWarningState {
 }
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
-    matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
+    matches!(
+        mode,
+        BlendMode::Src | BlendMode::SrcOver | BlendMode::DstOut
+    )
 }
 
 fn blend_state_for_mode(mode: BlendMode) -> wgpu::BlendState {
     match mode {
+        BlendMode::Src => wgpu::BlendState::REPLACE,
         BlendMode::DstOut => wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::Zero,
@@ -10530,7 +10534,7 @@ impl GpuRenderer {
                         alpha: 1.0,
                         scissor: None,
                         rounded_mask: None,
-                        blend_mode: BlendMode::SrcOver,
+                        blend_mode: BlendMode::Src,
                         dest_viewport: None,
                         source_viewport: None,
                         sample_mode: CompositeSampleMode::Nearest,
@@ -22232,6 +22236,7 @@ mod tests {
 
     #[test]
     fn blend_mode_support_matrix_is_explicit() {
+        assert!(is_blend_mode_supported(BlendMode::Src));
         assert!(is_blend_mode_supported(BlendMode::SrcOver));
         assert!(is_blend_mode_supported(BlendMode::DstOut));
         assert!(!is_blend_mode_supported(BlendMode::Clear));
