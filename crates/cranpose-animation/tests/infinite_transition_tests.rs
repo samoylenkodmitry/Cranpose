@@ -3,7 +3,7 @@ use cranpose_animation::{
 };
 use cranpose_core::{
     location_key, with_current_composer, Composition, MemoryApplier, MutableState, Node, NodeError,
-    State,
+    SnapshotStateObserver, State,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -30,34 +30,44 @@ fn infinite_transition_drives_state_updates() {
     let group_key = location_key(file!(), line!(), column!());
     let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
 
-    {
+    let mut render = {
         let state_slot = Rc::clone(&state_slot);
-        composition
-            .render(root_key, move || {
-                let state_slot = Rc::clone(&state_slot);
-                with_current_composer(|composer| {
-                    composer.with_group(group_key, |_| {
-                        let transition = rememberInfiniteTransition("integration_pulse");
-                        let state = transition.animateFloat(
-                            0.0,
-                            1.0,
-                            infiniteRepeatable(
-                                AnimationSpec::linear(800),
-                                RepeatMode::Reverse,
-                                StartOffset::default(),
-                            ),
-                            "integration_pulse",
-                        );
-                        let _ = state.get();
-                        state_slot.borrow_mut().replace(state);
-                    });
+        move || {
+            let state_slot = Rc::clone(&state_slot);
+            with_current_composer(|composer| {
+                composer.with_group(group_key, |_| {
+                    let transition = rememberInfiniteTransition("integration_pulse");
+                    let state = transition.animateFloat(
+                        0.0,
+                        1.0,
+                        infiniteRepeatable(
+                            AnimationSpec::linear(800),
+                            RepeatMode::Reverse,
+                            StartOffset::default(),
+                        ),
+                        "integration_pulse",
+                    );
+                    let _ = state.get();
+                    state_slot.borrow_mut().replace(state);
                 });
-            })
-            .expect("initial render");
-    }
+            });
+        }
+    };
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render");
 
-    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let initial = observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
     assert_eq!(initial, 0.0);
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render");
 
     let mut time = 0u64;
     let mut saw_change = false;
@@ -84,45 +94,54 @@ fn infinite_transition_survives_conditional_cycle() {
     let root_key = location_key(file!(), line!(), column!());
     let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
 
-    {
+    let mut render = {
         let state_slot = Rc::clone(&state_slot);
-        composition
-            .render(root_key, move || {
-                let state_slot = Rc::clone(&state_slot);
-                with_current_composer(|composer| {
-                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
-                        let transition = rememberInfiniteTransition("conditional_pulse");
-                        let state = transition.animateFloat(
-                            0.0,
-                            1.0,
-                            infiniteRepeatable(
-                                AnimationSpec::linear(600),
-                                RepeatMode::Reverse,
-                                StartOffset::default(),
-                            ),
-                            "conditional_pulse",
-                        );
-                        let progress = state.get();
-                        state_slot.borrow_mut().replace(state);
+        move || {
+            let state_slot = Rc::clone(&state_slot);
+            with_current_composer(|composer| {
+                composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                    let transition = rememberInfiniteTransition("conditional_pulse");
+                    let state = transition.animateFloat(
+                        0.0,
+                        1.0,
+                        infiniteRepeatable(
+                            AnimationSpec::linear(600),
+                            RepeatMode::Reverse,
+                            StartOffset::default(),
+                        ),
+                        "conditional_pulse",
+                    );
+                    let progress = state.get();
+                    state_slot.borrow_mut().replace(state);
 
-                        composer.with_group(
-                            location_key(file!(), line!(), column!()),
-                            |composer| {
-                                if progress > 0.0 {
-                                    composer.with_group(
-                                        location_key(file!(), line!(), column!()),
-                                        |composer| {
-                                            composer.emit_node(|| DummyNode);
-                                        },
-                                    );
-                                }
-                            },
-                        );
+                    composer.with_group(location_key(file!(), line!(), column!()), |composer| {
+                        if progress > 0.0 {
+                            composer.with_group(
+                                location_key(file!(), line!(), column!()),
+                                |composer| {
+                                    composer.emit_node(|| DummyNode);
+                                },
+                            );
+                        }
                     });
                 });
-            })
-            .expect("initial render");
-    }
+            });
+        }
+    };
+    composition
+        .render(root_key, &mut render)
+        .expect("initial render");
+
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render");
 
     drain_all(&mut composition).expect("initial drain");
 
@@ -183,7 +202,6 @@ fn infinite_transition_inserted_after_state_change_advances() {
                                     ),
                                     "inserted_busy_pulse",
                                 );
-                                let _ = state.get();
                                 state_slot.borrow_mut().replace(state);
                                 composer.emit_node(|| DummyNode);
                             },
@@ -209,8 +227,17 @@ fn infinite_transition_inserted_after_state_change_advances() {
         .reconcile(root_key, &mut render)
         .expect("reconcile after busy state update");
 
-    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let initial = observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
     assert_eq!(initial, 0.0);
+    runtime.drain_ui();
+    composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile subscriber restart");
 
     let mut time = 0u64;
     let mut last_value = initial;
@@ -256,7 +283,6 @@ fn infinite_transition_restarts_when_first_animation_is_inserted_later() {
                                 ),
                                 "late_child_pulse",
                             );
-                            let _ = state.get();
                             state_slot.borrow_mut().replace(state);
                         });
                     }
@@ -280,8 +306,17 @@ fn infinite_transition_restarts_when_first_animation_is_inserted_later() {
         .reconcile(root_key, &mut render)
         .expect("reconcile after animation insertion");
 
-    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let initial = observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
     assert_eq!(initial, 0.0);
+    runtime.drain_ui();
+    composition
+        .reconcile(root_key, &mut render)
+        .expect("reconcile subscriber restart");
 
     let mut time = 16_666_667u64;
     let mut last_value = initial;
@@ -307,9 +342,12 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let root_key = location_key(file!(), line!(), column!());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
 
-    composition
-        .render(root_key, move || {
+    let mut render = {
+        let state_slot = Rc::clone(&state_slot);
+        move || {
+            let state_slot = Rc::clone(&state_slot);
             with_current_composer(|composer| {
                 composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                     let transition = rememberInfiniteTransition("conditional_slot_budget");
@@ -324,6 +362,7 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
                         "conditional_slot_budget",
                     );
                     let progress = state.get();
+                    state_slot.borrow_mut().replace(state);
 
                     composer.with_group(location_key(file!(), line!(), column!()), |composer| {
                         composer.emit_node(|| DummyNode);
@@ -344,8 +383,22 @@ fn infinite_transition_conditional_cycle_does_not_leak_slots() {
                     });
                 });
             });
-        })
+        }
+    };
+    composition
+        .render(root_key, &mut render)
         .expect("initial render");
+
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render");
 
     drain_all(&mut composition).expect("initial drain");
 

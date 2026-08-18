@@ -608,6 +608,7 @@ struct InfiniteTransitionInner {
     label: String,
     animations: RefCell<Vec<Rc<dyn InfiniteTransitionAnimation>>>,
     run_token: OwnedMutableState<u64>,
+    restart_pending: Cell<bool>,
     runtime: RuntimeHandle,
 }
 
@@ -618,6 +619,7 @@ impl InfiniteTransition {
                 label: label.to_string(),
                 animations: RefCell::new(Vec::new()),
                 run_token: OwnedMutableState::with_runtime(0u64, runtime.clone()),
+                restart_pending: Cell::new(false),
                 runtime,
             }),
         }
@@ -644,6 +646,7 @@ impl InfiniteTransition {
                     let Some(inner) = weak.upgrade() else {
                         break;
                     };
+                    inner.restart_pending.set(false);
 
                     if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
                         break;
@@ -771,6 +774,9 @@ impl InfiniteTransitionInner {
     }
 
     fn request_restart(self: Rc<Self>) {
+        if self.restart_pending.replace(true) {
+            return;
+        }
         let runtime = self.runtime.clone();
         runtime.enqueue_ui_task(Box::new(move || {
             self.run_token

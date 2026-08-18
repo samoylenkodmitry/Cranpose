@@ -187,7 +187,7 @@ impl SnapshotStateObserverInner {
             }
             let observed = dispatcher_targets.borrow().last().cloned();
             if let Some(observed) = observed {
-                observed.borrow_mut().insert(state.object_id().as_usize());
+                observed.borrow_mut().insert(state);
             }
         });
 
@@ -596,7 +596,7 @@ impl SnapshotStateObserverInner {
 
     fn register_observed_ids(&self, entry_id: usize, observed: &ObservedIds) {
         let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
-        for &state_id in observed.iter() {
+        for state_id in observed.iter() {
             let scope_ids = observed_to_scopes.entry(state_id).or_default();
             scope_ids.insert(entry_id);
         }
@@ -605,7 +605,7 @@ impl SnapshotStateObserverInner {
     fn unregister_observed_ids(&self, entry_id: usize, observed: &ObservedIds) {
         let mut observed_to_scopes = self.observed_to_scopes.borrow_mut();
         let mut emptied = SmallVec::<[StateObjectId; MAX_OBSERVED_STATES]>::new();
-        for &state_id in observed.iter() {
+        for state_id in observed.iter() {
             if let Some(scope_ids) = observed_to_scopes.get_mut(&state_id) {
                 scope_ids.remove(&entry_id);
                 if scope_ids.is_empty() {
@@ -646,8 +646,13 @@ where
 }
 
 enum ObservedIds {
-    Small(SmallVec<[StateObjectId; MAX_OBSERVED_STATES]>),
-    Large(HashSet<StateObjectId>),
+    Small(SmallVec<[ObservedState; MAX_OBSERVED_STATES]>),
+    Large(HashMap<StateObjectId, Option<Box<dyn Any>>>),
+}
+
+struct ObservedState {
+    id: StateObjectId,
+    _lease: Option<Box<dyn Any>>,
 }
 
 impl ObservedIds {
@@ -655,26 +660,32 @@ impl ObservedIds {
         ObservedIds::Small(SmallVec::new())
     }
 
-    fn insert(&mut self, id: StateObjectId) {
+    fn insert(&mut self, state: &dyn StateObject) {
+        let id = state.object_id().as_usize();
         match self {
             ObservedIds::Small(small) => {
-                if small.contains(&id) {
+                if small.iter().any(|observed| observed.id == id) {
                     return;
                 }
                 if small.len() < MAX_OBSERVED_STATES {
-                    small.push(id);
+                    small.push(ObservedState {
+                        id,
+                        _lease: state.observation_lease(),
+                    });
                 } else {
                     let mut large =
-                        HashSet::with_capacity_and_hasher(small.len() + 1, Default::default());
-                    for existing in small.iter() {
-                        large.insert(*existing);
+                        HashMap::with_capacity_and_hasher(small.len() + 1, Default::default());
+                    for observed in small.drain(..) {
+                        large.insert(observed.id, observed._lease);
                     }
-                    large.insert(id);
+                    large.insert(id, state.observation_lease());
                     *self = ObservedIds::Large(large);
                 }
             }
             ObservedIds::Large(large) => {
-                large.insert(id);
+                if !large.contains_key(&id) {
+                    large.insert(id, state.observation_lease());
+                }
             }
         }
     }
@@ -700,15 +711,14 @@ impl ObservedIds {
         }
     }
 
-    fn iter(&self) -> Box<dyn Iterator<Item = &StateObjectId> + '_> {
+    fn iter(&self) -> Box<dyn Iterator<Item = StateObjectId> + '_> {
         match self {
-            ObservedIds::Small(small) => Box::new(small.iter()),
-            ObservedIds::Large(large) => Box::new(large.iter()),
+            ObservedIds::Small(small) => Box::new(small.iter().map(|observed| observed.id)),
+            ObservedIds::Large(large) => Box::new(large.keys().copied()),
         }
     }
 }
 
-// Most scopes observe only a handful of state objects. Spill into HashSet after that.
 const MAX_OBSERVED_STATES: usize = 8;
 
 enum ScopeStorage {

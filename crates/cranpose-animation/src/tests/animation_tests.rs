@@ -2,7 +2,7 @@ use super::*;
 
 use cranpose_core::{
     location_key, with_current_composer, Composer, Composition, MemoryApplier, MutableState, Node,
-    State,
+    SnapshotStateObserver, State,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -246,37 +246,44 @@ fn infinite_transition_animates_float_over_time() {
     let mut composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();
     let root_key = location_key(file!(), line!(), column!());
-    let group_key = location_key(file!(), line!(), column!());
     let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
-
-    {
+    let mut render = {
         let state_slot = Rc::clone(&state_slot);
-        composition
-            .render(root_key, move || {
-                let state_slot = Rc::clone(&state_slot);
-                with_current_composer(|composer| {
-                    composer.with_group(group_key, |_| {
-                        let transition = rememberInfiniteTransition("pulse");
-                        let state = transition.animateFloat(
-                            0.0,
-                            1.0,
-                            infiniteRepeatable(
-                                AnimationSpec::linear(1000),
-                                RepeatMode::Reverse,
-                                StartOffset::default(),
-                            ),
-                            "pulse",
-                        );
-                        let _ = state.get();
-                        state_slot.borrow_mut().replace(state);
-                    });
-                });
-            })
-            .expect("render succeeds");
-    }
+        move || {
+            let transition = rememberInfiniteTransition("pulse");
+            let state = transition.animateFloat(
+                0.0,
+                1.0,
+                infiniteRepeatable(
+                    AnimationSpec::linear(1000),
+                    RepeatMode::Reverse,
+                    StartOffset::default(),
+                ),
+                "pulse",
+            );
+            state_slot.borrow_mut().replace(state);
+        }
+    };
+    composition
+        .render(root_key, &mut render)
+        .expect("render succeeds");
 
-    let initial = state_slot.borrow().as_ref().expect("state available").get();
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let initial = observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
     assert_eq!(initial, 0.0);
+    assert!(state_slot
+        .borrow()
+        .as_ref()
+        .expect("state available")
+        .has_subscribers());
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render succeeds");
 
     let mut time = 0u64;
     let mut saw_change = false;

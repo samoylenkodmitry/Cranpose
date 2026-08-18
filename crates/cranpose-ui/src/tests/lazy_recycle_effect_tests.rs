@@ -16,8 +16,16 @@ fn measure(composition: &mut TestComposition, root: NodeId) {
     let handle = composition.runtime_handle();
     let mut applier = composition.applier_mut();
     applier.set_runtime_handle(handle);
-    measure_layout(&mut applier, root, VIEWPORT).expect("layout measurement");
+    let layout = applier
+        .compute_layout(root, VIEWPORT)
+        .expect("layout measurement");
     applier.clear_runtime_handle();
+    drop(applier);
+    HeadlessRenderer::new().render(&layout);
+    composition.runtime_handle().drain_ui();
+    composition
+        .process_invalid_scopes()
+        .expect("draw subscription recomposition");
 }
 
 #[composable]
