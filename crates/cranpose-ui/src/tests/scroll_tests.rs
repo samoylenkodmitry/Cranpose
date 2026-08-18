@@ -1609,3 +1609,32 @@ fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
         scroll_state.value_non_reactive()
     );
 }
+
+#[test]
+fn wheel_edge_overscroll_settles_without_custom_policy() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let runtime = Runtime::new(Arc::new(DefaultScheduler));
+    let scroll_state = ScrollState::new(0.0);
+    scroll_state.set_max_value(400.0);
+    let (handler, _chain) =
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
+    for _ in 0..20 {
+        let event = scroll_wheel_event(0.0, 200.0);
+        handler(event.clone());
+        event.finish_post_dispatch();
+    }
+
+    let context = scroll_motion_context_for_key(ScrollMotionContextKey::ScrollState {
+        state_id: scroll_state.id(),
+        is_vertical: true,
+        reverse_scrolling: false,
+    });
+    assert!(context.overscroll().offset().abs() > 0.001);
+    for frame in 1..600u64 {
+        runtime.handle().drain_frame_callbacks(frame * 16_000_000);
+        if context.overscroll().offset().abs() <= 0.001 {
+            break;
+        }
+    }
+    assert!(context.overscroll().offset().abs() <= 0.001);
+}

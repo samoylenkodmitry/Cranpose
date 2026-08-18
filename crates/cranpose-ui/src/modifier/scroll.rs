@@ -925,7 +925,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     /// sitting still for [`WHEEL_SETTLE_IDLE_NANOS`] of frame time — is the
     /// gesture end.
     fn ensure_wheel_settle_watcher(&self) {
-        if self.scroll_target.settle_policy().is_none() {
+        if self.scroll_target.settle_policy().is_none() && self.overscroll.offset().abs() <= 0.001 {
             return;
         }
         {
@@ -1011,6 +1011,10 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
                     if this.idle_nanos.get() >= WHEEL_SETTLE_IDLE_NANOS {
                         this.is_running.set(false);
+                        if this.detector.overscroll.offset().abs() > 0.001 {
+                            this.detector.start_overscroll_settle(0.0);
+                            return;
+                        }
                         if let Some(policy) = this.detector.scroll_target.settle_policy() {
                             let target = policy(offset, 0.0);
                             if (target - offset).abs() > 0.5 {
