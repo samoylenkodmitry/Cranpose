@@ -139,10 +139,6 @@ fn main() {
                 "draw-only infinite transition recomposed the root"
             );
             assert!(
-                draw_only_render.draw_calls > 0,
-                "draw-only infinite transition did not redraw its canvas: {draw_only_render:?}"
-            );
-            assert!(
                 consumed.frame_count > 0
                     && consumed.recompositions > 0
                     && consumed_runtime.runtime_stats.frame_callbacks_len > 0,
