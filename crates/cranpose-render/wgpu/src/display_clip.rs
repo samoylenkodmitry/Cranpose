@@ -46,6 +46,7 @@ pub enum DisplayVisibleRegion {
 
 impl DisplayVisibleRegion {
     /// Whether the region leaves anything to cull at all.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn cullable(self) -> bool {
         self != Self::Full
     }

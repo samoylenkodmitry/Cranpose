@@ -462,6 +462,7 @@ pub(crate) struct PreparedShaderDraw<'a> {
 /// segment-surface cache's draw-back. `dest_quad` is in destination pixels,
 /// strip order TL, TR, BL, BR; `inverse` maps destination pixels to SOURCE
 /// TEXEL coordinates (not normalized).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct ProjectiveCompositeItem<'a> {
     pub source: &'a OffscreenTarget,
     pub viewport: (u32, u32),
@@ -472,6 +473,7 @@ pub(crate) struct ProjectiveCompositeItem<'a> {
     pub sample_mode: CompositeSampleMode,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct PreparedProjectiveComposite<'a> {
     texture_bind_group: &'a wgpu::BindGroup,
     uniform_bind_group: wgpu::BindGroup,
@@ -1006,6 +1008,7 @@ impl EffectRenderer {
         })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn initialized_projective_blit_pipeline(
         &self,
         blend_mode: BlendMode,
@@ -2080,6 +2083,7 @@ impl EffectRenderer {
     /// exactly the transformed quad, which is what the segment-surface
     /// economics gate prices. The fragment shader's out-of-source discard
     /// stays as the safety net at the quad edges.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_projective_composite_draw<'a, C: FrameCommandRecorder>(
         &mut self,
         recorder: &mut C,
@@ -2175,6 +2179,7 @@ impl EffectRenderer {
     /// Draws a prepared projective composite inside an existing pass. The
     /// scissor is reset to the full viewport, matching what the retained
     /// draws around it do.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn draw_prepared_projective_composite(
         &self,
         pass: &mut wgpu::RenderPass<'_>,

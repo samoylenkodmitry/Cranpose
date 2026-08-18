@@ -1,6 +1,8 @@
 //! GPU rendering implementation using WGPU
 
-use crate::display_clip::{self, DisplayVisibleRegion};
+use crate::display_clip;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::display_clip::DisplayVisibleRegion;
 use crate::effect_renderer::{
     projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
     EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
@@ -174,7 +176,7 @@ impl ShapeBatchLimits {
     /// reached with a device in hand: it needs an adapter that reports storage
     /// buffers and no vertex-stage access, which is every ARM Mali GLES driver
     /// and no desktop.
-    fn select(limits: &wgpu::Limits, downlevel: wgpu::DownlevelFlags) -> Self {
+    fn select(limits: &wgpu::Limits, _downlevel: wgpu::DownlevelFlags) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         if limits.max_storage_buffers_per_shader_stage >= 2
             // `max_storage_buffers_per_shader_stage` alone is NOT the question,
@@ -196,7 +198,7 @@ impl ShapeBatchLimits {
             // variable. Adreno 650 and Adreno 702 have the flag and are
             // unaffected. `VERTEX_STORAGE` is the flag that actually answers
             // the question the layout asks, so ask it.
-            && downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
+            && _downlevel.contains(wgpu::DownlevelFlags::VERTEX_STORAGE)
         {
             return Self::for_storage_binding_size(limits.max_storage_buffer_binding_size);
         }
@@ -7374,6 +7376,7 @@ impl GpuRenderer {
         self.acquire_offscreen(width, height)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn acquire_segment_surface(&mut self, width: u32, height: u32) -> OffscreenTarget {
         let max_texture_dim = self.max_texture_dim();
         OffscreenTarget::new(

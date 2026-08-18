@@ -347,7 +347,8 @@ impl RendererFrontend {
             frame_id: _,
             outcome: _,
             cancelled_replay,
-            timings: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                timings: _,
         } = returns;
         if let Some(scene) = scene {
             // The packet's scene buffers return to the producer pool — for

@@ -245,6 +245,7 @@ pub(crate) struct RenderReturns {
     /// Present-thread stage timestamps for this packet; all-zero on the
     /// sync path (the producer already holds the clock there) and on any
     /// outcome that never reached the swapchain.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) timings: PresentTimings,
 }
 
