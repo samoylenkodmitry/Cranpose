@@ -264,18 +264,8 @@ impl Affine2 {
         })
     }
 
-    /// True when the map moves no point of a viewport-sized region by more
-    /// than ~1/64 px — the composite can then sample with the exact
-    /// `textureLoad` path and the parity bar is byte-level.
     pub(crate) fn is_identity_for_sampling(&self) -> bool {
-        const LINEAR_EPS: f32 = 1e-6;
-        const OFFSET_EPS: f32 = 1.0 / 64.0;
-        (self.l[0][0] - 1.0).abs() <= LINEAR_EPS
-            && (self.l[1][1] - 1.0).abs() <= LINEAR_EPS
-            && self.l[0][1].abs() <= LINEAR_EPS
-            && self.l[1][0].abs() <= LINEAR_EPS
-            && self.t[0].abs() <= OFFSET_EPS
-            && self.t[1].abs() <= OFFSET_EPS
+        self.l == [[1.0, 0.0], [0.0, 1.0]] && self.t == [0.0, 0.0]
     }
 }
 
