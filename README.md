@@ -22,6 +22,8 @@ them.
 
 [`apps/isolated-demo`](apps/isolated-demo) is a complete starter project that
 depends only on published crates — copy it rather than starting from scratch.
+It targets desktop, Android, and the web. The workspace's comprehensive demo
+(`apps/desktop-demo`) also contains the iOS entry point.
 
 ```bash
 git clone https://github.com/samoylenkodmitry/cranpose.git
@@ -33,7 +35,7 @@ Or add the framework to an existing project:
 
 ```toml
 [dependencies]
-cranpose = { version = "0.1.88", features = ["desktop", "renderer-wgpu"] }
+cranpose = { version = "0.1.95", features = ["desktop", "renderer-wgpu"] }
 ```
 
 ## Example
@@ -152,6 +154,9 @@ gap-table notes elsewhere are historical rationale only.
 Release binaries for the desktop platforms are attached to each
 [release](https://github.com/samoylenkodmitry/Cranpose/releases).
 
+The iOS implementation is built from `apps/desktop-demo`; the standalone
+`apps/isolated-demo` template does not include an iOS target.
+
 ## Building
 
 ### Desktop (Linux/macOS/Windows)
@@ -197,11 +202,14 @@ cd apps/ios-demo
 ### Web (WASM)
 
 ```bash
-# Prerequisites: cargo install wasm-pack
+# Prerequisites: rustup target add wasm32-unknown-unknown && cargo install wasm-pack
 cd apps/isolated-demo
 ./build-web.sh
 python3 -m http.server 8080
 ```
+
+Open `http://localhost:8080`. WebGL2 is the default backend; append
+`?backend=webgpu` to the URL to force WebGPU when the browser supports it.
 
 ## Binary size
 
@@ -238,7 +246,7 @@ out-of-the-box behaviour over size:
 
 ```toml
 [dependencies]
-cranpose = { version = "0.1.88", default-features = false, features = [
+cranpose = { version = "0.1.95", default-features = false, features = [
     "desktop",        # or just "desktop-wayland" / "desktop-x11"
     "renderer-wgpu",
 ] }
