@@ -29,13 +29,83 @@ use ndk::audio::{
     AudioPerformanceMode, AudioSharingMode, AudioStream, AudioStreamBuilder, AudioStreamState,
 };
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread::{self, JoinHandle};
 
 /// The rate the mixer assumes until the stream reports the one it negotiated.
 const NOMINAL_SAMPLE_RATE: f32 = 48_000.0;
 const REQUESTED_CHANNELS: i32 = 2;
 
 pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
+    let connected = Arc::new(AtomicBool::new(true));
+    let (requests, request_rx) = mpsc::channel();
+    let (startup_tx, startup_rx) = mpsc::sync_channel(1);
+    let worker_connected = Arc::clone(&connected);
+    let worker = thread::Builder::new()
+        .name("cranpose-aaudio".into())
+        .spawn(move || run_worker(seed, worker_connected, request_rx, startup_tx))
+        .map_err(|error| {
+            AudioError::Backend(format!("failed to start the AAudio owner thread: {error}"))
+        })?;
+
+    match startup_rx.recv() {
+        Ok(Ok(())) => Ok(Box::new(AAudioSink {
+            requests: Some(requests),
+            connected,
+            worker: Some(worker),
+        })),
+        Ok(Err(error)) => {
+            join_worker(worker);
+            Err(error)
+        }
+        Err(_) => {
+            join_worker(worker);
+            Err(AudioError::Backend(
+                "AAudio owner thread stopped during startup".into(),
+            ))
+        }
+    }
+}
+
+fn run_worker(
+    seed: MixerSeed,
+    connected: Arc<AtomicBool>,
+    requests: mpsc::Receiver<StreamRequest>,
+    startup: mpsc::SyncSender<Result<(), AudioError>>,
+) {
+    let stream = match open_stream(seed, Arc::clone(&connected)) {
+        Ok(stream) => stream,
+        Err(error) => {
+            connected.store(false, Ordering::Release);
+            let _ = startup.send(Err(error));
+            return;
+        }
+    };
+
+    if !stream_is_usable(&stream, &connected) {
+        let _ = startup.send(Err(AudioError::Backend(
+            "AAudio stream disconnected during startup".into(),
+        )));
+        return;
+    }
+    if startup.send(Ok(())).is_err() {
+        stop_stream(&stream);
+        return;
+    }
+
+    while let Ok(request) = requests.recv() {
+        let available = apply_operation(&stream, request.operation, &connected);
+        let _ = request.completed.send(available);
+    }
+
+    connected.store(false, Ordering::Release);
+    stop_stream(&stream);
+}
+
+fn open_stream(seed: MixerSeed, connected: Arc<AtomicBool>) -> Result<AudioStream, AudioError> {
     let mut mixer = Mixer::new(seed, NOMINAL_SAMPLE_RATE, REQUESTED_CHANNELS as usize);
+    let error_connected = Arc::clone(&connected);
 
     let stream = AudioStreamBuilder::new()
         .map_err(backend_error("failed to create an AAudio stream builder"))?
@@ -74,10 +144,11 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
                 }
             },
         ))
-        .error_callback(Box::new(|_stream, error| {
+        .error_callback(Box::new(move |_stream, error| {
             // Runs on an AAudio worker thread, not the real-time one, so this
             // may log. A disconnect ends the stream; the engine reopens the
             // device the next time it is asked to play.
+            error_connected.store(false, Ordering::Release);
             log::warn!("AAudio stream error: {error:?}");
         }))
         .open_stream()
@@ -101,71 +172,151 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
         stream.frames_per_burst()
     );
 
-    Ok(Box::new(AAudioSink { stream }))
+    Ok(stream)
 }
 
 fn backend_error(context: &'static str) -> impl Fn(AAudioError) -> AudioError {
     move |error| AudioError::Backend(format!("{context}: {error}"))
 }
 
+#[derive(Clone, Copy)]
+enum StreamOperation {
+    Suspend,
+    Resume,
+    IsRunning,
+    Park,
+}
+
+struct StreamRequest {
+    operation: StreamOperation,
+    completed: mpsc::SyncSender<bool>,
+}
+
 struct AAudioSink {
-    stream: AudioStream,
+    requests: Option<mpsc::Sender<StreamRequest>>,
+    connected: Arc<AtomicBool>,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl AAudioSink {
+    fn request(&self, operation: StreamOperation) -> bool {
+        let Some(requests) = self.requests.as_ref() else {
+            return false;
+        };
+        let (completed, result) = mpsc::sync_channel(1);
+        if requests
+            .send(StreamRequest {
+                operation,
+                completed,
+            })
+            .is_err()
+        {
+            self.connected.store(false, Ordering::Release);
+            return false;
+        }
+        result.recv().unwrap_or_else(|_| {
+            self.connected.store(false, Ordering::Release);
+            false
+        })
+    }
 }
 
 impl AudioSink for AAudioSink {
     fn suspend(&self) {
-        if let Err(error) = self.stream.request_pause() {
-            log::warn!("failed to pause the AAudio stream: {error}");
-        }
+        self.request(StreamOperation::Suspend);
     }
 
     fn resume(&self) {
-        // A stream the data callback gave up by returning `Stop` may still be
-        // in `Started`: on Android 8 that return only ended the callback, and
-        // the internal stop that later releases added does not exist there.
-        // `request_start` is rejected in that state, which would leave the app
-        // permanently silent, so the stop is made explicit first. This is a
-        // no-op on a stream that really did stop, and it does not fire on the
-        // lifecycle path, where `suspend` left the stream paused.
-        if self.stream.state() == AudioStreamState::Started {
-            if let Err(error) = self.stream.request_stop() {
-                log::warn!("failed to settle the AAudio stream before starting it: {error}");
-            }
-        }
-        if let Err(error) = self.stream.request_start() {
-            log::warn!("failed to restart the AAudio stream: {error}");
-        }
+        self.request(StreamOperation::Resume);
     }
 
     fn is_running(&self) -> bool {
-        let state = self.stream.state();
-        !matches!(
-            state,
-            AudioStreamState::Uninitialized
-                | AudioStreamState::Closing
-                | AudioStreamState::Closed
-                | AudioStreamState::Disconnected
-        )
+        self.connected.load(Ordering::Acquire) && self.request(StreamOperation::IsRunning)
     }
 
     fn park(&self) {
-        // `request_stop` rather than `request_pause`: a paused stream keeps its
-        // route, which is exactly the thing costing power. Stopping an already
-        // stopped stream is a no-op in AAudio, so this stays correct on the
-        // releases where returning `Stop` from the callback already tore the
-        // stream down.
-        if let Err(error) = self.stream.request_stop() {
-            log::warn!("failed to release the idle AAudio stream: {error}");
-        }
+        self.request(StreamOperation::Park);
     }
 }
 
 impl Drop for AAudioSink {
     fn drop(&mut self) {
-        // Stopping before the stream closes means the callback has returned for
-        // the last time, so the mixer it owns is dropped on this thread.
-        if let Err(error) = self.stream.request_stop() {
-            log::warn!("failed to stop the AAudio stream: {error}");
+        self.requests.take();
+        if let Some(worker) = self.worker.take() {
+            join_worker(worker);
         }
+    }
+}
+
+fn apply_operation(
+    stream: &AudioStream,
+    operation: StreamOperation,
+    connected: &AtomicBool,
+) -> bool {
+    match operation {
+        StreamOperation::Suspend => {
+            if let Err(error) = stream.request_pause() {
+                log::warn!("failed to pause the AAudio stream: {error}");
+            }
+        }
+        StreamOperation::Resume => {
+            // A stream the data callback gave up by returning `Stop` may still
+            // be in `Started`: on Android 8 that return only ended the
+            // callback, and the internal stop that later releases added does
+            // not exist there. `request_start` is rejected in that state,
+            // which would leave the app permanently silent, so the stop is
+            // made explicit first. This is a no-op on a stream that really did
+            // stop, and it does not fire on the lifecycle path, where
+            // `suspend` left the stream paused.
+            if stream.state() == AudioStreamState::Started {
+                if let Err(error) = stream.request_stop() {
+                    log::warn!("failed to settle the AAudio stream before starting it: {error}");
+                }
+            }
+            if let Err(error) = stream.request_start() {
+                log::warn!("failed to restart the AAudio stream: {error}");
+            }
+        }
+        StreamOperation::IsRunning => {}
+        StreamOperation::Park => {
+            // `request_stop` rather than `request_pause`: a paused stream
+            // keeps its route, which is exactly the thing costing power.
+            // Stopping an already stopped stream is a no-op in AAudio, so this
+            // stays correct on the releases where returning `Stop` from the
+            // callback already tore the stream down.
+            if let Err(error) = stream.request_stop() {
+                log::warn!("failed to release the idle AAudio stream: {error}");
+            }
+        }
+    }
+    stream_is_usable(stream, connected)
+}
+
+fn stream_is_usable(stream: &AudioStream, connected: &AtomicBool) -> bool {
+    let usable = connected.load(Ordering::Acquire)
+        && !matches!(
+            stream.state(),
+            AudioStreamState::Uninitialized
+                | AudioStreamState::Closing
+                | AudioStreamState::Closed
+                | AudioStreamState::Disconnected
+        );
+    if !usable {
+        connected.store(false, Ordering::Release);
+    }
+    usable
+}
+
+fn stop_stream(stream: &AudioStream) {
+    // Stopping before the stream closes means the callback has returned for
+    // the last time, so the mixer it owns is dropped on its owner thread.
+    if let Err(error) = stream.request_stop() {
+        log::warn!("failed to stop the AAudio stream: {error}");
+    }
+}
+
+fn join_worker(worker: JoinHandle<()>) {
+    if worker.join().is_err() {
+        log::error!("AAudio owner thread panicked");
     }
 }
