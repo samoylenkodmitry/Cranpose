@@ -2620,8 +2620,8 @@ mod tests {
 
         let mut composition = cranpose_ui::run_test_composition(move || {
             let scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
-            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
             cranpose_ui::Box(
                 Modifier::empty()
                     .size_points(240.0, 320.0)
@@ -2634,7 +2634,7 @@ mod tests {
                     Column(
                         Modifier::empty()
                             .size_points(240.0, 320.0)
-                            .vertical_scroll(scroll_state.clone(), false),
+                            .vertical_scroll(scroll_state, false),
                         ColumnSpec::default(),
                         || {
                             for index in 0..12usize {
@@ -2712,8 +2712,8 @@ mod tests {
 
         let mut composition = cranpose_ui::run_test_composition(move || {
             let scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
-            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
             Column(
                 Modifier::empty()
                     .size_points(240.0, 120.0)
@@ -2793,9 +2793,9 @@ mod tests {
         let mut composition = cranpose_ui::run_test_composition(move || {
             let label = cranpose_core::useState(|| "scrolled child before".to_string());
             let scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             *label_holder_for_comp.borrow_mut() = Some(label);
-            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
             let child_id_holder_for_content = child_id_holder_for_comp.clone();
             Column(
                 Modifier::empty()
@@ -2905,9 +2905,9 @@ mod tests {
         let mut composition = cranpose_ui::run_test_composition(move || {
             let alpha = cranpose_core::useState(|| 1.0f32);
             let scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             *alpha_holder_for_comp.borrow_mut() = Some(alpha);
-            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
             let underlay_id_holder_for_content = underlay_id_holder_for_comp.clone();
             let overlay_id_holder_for_content = overlay_id_holder_for_comp.clone();
             Column(

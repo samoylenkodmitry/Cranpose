@@ -5735,8 +5735,7 @@ fn layout_bounds_index_matches_cached_layout_tree() {
 
 #[composable]
 fn app_shell_scrollable_test_tab(label: &'static str) {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -5755,10 +5754,9 @@ fn app_shell_scrollable_test_tab(label: &'static str) {
 
 #[composable]
 fn app_shell_wheel_scroll_probe() {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(scroll_state.clone());
+        *slot.borrow_mut() = Some(scroll_state);
     });
 
     Column(
@@ -5792,10 +5790,9 @@ thread_local! {
 
 #[composable]
 fn app_shell_zoomable_probe() {
-    let zoom_state =
-        cranpose_core::remember(cranpose_ui::ZoomState::new).with(|state| state.clone());
+    let zoom_state = cranpose_core::remember(cranpose_ui::ZoomState::new).with(|state| *state);
     APP_SHELL_ZOOM_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(zoom_state.clone());
+        *slot.borrow_mut() = Some(zoom_state);
     });
 
     Box(
@@ -5809,10 +5806,9 @@ fn app_shell_zoomable_probe() {
 
 #[composable]
 fn app_shell_tall_fling_scroll_probe() {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(scroll_state.clone());
+        *slot.borrow_mut() = Some(scroll_state);
     });
 
     Column(
@@ -5837,10 +5833,9 @@ fn app_shell_tall_fling_scroll_probe() {
 
 #[composable]
 fn app_shell_consumed_child_drag_scroll_probe() {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(scroll_state.clone());
+        *slot.borrow_mut() = Some(scroll_state);
     });
 
     Column(
@@ -5895,10 +5890,9 @@ fn app_shell_consumed_child_drag_scroll_probe() {
 
 #[composable]
 fn app_shell_horizontal_clickable_wheel_scroll_probe() {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     APP_SHELL_WHEEL_SCROLL_STATE.with(|slot| {
-        *slot.borrow_mut() = Some(scroll_state.clone());
+        *slot.borrow_mut() = Some(scroll_state);
     });
 
     Row(
@@ -5929,8 +5923,7 @@ fn app_shell_horizontal_clickable_wheel_scroll_probe() {
 
 #[composable]
 fn app_shell_scrollable_wrapper(content: impl FnMut() + 'static) {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -6074,7 +6067,7 @@ fn app_shell_effect_test_tab() {
     let status_text = status.get();
     Column(
         Modifier::empty().fill_max_size().vertical_scroll(
-            cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone()),
+            cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state),
             false,
         ),
         ColumnSpec::default(),
@@ -6100,7 +6093,7 @@ fn app_shell_composition_local_test_tab() {
     let provided = counter.get();
     Column(
         Modifier::empty().fill_max_size().vertical_scroll(
-            cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone()),
+            cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state),
             false,
         ),
         ColumnSpec::default(),
@@ -6892,7 +6885,7 @@ fn app_shell_many_tabs_clickable_host() {
         ColumnSpec::default(),
         move || {
             let tabs_scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             Row(
                 Modifier::empty()
                     .fill_max_width()
@@ -6992,8 +6985,7 @@ fn app_shell_many_tabs_precise_tab_bar(active_tab: MutableState<i32>) {
         "Markdown Viewer",
     ];
 
-    let tabs_scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let tabs_scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Row(
         Modifier::empty()
             .fill_max_width()

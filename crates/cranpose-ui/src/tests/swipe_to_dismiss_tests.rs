@@ -437,9 +437,8 @@ impl NestedHarness {
 
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
-        let (scroll, scroll_chain) = pointer_handler_for(
-            crate::Modifier::empty().vertical_scroll(scroll_state.clone(), false),
-        );
+        let (scroll, scroll_chain) =
+            pointer_handler_for(crate::Modifier::empty().vertical_scroll(scroll_state, false));
 
         Self {
             harness,

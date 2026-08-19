@@ -20,15 +20,12 @@ fn text_field_modifier_slices_refresh_style_when_state_identity_is_reused() {
     let mut context = BasicModifierNodeContext::new();
 
     chain.update_from_slice(
-        &[modifier_element(TextFieldElement::new(
-            state.clone(),
-            dark_style,
-        ))],
+        &[modifier_element(TextFieldElement::new(state, dark_style))],
         &mut context,
     );
     chain.update_from_slice(
         &[modifier_element(TextFieldElement::new(
-            state.clone(),
+            state,
             light_style.clone(),
         ))],
         &mut context,

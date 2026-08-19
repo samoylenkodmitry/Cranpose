@@ -1314,14 +1314,14 @@ mod carried_plan_tests {
 
         let mut composition = cranpose_ui::run_test_composition(move || {
             let scroll_state =
-                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
-            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state.clone());
+                cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
+            *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
             let alpha = cranpose_core::useState(|| 1.0f32);
             *alpha_holder_for_comp.borrow_mut() = Some(alpha);
             Column(
                 Modifier::empty()
                     .size_points(240.0, 320.0)
-                    .vertical_scroll(scroll_state.clone(), false),
+                    .vertical_scroll(scroll_state, false),
                 ColumnSpec::default(),
                 move || {
                     for index in 0..12usize {

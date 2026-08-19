@@ -52,7 +52,7 @@ fn scroll_state_id_uses_retained_instance_identity() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let first = ScrollState::new(0.0);
-        let first_clone = first.clone();
+        let first_clone = first;
         let second = ScrollState::new(0.0);
 
         assert_ne!(first.id(), 0);
@@ -293,7 +293,7 @@ fn vertical_scroll_ignores_move_consumed_by_child_drag() {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 0.0));
         let consumed_move = scroll_pointer_event(PointerEventKind::Move, 0.0, 32.0);
@@ -318,7 +318,7 @@ fn touch_drag_moves_content_with_the_finger() {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 100.0));
         // Finger moves up by 60px (beyond the 8px drag threshold).
@@ -340,7 +340,7 @@ fn touch_drag_down_moves_content_down() {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 0.0, 40.0));
         // Finger moves down by 60px: content follows, scroll offset decreases.
@@ -382,9 +382,9 @@ fn exhausted_inner_scrollable_yields_the_drag_to_its_parent() {
         let outer = ScrollState::new(0.0);
         outer.set_max_value(600.0);
         let (child, _child_chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(inner.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(inner, false));
         let (parent, _parent_chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(outer.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(outer, false));
 
         // Finger up = scroll onward, beyond the inner's limit.
         dispatch_nested(
@@ -466,9 +466,9 @@ fn horizontal_drag_with_jitter_scrolls_nested_horizontal_not_vertical_parent() {
         let vertical = ScrollState::new(100.0);
         vertical.set_max_value(400.0);
         let (child, _child_chain) =
-            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
         let (parent, _parent_chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(vertical.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(vertical, false));
 
         dispatch_nested(
             &child,
@@ -536,9 +536,9 @@ fn vertical_drag_with_horizontal_jitter_scrolls_parent_not_nested_child() {
         let vertical = ScrollState::new(100.0);
         vertical.set_max_value(400.0);
         let (child, _child_chain) =
-            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
         let (parent, _parent_chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(vertical.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(vertical, false));
 
         dispatch_nested(
             &child,
@@ -592,7 +592,7 @@ fn cross_axis_drag_locks_scrollable_out_for_the_rest_of_the_gesture() {
         let horizontal = ScrollState::new(100.0);
         horizontal.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal.clone(), false));
+            pointer_handler_for(Modifier::empty().horizontal_scroll(horizontal, false));
 
         handler(scroll_pointer_event(PointerEventKind::Down, 100.0, 100.0));
         // Decisively vertical: dy = 20 crosses the slop while dx = 4.
@@ -648,7 +648,7 @@ fn wheel_scroll_updates_vertical_scroll_state() {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         let event = scroll_wheel_event(0.0, 48.0);
 
@@ -672,7 +672,7 @@ fn wheel_scroll_uses_horizontal_delta_for_horizontal_scroll() {
         let scroll_state = ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().horizontal_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().horizontal_scroll(scroll_state, false));
 
         let event = scroll_wheel_event(30.0, 120.0);
 
@@ -696,7 +696,7 @@ fn scroll_state_invalidation_callback_can_register_follow_up_callback() {
         let scroll_state = ScrollState::new(0.0);
         scroll_state.set_max_value(100.0);
         let follow_up_called = Rc::new(Cell::new(false));
-        let state_for_callback = scroll_state.clone();
+        let state_for_callback = scroll_state;
         let follow_up_for_callback = Rc::clone(&follow_up_called);
 
         scroll_state.add_invalidate_callback(Box::new(move || {
@@ -844,7 +844,7 @@ fn scroll_motion_context_survives_modifier_recomposition_with_stale_pointer_task
 
         let mut chain = ModifierNodeChain::new();
         let mut context = BasicModifierNodeContext::new();
-        let first = Modifier::empty().vertical_scroll(scroll_state.clone(), false);
+        let first = Modifier::empty().vertical_scroll(scroll_state, false);
         chain.update_from_slice(&first.elements(), &mut context);
         let stale_handler = collect_modifier_slices(&chain)
             .pointer_inputs()
@@ -852,7 +852,7 @@ fn scroll_motion_context_survives_modifier_recomposition_with_stale_pointer_task
             .cloned()
             .expect("scroll modifier should provide pointer input handler");
 
-        let recomposed = Modifier::empty().vertical_scroll(scroll_state.clone(), false);
+        let recomposed = Modifier::empty().vertical_scroll(scroll_state, false);
         chain.update_from_slice(&recomposed.elements(), &mut context);
         assert!(
             !collect_modifier_slices(&chain).motion_context_animated(),
@@ -1014,7 +1014,7 @@ fn batched_touch_delivery_computes_real_finger_velocity() {
         let scroll_state = ScrollState::new(200.0);
         scroll_state.set_max_value(4000.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         let t0 = 1_234_567i64; // arbitrary uptime base
         handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
@@ -1056,7 +1056,7 @@ fn release_jitter_does_not_reverse_or_inflate_fling() {
         let scroll_state = ScrollState::new(200.0);
         scroll_state.set_max_value(4000.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         let t0 = 987_654i64;
         handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
@@ -1107,7 +1107,7 @@ fn batched_same_millisecond_samples_do_not_explode_velocity() {
         let scroll_state = ScrollState::new(200.0);
         scroll_state.set_max_value(4000.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         let t0 = 500_000i64;
         handler(timed_pointer_event(PointerEventKind::Down, 0.0, 100.0, t0));
@@ -1213,7 +1213,7 @@ fn three_consecutive_flings_compute_the_same_velocity_sign() {
     let scroll_state = ScrollState::new(5_000.0);
     scroll_state.set_max_value(100_000.0);
     let (handler, _chain) =
-        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
     let mut event_ms = 7_777_000i64; // arbitrary uptime base
     let mut frame_ns = 0u64;
@@ -1285,10 +1285,10 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
         let item_count = 30usize;
 
         let scroll_state = ScrollState::new(0.0);
-        let scroll_state_for_content = scroll_state.clone();
+        let scroll_state_for_content = scroll_state;
         let mut composition = crate::run_test_composition(move || {
             Column(
-                Modifier::empty().vertical_scroll(scroll_state_for_content.clone(), false),
+                Modifier::empty().vertical_scroll(scroll_state_for_content, false),
                 ColumnSpec::default(),
                 move || {
                     for _ in 0..item_count {
@@ -1329,7 +1329,7 @@ fn vertical_scroll_box_bottom_reachable_at_fractional_density() {
         // Drag to the bottom with realistic touch gestures (finger up 200dp per
         // gesture, 8ms-per-8dp samples) until the offset stops moving.
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
         let mut time = 10_000i64;
         let mut last_value = -1.0f32;
         let mut gestures = 0;
@@ -1405,7 +1405,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
         let (inner_handler, _inner_chain) =
             pointer_handler_for(Modifier::empty().lazy_vertical_scroll(list_state, false));
         let (outer_handler, _outer_chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(outer_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(outer_state, false));
 
         // The shell dispatches gesture events along the hit path innermost
         // first without stopping on consumption for moves; replicate that.
@@ -1466,7 +1466,7 @@ fn drag_release_inside_settle_band_springs_to_policy_edge() {
         }
     })));
     let (handler, _chain) =
-        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
     handler(timed_pointer_event(PointerEventKind::Down, 0.0, 200.0, 0));
     handler(timed_pointer_event(PointerEventKind::Move, 0.0, 168.0, 16));
@@ -1507,7 +1507,7 @@ fn drag_release_below_band_midpoint_springs_back_to_zero() {
         }
     })));
     let (handler, _chain) =
-        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
     handler(timed_pointer_event(PointerEventKind::Down, 0.0, 200.0, 0));
     handler(timed_pointer_event(PointerEventKind::Move, 0.0, 182.0, 16));
@@ -1543,7 +1543,7 @@ fn fling_release_is_retargeted_by_settle_policy() {
         }
     })));
     let (handler, _chain) =
-        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
     // 8dp every 8ms of upward finger motion = a solid 1000 dp/s fling.
     handler(timed_pointer_event(PointerEventKind::Down, 0.0, 400.0, 0));
@@ -1587,7 +1587,7 @@ fn wheel_idle_inside_settle_band_snaps_to_policy_edge() {
         }
     })));
     let (handler, _chain) =
-        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+        pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
     handler(scroll_wheel_event(0.0, -30.0));
     assert!(

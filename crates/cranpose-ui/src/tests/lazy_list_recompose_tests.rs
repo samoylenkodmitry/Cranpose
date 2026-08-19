@@ -441,7 +441,7 @@ fn LazyItemWithScrollableRow() {
     let list_state = remember_lazy_list_state();
     let row_scroll = cranpose_core::remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
     LAST_INNER_ROW_SCROLL_STATE.with(|cell| {
-        *cell.borrow_mut() = Some(row_scroll.clone());
+        *cell.borrow_mut() = Some(row_scroll);
     });
 
     LazyColumn(
@@ -449,13 +449,13 @@ fn LazyItemWithScrollableRow() {
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
-            let row_scroll = row_scroll.clone();
+            let row_scroll = row_scroll;
             scope.item(Some(0), None, move || {
                 Row(
                     Modifier::empty()
                         .fill_max_width()
                         .height(60.0)
-                        .horizontal_scroll(row_scroll.clone(), false),
+                        .horizontal_scroll(row_scroll, false),
                     RowSpec::default(),
                     || {
                         Text(
@@ -1006,7 +1006,7 @@ fn scrolling_a_row_inside_a_cached_lazy_item_moves_its_rendered_children() {
     let initial_x = text_x(&initial_records, "Chip B");
 
     let row_scroll = LAST_INNER_ROW_SCROLL_STATE
-        .with(|cell| cell.borrow().clone())
+        .with(|cell| *cell.borrow())
         .expect("inner row scroll state captured");
     assert!(
         row_scroll.max_value() > 100.0,

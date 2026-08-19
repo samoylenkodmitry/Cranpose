@@ -171,8 +171,7 @@ fn make_tab_renderer(active_tab: MutableState<i32>, progress: MutableState<f32>)
 
 #[composable]
 fn scrollable_test_tab(label: &'static str) {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     Column(
         Modifier::empty()
             .fill_max_size()
@@ -191,8 +190,7 @@ fn scrollable_test_tab(label: &'static str) {
 
 #[composable]
 fn wrapped_stateful_counter_tab() {
-    let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
     let counter = cranpose_core::useState(|| 0i32);
     let pointer = cranpose_core::useState(|| 0i32);
     let is_even = counter.value() % 2 == 0;

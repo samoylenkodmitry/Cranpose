@@ -98,7 +98,7 @@ fn build_shell(lazy: bool, seed: String) -> Option<TestApp> {
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = cranpose_app_shell::AppShell::new(renderer, root_key, move || {
         let seed = seed.clone();
-        let state = cranpose_core::remember(move || TextFieldState::new(&seed)).with(|s| s.clone());
+        let state = cranpose_core::remember(move || TextFieldState::new(&seed)).with(|s| *s);
         let style = field_style();
         let root_mod = Modifier::empty()
             .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
@@ -106,13 +106,12 @@ fn build_shell(lazy: bool, seed: String) -> Option<TestApp> {
         if lazy {
             let list_state = remember_lazy_list_state();
             LazyColumn(root_mod, list_state, LazyColumnSpec::new(), move |scope| {
-                let state = state.clone();
                 let style = style.clone();
-                scope.item(None, None, move || Field(state.clone(), style.clone()));
+                scope.item(None, None, move || Field(state, style.clone()));
             });
         } else {
             Column(root_mod, ColumnSpec::default(), move || {
-                Field(state.clone(), style.clone());
+                Field(state, style.clone());
             });
         }
     });

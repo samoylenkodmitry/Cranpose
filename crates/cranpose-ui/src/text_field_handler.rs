@@ -321,7 +321,7 @@ mod tests {
     ) -> (TextFieldState, Rc<RefCell<bool>>) {
         let state = TextFieldState::new(initial);
         let handler = TextFieldHandler::new(
-            state.clone(),
+            state,
             None,
             line_limits,
             CaretGeometryRefs {

@@ -417,7 +417,7 @@ mod tests {
     fn interaction_source_ids_are_instance_owned() {
         let composition = Composition::new(MemoryApplier::new());
         let first = MutableInteractionSource::with_runtime(composition.runtime_handle());
-        let first_clone = first.clone();
+        let first_clone = first;
         let second = MutableInteractionSource::with_runtime(composition.runtime_handle());
 
         assert_eq!(first.id(), first_clone.id());
@@ -462,7 +462,7 @@ mod tests {
         source_slot: Rc<RefCell<Option<MutableInteractionSource>>>,
     ) {
         let source = rememberMutableInteractionSource();
-        source_slot.borrow_mut().replace(source.clone());
+        source_slot.borrow_mut().replace(source);
         let pressed = collect_is_pressed_as_state(&source);
         observed.borrow_mut().push(pressed.value());
     }
@@ -482,11 +482,10 @@ mod tests {
 
         assert_eq!(observed.borrow().as_slice(), &[false]);
 
-        let source = source_slot
+        let source = *source_slot
             .borrow()
             .as_ref()
-            .expect("interaction source captured")
-            .clone();
+            .expect("interaction source captured");
         let press = composition.with_app_context(|| source.press(Point { x: 1.0, y: 1.0 }));
         while composition
             .process_invalid_scopes()

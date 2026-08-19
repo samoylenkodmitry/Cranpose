@@ -137,7 +137,7 @@ fn renderer_survives_downlevel_uniform_binding_limit() {
         "rendering on a 16 KiB uniform-binding device must not raise validation errors: {validation:?}"
     );
     let frame = frame.expect("capture should succeed on a downlevel-uniform device");
-    let index = ((1 * frame.width + 17) * 4) as usize;
+    let index = ((frame.width + 17) * 4) as usize;
     assert!(
         frame.pixels[index..index + 3] == [128, 76, 178],
         "an interior shape pixel must preserve the deterministic linear output bytes: {:?}",

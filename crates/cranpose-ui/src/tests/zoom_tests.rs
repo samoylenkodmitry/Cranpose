@@ -155,7 +155,7 @@ fn two_finger_pinch_out_scales_up_and_consumes_moves() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
@@ -184,7 +184,7 @@ fn pinch_keeps_content_under_the_fingers() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::with_scale_range(1.0, 8.0);
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
@@ -211,7 +211,7 @@ fn secondary_pointer_down_and_up_are_consumed() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         let secondary_down = touch(PointerEventKind::Down, 1, 200.0, 100.0);
@@ -235,7 +235,7 @@ fn single_finger_drag_pans_only_when_transformed() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         // At identity: a one-finger drag must NOT pan (enclosing scrollables
         // own plain drags).
@@ -273,7 +273,7 @@ fn two_finger_centroid_pan_at_identity_scale_is_inert() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::with_scale_range(0.5, 8.0);
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
@@ -301,7 +301,7 @@ fn released_pinch_that_zoomed_back_out_leaves_no_offset() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
         handler(touch(PointerEventKind::Down, 1, 200.0, 100.0));
@@ -334,7 +334,7 @@ fn one_finger_drag_does_not_pan_offset_only_state() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
         state.set_offset(Point { x: 5.0, y: 5.0 });
 
         handler(touch(PointerEventKind::Down, 0, 100.0, 100.0));
@@ -359,7 +359,7 @@ fn double_tap_resets_transformed_state() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
         state.set_scale(2.5);
         state.set_offset(Point { x: -30.0, y: 12.0 });
 
@@ -387,7 +387,7 @@ fn slow_second_tap_does_not_reset() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
         state.set_scale(2.0);
 
         handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
@@ -409,7 +409,7 @@ fn double_tap_at_identity_is_not_consumed() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::new();
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         handler(timed_touch(PointerEventKind::Down, 100.0, 100.0, 0));
         handler(timed_touch(PointerEventKind::Up, 100.0, 100.0, 50));
@@ -429,7 +429,7 @@ fn zoom_events_scale_about_the_cursor() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = ZoomState::with_scale_range(1.0, 8.0);
-        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state.clone()));
+        let (handler, _chain) = pointer_handler_for(Modifier::empty().zoomable(state));
 
         let cursor = Point { x: 80.0, y: 60.0 };
         let zoom_event =
@@ -462,7 +462,7 @@ fn scroll_ignores_secondary_pointer_events() {
         let scroll_state = crate::ScrollState::new(100.0);
         scroll_state.set_max_value(400.0);
         let (handler, _chain) =
-            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state.clone(), false));
+            pointer_handler_for(Modifier::empty().vertical_scroll(scroll_state, false));
 
         handler(touch(PointerEventKind::Down, 0, 0.0, 100.0));
         handler(touch(PointerEventKind::Move, 0, 0.0, 80.0)); // drag starts

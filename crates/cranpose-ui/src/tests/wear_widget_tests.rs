@@ -75,7 +75,7 @@ fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> Tes
     let composition = run_test_composition(move || {
         crate::set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
         let heights = heights.clone();
         WearScalingLazyColumn(
             Modifier::empty().fill_max_size(),
@@ -98,7 +98,7 @@ fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> Tes
 use crate::widgets::wear::rememberWearScalingListState;
 
 fn state() -> WearScalingListState {
-    LAST_STATE.with(|cell| cell.borrow().clone().expect("state captured"))
+    LAST_STATE.with(|cell| (*cell.borrow()).expect("state captured"))
 }
 
 fn tree(composition: &mut TestComposition, root: NodeId) -> crate::LayoutTree {
@@ -705,8 +705,8 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
     let mut composition = run_test_composition(|| {
         crate::set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
-        let inner = state.clone();
+        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
+        let inner = state;
         ScreenScaffold(
             Modifier::empty(),
             state,
@@ -715,7 +715,7 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
             move || {
                 WearScalingLazyColumn(
                     Modifier::empty().fill_max_size(),
-                    inner.clone(),
+                    inner,
                     settings_spec(),
                     |scope| {
                         scope.items(10, |_| {
@@ -1026,8 +1026,8 @@ fn compose_credits_screen() -> TestComposition {
     run_test_composition(|| {
         crate::set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
-        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
-        let inner = state.clone();
+        LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
+        let inner = state;
         ScreenScaffold(
             Modifier::empty().fill_max_size(),
             state,
@@ -1036,7 +1036,7 @@ fn compose_credits_screen() -> TestComposition {
             move || {
                 WearScalingLazyColumn(
                     Modifier::empty().fill_max_size(),
-                    inner.clone(),
+                    inner,
                     WearScalingLazyColumnSpec::default().content_padding(30.0, SCREEN_VERTICAL),
                     move |scope| {
                         // Six lines and then the button, rather than four: a

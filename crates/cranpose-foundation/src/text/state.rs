@@ -626,7 +626,7 @@ mod tests {
             use std::rc::Rc;
 
             let state = TextFieldState::new("Hello");
-            let state_clone = state.clone();
+            let state_clone = state;
             let nested_result = Rc::new(Cell::new(true));
             let nested_result_for_edit = nested_result.clone();
             let outer_result = state.edit(move |_buffer| {

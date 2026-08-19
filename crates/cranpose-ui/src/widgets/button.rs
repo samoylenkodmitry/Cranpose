@@ -99,7 +99,7 @@ mod tests {
     fn button_spec_builder_preserves_interaction_source() {
         let composition = Composition::new(MemoryApplier::new());
         let source = MutableInteractionSource::with_runtime(composition.runtime_handle());
-        let spec = ButtonSpec::new().interaction_source(source.clone());
+        let spec = ButtonSpec::new().interaction_source(source);
 
         assert_eq!(spec.interaction_source, Some(source));
     }

@@ -1795,7 +1795,7 @@ mod tests {
         with_test_runtime(|| {
             let state = TextFieldState::new("hello world");
             let controller = TextFieldHandleController::new();
-            let mut node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
+            let mut node = TextFieldModifierNode::new(state, TextStyle::default())
                 .with_handle_controller(controller.clone());
             // Give the field a measured size so the draw closure has geometry.
             node.measured_size.set(Size {
@@ -1891,7 +1891,7 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("hello world");
-            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default());
+            let node = TextFieldModifierNode::new(state, TextStyle::default());
             node.measured_size.set(Size {
                 width: 200.0,
                 height: 20.0,
@@ -1939,11 +1939,12 @@ mod tests {
             // paragraph — so line and paragraph selections differ.
             let text = "alpha beta\ngamma delta\n\nsecond para";
             let state = TextFieldState::new(text);
-            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
-                .with_line_limits(TextFieldLineLimits::MultiLine {
+            let node = TextFieldModifierNode::new(state, TextStyle::default()).with_line_limits(
+                TextFieldLineLimits::MultiLine {
                     min_lines: 1,
                     max_lines: usize::MAX,
-                });
+                },
+            );
             node.measured_size.set(Size {
                 width: 400.0,
                 height: 80.0,
@@ -2003,7 +2004,7 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("hello world");
-            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default());
+            let node = TextFieldModifierNode::new(state, TextStyle::default());
             node.measured_size.set(Size {
                 width: 200.0,
                 height: 20.0,
@@ -2054,11 +2055,12 @@ mod tests {
         with_test_runtime(|| {
             let text = "alpha beta\ngamma delta\n\nsecond para";
             let state = TextFieldState::new(text);
-            let node = TextFieldModifierNode::new(state.clone(), TextStyle::default())
-                .with_line_limits(TextFieldLineLimits::MultiLine {
+            let node = TextFieldModifierNode::new(state, TextStyle::default()).with_line_limits(
+                TextFieldLineLimits::MultiLine {
                     min_lines: 1,
                     max_lines: usize::MAX,
-                });
+                },
+            );
             node.measured_size.set(Size {
                 width: 400.0,
                 height: 80.0,
@@ -2121,8 +2123,8 @@ mod tests {
             let state1 = TextFieldState::new("Hello");
             let state2 = TextFieldState::new("Hello"); // Different Rc, same text
 
-            let elem1 = TextFieldElement::new(state1.clone(), TextStyle::default());
-            let elem2 = TextFieldElement::new(state1.clone(), TextStyle::default()); // Same state (Rc identity)
+            let elem1 = TextFieldElement::new(state1, TextStyle::default());
+            let elem2 = TextFieldElement::new(state1, TextStyle::default()); // Same state (Rc identity)
             let elem3 = TextFieldElement::new(state2, TextStyle::default()); // Different state
 
             // Elements are equal only when they share the same state Rc
@@ -2145,7 +2147,7 @@ mod tests {
                 color: Some(Color::from_rgba_u8(14, 58, 96, 255)),
                 ..crate::text::SpanStyle::default()
             });
-            let initial = TextFieldElement::new(state.clone(), dark_style);
+            let initial = TextFieldElement::new(state, dark_style);
             let updated = TextFieldElement::new(state, light_style.clone());
             let mut node = initial.create();
 
@@ -2277,7 +2279,7 @@ mod tests {
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let state = TextFieldState::new("Test");
-            let element = TextFieldElement::new(state.clone(), TextStyle::default());
+            let element = TextFieldElement::new(state, TextStyle::default());
             let node = element.create();
 
             // Initially not focused

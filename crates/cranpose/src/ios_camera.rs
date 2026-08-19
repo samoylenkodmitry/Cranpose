@@ -237,7 +237,7 @@ fn back_lenses() -> Vec<Retained<AVCaptureDevice>> {
         )
     };
     let mut found: Vec<Retained<AVCaptureDevice>> = unsafe { session.devices() }.to_vec();
-    found.sort_by_key(lens_order);
+    found.sort_by_key(|device| lens_order(device));
     found
 }
 

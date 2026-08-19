@@ -52,9 +52,9 @@ fn text_field_element_hash_tracks_style_and_line_limits() {
     let _app_context = crate::render_state::app_context_test_scope();
     with_test_runtime(|| {
         let state = TextFieldState::new("same");
-        let base = TextFieldElement::new(state.clone(), TextStyle::default());
+        let base = TextFieldElement::new(state, TextStyle::default());
         let styled = TextFieldElement::new(
-            state.clone(),
+            state,
             TextStyle::from_span_style(SpanStyle {
                 font_size: TextUnit::Sp(18.0),
                 ..SpanStyle::default()
@@ -329,7 +329,7 @@ fn tap_count_selects_cursor_word_and_line() {
     with_test_runtime(|| {
         let style = TextStyle::default();
         let state = TextFieldState::new("hello world\nsecond line");
-        let chain = focused_text_field_chain(state.clone(), style.clone());
+        let chain = focused_text_field_chain(state, style.clone());
         let handler = chain
             .node::<TextFieldModifierNode>(0)
             .expect("text field node")
@@ -575,7 +575,7 @@ fn single_line_field_pans_back_when_cursor_moves_to_start() {
             height: 40.0,
         };
         let state = TextFieldState::new(LONG_TEXT);
-        let chain = focused_single_line_chain(state.clone(), style);
+        let chain = focused_single_line_chain(state, style);
 
         // First draw: cursor at end, field pans right.
         let _ = run_field_draw(&chain, size);

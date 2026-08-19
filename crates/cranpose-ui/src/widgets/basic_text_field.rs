@@ -889,32 +889,28 @@ mod tests {
         let key = location_key(file!(), line!(), column!());
         let state = TextFieldState::new("hello world");
 
-        let mut content = {
-            let state = state.clone();
-            move || {
-                let state = state.clone();
-                PopupHost(move || {
-                    let controller = TextFieldHandleController::new();
-                    controller.publish(TextFieldHandleMetrics {
-                        focused: true,
-                        direct_manipulation,
-                        node_origin: Point { x: 0.0, y: 10.0 },
-                        padding_left: 0.0,
-                        padding_top: 0.0,
-                        scroll_offset: 0.0,
-                        line_height: 18.0,
-                        glyph_box: (0.0, 18.0),
-                        wrap_width: None,
-                        press: None,
-                    });
-                    SelectionHandles(
-                        state.clone(),
-                        TextStyle::default(),
-                        controller,
-                        Color(0.0, 0.478, 1.0, 1.0),
-                    );
+        let mut content = move || {
+            PopupHost(move || {
+                let controller = TextFieldHandleController::new();
+                controller.publish(TextFieldHandleMetrics {
+                    focused: true,
+                    direct_manipulation,
+                    node_origin: Point { x: 0.0, y: 10.0 },
+                    padding_left: 0.0,
+                    padding_top: 0.0,
+                    scroll_offset: 0.0,
+                    line_height: 18.0,
+                    glyph_box: (0.0, 18.0),
+                    wrap_width: None,
+                    press: None,
                 });
-            }
+                SelectionHandles(
+                    state,
+                    TextStyle::default(),
+                    controller,
+                    Color(0.0, 0.478, 1.0, 1.0),
+                );
+            });
         };
 
         composition.render(key, &mut content).expect("render");
@@ -954,35 +950,31 @@ mod tests {
         let key = location_key(file!(), line!(), column!());
         let state = TextFieldState::new("hello world");
 
-        let mut content = {
-            let state = state.clone();
-            move || {
-                let state = state.clone();
-                PopupHost(move || {
-                    let controller = TextFieldHandleController::new();
-                    if state.selection() != TextRange::new(0, 5) {
-                        state.set_selection(TextRange::new(0, 5));
-                    }
-                    controller.publish(TextFieldHandleMetrics {
-                        focused: true,
-                        direct_manipulation,
-                        node_origin: Point { x: 0.0, y: 40.0 },
-                        padding_left: 0.0,
-                        padding_top: 0.0,
-                        scroll_offset: 0.0,
-                        line_height: 18.0,
-                        glyph_box: (0.0, 18.0),
-                        wrap_width: None,
-                        press: None,
-                    });
-                    SelectionHandles(
-                        state.clone(),
-                        TextStyle::default(),
-                        controller,
-                        Color(0.0, 0.478, 1.0, 1.0),
-                    );
+        let mut content = move || {
+            PopupHost(move || {
+                let controller = TextFieldHandleController::new();
+                if state.selection() != TextRange::new(0, 5) {
+                    state.set_selection(TextRange::new(0, 5));
+                }
+                controller.publish(TextFieldHandleMetrics {
+                    focused: true,
+                    direct_manipulation,
+                    node_origin: Point { x: 0.0, y: 40.0 },
+                    padding_left: 0.0,
+                    padding_top: 0.0,
+                    scroll_offset: 0.0,
+                    line_height: 18.0,
+                    glyph_box: (0.0, 18.0),
+                    wrap_width: None,
+                    press: None,
                 });
-            }
+                SelectionHandles(
+                    state,
+                    TextStyle::default(),
+                    controller,
+                    Color(0.0, 0.478, 1.0, 1.0),
+                );
+            });
         };
 
         composition.render(key, &mut content).expect("render");
@@ -1027,44 +1019,40 @@ mod tests {
         let key = location_key(file!(), line!(), column!());
         let state = TextFieldState::new("hello world");
 
-        let mut content = {
-            let state = state.clone();
-            move || {
-                let state = state.clone();
-                PopupHost(move || {
-                    let state = state.clone();
-                    BoxWithConstraints(
-                        Modifier::empty().size(Size {
-                            width: 300.0,
-                            height: 300.0,
-                        }),
-                        move |_scope| {
-                            let controller = TextFieldHandleController::new();
-                            if state.selection() != TextRange::new(0, 5) {
-                                state.set_selection(TextRange::new(0, 5));
-                            }
-                            controller.publish(TextFieldHandleMetrics {
-                                focused: true,
-                                direct_manipulation,
-                                node_origin: Point { x: 0.0, y: 40.0 },
-                                padding_left: 0.0,
-                                padding_top: 0.0,
-                                scroll_offset: 0.0,
-                                line_height: 18.0,
-                                glyph_box: (0.0, 18.0),
-                                wrap_width: None,
-                                press: None,
-                            });
-                            SelectionHandles(
-                                state.clone(),
-                                TextStyle::default(),
-                                controller,
-                                Color(0.0, 0.478, 1.0, 1.0),
-                            );
-                        },
-                    );
-                });
-            }
+        let mut content = move || {
+            PopupHost(move || {
+                let state = state;
+                BoxWithConstraints(
+                    Modifier::empty().size(Size {
+                        width: 300.0,
+                        height: 300.0,
+                    }),
+                    move |_scope| {
+                        let controller = TextFieldHandleController::new();
+                        if state.selection() != TextRange::new(0, 5) {
+                            state.set_selection(TextRange::new(0, 5));
+                        }
+                        controller.publish(TextFieldHandleMetrics {
+                            focused: true,
+                            direct_manipulation,
+                            node_origin: Point { x: 0.0, y: 40.0 },
+                            padding_left: 0.0,
+                            padding_top: 0.0,
+                            scroll_offset: 0.0,
+                            line_height: 18.0,
+                            glyph_box: (0.0, 18.0),
+                            wrap_width: None,
+                            press: None,
+                        });
+                        SelectionHandles(
+                            state,
+                            TextStyle::default(),
+                            controller,
+                            Color(0.0, 0.478, 1.0, 1.0),
+                        );
+                    },
+                );
+            });
         };
 
         composition.render(key, &mut content).expect("render");
@@ -1119,55 +1107,51 @@ mod tests {
         let key = location_key(file!(), line!(), column!());
         let state = TextFieldState::new("hello world");
 
-        let mut content = {
-            let state = state.clone();
-            move || {
-                let state = state.clone();
-                PopupHost(move || {
-                    let state = state.clone();
-                    let list_state = remember_lazy_list_state();
-                    LazyColumn(
-                        Modifier::empty().size(Size {
-                            width: 300.0,
-                            height: 300.0,
-                        }),
-                        list_state,
-                        LazyColumnSpec::default(),
-                        move |scope| {
-                            let state = state.clone();
-                            scope.items(
-                                1,
-                                None::<fn(usize) -> u64>,
-                                None::<fn(usize) -> u64>,
-                                move |_index| {
-                                    let controller = TextFieldHandleController::new();
-                                    if state.selection() != TextRange::new(0, 5) {
-                                        state.set_selection(TextRange::new(0, 5));
-                                    }
-                                    controller.publish(TextFieldHandleMetrics {
-                                        focused: true,
-                                        direct_manipulation,
-                                        node_origin: Point { x: 0.0, y: 40.0 },
-                                        padding_left: 0.0,
-                                        padding_top: 0.0,
-                                        scroll_offset: 0.0,
-                                        line_height: 18.0,
-                                        glyph_box: (0.0, 18.0),
-                                        wrap_width: None,
-                                        press: None,
-                                    });
-                                    SelectionHandles(
-                                        state.clone(),
-                                        TextStyle::default(),
-                                        controller,
-                                        Color(0.0, 0.478, 1.0, 1.0),
-                                    );
-                                },
-                            );
-                        },
-                    );
-                });
-            }
+        let mut content = move || {
+            PopupHost(move || {
+                let state = state;
+                let list_state = remember_lazy_list_state();
+                LazyColumn(
+                    Modifier::empty().size(Size {
+                        width: 300.0,
+                        height: 300.0,
+                    }),
+                    list_state,
+                    LazyColumnSpec::default(),
+                    move |scope| {
+                        let state = state;
+                        scope.items(
+                            1,
+                            None::<fn(usize) -> u64>,
+                            None::<fn(usize) -> u64>,
+                            move |_index| {
+                                let controller = TextFieldHandleController::new();
+                                if state.selection() != TextRange::new(0, 5) {
+                                    state.set_selection(TextRange::new(0, 5));
+                                }
+                                controller.publish(TextFieldHandleMetrics {
+                                    focused: true,
+                                    direct_manipulation,
+                                    node_origin: Point { x: 0.0, y: 40.0 },
+                                    padding_left: 0.0,
+                                    padding_top: 0.0,
+                                    scroll_offset: 0.0,
+                                    line_height: 18.0,
+                                    glyph_box: (0.0, 18.0),
+                                    wrap_width: None,
+                                    press: None,
+                                });
+                                SelectionHandles(
+                                    state,
+                                    TextStyle::default(),
+                                    controller,
+                                    Color(0.0, 0.478, 1.0, 1.0),
+                                );
+                            },
+                        );
+                    },
+                );
+            });
         };
 
         composition.render(key, &mut content).expect("render");
@@ -1233,11 +1217,9 @@ mod tests {
 
         let spacer_before = 200.0_f32;
         let mut content = {
-            let state = state.clone();
             let controller_slot = Rc::clone(&controller_slot);
             let scroll_slot = Rc::clone(&scroll_slot);
             move || {
-                let state = state.clone();
                 let controller_slot = Rc::clone(&controller_slot);
                 let scroll_slot = Rc::clone(&scroll_slot);
                 PopupHost(move || {
@@ -1245,8 +1227,8 @@ mod tests {
                         .with(TextFieldHandleController::clone);
                     *controller_slot.borrow_mut() = Some(controller.clone());
                     let scroll = remember(|| ScrollState::new(0.0)).with(ScrollState::clone);
-                    *scroll_slot.borrow_mut() = Some(scroll.clone());
-                    let state = state.clone();
+                    *scroll_slot.borrow_mut() = Some(scroll);
+                    let state = state;
                     let controller = controller.clone();
                     Column(
                         Modifier::empty()
@@ -1254,16 +1236,15 @@ mod tests {
                                 width: 300.0,
                                 height: 150.0,
                             })
-                            .vertical_scroll(scroll.clone(), false),
+                            .vertical_scroll(scroll, false),
                         ColumnSpec::default(),
                         move || {
                             Spacer(Size {
                                 width: 300.0,
                                 height: spacer_before,
                             });
-                            let element =
-                                TextFieldElement::new(state.clone(), TextStyle::default())
-                                    .with_handle_controller(controller.clone());
+                            let element = TextFieldElement::new(state, TextStyle::default())
+                                .with_handle_controller(controller.clone());
                             let field_modifier =
                                 Modifier::from_parts(vec![modifier_element(element)]);
                             Layout(field_modifier, EmptyMeasurePolicy, || {});
@@ -1352,7 +1333,7 @@ mod tests {
 
         // Scroll the list down by 50px; the field must move up by exactly 50px
         // and the published origin must track it live.
-        let scroll = scroll_slot.borrow().as_ref().expect("scroll state").clone();
+        let scroll = *scroll_slot.borrow().as_ref().expect("scroll state");
         scroll.scroll_to(50.0);
         assert!(
             scroll.value() >= 49.5,
@@ -1761,11 +1742,8 @@ mod tests {
         let mut composition = Composition::new(MemoryApplier::new());
         let state = TextFieldState::new("Test content");
 
-        let result = composition.render(location_key(file!(), line!(), column!()), {
-            let state = state.clone();
-            move || {
-                BasicTextField(state.clone(), Modifier::empty(), TextStyle::default());
-            }
+        let result = composition.render(location_key(file!(), line!(), column!()), move || {
+            BasicTextField(state, Modifier::empty(), TextStyle::default());
         });
 
         assert!(result.is_ok());
