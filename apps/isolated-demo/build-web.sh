@@ -45,13 +45,13 @@ if [ $BUILD_RESULT -ne 0 ]; then
     echo "This might be due to wasm-opt issues. Retrying without wasm-opt..."
     echo ""
 
-    cp Cargo.toml Cargo.toml.backup
-    sed -i 's/wasm-opt = \[.*\]/wasm-opt = false/' Cargo.toml
-
-    "$WASM_PACK" build --target web --out-dir pkg --features web,renderer-wgpu --no-default-features
+    "$WASM_PACK" build \
+        --target web \
+        --out-dir pkg \
+        --features web,renderer-wgpu \
+        --no-default-features \
+        --no-opt
     BUILD_RESULT=$?
-
-    mv Cargo.toml.backup Cargo.toml
 
     if [ $BUILD_RESULT -ne 0 ]; then
         echo "Build failed even without wasm-opt"
@@ -76,4 +76,4 @@ echo "   npx serve ."
 echo ""
 echo "2. Open http://localhost:8080 in your browser"
 echo ""
-echo "Note: WebGPU support is required. Use Chrome 113+, Edge 113+, or Safari 18+"
+echo "Note: WebGL2 is the default browser backend. Add ?backend=webgpu to the URL to force WebGPU."
