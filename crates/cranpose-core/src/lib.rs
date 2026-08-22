@@ -68,7 +68,7 @@ pub use launched_effect::{
     TaskSite,
 };
 pub use owned::Owned;
-pub use platform::{Clock, RuntimeScheduler};
+pub use platform::{scheduler_ref, Clock, RuntimeScheduler, SchedulerRef};
 pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, RetentionPolicy};
 #[doc(hidden)]
 pub use runtime::{

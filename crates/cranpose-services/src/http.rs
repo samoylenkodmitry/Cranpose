@@ -221,8 +221,29 @@ pub trait HttpBody {
 pub type HttpBodyRef = Arc<dyn HttpBody + Send + Sync>;
 
 /// Shared handle to a response body.
+///
+/// A browser's body is a `ReadableStream` reader that belongs to the one
+/// thread a page has and cannot claim otherwise, so it is never `Send + Sync`
+/// there; `Rc` avoids paying for synchronisation the target cannot use.
 #[cfg(target_arch = "wasm32")]
-pub type HttpBodyRef = Arc<dyn HttpBody>;
+pub type HttpBodyRef = std::rc::Rc<dyn HttpBody>;
+
+/// Wraps `body` in an [`HttpBodyRef`].
+///
+/// A trait-object alias cannot expose its own `new`, so this is the one place
+/// that picks `Arc` on native and `Rc` on wasm; callers that need an
+/// [`HttpBodyRef`] from a concrete body go through this instead of repeating
+/// that choice.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn http_body_ref<B: HttpBody + Send + Sync + 'static>(body: B) -> HttpBodyRef {
+    Arc::new(body)
+}
+
+/// See the native definition of [`http_body_ref`] for why this is `Rc` on wasm.
+#[cfg(target_arch = "wasm32")]
+pub fn http_body_ref<B: HttpBody + 'static>(body: B) -> HttpBodyRef {
+    std::rc::Rc::new(body)
+}
 
 /// A body with nothing in it, which is what a `HEAD` answers with.
 struct EmptyBody;
@@ -321,7 +342,7 @@ impl HttpResponse {
 
     /// A response with no body, which is what a `HEAD` answers with.
     pub fn empty(url: impl Into<String>, status: u16) -> Self {
-        Self::new(url, status, Arc::new(EmptyBody))
+        Self::new(url, status, http_body_ref(EmptyBody))
     }
 
     pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
@@ -638,7 +659,7 @@ impl StubHttpClient {
             Ok(HttpResponse::new(
                 request.url.clone(),
                 200,
-                Arc::new(BytesBody::new(body.clone())),
+                http_body_ref(BytesBody::new(body.clone())),
             ))
         })
     }
@@ -652,7 +673,7 @@ impl StubHttpClient {
             Ok(HttpResponse::new(
                 request.url.clone(),
                 200,
-                Arc::new(BytesBody::new(body)),
+                http_body_ref(BytesBody::new(body)),
             ))
         })
     }
@@ -767,12 +788,14 @@ async fn send_native(
             message: "the transfer ended before a response arrived".to_string(),
         })??;
 
-    Ok(
-        HttpResponse::new(url, head.status, Arc::new(ChannelBody { chunks: stream }))
-            .with_headers(head.headers)
-            .with_content_length(head.content_length)
-            .with_resumed(head.resumed),
+    Ok(HttpResponse::new(
+        url,
+        head.status,
+        http_body_ref(ChannelBody { chunks: stream }),
     )
+    .with_headers(head.headers)
+    .with_content_length(head.content_length)
+    .with_resumed(head.resumed))
 }
 
 /// The worker body of [`send_native`]: sends the request, publishes the head,
@@ -1102,7 +1125,7 @@ async fn send_web(request: &HttpRequest, control: HttpControl) -> Result<HttpRes
     Ok(HttpResponse::new(
         request.url.clone(),
         status,
-        Arc::new(FetchBody {
+        http_body_ref(FetchBody {
             url: request.url.clone(),
             reader,
             control,

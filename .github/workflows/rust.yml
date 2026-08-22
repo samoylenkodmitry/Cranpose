@@ -185,5 +185,12 @@ jobs:
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           wasm-opt --version
 
+      - name: Run wasm clippy
+        # A build alone (below) does not lint: `Arc<dyn Trait>` values that are
+        # not `Send + Sync` on the single-threaded wasm target compile fine but
+        # pay for synchronisation the target cannot use. Only clippy catches
+        # that, and only for the exact package/feature set the web demo ships.
+        run: cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
+
       - name: Build web demo
         run: apps/desktop-demo/build-web.sh --release

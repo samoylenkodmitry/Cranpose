@@ -253,7 +253,7 @@ impl RendererFrontend {
                         .take_frame_ops(crate::pipeline::retained_feed_generation())
                 });
                 #[cfg(target_arch = "wasm32")]
-                let replay = ReplayFrameOps::default();
+                let replay = ReplayFrameOps;
                 (PacketRoot::Direct(Box::new(root)), replay)
             }
             None => {
@@ -274,10 +274,11 @@ impl RendererFrontend {
                     height,
                     root_scale,
                 );
-                (
-                    PacketRoot::Surface(Box::new(surface)),
-                    ReplayFrameOps::default(),
-                )
+                #[cfg(not(target_arch = "wasm32"))]
+                let replay = ReplayFrameOps::default();
+                #[cfg(target_arch = "wasm32")]
+                let replay = ReplayFrameOps;
+                (PacketRoot::Surface(Box::new(surface)), replay)
             }
         };
         let after_root_collect = Instant::now();

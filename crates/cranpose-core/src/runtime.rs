@@ -16,7 +16,7 @@ use std::thread_local;
 
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
-use crate::platform::RuntimeScheduler;
+use crate::platform::{RuntimeScheduler, SchedulerRef};
 use crate::{Applier, Command, FrameCallbackId, NodeError, RecomposeScopeInner, ScopeId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -305,13 +305,29 @@ impl RuntimeId {
 }
 
 struct UiDispatcherInner {
-    scheduler: Arc<dyn RuntimeScheduler>,
+    scheduler: SchedulerRef,
     tx: mpsc::Sender<UiMessage>,
     pending: AtomicUsize,
 }
 
+/// Shared handle to a [`UiDispatcherInner`].
+///
+/// `UiDispatcherInner` holds a [`SchedulerRef`], so it inherits the same
+/// per-target split: native code posts work onto the UI dispatcher from other
+/// threads (see `EventSender` and `launchBlocking` in `concurrency.rs`), so
+/// the handle has to be an atomically reference-counted `Send + Sync` pointer
+/// there; on wasm the dispatcher is only ever touched from the one thread it
+/// was created on, and its scheduler cannot be `Send + Sync`, so `Rc` is used
+/// instead of paying for synchronisation the target cannot use.
+#[cfg(not(target_arch = "wasm32"))]
+type UiDispatcherRef = Arc<UiDispatcherInner>;
+
+/// See the native definition of [`UiDispatcherRef`] for why this is `Rc` on wasm.
+#[cfg(target_arch = "wasm32")]
+type UiDispatcherRef = Rc<UiDispatcherInner>;
+
 impl UiDispatcherInner {
-    fn new(scheduler: Arc<dyn RuntimeScheduler>, tx: mpsc::Sender<UiMessage>) -> Self {
+    fn new(scheduler: SchedulerRef, tx: mpsc::Sender<UiMessage>) -> Self {
         Self {
             scheduler,
             tx,
@@ -374,11 +390,11 @@ impl<'a> Drop for PendingGuard<'a> {
 
 #[derive(Clone)]
 pub struct UiDispatcher {
-    inner: Arc<UiDispatcherInner>,
+    inner: UiDispatcherRef,
 }
 
 impl UiDispatcher {
-    fn new(inner: Arc<UiDispatcherInner>) -> Self {
+    fn new(inner: UiDispatcherRef) -> Self {
         Self { inner }
     }
 
@@ -399,7 +415,7 @@ impl UiDispatcher {
 }
 
 struct RuntimeInner {
-    scheduler: Arc<dyn RuntimeScheduler>,
+    scheduler: SchedulerRef,
     needs_frame: RefCell<bool>,
     node_updates: RefCell<Vec<Command>>,
     invalid_scopes: RefCell<HashSet<ScopeId>>,
@@ -407,7 +423,7 @@ struct RuntimeInner {
     frame_callbacks: RefCell<VecDeque<FrameCallbackEntry>>,
     next_frame_callback_id: Cell<u64>,
     last_frame_time_nanos: Cell<Option<u64>>,
-    ui_dispatcher: Arc<UiDispatcherInner>,
+    ui_dispatcher: UiDispatcherRef,
     ui_rx: RefCell<mpsc::Receiver<UiMessage>>,
     local_tasks: RefCell<VecDeque<Box<dyn FnOnce() + 'static>>>,
     ui_conts: RefCell<UiContinuationMap>,
@@ -450,9 +466,9 @@ pub fn label_next_ui_task(label: impl Into<String>) {
 }
 
 impl RuntimeInner {
-    fn new(scheduler: Arc<dyn RuntimeScheduler>) -> Self {
+    fn new(scheduler: SchedulerRef) -> Self {
         let (tx, rx) = mpsc::channel();
-        let dispatcher = Arc::new(UiDispatcherInner::new(scheduler.clone(), tx));
+        let dispatcher = UiDispatcherRef::new(UiDispatcherInner::new(scheduler.clone(), tx));
         Self {
             scheduler,
             needs_frame: RefCell::new(false),
@@ -869,7 +885,7 @@ pub struct Runtime {
 }
 
 impl Runtime {
-    pub fn new(scheduler: Arc<dyn RuntimeScheduler>) -> Self {
+    pub fn new(scheduler: SchedulerRef) -> Self {
         let inner = Rc::new(RuntimeInner::new(scheduler));
         let runtime = Self { inner };
         let handle = runtime.handle();
@@ -1388,7 +1404,7 @@ pub(crate) struct FrameCallbackEntry {
 /// finishing, a platform service replying.
 #[cfg(not(target_arch = "wasm32"))]
 struct RuntimeTaskWaker {
-    scheduler: Arc<dyn RuntimeScheduler>,
+    scheduler: SchedulerRef,
     runnable: Arc<AtomicBool>,
 }
 
