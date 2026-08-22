@@ -751,3 +751,72 @@ fn assert_shell_entrypoint_guarded(
         "{relative_path} must limit local cargo jobs before heavy work marker {heavy_marker:?}"
     );
 }
+
+/// The wasm build must see the same `web_sys` bindings an application sees.
+///
+/// `--cfg web_sys_unstable_apis` is not a neutral opt-in: it swaps whole method
+/// signatures. `MouseEvent::offset_x`/`offset_y` return `i32` without it and
+/// `f64` with it, so framework source written -- or clippy-corrected -- under
+/// the flag compiles here and fails in every project that consumes the
+/// published crates, which carry none of this repository's cargo configuration.
+/// A release built that way is broken for the web and nothing upstream of the
+/// consumer notices. `web_media` states the rule this guards: an application
+/// should not have to set a rustc flag to get a lock screen, so the framework
+/// reaches unstable browser APIs by name through `js_sys::Reflect` instead.
+#[test]
+fn no_cargo_config_enables_unstable_web_sys_bindings() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("desktop demo should live under workspace/apps")
+        .to_path_buf();
+
+    let mut offenders = Vec::new();
+    collect_cargo_configs(&workspace_root, &mut |path| {
+        let source =
+            fs::read_to_string(path).unwrap_or_else(|err| panic!("failed to read {path:?}: {err}"));
+        for (line_number, line) in source.lines().enumerate() {
+            if line.contains("web_sys_unstable_apis") {
+                offenders.push(format!(
+                    "{}:{}: {}",
+                    path.strip_prefix(&workspace_root).unwrap_or(path).display(),
+                    line_number + 1,
+                    line.trim()
+                ));
+            }
+        }
+    });
+
+    assert!(
+        offenders.is_empty(),
+        "cargo configuration must not enable unstable web-sys bindings; it changes \
+         published API signatures so the wasm build stops matching what applications \
+         compile:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Walks every `.cargo/config.toml` the workspace carries, skipping build
+/// output and version-control directories.
+fn collect_cargo_configs(root: &std::path::Path, visit: &mut impl FnMut(&std::path::Path)) {
+    let config = root.join(".cargo/config.toml");
+    if config.is_file() {
+        visit(&config);
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if matches!(name.as_ref(), "target" | ".git" | "node_modules" | ".cargo") {
+            continue;
+        }
+        collect_cargo_configs(&path, visit);
+    }
+}
