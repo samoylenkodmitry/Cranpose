@@ -414,7 +414,9 @@ fn normalized_region_ink_pixels(screenshot: &RobotScreenshot) -> usize {
     };
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| {
             let color_delta = pixel[0].abs_diff(background[0]) as u16
                 + pixel[1].abs_diff(background[1]) as u16

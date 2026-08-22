@@ -610,7 +610,7 @@ mod tests {
             produced += 1;
         }
         assert!(
-            (produced as i32 - (frames as i32 / 2)).abs() <= 2,
+            (produced - (frames as i32 / 2)).abs() <= 2,
             "produced {produced} from {frames}"
         );
     }
@@ -626,7 +626,7 @@ mod tests {
             produced += 1;
         }
         assert!(
-            (produced as i32 - (frames as i32 / 2)).abs() <= 2,
+            (produced - (frames as i32 / 2)).abs() <= 2,
             "produced {produced} from {frames}"
         );
     }

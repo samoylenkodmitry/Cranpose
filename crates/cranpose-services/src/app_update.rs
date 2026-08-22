@@ -314,16 +314,48 @@ pub enum AppUpdateError {
 
 /// Platform implementation for update discovery and package installation.
 pub trait AppUpdater: Send + Sync {
+    /// What this backend can do.
+    ///
+    /// Defaults to neither, so a backend states what it can do rather than
+    /// inheriting a claim: the two entry points below refuse a half a backend
+    /// has not claimed, and a backend that forgot to declare one is refused
+    /// rather than allowed to fail at the platform boundary.
+    fn capabilities(&self) -> AppUpdateCapabilities {
+        AppUpdateCapabilities::default()
+    }
+
     /// Starts release discovery. Progress is published through
     /// [`set_app_update_status`].
-    fn check(&self, source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError>;
+    fn check(&self, source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
+        let _ = source;
+        Err(AppUpdateError::Unsupported)
+    }
 
     /// Transfers a package to the platform installer.
     ///
     /// An implementation checks the package against
     /// [`UpdatePackage::digest`] before committing it — nothing is installed
     /// whose bytes were not the ones the release feed promised.
-    fn install(&self, package: &UpdatePackage) -> Result<(), AppUpdateError>;
+    fn install(&self, package: &UpdatePackage) -> Result<(), AppUpdateError> {
+        let _ = package;
+        Err(AppUpdateError::Unsupported)
+    }
+}
+
+/// What an update backend can do on this platform.
+///
+/// The two halves are separate because a platform can genuinely have one
+/// without the other: an iOS application may discover that a newer version
+/// exists and send the reader to the store, while installing a replacement
+/// binary is something the platform does not allow it to do at all. Reporting
+/// one flag for both would make `check` look unavailable where it works, or
+/// make `install` look available where it can only fail.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AppUpdateCapabilities {
+    /// Whether this platform can discover a newer release.
+    pub check: bool,
+    /// Whether this platform can install one.
+    pub install: bool,
 }
 
 /// Shared updater service.
@@ -341,14 +373,50 @@ pub fn clear_platform_app_updater() {
     PLATFORM_UPDATER.clear();
 }
 
+/// What this host can do about application updates.
+pub fn app_update_capabilities() -> AppUpdateCapabilities {
+    PLATFORM_UPDATER
+        .get()
+        .map(|updater| updater.capabilities())
+        .unwrap_or_default()
+}
+
 /// Returns whether this host can install application updates.
 pub fn app_updates_supported() -> bool {
-    PLATFORM_UPDATER.get().is_some()
+    app_update_capabilities().install
+}
+
+/// Returns whether this host can discover a newer release.
+///
+/// A host may answer yes here and no to [`app_updates_supported`]: knowing an
+/// update exists is what lets an application point at the store it cannot
+/// install from itself.
+pub fn app_update_checks_supported() -> bool {
+    app_update_capabilities().check
+}
+
+/// Publishes a failure as the update status and hands it back.
+///
+/// Every way these two entry points can fail goes through here, so the
+/// observable status is the whole story: an application that only observes
+/// [`app_update_status`] sees a host that cannot check just as it sees a
+/// download that failed. Without this, the failures that never reach a
+/// backend — no updater registered, or one that does not claim this half —
+/// would return an error into a caller that has nowhere to put it, and every
+/// application would mirror the `Result` into the status by hand.
+fn publish_failure(error: AppUpdateError) -> Result<(), AppUpdateError> {
+    set_app_update_status(AppUpdateStatus::Error(error.to_string()));
+    Err(error)
 }
 
 /// Starts update discovery and publishes the initial state.
 pub fn check_for_app_update(source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
-    let updater = PLATFORM_UPDATER.get().ok_or(AppUpdateError::Unsupported)?;
+    let Some(updater) = PLATFORM_UPDATER.get() else {
+        return publish_failure(AppUpdateError::Unsupported);
+    };
+    if !updater.capabilities().check {
+        return publish_failure(AppUpdateError::Unsupported);
+    }
     set_app_update_status(AppUpdateStatus::Checking);
     updater.check(source).inspect_err(|error| {
         set_app_update_status(AppUpdateStatus::Error(error.to_string()));
@@ -362,7 +430,12 @@ pub fn check_for_app_update(source: &GitHubReleaseUpdate) -> Result<(), AppUpdat
 /// megabytes to learn the feed was misconfigured, and nothing reaches an
 /// installer unchecked because its digest was unreadable.
 pub fn install_app_update(package: &UpdatePackage) -> Result<(), AppUpdateError> {
-    let updater = PLATFORM_UPDATER.get().ok_or(AppUpdateError::Unsupported)?;
+    let Some(updater) = PLATFORM_UPDATER.get() else {
+        return publish_failure(AppUpdateError::Unsupported);
+    };
+    if !updater.capabilities().install {
+        return publish_failure(AppUpdateError::Unsupported);
+    }
     let error = match &package.digest {
         None => Some(AppUpdateError::Unverifiable),
         Some(digest) if !digest.is_well_formed() => {
@@ -371,8 +444,7 @@ pub fn install_app_update(package: &UpdatePackage) -> Result<(), AppUpdateError>
         Some(_) => None,
     };
     if let Some(error) = error {
-        set_app_update_status(AppUpdateStatus::Error(error.to_string()));
-        return Err(error);
+        return publish_failure(error);
     }
     set_app_update_status(AppUpdateStatus::Downloading {
         downloaded: 0,
@@ -518,6 +590,13 @@ mod tests {
     }
 
     impl AppUpdater for RecordingUpdater {
+        fn capabilities(&self) -> AppUpdateCapabilities {
+            AppUpdateCapabilities {
+                check: true,
+                install: true,
+            }
+        }
+
         fn check(&self, _source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
             self.checks.fetch_add(1, Ordering::Relaxed);
             Ok(())
@@ -669,6 +748,52 @@ mod tests {
         ));
         assert!(updater.installs().is_empty());
         assert!(matches!(app_update_status(), AppUpdateStatus::Error(_)));
+        clear_platform_app_updater();
+    }
+
+    /// The defect a consumer application found: a host that cannot check or
+    /// install returned an error and published nothing, so a screen observing
+    /// the update status showed the state it was already in. Every failure
+    /// reaches the status, or an application has to mirror the `Result` into
+    /// it by hand — which is what the framework owning this is meant to stop.
+    #[test]
+    fn a_host_that_cannot_update_says_so_through_the_status_and_not_only_the_result() {
+        let _guard = crate::registry::test_service_guard();
+
+        // No backend at all.
+        clear_platform_app_updater();
+        set_app_update_status(AppUpdateStatus::Idle);
+        assert_eq!(
+            check_for_app_update(&GitHubReleaseUpdate::new("owner/app", "1", ".apk")),
+            Err(AppUpdateError::Unsupported)
+        );
+        assert!(matches!(app_update_status(), AppUpdateStatus::Error(_)));
+
+        // A backend that discovers releases but cannot install one, which is
+        // every desktop and iOS host.
+        struct CheckOnlyUpdater;
+        impl AppUpdater for CheckOnlyUpdater {
+            fn capabilities(&self) -> AppUpdateCapabilities {
+                AppUpdateCapabilities {
+                    check: true,
+                    install: false,
+                }
+            }
+            fn check(&self, _source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
+                Ok(())
+            }
+        }
+        set_platform_app_updater(Arc::new(CheckOnlyUpdater));
+        set_app_update_status(AppUpdateStatus::Idle);
+        let package = UpdatePackage::new("2", "https://example.test/app.apk")
+            .with_digest(PackageDigest::sha256(sha256_hex(b"package")));
+        assert_eq!(
+            install_app_update(&package),
+            Err(AppUpdateError::Unsupported)
+        );
+        assert!(matches!(app_update_status(), AppUpdateStatus::Error(_)));
+        assert!(app_update_checks_supported());
+        assert!(!app_updates_supported());
         clear_platform_app_updater();
     }
 

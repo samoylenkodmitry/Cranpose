@@ -342,11 +342,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn workspace_test_output_path(filename: &str) -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("../../target/test-output/cranpose-recorder");
-        std::fs::create_dir_all(&path).expect("create recorder test output directory");
-        path.push(filename);
-        path
+        crate::test_scratch_dir("recorder").join(filename)
     }
 
     #[test]

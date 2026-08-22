@@ -400,9 +400,15 @@ pub mod desktop;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_accessibility;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_bundled_assets;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_host_surface;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_incoming;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 mod desktop_input;
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+mod desktop_power;
 
 /// What this process is using: the memory and processor-time readings whose
 /// platform calls need `libc`, so no application writes them. Compiled with
@@ -486,6 +492,17 @@ mod ios_app_info;
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_device_info;
 
+/// Thermal pressure, which both Apple shells read from the same Foundation call.
+#[cfg(any(
+    all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"),
+    all(
+        feature = "desktop-shell",
+        feature = "renderer-wgpu",
+        target_os = "macos"
+    )
+))]
+mod apple_thermal;
+
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_writable_folder;
 
@@ -500,6 +517,9 @@ mod ios_back_gesture;
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 mod ios_background;
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+mod ios_bundled_assets;
 
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub mod recorder;
@@ -540,6 +560,12 @@ mod web_media;
 #[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
 mod web_services;
 
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_power;
+
+#[cfg(all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32"))]
+mod web_drop;
+
 // Re-export the renderer-agnostic robot harness so applications and the
 // testing crate can drive either desktop shell through a single path.
 #[cfg(all(
@@ -554,3 +580,14 @@ pub use robot::{
 /// Development frame pacing and FPS statistics types.
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
+
+/// A unique, empty directory under the workspace `target/test-output` for a
+/// test in this crate that needs real files. See
+/// [`cranpose_core::test_scratch_dir`].
+///
+/// Gated the way its callers are: the tests that need real files are the
+/// desktop shell's own, and an iOS or web build compiles neither them nor this.
+#[cfg(all(test, feature = "desktop-shell", feature = "renderer-wgpu"))]
+pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
+    cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
+}

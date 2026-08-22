@@ -90,6 +90,9 @@ web-sys = { version = "0.3", features = [
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4.0"
+# Parses the GitHub release feed `GitHubAppUpdater` reads. Not built for wasm32:
+# that checker only ever registers on desktop and iOS.
+serde_json = "1.0.149"
 
 # Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
 # rustls default crypto provider (aws-lc-sys) does not link for the device
@@ -105,4 +108,7 @@ webbrowser = { version = "1.2.1", optional = true }
 webpki-root-certs = { version = "1.0.7", optional = true }
 
 [dev-dependencies]
+# Path-only dev-dep: stripped from the published manifest. Turns on the
+# workspace's shared test scratch directory for this crate's own tests.
+cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
 webpki-root-certs = "1.0.7"

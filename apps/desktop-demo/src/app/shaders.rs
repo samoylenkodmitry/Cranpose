@@ -120,7 +120,7 @@ fn solid_color_bitmap(width: u32, height: u32, color: Color) -> ImageBitmap {
     let b = (color.b().clamp(0.0, 1.0) * 255.0).round() as u8;
     let a = (color.a().clamp(0.0, 1.0) * 255.0).round() as u8;
     let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         px[0] = r;
         px[1] = g;
         px[2] = b;

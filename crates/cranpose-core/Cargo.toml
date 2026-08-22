@@ -23,6 +23,8 @@ web-time = { workspace = true }
 default = []
 std-hash = []
 internal = []
+# The workspace's one answer to where a test writes real files.
+test-helpers = []
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).

@@ -137,6 +137,16 @@ pub fn DialogWithScrim<C>(
 ) where
     C: Fn() + 'static,
 {
+    // The depth this dialog's own `register_modal` registration will occupy,
+    // fixed at this dialog's first composition (before `DisposableEffect`
+    // below actually registers it) and held stable for as long as the dialog
+    // stays mounted — recomputing it from the live `modal_depth()` on every
+    // recomposition would double-count this dialog's own registration once
+    // it commits. Provided to the content below so its fields (and any
+    // nested dialog) know how deep they are.
+    let own_modal_depth =
+        cranpose_core::remember(|| crate::modal::current_modal_depth() + 1).with(|depth| *depth);
+
     let viewport = local_popup_viewport().current().get();
     let insets = if spec.apply_window_insets {
         window_insets().combined()
@@ -192,7 +202,13 @@ pub fn DialogWithScrim<C>(
                     config.is_modal = true;
                 }),
             BoxSpec::default().content_alignment(Alignment::CENTER),
-            move || content(),
+            move || {
+                let content = Rc::clone(&content);
+                cranpose_core::CompositionLocalProvider(
+                    [crate::modal::local_modal_depth().provides(own_modal_depth)],
+                    move || content(),
+                );
+            },
         );
     });
 }
@@ -247,5 +263,173 @@ mod tests {
                 .dismiss_on_outside_tap
         );
         assert!(!spec.with_window_insets(false).apply_window_insets);
+    }
+
+    /// Pins the defect this module's doc comment promises and nothing used to
+    /// implement: a text field behind an open dialog must not be able to take
+    /// focus away from the dialog, and once the dialog closes the field
+    /// behind it must be focusable again — and the field the closed dialog
+    /// held must not be left "focused" with nothing there to receive input.
+    #[test]
+    fn a_dialog_traps_focus_inside_it_and_releases_it_on_close() {
+        use crate::layout::{LayoutBox, LayoutEngine, LayoutTree};
+        use crate::text::TextStyle;
+        use crate::text_field_focus::{focused_editor_state, has_focused_field};
+        use crate::widgets::basic_text_field::BasicTextField;
+        use crate::widgets::popup::PopupHost;
+        use cranpose_core::{
+            location_key, mutableStateOf, remember, Composition, MemoryApplier, MutableState,
+            NodeId,
+        };
+        use cranpose_foundation::text::TextFieldState;
+        use cranpose_foundation::{PointerEvent, PointerEventKind};
+        use cranpose_ui_graphics::Size;
+        use std::cell::{Cell, RefCell};
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        crate::modal::clear_modals();
+
+        // `Composition::new` installs the runtime `TextFieldState` needs, so
+        // it must exist before any state is allocated.
+        let mut composition = Composition::new(MemoryApplier::new());
+
+        let outside_state = TextFieldState::new("outside");
+        let inside_state = TextFieldState::new("inside");
+        let outside_id: Rc<Cell<Option<NodeId>>> = Rc::new(Cell::new(None));
+        let inside_id: Rc<Cell<Option<NodeId>>> = Rc::new(Cell::new(None));
+        let dialog_open_slot: Rc<RefCell<Option<MutableState<bool>>>> = Rc::new(RefCell::new(None));
+
+        let mut content = {
+            let outside_id = Rc::clone(&outside_id);
+            let inside_id = Rc::clone(&inside_id);
+            let dialog_open_slot = Rc::clone(&dialog_open_slot);
+            move || {
+                let outside_id = Rc::clone(&outside_id);
+                let inside_id = Rc::clone(&inside_id);
+                let dialog_open_slot = Rc::clone(&dialog_open_slot);
+                PopupHost(move || {
+                    let dialog_open = remember(|| mutableStateOf(true)).with(|state| *state);
+                    *dialog_open_slot.borrow_mut() = Some(dialog_open);
+
+                    outside_id.set(Some(BasicTextField(
+                        outside_state,
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    )));
+
+                    if dialog_open.value() {
+                        let inside_id = Rc::clone(&inside_id);
+                        Dialog(
+                            DialogSpec::default(),
+                            |_reason: DismissReason| {},
+                            move || {
+                                inside_id.set(Some(BasicTextField(
+                                    inside_state,
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                )));
+                            },
+                        );
+                    }
+                });
+            }
+        };
+
+        let key = location_key(file!(), line!(), column!());
+        composition.render(key, &mut content).expect("render");
+
+        // The dialog's Popup registers into the host during a subcomposition
+        // pass; a follow-up reconcile + layout is needed for it to actually
+        // place content, so settle a few frames the way a real host would.
+        let mut settle = move |composition: &mut Composition<MemoryApplier>| -> LayoutTree {
+            for _ in 0..16 {
+                if !composition.should_render() {
+                    break;
+                }
+                composition.reconcile(key, &mut content).expect("reconcile");
+            }
+            let root = composition.root().expect("root");
+            let handle = composition.runtime_handle();
+            let mut applier = composition.applier_mut();
+            applier.set_runtime_handle(handle);
+            let layout = applier
+                .compute_layout(root, Size::new(400.0, 800.0))
+                .expect("layout");
+            applier.clear_runtime_handle();
+            drop(applier);
+            layout
+        };
+
+        fn find_node(node: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+            if node.node_id == id {
+                return Some(node);
+            }
+            node.children.iter().find_map(|child| find_node(child, id))
+        }
+
+        fn tap(layout_root: &LayoutBox, id: &Rc<Cell<Option<NodeId>>>) {
+            let id = id.get().expect("field composed");
+            let node = find_node(layout_root, id).expect("field placed in the layout");
+            let handler = node
+                .node_data
+                .modifier_slices()
+                .pointer_inputs()
+                .first()
+                .cloned()
+                .expect("field has a pointer handler");
+            let position = cranpose_ui_graphics::Point { x: 1.0, y: 1.0 };
+            handler(PointerEvent::new(
+                PointerEventKind::Down,
+                position,
+                position,
+            ));
+        }
+
+        let mut layout = settle(&mut composition);
+        for _ in 0..7 {
+            layout = settle(&mut composition);
+        }
+
+        // The dialog is open. Its own field can take focus...
+        tap(layout.root(), &inside_id);
+        assert!(has_focused_field(), "the dialog's own field must focus");
+        assert_eq!(
+            focused_editor_state().map(|s| s.text),
+            Some("inside".to_string()),
+            "the dialog's own field must be the one focused"
+        );
+
+        // ...but the field behind the dialog must not be able to steal it.
+        tap(layout.root(), &outside_id);
+        assert_eq!(
+            focused_editor_state().map(|s| s.text),
+            Some("inside".to_string()),
+            "a field behind an open dialog must not take focus from it"
+        );
+
+        // Closing the dialog must not leave focus pointing at the field that
+        // just went away with it.
+        let dialog_open = dialog_open_slot
+            .borrow()
+            .as_ref()
+            .copied()
+            .expect("dialog_open captured");
+        dialog_open.set(false);
+        layout = settle(&mut composition);
+        assert!(
+            !has_focused_field(),
+            "closing the dialog must release focus from the field it held"
+        );
+
+        // The field behind it can now take focus again.
+        tap(layout.root(), &outside_id);
+        assert_eq!(
+            focused_editor_state().map(|s| s.text),
+            Some("outside".to_string()),
+            "once the dialog is closed, the field behind it must be focusable"
+        );
+
+        crate::modal::clear_modals();
+        crate::text_field_focus::clear_focus();
     }
 }

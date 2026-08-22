@@ -7661,8 +7661,10 @@ fn screenshot_abs_difference_score(
     }
     Some(
         left.pixels
-            .chunks_exact(4)
-            .zip(right.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(right.pixels.as_chunks::<4>().0)
             .map(|(left, right)| {
                 left.iter()
                     .zip(right)
@@ -8698,7 +8700,7 @@ fn screenshot_red_strength_edge_energy(screenshot: &cranpose::RobotScreenshot) -
 
 fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     let mut colors = HashSet::new();
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
     colors.len()
@@ -8754,7 +8756,7 @@ fn screenshot_color_health(screenshot: &cranpose::RobotScreenshot) -> Screenshot
     let mut blue_cyan_pixels = 0usize;
     let mut dark_pixels = 0usize;
 
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         let pixel = [rgba[0], rgba[1], rgba[2], rgba[3]];
         if pixel[3] == 0 {
             continue;

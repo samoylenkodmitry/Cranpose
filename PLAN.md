@@ -168,15 +168,38 @@ report it at all.
       controller, native/GPU preview, bounded analysis stream, and async capture.
 - [x] Add a cross-platform media player with observable playback, seeking, audio
       focus, lifecycle handling, media sessions, and optional analysis samples.
-- [x] Make power and device information observable, capability-aware, and explicit
-      about unsupported or unknown values.
+- [x] Make power and device information capability-aware and explicit about
+      unsupported or unknown values. Power is observable as well —
+      `publish_power_state` / `observe_power_state` / `rememberPowerState`,
+      because thermal pressure and battery level are things the platform
+      *tells* an application about. Device information is deliberately a
+      snapshot: `device_info()` answers what the process is using right now,
+      and there is no platform event to publish from, so an observable mirror
+      would be a poller with a cadence the framework invented. An application
+      that wants a live reading samples it on its own frame.
 - [x] Make HTTP operations genuinely async with streaming, progress, cancellation,
       and resumable downloads.
 - [x] Add declarative versioned installation for bundled asset sets with
       per-file atomic replacement and a final commit stamp.
 - [x] Add streaming reads for bundled assets that do not fit in memory.
 - [x] Add a typed application update service with progress, verification, and
-      platform installer confirmation.
+      platform installer confirmation. Android discovers a release and installs
+      it. Desktop and iOS discover one and cannot install it — App Store Review
+      Guideline 3.3.2 forbids an iOS application from replacing its own binary,
+      and the framework owns no desktop installer — so `AppUpdateCapabilities`
+      splits `check` from `install` and those two hosts answer `check: true,
+      install: false` rather than registering an installer that can only fail.
+      The check itself needs an HTTP client, which is the application's own
+      opt-in (`cranpose-services/http-native`); without it the backend reports
+      `check: false` rather than claiming a request it cannot make. The feed
+      reader is covered by a test for the one thing a version comparison gets
+      wrong on its own — `0.1.10` is newer than `0.1.9`, which sorting strings
+      says it is not — and its field names were checked against the live
+      release feed rather than against a fixture written from the same reading
+      of the documentation that produced the parser. Forwarding
+      that feature through the `cranpose` umbrella the way every other service
+      feature is forwarded would need one feature per target, which Cargo cannot
+      express — so the opt-in stays where every application already writes it.
 - [x] Add an observable web host surface size and resize request API.
 
 ## 6. Consumer conversions
@@ -215,39 +238,66 @@ report it at all.
 
 ## 7. Verification and review
 
-- [x] Unit-test every public framework function and method, and delete the ones
-      no caller wants. `python3 scripts/public_api_test_coverage.py` is the
-      measure; it counts the headless robot suite as the test code it is, and
-      matches whole names rather than substrings, both of which it previously
-      did not — `with_timeout` read as covered because `exit_with_timeout`
-      mentions it.
+- [~] Unit-test every public framework function and method, and delete the ones
+      no caller wants. This is **not** achieved, and the number that said it was
+      came from a broken measure.
 
-      Sixty-one public functions had no caller in the framework, the demos, the
-      robot suite or any of the three applications, and are gone rather than
-      tested: a public function nobody calls is not an API, and two of them were
-      placeholders that answered `true` regardless of the screen. The dead focus
-      requester went with them — a second, never-instantiated focus layer beside
-      the one text fields actually use, whose `request_focus` returned `true`
-      without doing anything.
+      `python3 scripts/public_api_test_coverage.py` reported 2628/2689 (97.7%)
+      with 61 functions untested. It built its test corpus by taking each file
+      from its first `#[cfg(test)]` to the end. That attribute also introduces
+      test-only imports and conditional debug lines, and 138 files here carry
+      one near the top — `render.rs` at 0.1% of the file, handing 971KB of
+      production source to the "test corpus". Every public function below such
+      a marker certified itself as tested by its own source position. The
+      corpus is now the braced body of each `#[cfg(test)] mod`, and the honest
+      figure is **3031/3396 (89.3%), with 365 public functions untested**. The
+      denominator moved because 700 of those functions were being read as test
+      code rather than counted as API at all.
 
-      The tool names the sixty-one that are left. Six are gated to a platform
-      or a feature and do not exist to be called here at all — a wasm entry
-      point, a Windows launcher, an Android asset font, the two `internal`
-      frame hooks, the desktop-robot FPS assertion. The rest are node-level
-      plumbing that the widgets and the measure pass reach rather than a caller
-      does: text-field node accessors, lazy-list measurement knobs, subcompose
-      slot-table readers, retained-primitive materialization. Each is exercised
-      through the widget above it and named by no test of its own, which is a
-      weaker guarantee than the ones above and is recorded here as such rather
-      than papered over with a test that only calls them.
+      That was the third defect in this one script: it also matched names as
+      substrings, so `with_timeout` read as covered because `exit_with_timeout`
+      exists, and it excluded the robot suite, which is the only exercise much
+      of the robot driver API gets. A proxy metric that is quietly wrong sends
+      work to the wrong places for as long as nobody reads it.
+
+      The 365 are not being closed by writing 365 tests. A test written to
+      raise a number tests the implementation it was written against. The tests
+      this pass did add were written the other way round: each pins a defect
+      found first — a seek that played from up to a packet early, a dialog that
+      did not trap focus — or covers a new platform module's own decisions,
+      which is where a path that escapes its asset root or a version that sorts
+      `0.1.10` before `0.1.9` would otherwise ship unnoticed. The gap is
+      recorded here as a gap.
+
+      Sixty-one public functions had no caller anywhere and were deleted, two
+      of them placeholders that answered `true` regardless of the screen, along
+      with a second never-instantiated focus layer whose `request_focus`
+      returned `true` without doing anything. That deletion rule does not
+      extend to the Compose-shaped surface: `rememberSaveable`,
+      `ProvideLifecycle`, `rememberLifecycleState`, `DurableSaveEffect` and
+      `interval` have no consumer calling them today and are kept, because what
+      makes them API is that an application written against Compose expects
+      them to exist, not that one of ours has reached for them yet.
 
 - [x] Add integration coverage for host recreation, picker redelivery, lifecycle,
       observable services, controls, accessibility, and platform capability
       state. The widget libraries are composed and measured rather than only
       called: `cranpose-liquid` and `cranpose-ui` each have a suite that runs
-      every widget they export through a real composition, which is what catches
-      a component that reads a local nobody provided.
+      widgets through a real composition, which is what catches a component
+      that reads a local nobody provided. Not every exported widget is in those
+      suites — `LazyRow` has no composition test anywhere, and several others
+      are covered instead by the robot suite or by tests next to their own
+      module. "Every widget they export" was too strong.
 - [x] Run `cargo fmt`, full workspace tests, and clippy with zero warnings.
+      This was recorded as done while clippy reported 28 warnings. The tree had
+      been linted under an older toolchain; 1.98 added
+      `chunks_exact_to_as_chunks`, and 27 sites across the framework, the demo
+      and the robot runners tripped it, plus `unnecessary_cast` and
+      `manual_slice_fill`. All are fixed. The three consumer applications were
+      carrying warnings of their own — CranScan 371, mostly `.clone()` on
+      framework types that had become `Copy`, and CranOrbit 27 — and both are
+      now at zero, with the `too_many_arguments` cases resolved by giving the
+      repeated parameter groups a type rather than by silencing the lint.
 - [x] Build the web targets, and the desktop and iOS targets of every consumer.
       The web build runs on a second machine, which is also where the wasm
       toolchain lives.

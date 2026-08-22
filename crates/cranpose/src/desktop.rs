@@ -4448,6 +4448,14 @@ impl ApplicationHandler for App {
                 }
                 event_loop.exit();
             }
+            // A file dropped on the window arrives the same way a shared or
+            // picked one does, so an application collects one stream of
+            // incoming content rather than a desktop path of its own.
+            WindowEvent::DragDropped { ref paths, .. } => {
+                for path in paths {
+                    crate::desktop_incoming::publish_file(path);
+                }
+            }
             WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
                 let viewport = viewport_for_surface_size(
                     primary_viewport_override,
@@ -5860,6 +5868,25 @@ pub fn try_run(
     // by the shell, opening no device until an item is opened.
     #[cfg(feature = "media-desktop")]
     cranpose_media::install();
+
+    // Heat and battery, so an application that paces itself by them paces
+    // itself on a laptop too rather than reading every desktop as unsupported.
+    crate::desktop_power::register();
+
+    // Resources shipped beside the executable, so an application declares what
+    // it ships rather than searching for it.
+    crate::desktop_bundled_assets::register();
+
+    // Desktop has no framework-owned installer to replace its own binary
+    // with, but it can still read a GitHub repository's release feed and
+    // tell an application a newer version exists.
+    cranpose_services::set_platform_app_updater(Arc::new(
+        cranpose_services::GitHubAppUpdater::new(),
+    ));
+
+    // Documents this process was launched to open, published before the first
+    // composition so the backlog is waiting for its first collector.
+    crate::desktop_incoming::publish_launch_documents();
 
     // What this process is using. Wraps whatever device info is registered, so
     // an application reads its own footprint through one contract on every

@@ -7,7 +7,7 @@ use cranpose_services::{
     set_platform_device_info, set_platform_power_monitor, BatteryStatus, DeviceInfo,
     PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
 };
-use objc2_foundation::{NSProcessInfo, NSProcessInfoThermalState};
+use objc2_foundation::NSProcessInfo;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -39,16 +39,7 @@ impl PowerMonitor for IosPowerMonitor {
     }
 
     fn thermal_state(&self) -> PowerReading<ThermalState> {
-        let state = NSProcessInfo::processInfo().thermalState();
-        PowerReading::Known(if state >= NSProcessInfoThermalState::Critical {
-            ThermalState::Critical
-        } else if state >= NSProcessInfoThermalState::Serious {
-            ThermalState::Severe
-        } else if state >= NSProcessInfoThermalState::Fair {
-            ThermalState::Light
-        } else {
-            ThermalState::Normal
-        })
+        PowerReading::Known(crate::apple_thermal::thermal_state())
     }
 
     fn battery_status(&self) -> PowerReading<BatteryStatus> {

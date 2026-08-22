@@ -333,7 +333,7 @@ mod tests {
             },
         );
         let focus = Rc::new(RefCell::new(false));
-        text_field_focus::request_focus(focus.clone(), handler);
+        text_field_focus::request_focus(focus.clone(), handler, 0);
         (state, focus)
     }
 

@@ -88,14 +88,12 @@ impl MineswapperGame {
         self.is_lost = false;
         self.is_won = false;
         self.revealed_count = 0;
-        for cell in &mut self.cells {
-            *cell = MineswapperCell {
-                is_mine: false,
-                is_revealed: false,
-                is_flagged: false,
-                adjacent: 0,
-            };
-        }
+        self.cells.fill(MineswapperCell {
+            is_mine: false,
+            is_revealed: false,
+            is_flagged: false,
+            adjacent: 0,
+        });
 
         let mut rng = seed | 1;
         let mut placed = 0;

@@ -96,7 +96,7 @@ fn main() {
             let mut min_blue = 1.0f32;
             let mut max_blue = 0.0f32;
 
-            for rgba in cropped.pixels.chunks_exact(4) {
+            for rgba in cropped.pixels.as_chunks::<4>().0 {
                 let red = rgba[0] as f32 / 255.0;
                 let green = rgba[1] as f32 / 255.0;
                 let blue = rgba[2] as f32 / 255.0;

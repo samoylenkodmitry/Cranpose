@@ -18,12 +18,12 @@ use cranpose_services::{
     publish_incoming_content, push_notification_deeplink, set_platform_app_updater,
     set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
     set_platform_launch_args, set_platform_network_monitor, set_platform_notifier,
-    set_platform_power_monitor, set_platform_share_sheet, AppUpdateError, AppUpdateStatus,
-    AppUpdater, BackgroundActivity, BatteryStatus, BundledAssetError, BundledAssets,
-    GitHubReleaseUpdate, HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent,
-    LaunchArgs, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, PackageDigest,
-    PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet,
-    ThermalState, UpdatePackage,
+    set_platform_power_monitor, set_platform_share_sheet, AppUpdateCapabilities, AppUpdateError,
+    AppUpdateStatus, AppUpdater, BackgroundActivity, BatteryStatus, BundledAssetError,
+    BundledAssetReader, BundledAssets, GitHubReleaseUpdate, HapticEffect, HapticFeedback,
+    HapticPattern, Haptics, IncomingContent, LaunchArgs, NetworkMonitor, NetworkStatus, Notifier,
+    NotifyRequest, PackageDigest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent,
+    ShareError, ShareSheet, StreamingAssetReader, ThermalState, UpdatePackage,
 };
 use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
@@ -112,6 +112,15 @@ struct AndroidAppUpdater {
 }
 
 impl AppUpdater for AndroidAppUpdater {
+    fn capabilities(&self) -> AppUpdateCapabilities {
+        // Android is the one platform that both discovers a release and hands
+        // the package to a system installer.
+        AppUpdateCapabilities {
+            check: true,
+            install: true,
+        }
+    }
+
     fn check(&self, source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
         with_android_activity_env(&self.app, |env, activity| {
             let repository = env
@@ -210,6 +219,53 @@ impl BundledAssets for AndroidBundledAssets {
             message,
         })?;
         result.ok_or_else(|| BundledAssetError::NotFound(path.to_string()))
+    }
+
+    fn open(&self, path: &str) -> Result<Box<dyn BundledAssetReader>, BundledAssetError> {
+        match self.asset_descriptor(path) {
+            Some(reader) => Ok(Box::new(reader)),
+            // A compressed asset has no descriptor to hand out: the bytes only
+            // exist once inflated. Storing a large asset uncompressed in the
+            // APK is what buys the streaming path.
+            None => Ok(Box::new(StreamingAssetReader::new(
+                path,
+                std::io::Cursor::new(self.read(path)?),
+            ))),
+        }
+    }
+
+    fn len(&self, path: &str) -> Option<u64> {
+        let manager = self.app.asset_manager();
+        let name = std::ffi::CString::new(path).ok()?;
+        Some(manager.open(&name)?.length() as u64)
+    }
+}
+
+impl AndroidBundledAssets {
+    /// A reader over the asset's own bytes inside the APK.
+    ///
+    /// `AAsset` is not thread-safe and the `ndk` crate marks it so, but the
+    /// descriptor it opens is an ordinary file descriptor into the package,
+    /// which a worker thread may own. Reading through the descriptor is what
+    /// lets a bundled model reach a loader without being materialised first.
+    fn asset_descriptor(&self, path: &str) -> Option<StreamingAssetReader<std::fs::File>> {
+        let manager = self.app.asset_manager();
+        let name = std::ffi::CString::new(path).ok()?;
+        let asset = manager.open(&name)?;
+        let descriptor = asset.open_file_descriptor().ok()?;
+        let mut file = std::fs::File::from(descriptor.fd);
+        std::io::Seek::seek(
+            &mut file,
+            std::io::SeekFrom::Start(descriptor.offset as u64),
+        )
+        .ok()?;
+        // The descriptor addresses the whole package, so the asset's end is a
+        // count rather than the end of the file.
+        Some(StreamingAssetReader::with_length(
+            path,
+            file,
+            descriptor.size as u64,
+        ))
     }
 }
 

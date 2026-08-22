@@ -34,7 +34,12 @@ never silently pretend.
 | background activity | ■ | □ (FGS is app policy) | □ | □ | documented |
 | file save dialog  | □ (export picker still open) | ■ ACTION_CREATE_DOCUMENT | ■ rfd save | ■ browser download | `FilePicker::save_file`; killed cranscan's direct rfd |
 | launch arguments  | ● argv (`simctl launch`, `launchArguments`) | ■ intent extras + `onNewIntent` | ● argv | □ (query string still open) | `launch_args()`; `is_debuggable()` = `FLAG_DEBUGGABLE` on Android, `debug_assertions` elsewhere |
-| media playback    | ■ `AVAudioPlayer` + `AVAudioSession` + MediaPlayer | ■ `MediaPlayer` + `AudioManager` + `MediaSession` + `Visualizer` | ■ `cranpose-media` (rodio/symphonia) | ■ `<audio>` + Media Session + Web Audio | observable `PlaybackState`/`PlaybackProgress`; the audio-focus policy lives in the framework; analysis samples are capability-gated (iOS has none, Android needs `RECORD_AUDIO`); desktop and iOS play local files only; the equalizer is ten octave bands where the framework builds the filters, the device's own bands on Android, and absent on iOS |
+| media playback    | ■ `AVAudioPlayer` + `AVAudioSession` + MediaPlayer | ■ `MediaPlayer` + `AudioManager` + `MediaSession` + `Visualizer` | ■ `cranpose-media` (symphonia + cpal) | ■ `<audio>` + Media Session + Web Audio | observable `PlaybackState`/`PlaybackProgress`; the audio-focus policy lives in the framework; analysis samples are capability-gated (iOS has none, Android needs `RECORD_AUDIO`); desktop and iOS play local files only; the equalizer is ten octave bands where the framework builds the filters, the device's own bands on Android, and absent on iOS |
+| power             | ■ `NSProcessInfo.thermalState` + `UIDevice` battery | ■ `PowerManager` thermal status + `BatteryManager` | ■ thermal on macOS (`NSProcessInfo`, Foundation not UIKit); battery on Linux (`/sys/class/power_supply`) | ■ battery via `navigator.getBattery` when the browser has it | `PowerCapabilities` names the two halves separately, and `PowerReading` tells `Unsupported` apart from `Unknown` — a browser whose `getBattery` promise has not resolved is not a browser without one |
+| bundled assets    | ■ `NSBundle` resource directory, streamed | ■ `AssetManager`; an uncompressed asset streams through its own descriptor | ■ beside the executable, in a `.app`'s `Resources`, or the working directory, streamed | □ | a browser has no packaged file — its resources arrive over HTTP, so the web fetches them through `http` instead |
+| incoming content  | □ | ■ `ACTION_SEND` / `ACTION_VIEW` shares and `onNewIntent` | ■ files dropped on the window, and documents named in `argv` | ■ files dropped on the canvas | one `IncomingContent` stream on every platform that has one; winit owns the iOS `UIApplicationDelegate`, so `openURL` is not reachable, and a macOS `.app` opened from the Finder is told by an Apple Event winit does not surface — drops arrive, opens do not |
+| app updates       | ■ check only | ■ check and install (`PackageInstaller`, digest verified before commit) | ■ check only | □ | `AppUpdateCapabilities` splits `check` from `install`: App Store Review Guideline 3.3.2 forbids an iOS application from replacing its own binary and the framework owns no desktop installer, so both report `install: false` rather than registering an installer that can only fail. The check needs the application's own `http-native` opt-in and reports `check: false` without it |
+| host surface      | ● window size | ● window size | ■ observable size and resize requests | ■ canvas size, observable, with resize requests | |
 | in-app purchases  | ■ StoreKit 2 (`cranpose-storekit`) | ■ Play Billing (`playbilling` feature + `CranposeBilling`) | □ | □ | `purchases::store_state()` snapshot read from the frame loop; a platform without a store reports `StorePhase::Unavailable` and owns nothing, so a build with no backend never grants a paid entitlement by accident |
 
 ## Structural fixes
@@ -63,11 +68,20 @@ never silently pretend.
 
 ## Still open
 
+- Desktop battery on macOS and Windows. Linux publishes it from
+  `/sys/class/power_supply`, which is a file to read; macOS would need IOKit's
+  `IOPSCopyPowerSourcesInfo` and Windows `GetSystemPowerStatus`, each a second
+  FFI surface for one number. `PowerCapabilities::battery` reports `false`
+  there rather than answering with a guess.
+- Desktop thermal on Linux and Windows. Neither exposes thermal *pressure*; the
+  Linux kernel publishes temperatures, and a threshold this framework invented
+  to turn degrees into a `ThermalState` would read as a measurement while being
+  a guess.
 - iOS network monitor (NWPathMonitor) and export-style save dialog.
 - Web camera (getUserMedia).
 - Network items for the desktop and iOS media backends. Both play local files;
-  `AVPlayer` and a streaming `rodio` source are what would close that, and
-  until then the URI is refused rather than downloaded into memory first.
+  `AVPlayer` and a streaming `symphonia` source are what would close that,
+  and until then the URI is refused rather than downloaded into memory first.
 - Analysis samples on iOS. `AVAudioPlayer` metering gives an average and a peak
   per channel, not the samples a visualiser draws, so
   `MediaCapabilities::analysis` reports `false` rather than publishing

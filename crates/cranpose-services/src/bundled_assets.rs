@@ -114,6 +114,14 @@ pub enum BundledAssetInstallOutcome {
 }
 
 /// Access to files packaged in the app bundle.
+///
+/// Reads are synchronous, which is what a packaged file on a native platform
+/// is: Android's asset manager, an application bundle and a directory beside
+/// the executable all answer without waiting on a network. A browser has no
+/// such file — its resources arrive over HTTP — so the web registers no backend
+/// and [`bundled_assets`] answers `None` there. An application that ships
+/// resources to the web fetches them through [`crate::http`], which is async
+/// because that is what the medium is.
 pub trait BundledAssets: Send + Sync {
     /// Reads one bundle-relative asset in full.
     ///
@@ -128,7 +136,10 @@ pub trait BundledAssets: Send + Sync {
     /// Backends with a real streaming API — Android's `AssetManager`, a file in
     /// an application bundle — override it and never materialise the asset.
     fn open(&self, path: &str) -> Result<Box<dyn BundledAssetReader>, BundledAssetError> {
-        Ok(Box::new(BufferedAssetReader::new(self.read(path)?)))
+        Ok(Box::new(StreamingAssetReader::new(
+            path,
+            std::io::Cursor::new(self.read(path)?),
+        )))
     }
 
     /// The asset's byte length without reading it, when the backend knows it.
@@ -147,26 +158,79 @@ pub trait BundledAssetReader: Send {
     fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, BundledAssetError>;
 }
 
-/// The fallback reader for a backend that can only produce whole assets.
-struct BufferedAssetReader {
-    bytes: Vec<u8>,
-    offset: usize,
+/// A [`BundledAssetReader`] over any byte stream.
+///
+/// Every backend that streams an asset ends at the same loop: fill a chunk,
+/// stop at the end, name the asset rather than its resolved location when the
+/// read fails. What differs is only what was opened — a file beside the
+/// executable, a file in an application bundle, a span of an Android package,
+/// or bytes already in hand — and whether the asset ends where its stream
+/// does. The loop lives here once; a backend supplies the stream and, when
+/// its asset is a span of something larger, how many bytes of it are its own.
+pub struct StreamingAssetReader<R> {
+    source: R,
+    /// The asset the caller asked for, so a failure names that rather than
+    /// wherever it happened to resolve to.
+    path: String,
+    /// Bytes left when the asset ends before its stream does; `None` when the
+    /// stream's own end is the asset's end.
+    remaining: Option<u64>,
 }
 
-impl BufferedAssetReader {
-    fn new(bytes: Vec<u8>) -> Self {
-        Self { bytes, offset: 0 }
+impl<R: std::io::Read + Send> StreamingAssetReader<R> {
+    /// A reader over a stream whose end is the asset's end.
+    pub fn new(path: impl Into<String>, source: R) -> Self {
+        Self {
+            source,
+            path: path.into(),
+            remaining: None,
+        }
+    }
+
+    /// A reader over `len` bytes of a stream that continues past the asset —
+    /// an Android package's file descriptor addresses the whole package, so
+    /// the asset's end is a count rather than end of file.
+    pub fn with_length(path: impl Into<String>, source: R, len: u64) -> Self {
+        Self {
+            source,
+            path: path.into(),
+            remaining: Some(len),
+        }
     }
 }
 
-impl BundledAssetReader for BufferedAssetReader {
+impl<R: std::io::Read + Send> BundledAssetReader for StreamingAssetReader<R> {
     fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, BundledAssetError> {
-        if self.offset >= self.bytes.len() {
+        let want = match self.remaining {
+            Some(0) => return Ok(None),
+            Some(remaining) => remaining.min(crate::content::DEFAULT_CHUNK_LEN as u64) as usize,
+            None => crate::content::DEFAULT_CHUNK_LEN,
+        };
+        let mut chunk = vec![0u8; want];
+        let mut filled = 0;
+        while filled < chunk.len() {
+            match self.source.read(&mut chunk[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => {
+                    return Err(BundledAssetError::ReadFailed {
+                        path: self.path.clone(),
+                        message: error.to_string(),
+                    })
+                }
+            }
+        }
+        if filled == 0 {
+            // A stream that ends early ends the asset with it; recording that
+            // stops the next call re-reading a source with nothing left.
+            self.remaining = Some(0);
             return Ok(None);
         }
-        let end = (self.offset + crate::content::DEFAULT_CHUNK_LEN).min(self.bytes.len());
-        let chunk = self.bytes[self.offset..end].to_vec();
-        self.offset = end;
+        chunk.truncate(filled);
+        if let Some(remaining) = &mut self.remaining {
+            *remaining -= filled as u64;
+        }
         Ok(Some(chunk))
     }
 }
@@ -333,6 +397,38 @@ mod tests {
                 other => Err(BundledAssetError::NotFound(other.to_string())),
             }
         }
+    }
+
+    /// The Android package path opens a descriptor onto the whole APK and
+    /// tells the reader how many of its bytes belong to this asset. Reading
+    /// past that count would hand the caller the next asset's bytes; stopping
+    /// short of it would truncate this one. Neither is visible without a
+    /// stream that continues past the asset, which is what this gives it.
+    #[test]
+    fn a_length_bounded_reader_stops_at_the_asset_and_not_at_the_stream() {
+        let asset_len = crate::content::DEFAULT_CHUNK_LEN + 5;
+        let mut package = vec![7u8; asset_len];
+        package.extend_from_slice(&[9u8; 64]);
+
+        let mut reader = StreamingAssetReader::with_length(
+            "model.bin",
+            std::io::Cursor::new(package),
+            asset_len as u64,
+        );
+        let mut read = Vec::new();
+        while let Some(chunk) = reader.read_chunk().expect("chunks read") {
+            read.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(
+            read.len(),
+            asset_len,
+            "the asset ends where its length says"
+        );
+        assert!(
+            read.iter().all(|byte| *byte == 7),
+            "no byte of what follows the asset in the package is handed out"
+        );
     }
 
     #[test]

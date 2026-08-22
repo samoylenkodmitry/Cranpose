@@ -70,10 +70,15 @@ profile_output_dir() {
 }
 
 PROFILE_DIR=$(profile_output_dir "$ROBOT_PROFILE")
+# Where cargo puts the binaries, which is not always `target/`: a machine with
+# a small system disk points CARGO_TARGET_DIR at a roomier one, and a suite
+# that looked only in `target/` reported every example as a missing binary
+# after a build that had just succeeded.
+CARGO_OUT_DIR="${CARGO_TARGET_DIR:-target}"
 if [ -n "${CARGO_BUILD_TARGET:-}" ]; then
-    EXAMPLE_BIN_DIR="target/$CARGO_BUILD_TARGET/$PROFILE_DIR/examples"
+    EXAMPLE_BIN_DIR="$CARGO_OUT_DIR/$CARGO_BUILD_TARGET/$PROFILE_DIR/examples"
 else
-    EXAMPLE_BIN_DIR="target/$PROFILE_DIR/examples"
+    EXAMPLE_BIN_DIR="$CARGO_OUT_DIR/$PROFILE_DIR/examples"
 fi
 
 if ! [[ "$ROBOT_FAILURE_LOG_LINES" =~ ^[1-9][0-9]*$ ]]; then

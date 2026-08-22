@@ -309,10 +309,15 @@ pub fn BasicTextFieldWithOptions(
         remember(TextFieldHandleController::new).with(TextFieldHandleController::clone);
 
     // Build the text field element with line limits + the handle controller.
+    // The modal depth this field was composed at (see `local_modal_depth`)
+    // travels with it into the focus request, so a field behind an open
+    // dialog cannot steal focus from it.
+    let modal_depth = crate::modal::local_modal_depth().current();
     let text_field_element = TextFieldElement::new(state, options.text_style.clone())
         .with_cursor_color(options.cursor_color)
         .with_line_limits(options.line_limits)
-        .with_handle_controller(controller.clone());
+        .with_handle_controller(controller.clone())
+        .with_modal_depth(modal_depth);
 
     // Wrap it in a modifier
     let text_field_modifier = modifier_element(text_field_element);

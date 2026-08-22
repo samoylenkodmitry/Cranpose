@@ -1217,8 +1217,10 @@ pub fn changed_pixel_count(
     }
 
     before.pixels[..expected_len]
-        .chunks_exact(4)
-        .zip(after.pixels[..expected_len].chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(after.pixels[..expected_len].as_chunks::<4>().0)
         .filter(|(a, b)| {
             a[0].abs_diff(b[0]) > channel_threshold
                 || a[1].abs_diff(b[1]) > channel_threshold

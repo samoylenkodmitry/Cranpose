@@ -100,7 +100,9 @@ pub use layout::{
 pub use layout_direction::{
     layout_direction, local_layout_direction, LayoutDirection, ProvideLayoutDirection,
 };
-pub use modal::{clear_modals, dispatch_modal_back, modal_depth, ModalRegistration};
+pub use modal::{
+    clear_modals, dispatch_modal_back, local_modal_depth, modal_depth, ModalRegistration,
+};
 pub use safe_area::{local_ime_insets, local_safe_area_insets, window_insets, WindowInsets};
 // The accessibility vocabulary an app writes against. It is declared in
 // cranpose-foundation, next to `SemanticsConfiguration`, but an app composes

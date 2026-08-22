@@ -928,6 +928,7 @@ dependencies = [
  "js-sys",
  "libc",
  "log",
+ "mach2",
  "ndk",
  "ndk-sys",
  "objc2 0.6.4",
@@ -1055,6 +1056,7 @@ version = "0.1.95"
 dependencies = [
  "cpal",
  "cranpose-audio",
+ "cranpose-core",
  "cranpose-services",
  "log",
  "parking_lot",
@@ -1156,6 +1158,7 @@ dependencies = [
  "pollster",
  "reqwest",
  "rfd",
+ "serde_json",
  "sha2",
  "thiserror 2.0.18",
  "wasm-bindgen",

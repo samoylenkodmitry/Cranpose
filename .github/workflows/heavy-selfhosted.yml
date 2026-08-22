@@ -21,8 +21,7 @@ jobs:
     name: robot e2e (self-hosted GPU)
     # X11 suite: Linux runners only — the macOS boxes serve the Android
     # builds. The workspace persists between runs on a self-hosted runner,
-    # so the robot-profile target stays warm; the suite's own paths assume
-    # the workspace target dir, so no CARGO_TARGET_DIR override here.
+    # so the robot-profile target stays warm.
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 90
     env:

@@ -4342,3 +4342,10 @@ mod recursive_decrease_increase_test;
 
 pub mod collections;
 pub mod hash;
+
+/// Where a test writes real files. Behind `test-helpers` so only a test build
+/// of the workspace carries it.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_scratch;
+#[cfg(any(test, feature = "test-helpers"))]
+pub use test_scratch::test_scratch_dir;

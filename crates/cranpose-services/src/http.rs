@@ -904,7 +904,11 @@ fn build_native_client() -> Result<reqwest::blocking::Client, HttpError> {
         reqwest::blocking::Client::builder()
             .connect_timeout(Duration::from_secs(30))
             .timeout(None)
-            .user_agent("cranpose/0.1"),
+            // Named from the crate's own version rather than a literal,
+            // which drifts from the release it claims to be the moment one
+            // ships. Some hosts (GitHub's API among them) refuse a request
+            // that carries no agent at all.
+            .user_agent(concat!("cranpose/", env!("CARGO_PKG_VERSION"))),
     )?
     .build()
     .map_err(|err| HttpError::ClientInit(err.to_string()))

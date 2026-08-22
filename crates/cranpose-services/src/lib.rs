@@ -15,6 +15,8 @@ pub mod camera;
 pub mod content;
 pub mod device_info;
 pub mod file_picker;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod github_release_updater;
 pub mod haptics;
 pub mod host;
 pub mod host_surface;
@@ -43,10 +45,11 @@ pub use app_info::{
     AppInfoRef,
 };
 pub use app_update::{
-    app_update_status, app_updates_supported, check_for_app_update, clear_platform_app_updater,
-    install_app_update, observe_app_update_status, set_app_update_status, set_platform_app_updater,
-    sha256_hex, verify_package, AppUpdateError, AppUpdateObserver, AppUpdateStatus, AppUpdater,
-    AppUpdaterRef, DigestAlgorithm, DigestVerifier, GitHubReleaseUpdate, PackageDigest,
+    app_update_capabilities, app_update_checks_supported, app_update_status, app_updates_supported,
+    check_for_app_update, clear_platform_app_updater, install_app_update,
+    observe_app_update_status, set_app_update_status, set_platform_app_updater, sha256_hex,
+    verify_package, AppUpdateCapabilities, AppUpdateError, AppUpdateObserver, AppUpdateStatus,
+    AppUpdater, AppUpdaterRef, DigestAlgorithm, DigestVerifier, GitHubReleaseUpdate, PackageDigest,
     UpdatePackage,
 };
 pub use async_io::{ChunkChannel, ChunkNext, ChunkStream, Signal, SignalWait, MAX_PENDING_CHUNKS};
@@ -62,7 +65,7 @@ pub use background::{
 };
 pub use bundled_assets::{
     bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets, BundledAssetError,
-    BundledAssetReader, BundledAssets, BundledAssetsRef,
+    BundledAssetReader, BundledAssets, BundledAssetsRef, StreamingAssetReader,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use bundled_assets::{
@@ -96,6 +99,8 @@ pub use file_picker::{
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, PickerFuture,
     ProvideFilePicker, RecoveredPick, SaveDocumentRequest,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use github_release_updater::GitHubAppUpdater;
 pub use haptics::{
     clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticEffect,
     HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
@@ -220,22 +225,10 @@ pub use writable_folder::{
 pub(crate) type TestComposition = Composition<MemoryApplier>;
 
 /// A unique, empty directory under the workspace `target/test-output` for a
-/// test that needs real files.
-///
-/// Never the system temporary directory: on Linux that is tmpfs, so a test
-/// writing a payload there writes it to RAM, and a failure leaves nothing under
-/// `target` to look at afterwards.
+/// test that needs real files. See [`cranpose_core::test_scratch_dir`].
 #[cfg(test)]
 pub(crate) fn test_scratch_dir(tag: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static COUNTER: AtomicU32 = AtomicU32::new(0);
-    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/test-output/cranpose-services")
-        .join(format!("{tag}-{}-{unique}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&path);
-    std::fs::create_dir_all(&path).expect("a scratch directory under target/test-output");
-    path
+    cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
 }
 
 /// Build a composition with a simple in-memory applier and run the provided closure once.

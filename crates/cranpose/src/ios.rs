@@ -686,7 +686,22 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_camera::register();
     crate::ios_media::register();
     crate::ios_host::register();
-    // Opt-in: only apps that sell something link StoreKit and the Swift shim.
+    crate::ios_bundled_assets::register();
+    // App Store Review Guideline 3.3.2 forbids an application from
+    // downloading and installing a replacement binary for itself, and unlike
+    // Android's `PackageInstaller` or desktop's own file replacement, iOS has
+    // no API an app can call to install an updated version of itself — so
+    // `AppUpdater::install` stays the trait's own `Unsupported` default here.
+    //
+    // Discovering that a newer version exists is a separate question from
+    // installing one, which is what `AppUpdateCapabilities` splits `check`
+    // and `install` apart to say honestly: this reads the same GitHub
+    // release feed desktop does and reports `Available`, so an application
+    // can point the reader at the App Store listing even though it cannot
+    // install the update itself.
+    cranpose_services::set_platform_app_updater(Arc::new(
+        cranpose_services::GitHubAppUpdater::new(),
+    ));
     #[cfg(feature = "storekit")]
     cranpose_storekit::register();
 

@@ -4914,7 +4914,9 @@ mod tests {
     fn count_ink_pixels(image: &ImageBitmap) -> usize {
         image
             .pixels()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[3] > 0)
             .count()
     }

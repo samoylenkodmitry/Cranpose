@@ -469,6 +469,10 @@ pub struct TextFieldModifierNode {
     /// composable that renders the finger selection handles. `None` when the
     /// field is used without handle support.
     handle_controller: Option<TextFieldHandleController>,
+    /// The [`crate::modal::local_modal_depth`] this field was composed at,
+    /// forwarded to every focus request so a field behind an open dialog is
+    /// refused focus (see `crate::text_field_focus::request_focus`).
+    modal_depth: usize,
 }
 
 impl std::fmt::Debug for TextFieldModifierNode {
@@ -492,7 +496,8 @@ impl TextFieldModifierNode {
         let refs_line_height = refs.line_height.clone();
         let refs_wrap_width = refs.wrap_width.clone();
         let line_limits = TextFieldLineLimits::default();
-        let cached_handler = Self::create_handler(state, refs.clone(), line_limits, style.clone());
+        let cached_handler =
+            Self::create_handler(state, refs.clone(), line_limits, style.clone(), 0);
         let cached_pan_resolver =
             Self::create_pan_resolver(state, refs.clone(), line_limits, style.clone());
 
@@ -518,19 +523,39 @@ impl TextFieldModifierNode {
             cached_handler,
             cached_pan_resolver,
             handle_controller: None,
+            modal_depth: 0,
         }
     }
 
     /// Creates a node with custom line limits.
     pub fn with_line_limits(mut self, line_limits: TextFieldLineLimits) -> Self {
         self.line_limits = line_limits;
+        self.rebuild_cached_closures();
+        self
+    }
+
+    /// Rebuilds the closures that capture how this field is configured.
+    ///
+    /// The pointer handler and the pan resolver capture state, style, line
+    /// limits and modal depth by value, so changing any of those leaves a
+    /// closure describing the configuration the node no longer has. One place
+    /// rebuilds both from the node's own fields, and every path that changes
+    /// them ends here — a field configured while it is being constructed and
+    /// one reconfigured by a recomposition arrive at the same node.
+    fn rebuild_cached_closures(&mut self) {
+        self.cached_handler = Self::create_handler(
+            self.state,
+            self.refs.clone(),
+            self.line_limits,
+            self.style.clone(),
+            self.modal_depth,
+        );
         self.cached_pan_resolver = Self::create_pan_resolver(
             self.state,
             self.refs.clone(),
-            line_limits,
+            self.line_limits,
             self.style.clone(),
         );
-        self
     }
 
     /// Installs the controller the field publishes live handle metrics to.
@@ -607,6 +632,7 @@ impl TextFieldModifierNode {
         refs: TextFieldRefs,
         line_limits: TextFieldLineLimits,
         style: TextStyle, // Add style
+        modal_depth: usize,
     ) -> Rc<dyn Fn(PointerEvent)> {
         // Tap-count classification plus word/line/paragraph boundaries drive the
         // multi-tap selection granularity gestures.
@@ -664,7 +690,11 @@ impl TextFieldModifierNode {
                             style: style.clone(),
                         },
                     );
-                    crate::text_field_focus::request_focus(refs.is_focused.clone(), handler);
+                    crate::text_field_focus::request_focus(
+                        refs.is_focused.clone(),
+                        handler,
+                        modal_depth,
+                    );
 
                     let now = web_time::Instant::now();
                     let text = state.text();
@@ -1465,6 +1495,8 @@ pub struct TextFieldElement {
     /// Channel the node publishes live handle metrics to (finger selection
     /// handles). `None` disables handle support.
     handle_controller: Option<TextFieldHandleController>,
+    /// The [`crate::modal::local_modal_depth`] this field was composed at.
+    modal_depth: usize,
 }
 
 impl TextFieldElement {
@@ -1476,6 +1508,7 @@ impl TextFieldElement {
             cursor_color: DEFAULT_CURSOR_COLOR,
             line_limits: TextFieldLineLimits::default(),
             handle_controller: None,
+            modal_depth: 0,
         }
     }
 
@@ -1494,6 +1527,13 @@ impl TextFieldElement {
     /// Installs the finger-handle metrics channel shared with the composable.
     pub fn with_handle_controller(mut self, controller: TextFieldHandleController) -> Self {
         self.handle_controller = Some(controller);
+        self
+    }
+
+    /// Sets the modal depth this field was composed at (see
+    /// [`crate::modal::local_modal_depth`]).
+    pub fn with_modal_depth(mut self, depth: usize) -> Self {
+        self.modal_depth = depth;
         self
     }
 }
@@ -1520,6 +1560,7 @@ impl Hash for TextFieldElement {
         self.cursor_color.3.to_bits().hash(state);
         self.style.render_hash().hash(state);
         self.line_limits.hash(state);
+        self.modal_depth.hash(state);
     }
 }
 
@@ -1532,6 +1573,7 @@ impl PartialEq for TextFieldElement {
             && self.style == other.style
             && self.cursor_color == other.cursor_color
             && self.line_limits == other.line_limits
+            && self.modal_depth == other.modal_depth
     }
 }
 
@@ -1544,9 +1586,11 @@ impl ModifierNodeElement for TextFieldElement {
         let mut node = TextFieldModifierNode::new(self.state, self.style.clone())
             .with_cursor_color(self.cursor_color)
             .with_line_limits(self.line_limits);
+        node.modal_depth = self.modal_depth;
         if let Some(controller) = self.handle_controller.clone() {
             node = node.with_handle_controller(controller);
         }
+        node.rebuild_cached_closures();
         node
     }
 
@@ -1557,22 +1601,8 @@ impl ModifierNodeElement for TextFieldElement {
         node.cursor_brush = Brush::solid(self.cursor_color);
         node.line_limits = self.line_limits;
         node.handle_controller = self.handle_controller.clone();
-
-        // Recreate the cached handler with the new state but same refs
-        node.cached_handler = TextFieldModifierNode::create_handler(
-            node.state,
-            node.refs.clone(),
-            node.line_limits,
-            self.style.clone(),
-        );
-
-        // Recreate the pan resolver so it captures the new state/style/limits
-        node.cached_pan_resolver = TextFieldModifierNode::create_pan_resolver(
-            node.state,
-            node.refs.clone(),
-            node.line_limits,
-            self.style.clone(),
-        );
+        node.modal_depth = self.modal_depth;
+        node.rebuild_cached_closures();
 
         // Check if content changed and update cache
         if node.update_cached_state() {

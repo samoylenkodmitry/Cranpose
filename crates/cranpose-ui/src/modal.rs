@@ -6,7 +6,7 @@
 //! application shell asks the innermost one to close when the platform reports
 //! a back request. Nothing outside the framework registers or dispatches.
 
-use cranpose_core::{try_mutableStateOf, MutableState};
+use cranpose_core::{compositionLocalOf, try_mutableStateOf, CompositionLocal, MutableState};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -49,12 +49,26 @@ fn publish_depth() {
 /// Keeps a modal surface on the stack until it is dropped.
 pub struct ModalRegistration {
     id: u64,
+    /// The depth this registration occupied when it was pushed — fixed for
+    /// its lifetime, not recomputed from its (possibly shifting) position in
+    /// the stack. [`local_modal_depth`] readers inside this modal's content
+    /// are given this same value, so a field's recorded depth and its modal's
+    /// registration depth always mean the same thing when compared.
+    depth: usize,
 }
 
 impl Drop for ModalRegistration {
     fn drop(&mut self) {
         MODALS.with(|modals| modals.borrow_mut().retain(|entry| entry.id != self.id));
         publish_depth();
+        // A field focused at exactly this depth lived inside the content this
+        // registration guarded, which is now gone with it — leaving focus
+        // pointed at it would strand the platform keyboard open with no
+        // field behind it. A field at another depth (outside this modal, or
+        // inside a sibling modal open at the same time) is untouched.
+        if crate::render_state::has_current_app_context() {
+            crate::text_field_focus::clear_focus_for_closed_modal(self.depth);
+        }
     }
 }
 
@@ -66,9 +80,13 @@ pub fn register_modal(on_back: Rc<dyn Fn()>) -> ModalRegistration {
         next.set(id + 1);
         id
     });
-    MODALS.with(|modals| modals.borrow_mut().push(ModalEntry { id, on_back }));
+    let depth = MODALS.with(|modals| {
+        let mut modals = modals.borrow_mut();
+        modals.push(ModalEntry { id, on_back });
+        modals.len()
+    });
     publish_depth();
-    ModalRegistration { id }
+    ModalRegistration { id, depth }
 }
 
 /// How many modal surfaces are open. Reading this in a composable subscribes to
@@ -78,6 +96,44 @@ pub fn modal_depth() -> usize {
         Some(state) => state.get(),
         None => DEPTH_COUNT.with(Cell::get),
     }
+}
+
+/// How many modal surfaces are open, read without subscribing to it.
+///
+/// [`modal_depth`] is the composable's read: it goes through the observable
+/// mirror so that a reader recomposes when a modal opens or closes, and that
+/// mirror belongs to whichever runtime was current when it was first
+/// allocated. A pointer callback is not a composable and is not guaranteed to
+/// be on that runtime — a focus request arriving under a different one would
+/// reach a state whose runtime is gone. So the paths that only need the
+/// number read the count itself, which is the stack's own length and is
+/// correct whether a runtime exists or not.
+pub(crate) fn current_modal_depth() -> usize {
+    DEPTH_COUNT.with(Cell::get)
+}
+
+/// CompositionLocal carrying the modal depth at which content is being
+/// composed: zero outside any dialog, or the depth of the innermost dialog
+/// that encloses the current composition.
+///
+/// A modal provides this to its own content, set to the depth its own
+/// [`register_modal`] registration occupies (see [`ModalRegistration`]).
+/// Text fields read it and hand it to their focus request, so a field behind
+/// an open dialog — whose read of this local stays at a shallower depth —
+/// can be told apart from one inside it.
+///
+/// The same `CompositionLocal` instance is returned on every call (cached per
+/// thread), so the modal that provides it and the field that reads it observe
+/// one shared local.
+pub fn local_modal_depth() -> CompositionLocal<usize> {
+    thread_local! {
+        static LOCAL: RefCell<Option<CompositionLocal<usize>>> = const { RefCell::new(None) };
+    }
+    LOCAL.with(|cell| {
+        cell.borrow_mut()
+            .get_or_insert_with(|| compositionLocalOf(|| 0usize))
+            .clone()
+    })
 }
 
 /// Asks the innermost modal surface to close.

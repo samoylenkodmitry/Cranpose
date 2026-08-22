@@ -22,10 +22,11 @@ use wasm_bindgen::{JsCast, JsValue};
 
 pub(crate) fn register() {
     set_platform_share_sheet(Rc::new(WebShareSheet));
-    set_platform_notifier(Arc::new(WebNotifier::default()));
+    set_platform_notifier(Arc::new(WebNotifier));
     set_platform_haptics(Arc::new(WebHaptics));
     set_platform_device_info(Rc::new(WebDeviceInfo));
     crate::web_media::install();
+    crate::web_power::register();
     register_network_monitor();
 }
 
@@ -99,11 +100,12 @@ impl ShareSheet for WebShareSheet {
 
 // --- Notifications ----------------------------------------------------------
 
-#[derive(Default)]
 struct WebNotifier;
 
+type ActiveNotification = (web_sys::Notification, Closure<dyn FnMut()>);
+
 thread_local! {
-    static ACTIVE_NOTIFICATIONS: RefCell<HashMap<String, (web_sys::Notification, Closure<dyn FnMut()>)>> = RefCell::new(HashMap::new());
+    static ACTIVE_NOTIFICATIONS: RefCell<HashMap<String, ActiveNotification>> = RefCell::new(HashMap::new());
 }
 
 impl WebNotifier {
@@ -229,6 +231,22 @@ impl Haptics for WebHaptics {
 
 // --- Device info --------------------------------------------------------------
 
+/// Every [`DeviceInfo`] method besides [`total_memory_bytes`](DeviceInfo::total_memory_bytes)
+/// keeps its trait default (`None`/`false`) here rather than reading
+/// something that only sounds like an answer:
+///
+/// * `resident_memory_bytes`/`process_cpu_time` have no browser counterpart —
+///   `performance.memory` is a non-standard, Chrome-only JS heap size, not
+///   this process's resident set, and the standard replacement
+///   (`performance.measureUserAgentSpecificMemory`) is async, cross-origin-
+///   isolation-gated, and answers in a shape this trait's synchronous methods
+///   cannot represent.
+/// * `available_memory_bytes` has no signal a page can read at all; a
+///   browser tab is not told how much more it may allocate before it is
+///   killed.
+/// * `release_free_memory` has no allocator hook a page can reach from safe
+///   Rust; `wee_alloc`/`dlmalloc`-style wasm allocators expose nothing like
+///   `malloc_trim`.
 struct WebDeviceInfo;
 
 impl DeviceInfo for WebDeviceInfo {

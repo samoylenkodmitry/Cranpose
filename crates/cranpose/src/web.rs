@@ -16,6 +16,16 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
+/// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
+/// out only when the render loop itself needs replacing (never); held behind
+/// `RefCell<Option<_>>` because it borrows the state its own frame closes
+/// over and cannot exist until that state does.
+type RenderLoop = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+/// Reflows the canvas and its surface, optionally to a caller-requested CSS
+/// size, and republishes the resulting host-surface geometry.
+type ReshapeFn = Rc<dyn Fn(Option<(f32, f32)>)>;
+
 /// Maps a DOM `PointerEvent.pointerType` string onto the framework
 /// [`PointerSource`] so text fields show finger handles only for touch.
 fn web_pointer_source(event: &PointerEvent) -> PointerSource {
@@ -75,7 +85,7 @@ struct WebFrameTimer {
 struct WebPlatformFrameDriver<'a> {
     frame_timer: &'a Rc<WebFrameTimer>,
     frame_pending: &'a Rc<Cell<bool>>,
-    render_loop: &'a Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &'a RenderLoop,
 }
 
 impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
@@ -117,7 +127,7 @@ pub async fn run(
     let mut content = content;
     let content = {
         let env = Rc::clone(&platform_env);
-        move || env.compose_root(|| content())
+        move || env.compose_root(&mut content)
     };
 
     // Browser-backed service implementations (share, notifications, vibration,
@@ -290,6 +300,12 @@ pub async fn run(
     // then the static `with_fonts()` slices, then the embedded fallback.
     let fonts = settings.resolve_font_set();
     let mut renderer = WgpuRenderer::with_font_set(fonts);
+    // `init_gpu` takes `Arc<Device>`/`Arc<Queue>` because every other host
+    // (desktop, Android, iOS) shares this exact renderer entry point and
+    // those `wgpu` types are genuinely `Send + Sync` there. Only the web
+    // target's WebGPU backend wraps a JS object that is not, and there is no
+    // web-only `init_gpu` to hand an `Rc` to instead.
+    #[allow(clippy::arc_with_non_send_sync)]
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),
@@ -323,7 +339,7 @@ pub async fn run(
 
     let surface = Rc::new(surface);
     let surface_config = Rc::new(RefCell::new(surface_config));
-    let render_loop: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let render_loop: RenderLoop = Rc::new(RefCell::new(None));
     let frame_pending = Rc::new(Cell::new(false));
     let frame_timer = Rc::new(WebFrameTimer::default());
     // Starts true so the scene built during `AppShell` construction is presented
@@ -345,6 +361,16 @@ pub async fn run(
     // clipboard; without this they reach only an in-process one, so a copy on
     // the page could not leave it.
     crate::web_clipboard::install(&app, request_frame.clone());
+
+    // Files dropped onto the canvas arrive through the same incoming-content
+    // pipeline a share or a document intent uses on Android and iOS.
+    crate::web_drop::install(&canvas, request_frame.clone())?;
+
+    // Live battery readings where the browser has the Battery Status API.
+    // Registered against the render loop (not `web_services::register()`,
+    // which runs before one exists) so a level or charging change wakes a
+    // repaint instead of waiting for one for an unrelated reason.
+    crate::web_power::start_battery_probe(request_frame.clone());
 
     // Hidden editable element backing IME composition. Browsers only start
     // IME composition sessions (and mobile browsers only show their virtual
@@ -394,8 +420,8 @@ pub async fn run(
         let wheel_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
 
             // What the sample means -- zoom, rotary, axis-swapped scroll, or
@@ -432,8 +458,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -453,8 +479,8 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let _ = pointer_canvas.set_pointer_capture(event.pointer_id());
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -475,8 +501,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -830,7 +856,7 @@ pub async fn run(
     // whole reshape — CSS box, drawing buffer, swapchain, composition viewport
     // and density — happens in one place, and the same place serves an
     // application that asks for a size through the host-surface service.
-    let reshape: Rc<dyn Fn(Option<(f32, f32)>)> = {
+    let reshape: ReshapeFn = {
         let canvas = canvas.clone();
         let window = window.clone();
         let app = app.clone();
@@ -976,7 +1002,7 @@ pub async fn run(
                     {
                         let mut app_mut = app.borrow_mut();
                         if let Some(device) = app_mut.renderer().try_device() {
-                            surface.configure(device, &*config);
+                            surface.configure(device, &config);
                         } else {
                             log::error!(
                                 "web surface reconfigure skipped: GPU renderer is not initialized"
@@ -1089,7 +1115,7 @@ fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {
 
 fn request_web_frame(
     frame_pending: &Cell<bool>,
-    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &RenderLoop,
     timer: Option<&WebFrameTimer>,
 ) {
     if let Some(timer) = timer {
@@ -1115,7 +1141,7 @@ fn request_web_frame_at_deadline(
     timer: &Rc<WebFrameTimer>,
     deadline: web_time::Instant,
     frame_pending: &Rc<Cell<bool>>,
-    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &RenderLoop,
 ) {
     if frame_pending.get() || timer.pending.get() {
         return;

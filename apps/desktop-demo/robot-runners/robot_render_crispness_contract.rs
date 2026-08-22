@@ -73,7 +73,9 @@ fn atlas_bitmap() -> ImageBitmap {
 fn blue_leak_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| rgba[2] > 118 && rgba[2] > rgba[0].saturating_add(42))
         .count()
 }
@@ -113,7 +115,7 @@ fn edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
 
 fn unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     let mut colors = std::collections::HashSet::new();
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
     colors.len()

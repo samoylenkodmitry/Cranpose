@@ -2588,7 +2588,7 @@ fn text_field_focus_drives_platform_soft_keyboard() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -2613,7 +2613,11 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
     {
         let focus_flag = Rc::new(RefCell::new(false));
         shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+            cranpose_ui::text_field_focus::request_focus(
+                Rc::clone(&focus_flag),
+                handler.clone(),
+                0,
+            );
         });
         // focus_flag drops here: the focus manager's weak reference goes stale.
     }
@@ -2639,7 +2643,11 @@ fn frame_update_after_field_removal_hides_soft_keyboard() {
     {
         let focus_flag = Rc::new(RefCell::new(false));
         shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+            cranpose_ui::text_field_focus::request_focus(
+                Rc::clone(&focus_flag),
+                handler.clone(),
+                0,
+            );
         });
         // focus_flag drops here: the focus manager's weak reference goes stale.
     }
@@ -2661,7 +2669,7 @@ fn ime_delete_surrounding_marks_dirty() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert!(shell.on_ime_delete_surrounding(2, 1));
     assert_eq!(handler.last_delete.get(), Some((2, 1)));
@@ -2691,7 +2699,7 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -2729,7 +2737,7 @@ fn text_mutation_platform_events_run_inside_event_and_applied_snapshot_scopes() 
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
 
     assert!(shell.on_paste("hello"));

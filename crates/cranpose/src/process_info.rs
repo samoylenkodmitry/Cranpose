@@ -5,8 +5,10 @@
 //! — are answered by its own default. This supplies the rest, which cannot be:
 //! processor time comes from `getrusage`, the page size `/proc/self/statm`
 //! counts in comes from `sysconf`, the memory an application may still have
-//! comes from `os_proc_available_memory`, and returning free pages to the
-//! system is a `mallopt` extension bionic has and glibc does not.
+//! comes from `os_proc_available_memory`, resident memory on Apple targets
+//! (Darwin has no `/proc` of its own) comes from `task_info`, and returning
+//! free pages to the system is a `mallopt` extension bionic has and glibc
+//! does not.
 //!
 //! An application never writes any of this. It is the same handful of calls in
 //! every application that watches its own footprint, each needing an `unsafe`
@@ -67,10 +69,58 @@ fn resident_memory_bytes() -> Option<u64> {
         let pages: u64 = text.split_whitespace().nth(1)?.parse().ok()?;
         pages.checked_mul(page_size_bytes())
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    {
+        darwin_resident_memory_bytes()
+    }
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "ios",
+        target_os = "macos"
+    )))]
     {
         None
     }
+}
+
+/// Memory this process holds resident, from the Mach kernel's own task
+/// accounting.
+///
+/// Darwin has no `/proc` for a process to read its own footprint from; the
+/// call every Apple memory profiler uses instead is `task_info` with
+/// `MACH_TASK_BASIC_INFO`, which is what this reads. A Mac and an iPhone run
+/// the same kernel here, so they read it the same way.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+fn darwin_resident_memory_bytes() -> Option<u64> {
+    use mach2::kern_return::KERN_SUCCESS;
+    use mach2::task::task_info;
+    use mach2::task_info::{
+        mach_task_basic_info, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT,
+    };
+    use mach2::traps::mach_task_self;
+
+    let mut info = mach_task_basic_info::default();
+    let mut count = MACH_TASK_BASIC_INFO_COUNT;
+    // SAFETY: `mach_task_self` returns this process's own task port, a plain
+    // integer with no ownership to release. `task_info` writes into `info`
+    // through the pointer and length this call gives it; the pointer is a
+    // live, correctly sized local (`count` names its capacity in the same
+    // `natural_t` words the call measures in) and `count` is read back
+    // afterwards to confirm it wrote the whole struct before any field of
+    // `info` is used.
+    let result = unsafe {
+        task_info(
+            mach_task_self(),
+            MACH_TASK_BASIC_INFO,
+            (&mut info as *mut mach_task_basic_info).cast(),
+            &mut count,
+        )
+    };
+    if result != KERN_SUCCESS || count != MACH_TASK_BASIC_INFO_COUNT {
+        return None;
+    }
+    Some(info.resident_size)
 }
 
 /// The page size `/proc/self/statm` counts in.

@@ -309,13 +309,21 @@ mod tests {
         std::fs::write(path, wav).expect("write wav");
     }
 
+    /// A directory under the workspace `target/test-output` for one fixture.
+    /// Never the system temporary directory, which is tmpfs on Linux — a
+    /// fixture written there is written to RAM and leaves nothing to inspect
+    /// after a failure.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        cranpose_core::test_scratch_dir(env!("CARGO_MANIFEST_DIR"), tag)
+    }
+
     /// A temporary file that removes itself, so a failing assertion does not
     /// leave the next run reading a stale fixture.
     struct Fixture(std::path::PathBuf);
 
     impl Fixture {
         fn wav(name: &str, channels: u16, rate: u32, frames: u32) -> Fixture {
-            let path = std::env::temp_dir().join(format!("cranpose-media-{name}.wav"));
+            let path = scratch(name).join(format!("{name}.wav"));
             write_wav(&path, channels, rate, frames);
             Fixture(path)
         }
@@ -426,7 +434,7 @@ mod tests {
 
     #[test]
     fn opening_something_that_is_not_media_fails_rather_than_panicking() {
-        let path = std::env::temp_dir().join("cranpose-media-not-audio.bin");
+        let path = scratch("not-audio").join("not-audio.bin");
         std::fs::write(&path, b"this is not a container").expect("write");
         let opened = Decoder::open(&path);
         let _ = std::fs::remove_file(&path);
@@ -435,7 +443,7 @@ mod tests {
 
     #[test]
     fn probing_something_that_is_not_media_reports_no_duration() {
-        let path = std::env::temp_dir().join("cranpose-media-not-audio-probe.bin");
+        let path = scratch("not-audio-probe").join("not-audio-probe.bin");
         std::fs::write(&path, b"this is not a container either").expect("write");
         let duration = Decoder::probe_duration(&path);
         let _ = std::fs::remove_file(&path);

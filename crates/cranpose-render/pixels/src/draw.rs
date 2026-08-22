@@ -110,7 +110,7 @@ pub fn draw_scene_with_text_resources(
 }
 
 fn clear_frame(frame: &mut [u8]) {
-    for chunk in frame.chunks_exact_mut(4) {
+    for chunk in frame.as_chunks_mut::<4>().0 {
         chunk.copy_from_slice(&[18, 18, 24, 255]);
     }
 }

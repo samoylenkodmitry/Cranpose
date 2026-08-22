@@ -165,6 +165,11 @@ web-sys = { version = "0.3", optional = true, features = [
     "Clipboard",
     "ClipboardEvent",
     "DataTransfer",
+    # Dropped files (`web_drop`)
+    "DragEvent",
+    "FileList",
+    # Battery Status API (`web_power`)
+    "BatteryManager",
     # IME composition support (hidden textarea + composition events)
     "CompositionEvent",
     "HtmlTextAreaElement",
@@ -260,8 +265,25 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "dx12",
 ] }
 
+# Both Apple targets, which share a kernel and therefore share these.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+# Raw Mach task-info bindings, used by `process_info.rs` to read this
+# process's resident memory: Darwin has no `/proc` for a process to read its
+# own footprint from, so the Linux/Android path's `/proc/self/statm` has no
+# Apple equivalent short of the same kernel call every Instruments memory
+# gauge uses.
+mach2 = "0.6"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 accesskit_macos = "0.26.3"
+# Thermal pressure. `NSProcessInfo` is Foundation rather than UIKit, so the
+# reading a Mac gives is the same one iOS gives and needs no second mapping.
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSObject",
+    "NSProcessInfo",
+    "NSString",
+] }
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
@@ -414,3 +436,8 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "parking_lot",
     "vulkan",
 ] }
+
+[dev-dependencies]
+# Path-only dev-dep: stripped from the published manifest. Turns on the
+# workspace's shared test scratch directory for this crate's own tests.
+cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }

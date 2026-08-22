@@ -413,8 +413,10 @@ fn an_animated_shader_keeps_animating_inside_a_cacheable_container() {
 
     let changed = first
         .pixels
-        .chunks_exact(4)
-        .zip(second.pixels.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(second.pixels.as_chunks::<4>().0)
         .filter(|(a, b)| a != b)
         .count();
     assert!(

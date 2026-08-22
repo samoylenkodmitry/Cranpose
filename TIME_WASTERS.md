@@ -855,3 +855,27 @@ unpublished crate that caused the resolution failure in the first place.
   from a worktree at the base revision and from the branch back to back on the
   one machine; two revisions on two machines, or on one machine hours apart,
   compare the display state as much as the code.
+- Synthetic X11 pointer sequences and wheel injection reach some Cranpose
+  windows and not others, and the split is by *gesture shape*, not by whether
+  X11 input works at all. On `samarch-1` five robot examples fail while 150
+  pass, and the five are exactly the ones that either inject a real wheel or
+  drive a press / hold / move / release sequence as separate `xdotool`
+  invocations: `robot_counter_button_release_external_visual`,
+  `robot_markdown_full_demo_code_block_visual_contract`,
+  `robot_shader_external_x11_drag`, `robot_shader_full_demo_external_perf`,
+  and `robot_regression_shader_visual_contract`. Tests using a discrete
+  `xdotool click` or the in-process `Robot::mouse_scroll` pass on the same
+  host in the same run — `robot_shader_rect_external_animation` and the four
+  `*_scroll_exact_external_contract` examples among them — so "X11 input is
+  broken here" is the wrong conclusion and will waste a day. The window does
+  take real focus: polling `xdotool getactivewindow` every 100ms shows the app
+  focused by t=400ms and holding it through the whole click sequence, and the
+  click still does not register.
+
+  Before reading any of this as a renderer or input regression, run the same
+  examples from a checkout of the base revision on the same machine, back to
+  back. Doing that here produced identical failures on both trees, down to the
+  same panic line numbers, the same `changed_pixels=0 frames=0`, and — for the
+  one failure that asserts on pixels with no external input at all — a
+  screenshot with the same SHA-256 and an empty `ImageChops.difference` bbox.
+  Byte-identical output from two revisions is the end of the question.

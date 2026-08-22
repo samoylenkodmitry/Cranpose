@@ -54,7 +54,9 @@ fn bright_pixels_below(frame: &CapturedFrame, min_y: u32) -> usize {
     let width = frame.width as usize;
     frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter(|(idx, pixel)| {
             let y = (*idx / width) as u32;
