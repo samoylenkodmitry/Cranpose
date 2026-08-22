@@ -1,7 +1,7 @@
 mod support;
 
 use cranpose_core::location_key;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::text::{SpanStyle, TextUnit};
@@ -104,10 +104,10 @@ fn build_shell(lazy: bool, seed: String) -> Option<TestApp> {
             .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
             .background(Color(0.02, 0.03, 0.05, 1.0));
         if lazy {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             LazyColumn(root_mod, list_state, LazyColumnSpec::new(), move |scope| {
                 let style = style.clone();
-                scope.item(None, None, move || Field(state, style.clone()));
+                scope.item(move || Field(state, style.clone()));
             });
         } else {
             Column(root_mod, ColumnSpec::default(), move || {

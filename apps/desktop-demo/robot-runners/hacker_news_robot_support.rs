@@ -1,11 +1,10 @@
 use cranpose::SemanticElement;
-use cranpose_services::{HttpClient, HttpClientRef, HttpError, HttpFuture};
+use cranpose_services::{HttpClientRef, HttpError, StubHttpClient};
 use cranpose_testing::{
     find_button, find_element_by_text_exact, find_in_semantics, find_text_exact,
     print_semantics_with_bounds,
 };
 use serde_json::json;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub const MOCK_STORY_COUNT: usize = 60;
@@ -91,29 +90,33 @@ impl MockHackerNewsClient {
     }
 }
 
-impl HttpClient for MockHackerNewsClient {
-    fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
-        let response = if url.ends_with("/topstories.json") {
-            Ok(self.topstories_json())
-        } else if let Some(id) = Self::parse_story_id(url) {
-            if let Some(payload) = self.comment_json(id) {
-                Ok(payload)
-            } else if self.ids.contains(&id) {
-                Ok(self.story_json(id))
-            } else {
-                Err(HttpError::RequestFailed {
-                    url: url.to_string(),
-                    message: "Unknown mock item".to_string(),
-                })
-            }
+impl MockHackerNewsClient {
+    /// The payload this fixture answers `url` with.
+    fn text_for(&self, url: &str) -> Result<String, HttpError> {
+        if url.ends_with("/topstories.json") {
+            return Ok(self.topstories_json());
+        }
+        let Some(id) = Self::parse_story_id(url) else {
+            return Err(HttpError::RequestFailed {
+                url: url.to_string(),
+                message: "Unknown mock endpoint".to_string(),
+            });
+        };
+        if let Some(payload) = self.comment_json(id) {
+            Ok(payload)
+        } else if self.ids.contains(&id) {
+            Ok(self.story_json(id))
         } else {
             Err(HttpError::RequestFailed {
                 url: url.to_string(),
-                message: "Unknown mock endpoint".to_string(),
+                message: "Unknown mock item".to_string(),
             })
-        };
+        }
+    }
 
-        Box::pin(async move { response })
+    /// This fixture as an HTTP client.
+    pub(crate) fn into_client(self) -> HttpClientRef {
+        std::sync::Arc::new(StubHttpClient::from_text(move |url| self.text_for(url)))
     }
 }
 
@@ -163,7 +166,7 @@ fn find_comment_number(elem: &SemanticElement) -> Option<usize> {
 }
 
 pub fn create_mock_client() -> HttpClientRef {
-    Arc::new(MockHackerNewsClient::new())
+    MockHackerNewsClient::new().into_client()
 }
 
 pub fn long_comment_body_text() -> String {

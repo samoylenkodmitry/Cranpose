@@ -191,8 +191,8 @@ fn scrollable_test_tab(label: &'static str) {
 #[composable]
 fn wrapped_stateful_counter_tab() {
     let scroll_state = cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
-    let counter = cranpose_core::useState(|| 0i32);
-    let pointer = cranpose_core::useState(|| 0i32);
+    let counter = cranpose_core::rememberMutableStateOf(|| 0i32);
+    let pointer = cranpose_core::rememberMutableStateOf(|| 0i32);
     let is_even = counter.value() % 2 == 0;
     RESTORED_COUNTER_STATE.with(|slot| {
         *slot.borrow_mut() = Some(counter);

@@ -194,6 +194,7 @@ fn tree_update(elements: &[AccessibilityElement]) -> TreeUpdate {
             AccessibilityRole::Tab => Role::Tab,
             AccessibilityRole::Image => Role::Image,
             AccessibilityRole::Header => Role::Heading,
+            AccessibilityRole::Dialog => Role::Dialog,
         };
         let mut node = Node::new(role);
         if element.role == AccessibilityRole::StaticText {

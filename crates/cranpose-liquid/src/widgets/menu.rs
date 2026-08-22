@@ -5,7 +5,8 @@ use crate::material::{
     Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape,
 };
 use crate::theme::{liquid_colors, liquid_typography};
-use cranpose_core::{mutableStateOf, remember, MutableState, SideEffect};
+use crate::widgets::content_scope::ScopeContent;
+use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, MutableState, SideEffect};
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
@@ -109,6 +110,84 @@ pub struct LiquidMenuAbsorbedSource {
     pub spec: crate::widgets::GlassButtonSpec,
     pub diameter: f32,
     pub icon_path: &'static str,
+}
+
+/// Visual configuration for an anchored liquid dropdown.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiquidDropdownMenuSpec {
+    pub menu: LiquidMenuSpec,
+    pub absorbed: Vec<LiquidMenuAbsorbedSource>,
+}
+
+impl LiquidDropdownMenuSpec {
+    pub fn menu(mut self, menu: LiquidMenuSpec) -> Self {
+        self.menu = menu;
+        self
+    }
+
+    pub fn absorbed(mut self, absorbed: Vec<LiquidMenuAbsorbedSource>) -> Self {
+        self.absorbed = absorbed;
+        self
+    }
+}
+
+/// One row a menu declares: what it draws, and what a tap on it does.
+#[derive(Clone)]
+struct LiquidMenuEntry {
+    item: LiquidMenuItem,
+    action: Option<Rc<dyn Fn()>>,
+}
+
+/// The scope a menu's rows are declared in.
+///
+/// Each row carries its own action, so a caller never dispatches on a row
+/// index and never keeps a parallel list to look one up in. Rows appear in the
+/// order they are declared.
+pub struct LiquidMenuScope {
+    entries: ScopeContent<LiquidMenuEntry>,
+    section_next: Cell<bool>,
+}
+
+impl LiquidMenuScope {
+    /// An interactive row. Tapping it runs `on_click`, then dismisses the menu
+    /// unless the item [keeps open](LiquidMenuItem::keeps_open()).
+    pub fn item(&self, item: LiquidMenuItem, on_click: impl Fn() + 'static) {
+        self.push(LiquidMenuEntry {
+            item,
+            action: Some(Rc::new(on_click)),
+        });
+    }
+
+    /// A gray, non-interactive section title.
+    pub fn header(&self, label: impl Into<String>) {
+        self.push(LiquidMenuEntry {
+            item: LiquidMenuItem::header(label),
+            action: None,
+        });
+    }
+
+    /// Starts a new section: the next row declared is drawn under a hairline.
+    pub fn separator(&self) {
+        self.section_next.set(true);
+    }
+
+    fn push(&self, mut entry: LiquidMenuEntry) {
+        if self.section_next.replace(false) {
+            entry.item.section_start = true;
+        }
+        self.entries.push(entry);
+    }
+}
+
+/// Runs `content` and returns the rows it declared.
+fn collect_entries(content: impl FnOnce(&LiquidMenuScope)) -> Vec<LiquidMenuEntry> {
+    ScopeContent::collect(
+        |entries| LiquidMenuScope {
+            entries,
+            section_next: Cell::new(false),
+        },
+        content,
+    )
 }
 
 impl LiquidMenuAbsorbedSource {
@@ -353,7 +432,7 @@ impl LiquidMenuGesture {
 
 /// Remembers one continuous menu gesture channel.
 #[composable]
-pub fn remember_liquid_menu_gesture() -> LiquidMenuGesture {
+pub fn rememberLiquidMenuGesture() -> LiquidMenuGesture {
     remember(LiquidMenuGesture::new).with(Clone::clone)
 }
 
@@ -1025,8 +1104,16 @@ fn AbsorbedSourceVisual(
 /// A glass popup menu anchored to `anchor` (window coordinates of the button
 /// that opened it). `absorbed` contains adjacent glass controls whose combined
 /// source volume and foreground feed the opening droplet. While `expanded`,
-/// taps outside dismiss via `on_dismiss`; item taps call `on_item` with the
-/// index then dismiss.
+/// taps outside dismiss via `on_dismiss`; a tap on a row runs that row's own
+/// action and then dismisses, unless the row keeps the menu open.
+///
+/// ```rust,ignore
+/// LiquidMenu(expanded, anchor, spec, Vec::new(), gesture, on_dismiss, |scope| {
+///     scope.header("Show");
+///     scope.item(LiquidMenuItem::new("List").checked(!grid), move || grid_state.set(false));
+///     scope.item(LiquidMenuItem::new("Grid").checked(grid), move || grid_state.set(true));
+/// });
+/// ```
 ///
 /// Layout follows the iOS menu: an optional leading checkmark column (present
 /// on every row once any item is checkable, so labels align), then the icon
@@ -1034,17 +1121,17 @@ fn AbsorbedSourceVisual(
 /// are gray non-interactive rows.
 #[composable]
 #[allow(non_snake_case)]
-#[allow(clippy::too_many_arguments)]
 pub fn LiquidMenu(
     expanded: bool,
     anchor: Rect,
     spec: LiquidMenuSpec,
     absorbed: Vec<LiquidMenuAbsorbedSource>,
-    items: Vec<LiquidMenuItem>,
     gesture: LiquidMenuGesture,
-    on_item: impl Fn(usize) + 'static,
     on_dismiss: impl Fn() + 'static,
+    content: impl FnOnce(&LiquidMenuScope),
 ) {
+    let entries = Rc::new(collect_entries(content));
+    let items: Vec<LiquidMenuItem> = entries.iter().map(|entry| entry.item.clone()).collect();
     let menu_width = spec.width;
     // The menu outlives `expanded` by one collapse animation: dismissing
     // deflates the droplet back into the anchor (the reference close morph)
@@ -1058,7 +1145,11 @@ pub fn LiquidMenu(
     }
     let colors = liquid_colors();
     let typography = liquid_typography();
-    let on_item: Rc<dyn Fn(usize)> = Rc::new(on_item);
+    let on_item: Rc<dyn Fn(usize)> = Rc::new(move |index| {
+        if let Some(action) = entries.get(index).and_then(|entry| entry.action.as_ref()) {
+            action();
+        }
+    });
     let on_dismiss: Rc<dyn Fn()> = Rc::new(on_dismiss);
     let gesture_snapshot = gesture.snapshot();
     let gesture_hover = (gesture_snapshot.active && gesture_snapshot.claimed)
@@ -1113,12 +1204,7 @@ pub fn LiquidMenu(
                 let keeps_open = items.get(index).is_some_and(|item| item.keeps_open);
                 let on_item = Rc::clone(&on_item);
                 let on_dismiss = Rc::clone(&on_dismiss);
-                SideEffect(move || {
-                    on_item(index);
-                    if !keeps_open {
-                        on_dismiss();
-                    }
-                });
+                SideEffect(move || commit_menu_row(index, keeps_open, &on_item, &on_dismiss));
             }
         }
     }
@@ -1644,6 +1730,69 @@ pub fn LiquidMenu(
     );
 }
 
+/// Renders an anchor and positions a [`LiquidMenu`] from the anchor's measured
+/// window rectangle, without application-owned coordinate calculations.
+#[composable]
+#[allow(non_snake_case)]
+pub fn LiquidDropdownMenu<A>(
+    modifier: Modifier,
+    expanded: bool,
+    spec: LiquidDropdownMenuSpec,
+    on_dismiss: impl Fn() + 'static,
+    mut anchor_content: A,
+    content: impl Fn(&LiquidMenuScope) + 'static,
+) where
+    A: FnMut() + 'static,
+{
+    let anchor = rememberMutableStateOf(|| Rect {
+        x: 0.0,
+        y: 0.0,
+        width: 0.0,
+        height: 0.0,
+    });
+    let gesture = rememberLiquidMenuGesture();
+    let on_dismiss = Rc::new(on_dismiss);
+    let content = Rc::new(content);
+    Box(
+        modifier.report_window_rect_state(anchor),
+        BoxSpec::default(),
+        move || {
+            anchor_content();
+            let content = Rc::clone(&content);
+            let dismiss = Rc::clone(&on_dismiss);
+            LiquidMenu(
+                expanded,
+                anchor.get(),
+                spec.menu,
+                spec.absorbed.clone(),
+                gesture.clone(),
+                move || dismiss(),
+                move |scope| content(scope),
+            );
+        },
+    );
+}
+
+/// What a tap on a row does, wherever the tap came from.
+///
+/// A row can be committed two ways: its own pointer handler sees the release,
+/// or a press that started on the trigger slides through the menu and lets go
+/// over it. Both mean the same thing — run the row's action, and dismiss
+/// unless the row asked to stay open — so both go through here. Written twice,
+/// the two paths can disagree about whether a `keeps_open` row closes the menu,
+/// which is precisely how a menu ends up dismissing a row that asked to stay.
+fn commit_menu_row(
+    index: usize,
+    keeps_open: bool,
+    on_item: &Rc<dyn Fn(usize)>,
+    on_dismiss: &Rc<dyn Fn()>,
+) {
+    on_item(index);
+    if !keeps_open {
+        on_dismiss();
+    }
+}
+
 /// Gray non-interactive section header, aligned with the icon column.
 fn menu_header_row(
     item: &LiquidMenuItem,
@@ -1730,10 +1879,7 @@ fn menu_item_row(
                                     }
                                     PointerEventKind::Up => {
                                         hovered.set(None);
-                                        on_item(index);
-                                        if !keeps_open {
-                                            on_dismiss();
-                                        }
+                                        commit_menu_row(index, keeps_open, &on_item, &on_dismiss);
                                         event.consume();
                                     }
                                     _ => {}
@@ -1850,6 +1996,41 @@ fn menu_item_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scope_keeps_actions_with_their_items() {
+        let selected = Rc::new(Cell::new(false));
+        let selected_by_action = Rc::clone(&selected);
+        let entries = collect_entries(|scope| {
+            scope.header("Section");
+            scope.separator();
+            scope.item(LiquidMenuItem::new("Open"), move || {
+                selected_by_action.set(true)
+            });
+        });
+
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].item.header);
+        assert!(entries[1].item.section_start);
+        entries[1].action.as_ref().unwrap()();
+        assert!(selected.get());
+    }
+
+    #[test]
+    fn dropdown_spec_builders_preserve_menu_configuration() {
+        let menu = LiquidMenuSpec { width: 180.0 };
+        let absorbed = LiquidMenuAbsorbedSource::new(
+            Rect::from_origin_size(Point::ZERO, Size::new(44.0, 44.0)),
+            crate::widgets::GlassButtonSpec::default(),
+            44.0,
+            crate::icons::SEARCH,
+        );
+        let spec = LiquidDropdownMenuSpec::default()
+            .menu(menu)
+            .absorbed(vec![absorbed]);
+        assert_eq!(spec.menu, menu);
+        assert_eq!(spec.absorbed.len(), 1);
+    }
 
     #[test]
     fn menu_rows_use_the_reference_leading_grid_and_vertical_rhythm() {
@@ -2181,5 +2362,49 @@ mod tests {
         // A second lift without a new press cannot synthesize another action.
         gesture.release(Point::new(40.0, 65.0));
         assert_eq!(gesture.snapshot().release, released.release);
+    }
+
+    #[test]
+    fn committing_a_row_dismisses_unless_the_row_keeps_the_menu_open() {
+        let taps = Rc::new(Cell::new(0usize));
+        let dismissals = Rc::new(Cell::new(0usize));
+        let on_item: Rc<dyn Fn(usize)> = {
+            let taps = Rc::clone(&taps);
+            Rc::new(move |_| taps.set(taps.get() + 1))
+        };
+        let on_dismiss: Rc<dyn Fn()> = {
+            let dismissals = Rc::clone(&dismissals);
+            Rc::new(move || dismissals.set(dismissals.get() + 1))
+        };
+
+        commit_menu_row(0, false, &on_item, &on_dismiss);
+        assert_eq!(
+            (taps.get(), dismissals.get()),
+            (1, 1),
+            "an ordinary row dismisses"
+        );
+
+        commit_menu_row(1, true, &on_item, &on_dismiss);
+        assert_eq!(
+            (taps.get(), dismissals.get()),
+            (2, 1),
+            "a row that keeps the menu open runs its action and dismisses nothing"
+        );
+    }
+
+    #[test]
+    fn a_row_is_committed_exactly_once_per_tap() {
+        // Both ways a row can be committed — its own pointer handler, and a
+        // press that slid through the menu — run this one function, so a tap
+        // can dismiss at most once. Two copies of the rule are what let a
+        // dropdown dismiss on top of the menu's own dismissal.
+        let dismissals = Rc::new(Cell::new(0usize));
+        let on_item: Rc<dyn Fn(usize)> = Rc::new(|_| {});
+        let on_dismiss: Rc<dyn Fn()> = {
+            let dismissals = Rc::clone(&dismissals);
+            Rc::new(move || dismissals.set(dismissals.get() + 1))
+        };
+        commit_menu_row(0, false, &on_item, &on_dismiss);
+        assert_eq!(dismissals.get(), 1);
     }
 }

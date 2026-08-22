@@ -1,4 +1,6 @@
-use cranpose_services::{HttpClient, HttpFuture};
+use cranpose_services::{
+    BytesBody, HttpClient, HttpControl, HttpFuture, HttpRequest, HttpResponse,
+};
 use std::path::PathBuf;
 
 pub(crate) struct MarkdownFixtureClient {
@@ -24,9 +26,18 @@ impl MarkdownFixtureClient {
 }
 
 impl HttpClient for MarkdownFixtureClient {
-    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
-        let body = self.body.clone();
-        Box::pin(async move { Ok(body) })
+    fn send<'a>(
+        &'a self,
+        request: &'a HttpRequest,
+        _control: HttpControl,
+    ) -> HttpFuture<'a, HttpResponse> {
+        Box::pin(async move {
+            Ok(HttpResponse::new(
+                request.url.clone(),
+                200,
+                std::sync::Arc::new(BytesBody::new(self.body.clone())),
+            ))
+        })
     }
 }
 

@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, Row, RowSpec, Text,
@@ -80,7 +80,7 @@ fn main() {
              robot.exit().ok();
         })
         .run(move || {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
 
             Column(Modifier::default(), ColumnSpec::default(), move || {
                 // Controls
@@ -105,7 +105,7 @@ fn main() {
                             state,
                             LazyColumnSpec::default(),
                             |scope| {
-                                scope.items(count, None::<fn(usize)->u64>, None::<fn(usize)->u64>, move |index| {
+                                scope.items(count, move |index| {
                                     let height = 48.0 * (index % 5) as f32;
 
                                     // Color cycle

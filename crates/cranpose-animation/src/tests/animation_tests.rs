@@ -241,6 +241,117 @@ fn remember_infinite_transition_retains_label() {
     assert_eq!(label, "demo_label");
 }
 
+/// Content that appears has to enter from somewhere. `animateFloatAsState`
+/// seeds itself at the target, so the first frame is already there and nothing
+/// animates; the with-initial form seeds at `initial` and animates toward the
+/// target, which is what makes a fade-in a fade rather than a pop.
+#[test]
+fn an_animation_with_an_initial_value_enters_from_it_rather_than_snapping() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
+
+    let mut render = {
+        let state_slot = Rc::clone(&state_slot);
+        move || {
+            let state = animate_float_as_state_with_initial(
+                0.0,
+                1.0,
+                AnimationType::Tween(AnimationSpec::linear(240)),
+                "enter",
+            );
+            state_slot.borrow_mut().replace(state);
+        }
+    };
+    composition.render(root_key, &mut render).expect("render");
+
+    let read = || state_slot.borrow().as_ref().expect("state").get();
+    assert_eq!(
+        read(),
+        0.0,
+        "the first frame is the initial value, not the target"
+    );
+
+    let mut time = 0u64;
+    let mut moved = 0.0;
+    for _ in 0..32 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        let _ = composition
+            .process_invalid_scopes()
+            .expect("process invalid scopes");
+        moved = read();
+        if moved > 0.0 {
+            break;
+        }
+    }
+    assert!(
+        moved > 0.0 && moved <= 1.0,
+        "the value should have entered toward its target, got {moved}"
+    );
+}
+
+/// `animateValue` is `animateFloat` for anything that interpolates. A control
+/// that pulses a colour or a size must not be made to drive a float and convert
+/// it by hand, which is where the two ends of the animation drift apart.
+#[test]
+fn infinite_transition_animates_any_interpolable_value() {
+    let mut composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let root_key = location_key(file!(), line!(), column!());
+    let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
+    let mut render = {
+        let state_slot = Rc::clone(&state_slot);
+        move || {
+            let transition = rememberInfiniteTransition("value");
+            let state = transition.animateValue(
+                10.0f32,
+                20.0f32,
+                infiniteRepeatable(
+                    AnimationSpec::linear(1000),
+                    RepeatMode::Reverse,
+                    StartOffset::default(),
+                ),
+            );
+            state_slot.borrow_mut().replace(state);
+        }
+    };
+    composition
+        .render(root_key, &mut render)
+        .expect("render succeeds");
+
+    let observer = SnapshotStateObserver::new(|callback| callback());
+    let initial = observer.observe_reads(
+        (),
+        |_| {},
+        || state_slot.borrow().as_ref().expect("state available").get(),
+    );
+    assert_eq!(initial, 10.0, "the animation starts at the value given");
+    runtime.drain_ui();
+    composition
+        .render(root_key, &mut render)
+        .expect("subscriber render succeeds");
+
+    let mut time = 0u64;
+    let mut seen = initial;
+    for _ in 0..32 {
+        time += 16_666_667;
+        runtime.drain_frame_callbacks(time);
+        let _ = composition
+            .process_invalid_scopes()
+            .expect("process invalid scopes succeeds");
+        seen = state_slot.borrow().as_ref().expect("state available").get();
+        if (seen - initial).abs() > 0.0001 {
+            break;
+        }
+    }
+    assert!(
+        seen > initial && seen <= 20.0,
+        "the value should have moved toward its target, got {seen}"
+    );
+}
+
 #[test]
 fn infinite_transition_animates_float_over_time() {
     let mut composition = Composition::new(MemoryApplier::new());
@@ -413,6 +524,35 @@ fn drive_spring(
         samples.push((frame_time, animatable.state().get()));
     }
     samples
+}
+
+/// A snap is what a control does when the value changed for a reason that is
+/// not motion — a list scrolled to a new item, a state restored, a gesture
+/// taking over. It has to land exactly, stop the animation that was running,
+/// and leave no velocity for the next one to inherit.
+#[test]
+fn snapping_lands_exactly_and_cancels_the_animation_that_was_running() {
+    let composition: Composition<MemoryApplier> = Composition::new(MemoryApplier::new());
+    let mut animatable = Animatable::new(0.0f32, composition.runtime_handle());
+    animatable.animateTo(100.0, AnimationType::Spring(SpringSpec::default_spring()));
+
+    // Mid-flight, so there is something to cancel.
+    let mid = drive_spring(&animatable, &composition, 3);
+    let before = mid.last().expect("samples").1;
+    assert!(
+        before > 0.0 && before < 100.0,
+        "the spring should be mid-flight, got {before}"
+    );
+
+    animatable.snapTo(42.0);
+    assert_eq!(animatable.state().get(), 42.0);
+    assert_eq!(animatable.target(), 42.0);
+
+    // Frames keep arriving; a cancelled animation must not move the value.
+    let after = drive_spring(&animatable, &composition, 10);
+    for (time, value) in after {
+        assert_eq!(value, 42.0, "a snapped value moved at {time}ns");
+    }
 }
 
 #[test]
@@ -611,4 +751,24 @@ fn tween_to_spring_transition_discards_the_stale_spring_clock() {
     );
     runtime.drain_frame_callbacks(84_333_335);
     assert!(animatable.state().get() > 50.0);
+}
+
+#[test]
+fn an_animatable_reports_the_spec_currently_driving_it() {
+    let composition = Composition::new(MemoryApplier::new());
+    let runtime = composition.runtime_handle();
+    let mut animatable = Animatable::new(0.0f32, runtime);
+
+    // Whatever it was built with is what it reports until something else
+    // drives it. A stale answer here sends a caller's `animateTo` through the
+    // wrong physics.
+    assert_eq!(animatable.animation_type(), AnimationType::default());
+
+    let spring = AnimationType::Spring(SpringSpec::default());
+    animatable.animateTo(1.0, spring);
+    assert_eq!(
+        animatable.animation_type(),
+        spring,
+        "the animatable kept reporting the spec it replaced"
+    );
 }

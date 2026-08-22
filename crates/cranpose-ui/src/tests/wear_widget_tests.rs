@@ -24,6 +24,7 @@ use crate::widgets::wear::{
 };
 use crate::widgets::Spacer;
 use cranpose_core::NodeId;
+use cranpose_foundation::lazy::LazyItems;
 use cranpose_foundation::{PointerButton, PointerButtons};
 use cranpose_ui_graphics::Size as ViewportSize;
 use std::cell::RefCell;
@@ -83,12 +84,15 @@ fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> Tes
             spec,
             move |scope| {
                 let heights = heights.clone();
-                scope.items(heights.len(), move |index| {
-                    Spacer(Size {
-                        width: 0.0,
-                        height: heights[index],
-                    });
-                });
+                scope.items(
+                    LazyItems::new(heights.len()).key(|index: usize| index as u64),
+                    move |index| {
+                        Spacer(Size {
+                            width: 0.0,
+                            height: heights[index],
+                        });
+                    },
+                );
             },
         );
     });
@@ -718,7 +722,7 @@ fn a_scaffold_draws_its_indicator_over_the_content_and_not_beside_it() {
                     inner,
                     settings_spec(),
                     |scope| {
-                        scope.items(10, |_| {
+                        scope.items(LazyItems::new(10).key(|index: usize| index as u64), |_| {
                             Spacer(Size {
                                 width: 0.0,
                                 height: ROW_HEIGHT,
@@ -1056,34 +1060,37 @@ fn compose_credits_screen() -> TestComposition {
                             "Back",
                         ];
                         let button = lines.len() - 1;
-                        scope.items(lines.len(), move |index| match index {
-                            0 => {
-                                ListHeader(
-                                    Modifier::empty(),
-                                    ListHeaderSpec::default().colors(measured_colors()),
-                                    lines[0].to_string(),
-                                );
-                            }
-                            other if other == button => {
-                                WearButton(
-                                    Modifier::empty().fill_max_width(),
-                                    WearButtonSpec::default().colors(measured_colors()),
-                                    lines[button].to_string(),
-                                    None,
-                                    || {},
-                                );
-                            }
-                            other => {
-                                Text(
-                                    lines[other].to_string(),
-                                    Modifier::empty().fill_max_width(),
-                                    WearTextStyle::BODY_LARGE
-                                        .at_size(12.0)
-                                        .with_line_height(16.0)
-                                        .resolve(measured_colors().content),
-                                );
-                            }
-                        });
+                        scope.items(
+                            LazyItems::new(lines.len()).key(|index: usize| index as u64),
+                            move |index| match index {
+                                0 => {
+                                    ListHeader(
+                                        Modifier::empty(),
+                                        ListHeaderSpec::default().colors(measured_colors()),
+                                        lines[0].to_string(),
+                                    );
+                                }
+                                other if other == button => {
+                                    WearButton(
+                                        Modifier::empty().fill_max_width(),
+                                        WearButtonSpec::default().colors(measured_colors()),
+                                        lines[button].to_string(),
+                                        None,
+                                        || {},
+                                    );
+                                }
+                                other => {
+                                    Text(
+                                        lines[other].to_string(),
+                                        Modifier::empty().fill_max_width(),
+                                        WearTextStyle::BODY_LARGE
+                                            .at_size(12.0)
+                                            .with_line_height(16.0)
+                                            .resolve(measured_colors().content),
+                                    );
+                                }
+                            },
+                        );
                     },
                 );
             },
@@ -1130,10 +1137,10 @@ fn a_credits_screen_emits_a_text_primitive_for_every_row_it_placed() {
     // which is why a screen whose rows measure perfectly and rasterise to
     // nothing passes all of them and shows a blank watch face.
     //
-    // The "Back" button used to be asserted here too, and it is now checked in
-    // `a_row_below_the_fold_paints_once_it_is_scrolled_to` instead: at rest it
-    // is below the fold, so a virtualising list neither places nor paints it —
-    // which is the point, not a regression.
+    // The "Back" button is asserted in
+    // `a_row_below_the_fold_paints_once_it_is_scrolled_to` rather than here: at
+    // rest it is below the fold, so a virtualising list neither places nor
+    // paints it — which is the point, not a regression.
     let mut composition = compose_credits_screen();
     let root = composition.root().expect("credits root");
     let tree = tree(&mut composition, root);

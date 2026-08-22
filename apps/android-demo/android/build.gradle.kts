@@ -1,17 +1,4 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
-buildscript {
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath("com.android.tools.build:gradle:9.2.1")
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        mavenCentral()
-    }
+// Top-level build file for the Cranpose demo application.
+plugins {
+    id("com.android.application") version "9.2.1" apply false
 }

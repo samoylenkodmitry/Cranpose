@@ -35,10 +35,55 @@ pub struct ScrollState {
 
 pub(crate) struct ScrollStateInner {
     max_value: RefCell<f32>,
+    /// How much of the content the last measure pass put on screen. Needed by
+    /// anything that reports the scroll position — a scrollbar's thumb is the
+    /// share of the content visible, which `max_value` alone cannot say.
+    viewport_extent: RefCell<f32>,
     invalidate_callbacks: RefCell<HashMap<u64, Rc<dyn Fn()>>>,
     next_invalidate_callback_id: Cell<u64>,
     pending_invalidation: Cell<bool>,
     settle_policy: RefCell<Option<ScrollSettlePolicy>>,
+}
+
+/// A scroll position and the extents it is measured against, read together.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollMetrics {
+    /// How far the content has travelled, in logical pixels.
+    pub offset: f32,
+    /// The furthest it can travel. Zero when the content fits.
+    pub max_offset: f32,
+    /// How much of the content is on screen.
+    pub viewport_extent: f32,
+}
+
+impl ScrollMetrics {
+    /// The whole scrollable content along the main axis.
+    pub fn content_extent(self) -> f32 {
+        self.viewport_extent + self.max_offset
+    }
+
+    /// How far through the scroll the content is, in `0..=1`.
+    pub fn progress(self) -> f32 {
+        if self.max_offset <= 0.0 {
+            0.0
+        } else {
+            (self.offset / self.max_offset).clamp(0.0, 1.0)
+        }
+    }
+
+    /// The thumb an indicator of this scroll should draw, given how short its
+    /// thumb may get, or `None` when the content fits.
+    pub fn thumb(
+        self,
+        bounds: crate::scrollbar::ThumbBounds,
+    ) -> Option<crate::scrollbar::ThumbGeometry> {
+        crate::scrollbar::thumb_geometry(
+            self.content_extent(),
+            self.viewport_extent,
+            self.offset,
+            bounds,
+        )
+    }
 }
 
 /// Remaps where a scroll comes to rest once the user's interaction ends — the
@@ -209,6 +254,7 @@ impl ScrollState {
             inner: MutableState::with_runtime(
                 Rc::new(ScrollStateInner {
                     max_value: RefCell::new(0.0),
+                    viewport_extent: RefCell::new(0.0),
                     invalidate_callbacks: RefCell::new(HashMap::new()),
                     next_invalidate_callback_id: Cell::new(1),
                     pending_invalidation: Cell::new(false),
@@ -279,9 +325,41 @@ impl ScrollState {
         actual_delta
     }
 
+    /// The main-axis extent of the scroll viewport, as the last measure pass
+    /// resolved it.
+    pub fn viewport_extent(&self) -> f32 {
+        *self.inner().viewport_extent.borrow()
+    }
+
+    /// The whole scrollable content along the main axis.
+    pub fn content_extent(&self) -> f32 {
+        self.viewport_extent() + self.max_value()
+    }
+
+    /// Everything an indicator needs about this scroll, read together so it
+    /// cannot mix a position from one frame with an extent from another.
+    ///
+    /// Read outside composition — during draw, or from a gesture — so following
+    /// a scroll costs no recomposition.
+    pub fn metrics(&self) -> ScrollMetrics {
+        let inner = self.inner();
+        let max_offset = *inner.max_value.borrow();
+        let viewport_extent = *inner.viewport_extent.borrow();
+        ScrollMetrics {
+            offset: self.value_non_reactive(),
+            max_offset,
+            viewport_extent,
+        }
+    }
+
     /// Sets the maximum scroll value (internal use by ScrollNode).
     pub(crate) fn set_max_value(&self, max: f32) {
         *self.inner().max_value.borrow_mut() = max;
+    }
+
+    /// Records the measured viewport extent (internal use by ScrollNode).
+    pub(crate) fn set_viewport_extent(&self, extent: f32) {
+        *self.inner().viewport_extent.borrow_mut() = extent;
     }
 
     /// Scrolls to the given position immediately.
@@ -347,6 +425,13 @@ pub(crate) enum ScrollMotionContextKey {
         state_identity: usize,
         is_vertical: bool,
         reverse_scrolling: bool,
+    },
+    /// A control dragged directly rather than a scrolling container. It has no
+    /// edge to overscroll, but it shares the motion context so the renderer
+    /// sees the same "a gesture is in flight" signal it does for a scroll.
+    Draggable {
+        state_identity: usize,
+        is_vertical: bool,
     },
 }
 
@@ -734,6 +819,8 @@ impl LayoutModifierNode for ScrollNode {
             || (!self.is_vertical && constraints.max_width.is_finite())
         {
             self.state.set_max_value(max_scroll);
+            self.state
+                .set_viewport_extent(if self.is_vertical { height } else { width });
             self.overscroll
                 .set_limit((if self.is_vertical { height } else { width }) * 0.5);
         }

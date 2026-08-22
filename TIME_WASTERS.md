@@ -666,3 +666,183 @@ its timing as production-performance evidence.
   hand-bumps the workspace version (#427 carried "Version 0.1.92 across the
   workspace"): harmless while the numbers agree with the tag, a conflict the
   moment they do not.
+- `git grep` cannot see the files a feature added (2026-08-21): a workspace-wide
+  rename of `useState` to `rememberMutableStateOf` was driven by
+  `git grep -lz ... | xargs -0 perl -pi`, which rewrote 278 call sites in tracked
+  files and silently skipped three of the crates the same branch had just
+  created — `git grep` reads the index, and an untracked file is not in it. The
+  build then failed on `unresolved import cranpose_core::useState` from a file
+  the rename had reported success over. Drive a tree-wide rename from `find`
+  (`find crates apps docs -name '*.rs' -o -name '*.md'`), or run `git add -A`
+  first; and always re-grep for the OLD name afterwards rather than trusting the
+  rewrite count. The same trap applies to any `git grep -l` audit run on a
+  branch that adds files, which on this repo is most of them.
+  While here: in zsh an unquoted `$FILES` from a command substitution does NOT
+  word-split, so `for f in $(git grep -l ...)` passes the whole newline-joined
+  list as ONE argument and every file is skipped with "File name too long".
+  That failure is loud; the untracked-file one is silent, which is what makes it
+  expensive. Use `-lz` with `xargs -0`, or `IFS=$'\n'`.
+- A `pgrep -f` wait loop matches its own shell (2026-08-21): a background
+  `until ! pgrep -qf "cargo check --workspace"; do sleep 3; done` never exits,
+  because the loop is itself running inside a shell whose full command line
+  contains that string — `pgrep -f` matches the pattern anywhere in the
+  command line, including the script it is scanning for. It burned ten minutes
+  looking like a slow compile. Wait on the thing you actually care about
+  instead: run the command in the background and wait for its exit, or poll a
+  marker the command writes when it finishes. If a process scan really is the
+  only option, exclude your own tree with `pgrep -f pat | grep -v $$`.
+  Related, on macOS: `pgrep -c` is not a flag (that is a Linux extension) and
+  fails with a usage error, which reads as "no match" to a `!` test.
+- `cargo test --workspace` runs this repo's ~129 test binaries **sequentially**
+  (2026-08-21): tests inside one binary run in parallel, but cargo starts the
+  next binary only after the previous one exits, and several here shell out to
+  `rustc` (the compile-fail UI tests) or stand up a wgpu device. A full run is
+  tens of minutes on an M5 while the machine sits mostly idle. `cargo nextest
+  run --workspace` runs binaries in parallel and would cut this to a fraction;
+  it is not installed here (`cargo install cargo-nextest`). Until it is, start
+  the run in the background and do other work — do NOT sit in a poll loop
+  reading the log every few seconds. A backgrounded command notifies on exit
+  by itself; polling it adds nothing but latency and noise.
+
+- `cargo nextest run --workspace` instead of `cargo test --workspace`
+  (2026-08-21): now installed. The sequential run described above took over an
+  hour; nextest runs the ~129 test binaries in parallel. Use it for every full
+  verification pass.
+
+- The isolated demo is the only thing that exercises the *standalone consumer*
+  path, and until 2026-08-21 nothing ever built it (2026-08-21): the Publish
+  workflow's `bump_isolated_demo` job pointed `apps/isolated-demo` at the new
+  release and stopped there, so the "canary that proves a release is
+  consumable" never actually flew. Two defects had been sitting in that path:
+  the Gradle plugin defaulted `releaseProfile` to `release-fast`, a profile
+  only *this* repository's `Cargo.toml` declares, so any application applying
+  `dev.cranpose.android` failed a local release build with `profile
+  'release-fast' is not defined` before reaching its own code. The job now
+  builds the demo, desktop and Android, after the bump. Two things to know when
+  working on it: the Android distribution is not on a remote repository, so the
+  plugin reaches the demo through `mavenLocal()` — republish with
+  `./android/gradlew -p android publishToMavenLocal` after any plugin edit or
+  the demo silently builds against the previous plugin. And the demo compiles
+  against the *published* version, so between a framework change and its
+  release the demo will not build against the pinned one; that is the version
+  skew a release resolves, not a defect.
+
+- `cargo nextest run --workspace` deadlocks on macOS here (2026-08-21): the run
+  never reaches a single test. Every hung process sits at 0% CPU inside
+  `_dyld_start` — the dynamic linker, before `main`. Nextest launches all ~129
+  test binaries at once to enumerate them (`--list --format terse`), and macOS
+  serializes code-signature validation of that many large unsigned debug
+  binaries until the launches stall. Nothing in this repository is at fault and
+  no test is to blame; `sample <pid>` showing only `_dyld_start` is the
+  signature. If nextest is worth another try, cap the launch concurrency
+  (`-j 4`) rather than debugging the suite. Otherwise `cargo test --workspace`
+  works and is merely slow.
+
+## Android builds fail with "SDK location not found" while the SDK is installed
+
+`./android/gradlew` dies with `SDK location not found`, and
+`cargo check --target aarch64-linux-android` dies inside `aws-lc-sys`'s build
+script with `failed to find tool "aarch64-linux-android-clang"`. Neither error
+means the toolchain is missing. On this machine both are installed:
+
+    ~/Library/Android/sdk
+    ~/Library/Android/sdk/ndk/{27.0.12077973,28.2.13676358}
+
+What is missing is the environment. `ANDROID_HOME`, `ANDROID_SDK_ROOT` and
+`ANDROID_NDK_HOME` are unset in a fresh shell, and `android/local.properties`
+is untracked so a fresh checkout has no `sdk.dir` either. Set them, or write
+`sdk.dir=$HOME/Library/Android/sdk` into `android/local.properties`, before
+concluding anything about an Android build failure:
+
+```bash
+export ANDROID_HOME="$HOME/Library/Android/sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+```
+
+Check `ls ~/Library/Android/sdk` before believing the error. Taking "SDK
+location not found" at face value cost a whole verification pass here, and put
+a false "cannot be built on this machine" note into PLAN.md.
+
+The genuinely useful local substitutes remain worth knowing, because they are
+much faster than an Android build:
+
+- `--target aarch64-apple-ios` compiles anything gated
+  `any(target_os = "ios", target_os = "android")`, which is most of the
+  platform-service code, and needs no NDK. It caught a whole broken camera
+  conversion in CranScan that the desktop build could not see.
+- `--target wasm32-unknown-unknown` answers "does this compile off desktop".
+
+
+## `cargo test -p cranpose-core` hanging forever
+
+If a `cargo test` run never finishes and `ps -eo pid,etime,comm | grep cargo`
+shows one that has been alive for an hour, it is not slow - it is deadlocked,
+and it holds the build lock, so every later `cargo check`/`clippy` in the repo
+silently waits behind it rather than reporting anything. Kill it before
+diagnosing anything else.
+
+`sample <pid>` names the deadlocked test directly: look for the test's own
+function name in a thread title and a `Condvar::wait` under it.
+
+Note the earlier entry in this file blaming a `cargo nextest` hang on macOS
+code-signature validation. At least some of those hangs were this instead:
+two tests sharing the process-wide `BlockingPool` while the harness ran them
+in parallel. Prefer a per-test pool (`BlockingPool::new()`) to the global one
+in any test that asserts on how far the pool has grown.
+
+## `cargo clippy` cannot resolve unreleased framework crates or features
+
+Verifying a consumer against unreleased framework changes uses
+`cargo --config <patch-file.toml>` with a `[patch.crates-io]` table pointing at
+local paths. `cargo check` honours it, because it reuses the `Cargo.lock` from a
+resolve that worked. `cargo clippy` re-resolves against the registry and fails
+on anything the published version does not have:
+
+    error: no matching package named `cranpose-media` found
+    package `cranamp` depends on `cranpose` with feature `media-desktop`
+    but `cranpose` does not have that feature
+
+`--offline` does not help, and swapping the dependency to a `path` for the run
+makes it worse: the patch table then stops applying to the *other* cranpose
+crates, and the consumer compiles against published ones, producing a screenful
+of errors about APIs that exist locally.
+
+So: `cargo check` is the local signal for a consumer on unreleased framework
+code. `cargo clippy` on that consumer has to wait for the release.
+
+The deeper lesson from the case that prompted this: before adding a new
+framework crate to a consumer's `Cargo.toml`, check whether the facade already
+has a feature for it. `cranpose` already had `media-desktop = ["dep:cranpose-media"]`
+and its desktop shell already called `cranpose_media::install()`. Depending on
+`cranpose-media` directly and installing it by hand was a second way to do
+something the framework already did - and it was the direct dependency on an
+unpublished crate that caused the resolution failure in the first place.
+- Coverage-measurement trap: a proxy metric that is quietly wrong sends work to
+  the wrong places. `scripts/public_api_test_coverage.py` reported 87.7% while
+  two of its own assumptions were false. It matched a function name as a
+  *substring* of the test corpus, so `with_timeout` counted as covered because
+  `exit_with_timeout` is mentioned somewhere - which hid, among others, two
+  pointer-input stubs that ignored their timeout argument entirely. And its
+  corpus was `crates/` only, so the 155-example headless robot suite - the sole
+  exercise most of the robot driver API ever gets - did not count as test code,
+  which reported the most heavily executed code in the repository as untested.
+  Before acting on any coverage number, read how the tool decides what counts.
+- Dead-vs-untested trap: "no test names this function" and "no code calls this
+  function" are different questions and want different answers. Deleting on the
+  first signal removes live code - `InspectorInfo::add_dimension` has four
+  callers and no test, and removing it broke four modifier files. Ask both:
+  uncalled *and* untested is dead and should go; called but untested wants a
+  test. `scripts/public_api_test_coverage.py` answers only the second question.
+- Non-headless robot tests need a display that is actually compositing. Two
+  examples — `robot_shader_rect` and `robot_shader_backdrop_drag` — call
+  `.with_headless(false)` because they verify real GPU presentation, and on a
+  Mac whose screen is asleep or whose session is detached they fail with
+  "the window surface refused N consecutive frames over 5s and never reached
+  generation 1 ... the window is occluded, off-screen, or on a display that is
+  not compositing". That message is the answer, not a symptom to debug: the
+  same commit passes both on a machine with an awake display. The suite's
+  host-capability skips gate on X11 plus `xdotool`, which these two do not
+  need, so they run and fail rather than skipping. Check the display before
+  reading a presentation failure as a renderer regression.

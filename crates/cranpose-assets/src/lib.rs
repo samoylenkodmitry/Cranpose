@@ -216,6 +216,34 @@ mod tests {
     }
 
     #[test]
+    fn an_earlier_root_wins_over_one_added_later() {
+        let base = test_asset_root().join("root-order");
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).expect("first root");
+        std::fs::create_dir_all(&second).expect("second root");
+        std::fs::write(first.join("shared.txt"), b"first").expect("write first");
+        std::fs::write(second.join("shared.txt"), b"second").expect("write second");
+        std::fs::write(second.join("only.txt"), b"only").expect("write only");
+
+        let mut assets = AssetManager::with_root(&first);
+        assets.add_root(&second);
+        assert_eq!(assets.roots(), &[first.clone(), second.clone()]);
+
+        // An overlay root is how a product replaces a framework asset, so the
+        // one registered first has to win rather than the one found last.
+        assert_eq!(
+            assets.load_bytes("shared.txt").expect("shared").as_ref(),
+            b"first"
+        );
+        // And a file only the later root has is still reachable.
+        assert_eq!(
+            assets.load_bytes("only.txt").expect("only").as_ref(),
+            b"only"
+        );
+    }
+
+    #[test]
     fn load_bytes_reads_and_caches_relative_asset() {
         let root = test_asset_root();
         std::fs::write(root.join("sample.bin"), [1u8, 2, 3]).expect("write test asset");

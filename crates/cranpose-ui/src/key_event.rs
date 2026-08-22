@@ -211,11 +211,6 @@ impl KeyEvent {
         self.event_type == KeyEventType::KeyDown
     }
 
-    /// Returns true if this is a key up event.
-    pub fn is_key_up(&self) -> bool {
-        self.event_type == KeyEventType::KeyUp
-    }
-
     /// Returns true if this key produces printable text.
     pub fn has_text(&self) -> bool {
         !self.text.is_empty()

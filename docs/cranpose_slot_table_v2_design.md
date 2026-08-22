@@ -121,7 +121,7 @@ Required correctness properties:
 - Remove `step_back` and `advance_after_node_read` from the storage trait.
 - Add explicit detach/restore operations.
 - Add storage validation methods for tests/debugging.
-- Keep public user-facing `remember`, `useState`, `with_key`, and composable macro behavior as stable as possible, but allow internal APIs to break.
+- Keep public user-facing `remember`, `rememberMutableStateOf`, `with_key`, and composable macro behavior as stable as possible, but allow internal APIs to break.
 
 ---
 

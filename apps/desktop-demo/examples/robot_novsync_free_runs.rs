@@ -105,7 +105,6 @@ fn press(robot: &cranpose::Robot, mode: FramePacingMode) {
     robot
         .click(x, y)
         .unwrap_or_else(|err| panic!("press {}: {err}", mode.label()));
-    let _ = robot.wait_for_idle();
     std::thread::sleep(Duration::from_millis(400));
 }
 

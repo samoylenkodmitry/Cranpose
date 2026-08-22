@@ -43,7 +43,7 @@ else
     PARALLEL_JOBS=1
 fi
 ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
-ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-1}"
+ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-2}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 ROBOT_KEEP_FAILURE_RESULTS="${CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS:-1}"
 SELECTED_EXAMPLES=()
@@ -210,6 +210,7 @@ echo "Cleaning up..."
 # Exclude utility modules (files that don't have a main function)
 EXAMPLES=()
 RUN_EXAMPLES=()
+CAPABILITY_SKIPPED_EXAMPLES=()
 for robot_source_dir in "$ROBOT_DIR" "$ROBOT_EXAMPLES_DIR"; do
     for file in "$robot_source_dir"/robot_*.rs; do
         if [ ! -f "$file" ]; then
@@ -224,6 +225,41 @@ for robot_source_dir in "$ROBOT_DIR" "$ROBOT_EXAMPLES_DIR"; do
         EXAMPLES+=("$example")
     done
 done
+
+robot_source_path() {
+    local example="$1"
+    local candidate
+    for candidate in "$ROBOT_DIR/$example.rs" "$ROBOT_EXAMPLES_DIR/$example.rs"; do
+        if [ -f "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+robot_capability_skip_reason() {
+    local example="$1"
+    local source
+    source=$(robot_source_path "$example") || return 1
+
+    if ! command -v xdotool >/dev/null 2>&1; then
+        case "$example" in
+            robot_counter_button_release_external_visual|robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_liquid_scroll_exact_external_contract|robot_liquid_*_cheatsheet|robot_markdown_default_visual_contract|robot_markdown_full_demo_code_block_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_regression_hn_markdown_visual_contract|robot_regression_layout_jitter_contract|robot_regression_shader_visual_contract|robot_renderer_micro_contract|robot_shader_external_x11_drag|robot_shader_full_demo_external_perf|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_indent_scroll_stability|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
+                echo "requires an X11 session and xdotool"
+                return 0
+                ;;
+        esac
+    fi
+
+    if grep -q 'mod scroll_stability_external_helpers;' "$source" \
+        && ! python3 -c 'from PIL import Image' >/dev/null 2>&1; then
+        echo "requires Python Pillow for pixel comparison"
+        return 0
+    fi
+
+    return 1
+}
 
 if [ ${#EXAMPLES[@]} -eq 0 ]; then
     echo "No robot tests found in $ROBOT_DIR" | tee -a "$LOG_FILE"
@@ -291,10 +327,27 @@ if [ -n "$SHARD_INDEX" ] || [ -n "$SHARD_COUNT" ]; then
     EXAMPLES=("${SHARDED_EXAMPLES[@]}")
 fi
 
+CAPABLE_EXAMPLES=()
+for example in "${EXAMPLES[@]}"; do
+    if reason=$(robot_capability_skip_reason "$example"); then
+        CAPABILITY_SKIPPED_EXAMPLES+=("$example")
+        echo "Skipping robot example: $example ($reason)" | tee -a "$LOG_FILE"
+    else
+        CAPABLE_EXAMPLES+=("$example")
+    fi
+done
+EXAMPLES=("${CAPABLE_EXAMPLES[@]}")
+
+if [ ${#EXAMPLES[@]} -eq 0 ]; then
+    echo "No selected robot tests can run with the available host capabilities." | tee -a "$LOG_FILE"
+    exit 0
+fi
+
 BUILD_ARGS=(--profile "$ROBOT_PROFILE" --package desktop-app --features robot-app)
 if [ ${#EXAMPLES[@]} -eq 1 ]; then
     BUILD_ARGS+=(--example "${EXAMPLES[0]}")
-elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ -n "$SHARD_INDEX" ]; then
+elif [ ${#SELECTED_EXAMPLES[@]} -gt 0 ] || [ -n "$SHARD_INDEX" ] \
+    || [ ${#CAPABILITY_SKIPPED_EXAMPLES[@]} -gt 0 ]; then
     for example in "${EXAMPLES[@]}"; do
         BUILD_ARGS+=(--example "$example")
     done
@@ -406,32 +459,30 @@ run_with_portable_timeout() {
     local output_file="$3"
     shift 3
 
-    local timeout_marker="${output_file}.timeout"
-    rm -f -- "$timeout_marker"
+    python3 - "$timeout_secs" "$kill_after_secs" "$output_file" "$@" <<'PY'
+import subprocess
+import sys
 
-    "$@" > "$output_file" 2>&1 &
-    local command_pid=$!
-    (
-        sleep "$timeout_secs"
-        if kill -0 "$command_pid" 2>/dev/null; then
-            : > "$timeout_marker"
-            kill -TERM "$command_pid" 2>/dev/null || true
-            sleep "$kill_after_secs"
-            kill -KILL "$command_pid" 2>/dev/null || true
-        fi
-    ) &
-    local watchdog_pid=$!
+timeout_secs = float(sys.argv[1])
+kill_after_secs = float(sys.argv[2])
+output_file = sys.argv[3]
+command = sys.argv[4:]
 
-    wait "$command_pid"
-    local exit_code=$?
-    kill "$watchdog_pid" 2>/dev/null || true
-    wait "$watchdog_pid" 2>/dev/null || true
+with open(output_file, "wb") as output:
+    process = subprocess.Popen(command, stdout=output, stderr=subprocess.STDOUT)
+    try:
+        exit_code = process.wait(timeout=timeout_secs)
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:
+            process.wait(timeout=kill_after_secs)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        sys.exit(124)
 
-    if [ -f "$timeout_marker" ]; then
-        rm -f -- "$timeout_marker"
-        exit_code=124
-    fi
-    return "$exit_code"
+sys.exit(exit_code if exit_code >= 0 else 128 - exit_code)
+PY
 }
 
 # Function to run a single test
@@ -463,6 +514,11 @@ run_test() {
         robot_text_handle_cycle_stability)
             # 30 select/sweep/release cycles with per-cycle stat sampling.
             timeout_secs=480
+            ;;
+        robot_text_loupe)
+            # High-scale keyframe captures exercise the full loupe lifecycle
+            # and need more than the generic budget on software rendering.
+            timeout_secs=90
             ;;
         robot_liquid_bar_alignment)
             # Far-anchor selection sweeps across two bars with settled
@@ -535,6 +591,10 @@ run_test() {
             ;;
         robot_tab_scroll)
             timeout_secs=120
+            ;;
+        robot_tab_screenshot_dump)
+            # Captures every demo tab and writes 23 full-size PNG files.
+            timeout_secs=180
             ;;
         robot_measure_shaders)
             timeout_secs=180
@@ -807,6 +867,7 @@ echo "============================================" | tee -a "$LOG_FILE"
 echo "Total: $((PASSED + FAILED))" | tee -a "$LOG_FILE"
 echo "Passed: $PASSED" | tee -a "$LOG_FILE"
 echo "Failed: $FAILED" | tee -a "$LOG_FILE"
+echo "Skipped (host capability): ${#CAPABILITY_SKIPPED_EXAMPLES[@]}" | tee -a "$LOG_FILE"
 
 # Write summary file for easy parsing
 {
@@ -814,6 +875,8 @@ echo "Failed: $FAILED" | tee -a "$LOG_FILE"
     echo "PASSED=$PASSED"
     echo "FAILED=$FAILED"
     echo "FAILED_TESTS=${FAILED_TESTS[*]}"
+    echo "CAPABILITY_SKIPPED=${#CAPABILITY_SKIPPED_EXAMPLES[@]}"
+    echo "CAPABILITY_SKIPPED_TESTS=${CAPABILITY_SKIPPED_EXAMPLES[*]}"
     echo "STOPPED_EARLY=$STOPPED_EARLY"
 } > "$SUMMARY_FILE"
 

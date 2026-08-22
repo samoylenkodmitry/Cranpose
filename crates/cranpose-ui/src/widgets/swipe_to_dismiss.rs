@@ -64,6 +64,15 @@ pub enum SwipeDismissSide {
     End,
 }
 
+/// Directions accepted by a swipe-dismiss container.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SwipeDismissDirection {
+    #[default]
+    Both,
+    StartToEnd,
+    EndToStart,
+}
+
 /// Boxed background closure, invoked each frame with the current
 /// [`SwipeDismissSide`] so the reveal can follow the swipe direction.
 type BackgroundFn = Rc<RefCell<dyn FnMut(SwipeDismissSide)>>;
@@ -83,9 +92,24 @@ pub struct SwipeToDismissSpec {
     /// rows all shift up after a removal — the remembered swipe state must
     /// not leak onto the new item: without a key, the next row inherits the
     /// dismissed row's displacement, revealed background and collapsed
-    /// height ("items go shuffled, red boxes stick"). `None` keeps the
-    /// keyless per-slot behaviour unchanged.
+    /// height ("items go shuffled, red boxes stick").
+    ///
+    /// Inside a keyed lazy list this is filled in from the item's own key, so
+    /// a row states its identity once, where the list already states it. Set it
+    /// explicitly only for a row that is not a lazy item, or whose identity is
+    /// not the one the list is keyed by.
     pub key: Option<u64>,
+    /// Caller-owned swipe state, from [`rememberSwipeDismissState`].
+    ///
+    /// Supply one to read the swipe as it happens — a label that fades in with
+    /// it, a count of what is about to go, an undo bar after it lands — or to
+    /// return a row to rest from elsewhere on the screen. Left unset, the row
+    /// owns its own state.
+    pub state: Option<SwipeDismissState>,
+    pub direction: SwipeDismissDirection,
+    pub edge_width: Option<f32>,
+    pub collapse_after_dismiss: bool,
+    pub enabled: bool,
 }
 
 impl SwipeToDismissSpec {
@@ -94,13 +118,28 @@ impl SwipeToDismissSpec {
             threshold_fraction: 0.5,
             background: None,
             key: None,
+            state: None,
+            direction: SwipeDismissDirection::Both,
+            edge_width: None,
+            collapse_after_dismiss: true,
+            enabled: true,
         }
     }
 
     /// Declares the identity of the wrapped content. When the key changes,
     /// the swipe state resets to rest — the new item starts untouched.
+    ///
+    /// A row inside a keyed lazy list already has an identity and does not
+    /// need this.
     pub fn with_key(mut self, key: u64) -> Self {
         self.key = Some(key);
+        self
+    }
+
+    /// Uses caller-owned swipe state, so the swipe can be read and reset from
+    /// outside the row.
+    pub fn with_state(mut self, state: SwipeDismissState) -> Self {
+        self.state = Some(state);
         self
     }
 
@@ -115,6 +154,26 @@ impl SwipeToDismissSpec {
     /// toward, so it can align its label/icon to the revealed edge.
     pub fn with_background(mut self, background: impl FnMut(SwipeDismissSide) + 'static) -> Self {
         self.background = Some(Rc::new(RefCell::new(background)));
+        self
+    }
+
+    pub fn with_direction(mut self, direction: SwipeDismissDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    pub fn from_edge(mut self, width: f32) -> Self {
+        self.edge_width = Some(width.max(0.0));
+        self
+    }
+
+    pub fn with_collapse_after_dismiss(mut self, collapse: bool) -> Self {
+        self.collapse_after_dismiss = collapse;
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
         self
     }
 }
@@ -216,7 +275,9 @@ struct SwipeToDismissController {
     /// Refreshed every recomposition so the latest captured environment runs.
     on_dismiss: RefCell<Option<Rc<dyn Fn()>>>,
     /// `on_dismiss` fired for the current dismissal (fires at most once).
-    dismissed: Cell<bool>,
+    /// Observable: a caller watching [`SwipeDismissState`] reacts to a row
+    /// leaving without being handed a callback.
+    dismissed: OwnedMutableState<bool>,
     /// The row's layout node, so the collapse watcher can force a re-measure
     /// each frame as the height shrinks. Set on every recomposition.
     node_id: Cell<Option<NodeId>>,
@@ -227,6 +288,11 @@ struct SwipeToDismissController {
     /// Identity of the content this controller's state belongs to (from
     /// [`SwipeToDismissSpec::with_key`]); state resets when it changes.
     identity: Cell<Option<u64>>,
+    active_pointer: Cell<Option<u64>>,
+    direction: Cell<SwipeDismissDirection>,
+    edge_width: Cell<Option<f32>>,
+    collapse_after_dismiss: Cell<bool>,
+    enabled: Cell<bool>,
 }
 
 impl SwipeToDismissController {
@@ -236,16 +302,21 @@ impl SwipeToDismissController {
             offset: RefCell::new(Animatable::new(0.0, runtime.clone())),
             revealed: OwnedMutableState::with_runtime(false, runtime.clone()),
             collapse: RefCell::new(Animatable::new(1.0, runtime.clone())),
+            dismissed: OwnedMutableState::with_runtime(false, runtime.clone()),
             runtime,
             phase: Cell::new(SwipePhase::Idle),
             width_px: Cell::new(f32::NAN),
             threshold_fraction: Cell::new(0.5),
             on_dismiss: RefCell::new(None),
-            dismissed: Cell::new(false),
             node_id: Cell::new(None),
             settle_watcher: RefCell::new(None),
             collapse_watcher: RefCell::new(None),
             identity: Cell::new(None),
+            active_pointer: Cell::new(None),
+            direction: Cell::new(SwipeDismissDirection::Both),
+            edge_width: Cell::new(None),
+            collapse_after_dismiss: Cell::new(true),
+            enabled: Cell::new(true),
         })
     }
 
@@ -259,7 +330,8 @@ impl SwipeToDismissController {
         self.offset.borrow_mut().snapTo(0.0);
         self.collapse.borrow_mut().snapTo(1.0);
         self.phase.set(SwipePhase::Idle);
-        self.dismissed.set(false);
+        self.active_pointer.set(None);
+        self.set_dismissed(false);
         self.set_revealed(false);
     }
 
@@ -296,6 +368,13 @@ impl SwipeToDismissController {
         }
     }
 
+    /// Updates the dismissed flag, writing only on change.
+    fn set_dismissed(&self, dismissed: bool) {
+        if self.dismissed.get_non_reactive() != dismissed {
+            self.dismissed.set_value(dismissed);
+        }
+    }
+
     fn snap_to(&self, offset: f32) {
         self.offset.borrow_mut().snapTo(offset);
         // A live drag frame: the background is revealed exactly while the row
@@ -313,6 +392,102 @@ impl SwipeToDismissController {
             self.set_revealed(true);
         }
     }
+}
+
+/// A row's swipe, as the application can see it.
+///
+/// A dismissable row is not only a callback: an application shows a delete
+/// label that fades in with the swipe, a counter of what is about to go, or an
+/// undo bar once a row has left. All of that needs the swipe itself, not just
+/// its ending, so the same state the widget drives is readable from outside it.
+///
+/// Cloning shares one row's state. Hold it with [`rememberSwipeDismissState`]
+/// and hand it to [`SwipeToDismissSpec::with_state`].
+#[derive(Clone)]
+pub struct SwipeDismissState {
+    controller: Rc<SwipeToDismissController>,
+}
+
+impl PartialEq for SwipeDismissState {
+    /// Identity, not value: a composable taking one skips while it is the same
+    /// row, however far that row has been swiped.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.controller, &other.controller)
+    }
+}
+
+impl SwipeDismissState {
+    fn new(runtime: RuntimeHandle) -> Self {
+        Self {
+            controller: SwipeToDismissController::new(runtime),
+        }
+    }
+
+    /// How far the row is displaced, in logical pixels: positive towards the
+    /// start edge, negative towards the end. Reactive.
+    pub fn offset(&self) -> f32 {
+        self.controller.current_offset()
+    }
+
+    /// How far through a dismissal the row is, in `0..=1`, against the same
+    /// threshold a release is judged by. `1.0` means letting go now dismisses.
+    ///
+    /// Zero before the row has been measured — a fraction of an unknown width
+    /// would be a guess.
+    pub fn progress(&self) -> f32 {
+        let width = self.controller.width_px.get();
+        if !width.is_finite() || width <= 0.0 {
+            return 0.0;
+        }
+        let threshold = width * self.controller.threshold_fraction.get();
+        if threshold <= 0.0 {
+            return 0.0;
+        }
+        (self.offset().abs() / threshold).clamp(0.0, 1.0)
+    }
+
+    /// The edge the background is revealed on, or `None` while the row is at
+    /// rest and no edge is showing.
+    pub fn side(&self) -> Option<SwipeDismissSide> {
+        (self.offset() != 0.0).then(|| self.controller.revealed_side())
+    }
+
+    /// Whether the row is away from rest — dragged, springing back, or leaving.
+    /// Reactive.
+    pub fn is_displaced(&self) -> bool {
+        self.controller.revealed()
+    }
+
+    /// Whether this row has been dismissed. Reactive.
+    pub fn is_dismissed(&self) -> bool {
+        self.controller.dismissed.value()
+    }
+
+    /// Returns the row to rest without dismissing it — an undo, or a screen
+    /// closing a menu the swipe opened.
+    pub fn reset(&self) {
+        self.controller.reset_to_rest();
+    }
+}
+
+/// Remembers the swipe state for one row.
+///
+/// Inside a keyed lazy list the state is keyed by the item, so a row removed
+/// from the middle does not leave its displacement on the row that moves up
+/// into its slot.
+#[allow(non_snake_case)]
+pub fn rememberSwipeDismissState() -> SwipeDismissState {
+    let state = with_current_composer(|composer| {
+        let runtime = composer.runtime_handle();
+        let owned: Owned<SwipeDismissState> = composer.remember(|| SwipeDismissState::new(runtime));
+        owned.with(SwipeDismissState::clone)
+    });
+    let identity = crate::lazy_item::lazy_item_key();
+    if state.controller.identity.get() != identity {
+        state.controller.reset_to_rest();
+        state.controller.identity.set(identity);
+    }
+    state
 }
 
 /// Appends the swipe pointer-input handler to `base`. Split out of the
@@ -338,17 +513,37 @@ fn swipe_gesture_modifier(base: Modifier, controller: Rc<SwipeToDismissControlle
 /// Handles one pointer event for the swipe gesture. Returns nothing; event
 /// consumption communicates ownership to sibling/ancestor handlers.
 fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &PointerEvent) {
-    // Secondary fingers never participate: the swipe is a one-finger gesture
-    // and multi-touch handlers (zoom) key off the extra pointers themselves.
-    if event.id != 0 && event.kind != PointerEventKind::Cancel {
+    if event.kind != PointerEventKind::Down
+        && event.kind != PointerEventKind::Cancel
+        && controller.active_pointer.get() != Some(event.id)
+    {
         return;
     }
 
     match event.kind {
         PointerEventKind::Down => {
-            if event.is_consumed() {
+            if event.is_consumed()
+                || !controller.enabled.get()
+                || controller.active_pointer.get().is_some()
+            {
                 return;
             }
+            let width = controller.width_px.get();
+            let inside_edge = match (controller.edge_width.get(), controller.direction.get()) {
+                (None, _) => true,
+                (Some(edge), SwipeDismissDirection::StartToEnd) => event.global_position.x <= edge,
+                (Some(edge), SwipeDismissDirection::EndToStart) => {
+                    width.is_finite() && event.global_position.x >= width - edge
+                }
+                (Some(edge), SwipeDismissDirection::Both) => {
+                    event.global_position.x <= edge
+                        || (width.is_finite() && event.global_position.x >= width - edge)
+                }
+            };
+            if !inside_edge {
+                return;
+            }
+            controller.active_pointer.set(Some(event.id));
             // Catch an in-flight spring: pressing pins the content where it
             // currently is, like Compose's swipeable.
             let current = controller.current_offset();
@@ -385,7 +580,10 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                                 start_offset,
                             });
                             let width = controller.width_px.get();
-                            controller.snap_to(clamp_offset(start_offset + total_dx, width));
+                            controller.snap_to(constrain_direction(
+                                clamp_offset(start_offset + total_dx, width),
+                                controller.direction.get(),
+                            ));
                             event.consume();
                         }
                         SwipeAxisDecision::Vertical => {
@@ -400,7 +598,10 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                 } => {
                     let total_dx = event.global_position.x - down_x;
                     let width = controller.width_px.get();
-                    controller.snap_to(clamp_offset(start_offset + total_dx, width));
+                    controller.snap_to(constrain_direction(
+                        clamp_offset(start_offset + total_dx, width),
+                        controller.direction.get(),
+                    ));
                     event.consume();
                 }
                 SwipePhase::Idle | SwipePhase::LockedOut => {}
@@ -413,12 +614,14 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
                 settle_release(controller);
                 event.consume();
             }
+            controller.active_pointer.set(None);
         }
         PointerEventKind::Cancel => {
             if matches!(controller.phase.get(), SwipePhase::Dragging { .. }) {
                 animate_spring_back(controller);
             }
             controller.phase.set(SwipePhase::Idle);
+            controller.active_pointer.set(None);
         }
         PointerEventKind::Scroll
         | PointerEventKind::Zoom
@@ -426,6 +629,14 @@ fn handle_swipe_event(controller: &Rc<SwipeToDismissController>, event: &Pointer
         | PointerEventKind::RotaryScroll
         | PointerEventKind::Enter
         | PointerEventKind::Exit => {}
+    }
+}
+
+fn constrain_direction(offset: f32, direction: SwipeDismissDirection) -> f32 {
+    match direction {
+        SwipeDismissDirection::Both => offset,
+        SwipeDismissDirection::StartToEnd => offset.max(0.0),
+        SwipeDismissDirection::EndToStart => offset.min(0.0),
     }
 }
 
@@ -468,7 +679,7 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                     return;
                 };
                 controller.settle_watcher.borrow_mut().take();
-                if dismissing && controller.dismissed.get() {
+                if dismissing && controller.dismissed.get_non_reactive() {
                     return;
                 }
                 // A new gesture retargeted the animation; a fresh snap already
@@ -484,12 +695,14 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                     // dismissal must *not* leave the red strip behind while it
                     // waits for the host to drop the item.
                     controller.set_revealed(false);
-                    if dismissing && !controller.dismissed.get() {
-                        controller.dismissed.set(true);
+                    if dismissing && !controller.dismissed.get_non_reactive() {
+                        controller.set_dismissed(true);
                         // Collapse the row to zero height so no empty gap (or
                         // background strip) lingers if the host removes the item
                         // a frame or two later, then notify the host.
-                        start_collapse(&controller);
+                        if controller.collapse_after_dismiss.get() {
+                            start_collapse(&controller);
+                        }
                         let on_dismiss = controller.on_dismiss.borrow().clone();
                         if let Some(on_dismiss) = on_dismiss {
                             on_dismiss();
@@ -570,19 +783,26 @@ where
     D: Fn() + 'static,
     F: FnMut() + 'static,
 {
-    let controller: Rc<SwipeToDismissController> = with_current_composer(|composer| {
+    let owned_controller: Rc<SwipeToDismissController> = with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         let owned: Owned<Rc<SwipeToDismissController>> =
             composer.remember(|| SwipeToDismissController::new(runtime));
         owned.with(Rc::clone)
     });
+    let controller = match &spec.state {
+        Some(state) => Rc::clone(&state.controller),
+        None => owned_controller,
+    };
 
     // Content identity: when this composition slot is reused for a different
     // item (unkeyed lazy rows shifting up after a removal), the remembered
     // controller must not leak the old item's swipe state onto the new one.
-    if controller.identity.get() != spec.key {
+    // A row inside a keyed lazy list is identified by the list's own key, so
+    // an application does not repeat it here.
+    let identity = spec.key.or_else(crate::lazy_item::lazy_item_key);
+    if controller.identity.get() != identity {
         controller.reset_to_rest();
-        controller.identity.set(spec.key);
+        controller.identity.set(identity);
     }
 
     // Refresh the per-recomposition inputs so the pointer handler (which
@@ -590,6 +810,12 @@ where
     controller
         .threshold_fraction
         .set(spec.threshold_fraction.clamp(f32::EPSILON, 1.0));
+    controller.direction.set(spec.direction);
+    controller.edge_width.set(spec.edge_width);
+    controller
+        .collapse_after_dismiss
+        .set(spec.collapse_after_dismiss);
+    controller.enabled.set(spec.enabled);
     *controller.on_dismiss.borrow_mut() = Some(Rc::new(on_dismiss));
 
     let background = spec.background.clone();
@@ -692,6 +918,26 @@ where
     });
     controller.node_id.set(Some(node));
     node
+}
+
+/// Full-content navigation dismissal. The gesture starts at the leading edge,
+/// moves only toward the end edge, and leaves sizing to the navigation owner.
+#[composable]
+pub fn SwipeToDismissBox<D, F>(modifier: Modifier, on_dismiss: D, content: F) -> NodeId
+where
+    D: Fn() + 'static,
+    F: FnMut() + 'static,
+{
+    SwipeToDismiss(
+        modifier,
+        SwipeToDismissSpec::new()
+            .with_threshold_fraction(0.35)
+            .with_direction(SwipeDismissDirection::StartToEnd)
+            .from_edge(32.0)
+            .with_collapse_after_dismiss(false),
+        on_dismiss,
+        content,
+    )
 }
 
 #[cfg(test)]

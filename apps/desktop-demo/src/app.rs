@@ -477,7 +477,7 @@ pub fn combined_app_with_initial_tab(initial_tab: Option<DemoTab>) {
 #[composable]
 pub fn combined_app_with_startup(startup: StartupSelection) {
     let initial_tab = startup.initial_tab.unwrap_or(DemoTab::Counter);
-    let active_tab = cranpose_core::useState(move || initial_tab);
+    let active_tab = cranpose_core::rememberMutableStateOf(move || initial_tab);
     let winamp_tab_state = remember_winamp_tab_state();
     TEST_ACTIVE_TAB_STATE.with(|cell| {
         *cell.borrow_mut() = Some(active_tab);
@@ -579,62 +579,72 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
     }
 }
 
-/// Demonstrates the native cross-platform file/folder picker.
+/// Demonstrates the framework-owned chooser launchers.
+///
+/// Every button is a composition-owned launcher: it presents the system chooser
+/// and receives its result through a callback, even when the host destroyed and
+/// recreated the composition while the chooser was in front.
 #[composable]
 fn file_picker_tab() {
-    let picker = cranpose::local_file_picker().current();
-    let status = cranpose_core::useState(|| "Pick a file or folder to begin.".to_string());
-    let file_request = cranpose_core::useState(|| 0u32);
-    let folder_request = cranpose_core::useState(|| 0u32);
+    let status =
+        cranpose_core::rememberMutableStateOf(|| "Pick a file or folder to begin.".to_string());
+    let scope = cranpose_core::rememberCoroutineScope();
 
-    let file_key = file_request.get();
-    {
-        let picker = picker.clone();
-        cranpose_core::LaunchedEffectAsync!(file_key, move |_scope| Box::pin(async move {
-            if file_key == 0 {
-                return;
+    let open_file = cranpose::rememberOpenFileLauncher("demo.open-file", move |picked| {
+        status.set(match picked {
+            Ok(Some(content)) => {
+                let metadata = content.metadata();
+                format!(
+                    "File: {} — {} bytes\n{}",
+                    metadata.name,
+                    metadata.len.unwrap_or(0),
+                    metadata.identifier
+                )
             }
-            status.set("Choosing a file…".to_string());
-            match picker
-                .pick_file(cranpose::FilePickerOptions::default().with_title("Pick a file"))
-                .await
-            {
-                Ok(Some(entry)) => {
-                    let bytes = entry.read_bytes().await.map(|data| data.len()).unwrap_or(0);
-                    status.set(format!(
-                        "File: {} — {bytes} bytes\n{}",
-                        entry.name(),
-                        entry.display_path()
-                    ));
-                }
-                Ok(None) => status.set("File selection cancelled.".to_string()),
-                Err(error) => status.set(format!("File picker error: {error}")),
-            }
-        }));
-    }
+            Ok(None) => "File selection cancelled.".to_string(),
+            Err(error) => format!("File chooser error: {error}"),
+        });
+    });
 
-    let folder_key = folder_request.get();
-    cranpose_core::LaunchedEffectAsync!(folder_key, move |_scope| Box::pin(async move {
-        if folder_key == 0 {
-            return;
-        }
-        status.set("Choosing a folder…".to_string());
-        match picker
-            .pick_folder(cranpose::FilePickerOptions::default().with_title("Pick a folder"))
-            .await
-        {
-            Ok(Some(entry)) => {
-                let count = entry.list().await.map(|items| items.len()).unwrap_or(0);
-                status.set(format!(
-                    "Folder: {} — {count} entries\n{}",
-                    entry.name(),
-                    entry.display_path()
-                ));
+    let open_files = cranpose::rememberOpenFilesLauncher("demo.open-files", move |picked| {
+        status.set(match picked {
+            Ok(files) if files.is_empty() => "Multi-file selection cancelled.".to_string(),
+            Ok(files) => {
+                let names: Vec<String> = files
+                    .iter()
+                    .map(|content| content.metadata().name)
+                    .collect();
+                format!("{} files: {}", names.len(), names.join(", "))
             }
-            Ok(None) => status.set("Folder selection cancelled.".to_string()),
-            Err(error) => status.set(format!("Folder picker error: {error}")),
-        }
-    }));
+            Err(error) => format!("File chooser error: {error}"),
+        });
+    });
+
+    let open_folder = cranpose::rememberOpenFolderLauncher("demo.open-folder", move |picked| {
+        status.set(match picked {
+            Ok(Some(folder)) => {
+                format!("Folder: {}\nCollecting its files…", folder.metadata().name)
+            }
+            Ok(None) => "Folder selection cancelled.".to_string(),
+            Err(error) => format!("Folder chooser error: {error}"),
+        });
+    });
+
+    let save_document =
+        cranpose::rememberSaveDocumentLauncher("demo.save-document", move |destination| {
+            match destination {
+                Ok(Some(sink)) => scope.launch(async move {
+                    let written =
+                        cranpose::write_all(&sink, b"Saved by the Cranpose demo.\n".to_vec()).await;
+                    status.set(match written {
+                        Ok(()) => "Document saved.".to_string(),
+                        Err(error) => format!("Save failed: {error}"),
+                    });
+                }),
+                Ok(None) => status.set("Save cancelled.".to_string()),
+                Err(error) => status.set(format!("Save chooser error: {error}")),
+            }
+        });
 
     Column(
         Modifier::empty().fill_max_size().padding(20.0),
@@ -646,15 +656,30 @@ fn file_picker_tab() {
                 TextStyle::default(),
             );
             Text(
-                "Opens the platform's native picker. On Android, iOS and the web it surfaces the system document providers (cloud, mounted WebDAV shares, …), returning an opaque handle rather than a local path.",
+                "Opens the platform's native choosers. On Android, iOS and the web they surface the system document providers (cloud, mounted WebDAV shares, …), returning streaming content handles rather than local paths.",
                 Modifier::empty().padding(8.0),
                 TextStyle::default(),
             );
+            let open_file = open_file.clone();
             picker_button("Pick a file", move || {
-                file_request.set(file_request.get() + 1)
+                open_file.launch(cranpose::FilePickerOptions::default().with_title("Pick a file"))
             });
+            let open_files = open_files.clone();
+            picker_button("Pick several files", move || {
+                open_files
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick some files"))
+            });
+            let open_folder = open_folder.clone();
             picker_button("Pick a folder", move || {
-                folder_request.set(folder_request.get() + 1)
+                open_folder
+                    .launch(cranpose::FilePickerOptions::default().with_title("Pick a folder"))
+            });
+            let save_document = save_document.clone();
+            picker_button("Save a document", move || {
+                save_document.launch(
+                    cranpose::SaveDocumentRequest::new("cranpose-demo.txt", "text/plain")
+                        .with_title("Save the demo document"),
+                )
             });
             Text(
                 status.get(),
@@ -997,7 +1022,7 @@ fn text_input_example() {
 
 #[composable]
 fn recursive_layout_example() {
-    let depth_state = cranpose_core::useState(|| 3usize);
+    let depth_state = cranpose_core::rememberMutableStateOf(|| 3usize);
     TEST_RECURSIVE_LAYOUT_DEPTH_STATE.with(|cell| {
         *cell.borrow_mut() = Some(depth_state);
     });
@@ -1186,7 +1211,7 @@ fn recursive_layout_node(modifier: Modifier, depth: usize, horizontal: bool, ind
 
 #[composable]
 pub fn composition_local_example() {
-    let counter = cranpose_core::useState(|| 0);
+    let counter = cranpose_core::rememberMutableStateOf(|| 0);
 
     TEST_COMPOSITION_LOCAL_COUNTER.with(|cell| {
         *cell.borrow_mut() = Some(counter);
@@ -1543,8 +1568,8 @@ pub(crate) fn AsyncRuntimeEngine(
     let progress_state = transition.animateFloat(0.0, 1.0, spec, "async_progress");
     let progress_value = progress_state.value();
 
-    let last_progress = cranpose_core::useState(|| progress_value);
-    let last_reset = cranpose_core::useState(|| reset_signal.get());
+    let last_progress = cranpose_core::rememberMutableStateOf(|| progress_value);
+    let last_reset = cranpose_core::rememberMutableStateOf(|| reset_signal.get());
     let running = is_running.get();
     let reset_key = reset_signal.get();
 
@@ -1580,10 +1605,10 @@ pub(crate) fn AsyncRuntimeEngine(
 
 #[composable]
 fn async_runtime_example() {
-    let animation = cranpose_core::useState(AnimationState::default);
-    let stats = cranpose_core::useState(FrameStats::default);
-    let is_running = cranpose_core::useState(|| true);
-    let reset_signal = cranpose_core::useState(|| 0u64);
+    let animation = cranpose_core::rememberMutableStateOf(AnimationState::default);
+    let stats = cranpose_core::rememberMutableStateOf(FrameStats::default);
+    let is_running = cranpose_core::rememberMutableStateOf(|| true);
+    let reset_signal = cranpose_core::rememberMutableStateOf(|| 0u64);
 
     AsyncRuntimeEngine(animation, stats, is_running, reset_signal);
     AsyncRuntimeTabContent(animation, stats, is_running, reset_signal);
@@ -1591,9 +1616,9 @@ fn async_runtime_example() {
 
 #[composable]
 fn counter_app() {
-    let counter = cranpose_core::useState(|| 0);
-    let pointer_position = cranpose_core::useState(|| Point { x: 0.0, y: 0.0 });
-    let pointer_down = cranpose_core::useState(|| false);
+    let counter = cranpose_core::rememberMutableStateOf(|| 0);
+    let pointer_position = cranpose_core::rememberMutableStateOf(|| Point { x: 0.0, y: 0.0 });
+    let pointer_down = cranpose_core::rememberMutableStateOf(|| false);
     TEST_COUNTER_APP_COUNTER_STATE.with(|cell| {
         *cell.borrow_mut() = Some(counter);
     });
@@ -1603,9 +1628,10 @@ fn counter_app() {
     TEST_COUNTER_APP_POINTER_POSITION_STATE.with(|cell| {
         *cell.borrow_mut() = Some(pointer_position);
     });
-    let async_message =
-        cranpose_core::useState(|| "Tap \"Fetch async value\" to run background work".to_string());
-    let fetch_request = cranpose_core::useState(|| 0u64);
+    let async_message = cranpose_core::rememberMutableStateOf(|| {
+        "Tap \"Fetch async value\" to run background work".to_string()
+    });
+    let fetch_request = cranpose_core::rememberMutableStateOf(|| 0u64);
     let pointer = pointer_position.get();
     let pointer_wave = (pointer.x / 360.0).clamp(0.0, 1.0);
     let target_wave = if pointer_down.get() {
@@ -2047,7 +2073,7 @@ fn counter_app() {
 
 #[composable]
 fn composition_local_observer() {
-    let state = cranpose_core::useState(|| 0);
+    let state = cranpose_core::rememberMutableStateOf(|| 0);
     DisposableEffect!((), move |_| {
         state.set(state.get() + 1);
         DisposableEffectResult::default()
@@ -2079,7 +2105,7 @@ impl ShowcaseType {
 
 #[composable]
 fn modifier_showcase_tab() {
-    let selected_showcase = cranpose_core::useState(|| ShowcaseType::SimpleCard);
+    let selected_showcase = cranpose_core::rememberMutableStateOf(|| ShowcaseType::SimpleCard);
 
     Row(
         Modifier::empty().fill_max_width().padding(8.0),
@@ -2577,7 +2603,7 @@ pub fn complex_chain_showcase() {
 
 #[composable]
 pub fn dynamic_modifiers_showcase() {
-    let frame = cranpose_core::useState(|| 0i32);
+    let frame = cranpose_core::rememberMutableStateOf(|| 0i32);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Text(

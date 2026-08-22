@@ -540,10 +540,6 @@ impl KernedFont {
         }
         GposKerning::parse(&face).map(Arc::new)
     }
-
-    pub fn font_arc(&self) -> &FontArc {
-        &self.font
-    }
 }
 
 impl Font for KernedFont {

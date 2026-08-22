@@ -118,8 +118,8 @@ async fn fetch_random_comic(client: &HttpClientRef) -> Result<LoadedComic, Strin
 
 #[composable]
 pub(crate) fn xkcd_tab() {
-    let state = cranpose_core::useState(|| XkcdState::Loading);
-    let request_id = cranpose_core::useState(|| 1u64);
+    let state = cranpose_core::rememberMutableStateOf(|| XkcdState::Loading);
+    let request_id = cranpose_core::rememberMutableStateOf(|| 1u64);
     let http_client = local_http_client().current();
     let uri_handler = local_uri_handler().current();
 

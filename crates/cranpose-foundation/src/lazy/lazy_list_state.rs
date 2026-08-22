@@ -225,7 +225,7 @@ impl LazyListScrollPosition {
 /// State object for lazy list scroll position tracking.
 ///
 /// Holds the current scroll position and provides methods to programmatically
-/// control scrolling. Create with [`remember_lazy_list_state()`] in composition.
+/// control scrolling. Create with [`rememberLazyListState()`] in composition.
 ///
 /// This type is `Copy`, so it can be passed to multiple closures without explicit `.clone()` calls.
 ///
@@ -244,7 +244,7 @@ impl LazyListScrollPosition {
 /// # Example
 ///
 /// ```rust,ignore
-/// let state = remember_lazy_list_state();
+/// let state = rememberLazyListState();
 ///
 /// // Scroll to item 50
 /// state.scroll_to_item(50, 0.0);
@@ -338,30 +338,32 @@ struct LazyListStateInner {
 /// # Example
 ///
 /// ```rust,ignore
-/// let list_state = remember_lazy_list_state();
+/// let list_state = rememberLazyListState();
 ///
 /// // Pass to multiple closures - no .clone() needed!
 /// LazyColumn(modifier, list_state, spec, content);
 /// Button(move || list_state.scroll_to_item(0, 0.0));
 /// ```
 #[composable]
-pub fn remember_lazy_list_state() -> LazyListState {
-    remember_lazy_list_state_with_position(0, 0.0)
+pub fn rememberLazyListState() -> LazyListState {
+    rememberLazyListStateWithPosition(0, 0.0)
 }
 
 /// Creates a remembered [`LazyListState`] with the specified initial position.
 ///
 /// The returned state is `Copy` and can be passed to multiple closures without `.clone()`.
 #[composable]
-pub fn remember_lazy_list_state_with_position(
+pub fn rememberLazyListStateWithPosition(
     initial_first_visible_item_index: usize,
     initial_first_visible_item_scroll_offset: f32,
 ) -> LazyListState {
     // Create scroll position with reactive fields (matches JC LazyListScrollPosition)
     let scroll_position = LazyListScrollPosition {
-        index: cranpose_core::useState(|| initial_first_visible_item_index),
-        scroll_offset: cranpose_core::useState(|| initial_first_visible_item_scroll_offset),
-        inner: cranpose_core::useStateRaw(|| {
+        index: cranpose_core::rememberMutableStateOf(|| initial_first_visible_item_index),
+        scroll_offset: cranpose_core::rememberMutableStateOf(|| {
+            initial_first_visible_item_scroll_offset
+        }),
+        inner: cranpose_core::rememberMutableStateOfNeverEqual(|| {
             Rc::new(RefCell::new(ScrollPositionInner {
                 current_index: initial_first_visible_item_index,
                 current_scroll_offset: initial_first_visible_item_scroll_offset,
@@ -372,7 +374,7 @@ pub fn remember_lazy_list_state_with_position(
     };
 
     // Non-reactive internal state
-    let inner = cranpose_core::useStateRaw(|| {
+    let inner = cranpose_core::rememberMutableStateOfNeverEqual(|| {
         Rc::new(RefCell::new(LazyListStateInner {
             scroll_to_be_consumed: 0.0,
             pending_scroll_to_index: None,
@@ -399,9 +401,9 @@ pub fn remember_lazy_list_state_with_position(
     });
 
     // Reactive state
-    let can_scroll_forward_state = cranpose_core::useState(|| false);
-    let can_scroll_backward_state = cranpose_core::useState(|| false);
-    let stats_state = cranpose_core::useState(LazyLayoutStats::default);
+    let can_scroll_forward_state = cranpose_core::rememberMutableStateOf(|| false);
+    let can_scroll_backward_state = cranpose_core::rememberMutableStateOf(|| false);
+    let stats_state = cranpose_core::rememberMutableStateOf(LazyLayoutStats::default);
 
     LazyListState {
         scroll_position,
@@ -467,23 +469,6 @@ impl LazyListState {
             self.can_scroll_backward_state.runtime_state_id(),
             self.stats_state.runtime_state_id(),
         ]
-    }
-
-    /// Returns whether the list is positioned away from its origin without creating
-    /// a reactive subscription.
-    pub fn is_scrolled_non_reactive(&self) -> bool {
-        self.scroll_position.current_index() > 0
-            || self.scroll_position.current_scroll_offset().abs() > 0.001
-            || self
-                .inner
-                .try_with(|rc| {
-                    let inner = rc.borrow();
-                    inner.scroll_to_be_consumed.abs() > 0.001
-                        || inner
-                            .pending_scroll_to_index
-                            .is_some_and(|(index, offset)| index > 0 || offset.abs() > 0.001)
-                })
-                .unwrap_or(false)
     }
 
     /// Returns the layout info from the last measure pass.
@@ -1827,7 +1812,7 @@ mod tests {
         let mut first = None;
         composition
             .render(key, || {
-                first = Some(super::remember_lazy_list_state());
+                first = Some(super::rememberLazyListState());
             })
             .expect("initial render");
         let first = first.expect("first lazy state");
@@ -1843,7 +1828,7 @@ mod tests {
         let mut second = None;
         composition
             .render(key, || {
-                second = Some(super::remember_lazy_list_state());
+                second = Some(super::rememberLazyListState());
             })
             .expect("second render");
         let second = second.expect("second lazy state");
@@ -1862,7 +1847,7 @@ mod tests {
         let mut released = None;
         composition
             .render(key, || {
-                released = Some(super::remember_lazy_list_state());
+                released = Some(super::rememberLazyListState());
             })
             .expect("initial render");
         let released = released.expect("lazy list state");

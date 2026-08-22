@@ -30,10 +30,22 @@ shown explicitly here so the feature choices are clear.
 
 ## Android
 
+The Android build is configured by the `dev.cranpose.android` Gradle plugin: it
+runs the native build, chooses the ABIs and Cargo profiles, packages the `.so`,
+and adds the framework's activity and manifest contributions. The application's
+own build file states only its namespace, its Cargo package and its label.
+
 Install the native build bridge once:
 
 ```bash
 cargo install cargo-ndk
+```
+
+The Cranpose Android artifacts are not on a remote repository yet, so publish
+them from this checkout once:
+
+```bash
+cd ../../android && ./gradlew publishToMavenLocal
 ```
 
 Then build from the Android project directory:
@@ -44,7 +56,7 @@ cd android
 ```
 
 The debug build produces the x86_64 library used by the emulator. Build the
-release APK to package all configured ABIs:
+release APK to package the release ABIs:
 
 ```bash
 ./gradlew :app:assembleRelease
@@ -76,7 +88,7 @@ used by the web build to be available.
 ```text
 apps/isolated-demo/
 ├── src/                 # Shared Cranpose app and platform entry points
-├── android/             # Minimal Gradle host for the NativeActivity APK
+├── android/             # Gradle host; the Cranpose plugin configures it
 ├── build-web.sh         # wasm-pack build for the browser
 ├── index.html           # Canvas host page
 ├── Cargo.toml           # Standalone package and published dependencies

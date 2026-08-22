@@ -3,7 +3,7 @@ use crate::{
 };
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
-    MemoryApplier, MutableState, Node, NodeError,
+    MemoryApplier, MutableState, Node, NodeError, TaskSite,
 };
 use cranpose_macros::composable;
 
@@ -49,6 +49,7 @@ fn async_runtime_demo(animation: MutableState<AnimationState>, stats: MutableSta
         let stats_state = stats;
         launched_effect_async_impl(
             location_key(file!(), line!(), column!()),
+            TaskSite::new(file!(), line!()),
             (),
             move |scope| {
                 let animation = animation_state;

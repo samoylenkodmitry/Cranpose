@@ -2,7 +2,7 @@
 //! Apache-2.0), rasterized through [`cranpose_ui_graphics::VectorPath`] and
 //! tinted at draw time.
 
-use cranpose_core::remember_keyed;
+use cranpose_core::rememberKeyed;
 use cranpose_macros::composable;
 use cranpose_ui::widgets::{Box, BoxSpec};
 use cranpose_ui::{Modifier, Size};
@@ -65,7 +65,7 @@ pub fn Icon(path: &'static str, size: f32, color: Color) {
     // a STALE glyph when a reused slot changed icons (the accordion's
     // "Sections" row inherited the collapsed row's chevron). Scaling happens
     // at draw time so a size change on recomposition is honored.
-    let parsed = remember_keyed(path, |path| VectorPath::parse(path).ok());
+    let parsed = rememberKeyed(path, |path| VectorPath::parse(path).ok());
     Box(
         Modifier::empty()
             .size(Size::new(size, size))

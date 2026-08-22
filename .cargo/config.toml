@@ -5,6 +5,12 @@ rustflags = [
     "--remap-path-prefix", "/home/user/cranpose/=",
 ]
 
+[env]
+# Keep Rust and Swift on the same StoreKit 2 deployment floors. Consumer build
+# integrations set these values as part of their platform configuration too.
+IPHONEOS_DEPLOYMENT_TARGET = { value = "15.0", force = false }
+MACOSX_DEPLOYMENT_TARGET = { value = "12.0", force = false }
+
 [alias]
 xtask = "run -p xtask --"
 

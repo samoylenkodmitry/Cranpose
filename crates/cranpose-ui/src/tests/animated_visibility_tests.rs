@@ -73,7 +73,7 @@ fn visibility_composition(initial: bool) -> (TestComposition, MutableState<bool>
         let alive = Rc::clone(&alive);
         let visible_slot = Rc::clone(&visible_slot);
         run_test_composition(move || {
-            let visible = cranpose_core::useState(move || initial);
+            let visible = cranpose_core::rememberMutableStateOf(move || initial);
             visible_slot.borrow_mut().replace(visible);
             VisibilityHost(visible, Rc::clone(&alive));
         })

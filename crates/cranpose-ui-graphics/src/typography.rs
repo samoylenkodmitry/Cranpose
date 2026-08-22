@@ -373,6 +373,53 @@ pub fn estimate_text_measurement(text: &str, style: &TextStyle) -> TextMeasureme
 
 #[cfg(test)]
 mod tests {
+
+    /// A measurer must never be handed a spacing it cannot use. A style built
+    /// from an unset or arithmetic-error value resolves to no spacing rather
+    /// than laying every glyph out at NaN, which renders as nothing at all.
+    #[test]
+    fn letter_spacing_resolves_to_something_a_measurer_can_use() {
+        let style = TextStyle::default().with_font_size(18.0);
+        assert_eq!(style.font_size, 18.0);
+        assert_eq!(style.resolved_font_size(), 18.0);
+        assert_eq!(style.resolved_letter_spacing(), 0.0);
+
+        assert_eq!(
+            style
+                .clone()
+                .with_letter_spacing(1.5)
+                .resolved_letter_spacing(),
+            1.5
+        );
+        assert_eq!(
+            style
+                .clone()
+                .with_letter_spacing(-0.5)
+                .resolved_letter_spacing(),
+            -0.5,
+            "tightening is a real request, not an error"
+        );
+        for broken in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(
+                style
+                    .clone()
+                    .with_letter_spacing(broken)
+                    .resolved_letter_spacing(),
+                0.0
+            );
+        }
+
+        // And a font size that is not a size falls back rather than producing
+        // NaN geometry for every glyph.
+        for broken in [0.0, -12.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                TextStyle::default()
+                    .with_font_size(broken)
+                    .resolved_font_size(),
+                TextStyle::DEFAULT_FONT_SIZE
+            );
+        }
+    }
     use super::*;
 
     #[test]

@@ -56,11 +56,6 @@ impl DrawCacheBuilder {
             .push(Rc::new(move |scope: &mut DrawScopeDefault| f(scope)));
     }
 
-    pub fn on_draw_with_content(&mut self, f: impl Fn(&mut dyn DrawScope) + 'static) {
-        self.with_content
-            .push(Rc::new(move |scope: &mut DrawScopeDefault| f(scope)));
-    }
-
     pub fn finish(self) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         commands.extend(self.behind.into_iter().map(DrawCommand::Behind));

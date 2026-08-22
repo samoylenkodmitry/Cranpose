@@ -2561,6 +2561,118 @@ mod tests {
         ));
     }
 
+    /// The retained-recording path exists so a command that re-records every
+    /// frame keeps the buffers it already grew. Handing storage in and getting
+    /// it back has to record exactly what a fresh scope would, and the count of
+    /// content markers has to come back without re-scanning the primitives.
+    #[test]
+    fn a_reused_recording_buffer_records_what_a_fresh_one_would() {
+        let size = Size::new(16.0, 16.0);
+        let measurer: Rc<dyn DrawTextMeasurer> = FixedAdvanceTextMeasurer::shared(10.0, 20.0);
+
+        let draw = |scope: &mut DrawScopeDefault| {
+            scope.draw_rect(Brush::solid(Color::WHITE));
+            scope.draw_content();
+            scope.draw_rect(Brush::solid(Color::BLACK));
+            scope.draw_content();
+        };
+
+        let mut fresh = DrawScopeDefault::with_text_measurer(size, Rc::clone(&measurer));
+        draw(&mut fresh);
+        assert_eq!(fresh.content_marker_count(), 2);
+        let expected = fresh.finish();
+
+        // Storage the caller already owns, carrying capacity from an earlier
+        // frame. What comes out has to be the same recording.
+        let storage = Vec::with_capacity(64);
+        let mut reused = DrawScopeDefault::with_text_measurer_reusing(size, measurer, storage);
+        draw(&mut reused);
+        assert_eq!(reused.content_marker_count(), 2);
+        let reused = reused.finish();
+
+        assert_eq!(reused.primitives.len(), expected.primitives.len());
+        assert_eq!(reused.content_markers, expected.content_markers);
+        assert_eq!(reused.dropped, expected.dropped);
+    }
+
+    /// A frame that is about to serve a previous frame's primitives should not
+    /// pay to build this frame's. Finishing recording-only returns the buffers
+    /// cleared, and the marker count, without materializing anything.
+    #[test]
+    fn finishing_recording_only_materializes_nothing_but_still_reports_markers() {
+        let mut scope = DrawScopeDefault::new(Size::new(8.0, 8.0));
+        scope.draw_rect(Brush::solid(Color::WHITE));
+        scope.draw_content();
+        assert_eq!(scope.content_marker_count(), 1);
+
+        let finished = scope.finish_recording_only();
+        assert!(
+            finished.primitives.is_empty(),
+            "nothing should have been materialized"
+        );
+        assert_eq!(finished.content_markers, 1);
+        assert!(finished.dropped.is_empty());
+        assert_eq!(
+            finished.recording.tape.len(),
+            0,
+            "the recording buffer comes back cleared, ready to be recorded into again"
+        );
+    }
+
+    /// Where a block of text lands inside the rect it was given. Split out of
+    /// the draw so the rule is stated once; a wrong vertical rule is what makes
+    /// baseline-aligned text sit a line too low.
+    #[test]
+    fn a_text_block_is_placed_by_its_alignment_inside_the_rect() {
+        let rect = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 40.0,
+        };
+        let measurement = TextMeasurement {
+            size: Size::new(60.0, 16.0),
+            line_height: 16.0,
+            first_baseline: 12.0,
+            line_count: 1,
+        };
+        let style = |align, vertical| {
+            TextStyle::default()
+                .with_align(align)
+                .with_vertical_align(vertical)
+        };
+
+        let left = align_text_block(
+            rect,
+            measurement,
+            &style(TextAlign::Left, TextVerticalAlign::Top),
+        );
+        assert_eq!(left, Point::new(10.0, 20.0));
+
+        let centered = align_text_block(
+            rect,
+            measurement,
+            &style(TextAlign::Center, TextVerticalAlign::Center),
+        );
+        assert_eq!(centered, Point::new(10.0 + 20.0, 20.0 + 12.0));
+
+        let right = align_text_block(
+            rect,
+            measurement,
+            &style(TextAlign::Right, TextVerticalAlign::Bottom),
+        );
+        assert_eq!(right, Point::new(50.0, 44.0));
+
+        // Baseline alignment places the baseline on the rect's top edge, which
+        // is what lets a caller line text up with something else.
+        let baseline = align_text_block(
+            rect,
+            measurement,
+            &style(TextAlign::Left, TextVerticalAlign::Baseline),
+        );
+        assert_eq!(baseline, Point::new(10.0, 20.0 - 12.0));
+    }
+
     #[test]
     fn draw_rect_blend_wraps_non_default_modes() {
         let mut scope = DrawScopeDefault::new(Size::new(10.0, 10.0));

@@ -9,16 +9,19 @@
 //! cargo run --package desktop-app --example robot_text_handle_cycle_stability --features robot-app
 //! ```
 
-use cranpose::{AppLauncher, Robot, RobotScreenshot};
-use cranpose_testing::{find_in_semantics, find_text};
-use desktop_app::app;
+use cranpose::widgets::{BasicTextField, Box as CBox, BoxSpec};
+use cranpose::{AppLauncher, Color, Modifier, Robot, RobotScreenshot, Size};
+use cranpose_foundation::text::TextFieldState;
+use cranpose_ui::text::TextStyle;
 use std::time::Duration;
-
-mod text_input_robot_helpers;
 
 const CYCLES: usize = 30;
 const SWEEPS_PER_CYCLE: usize = 10;
 const SWEEP_STEPS: usize = 6;
+const FIELD_X: f32 = 50.0;
+const FIELD_Y: f32 = 160.0;
+const FIELD_WIDTH: f32 = 500.0;
+const FIELD_HEIGHT: f32 = 72.0;
 
 /// Local-diagnosis knob: `CRANPOSE_CYCLE_STABILITY_CYCLES` overrides the
 /// cycle count so a profiler can watch an arbitrarily long accumulation
@@ -74,30 +77,10 @@ fn main() {
             });
 
             std::thread::sleep(Duration::from_millis(300));
-            assert!(
-                text_input_robot_helpers::open_text_input_tab(&robot),
-                "Text Input tab must open"
-            );
 
-            let field = text_input_robot_helpers::wait_for_in_semantics(&robot, |robot| {
-                find_in_semantics(robot, |elem| find_text(elem, "Type here..."))
-            })
-            .expect("text field must be present");
-            let (field_x, field_y, field_w, field_h) = field;
-
-            // Grow the text so a selection spans a wide band of the field.
-            for _ in 0..8 {
-                if let Some(bounds) = find_in_semantics(&robot, |elem| {
-                    cranpose_testing::find_button(elem, "Add !")
-                }) {
-                    let _ = text_input_robot_helpers::click_bounds(&robot, bounds);
-                }
-            }
-            let _ = robot.wait_for_idle();
-
-            let left_x = field_x + 12.0;
-            let right_x = field_x + field_w - 12.0;
-            let line_y = field_y + field_h * 0.5;
+            let left_x = FIELD_X + 12.0;
+            let right_x = FIELD_X + FIELD_WIDTH - 12.0;
+            let line_y = FIELD_Y + FIELD_HEIGHT * 0.5;
 
             let cycles = cycle_count();
             let mut samples: Vec<CycleSample> = Vec::with_capacity(cycles);
@@ -262,9 +245,33 @@ fn main() {
             println!("\n✓ PASS: {cycles} select/sweep/release cycles stayed flat");
             let _ = robot.exit();
         })
-        .run(|| {
-            app::combined_app();
-        });
+        .run(HandleCycleFixture);
+}
+
+#[allow(non_snake_case)]
+#[cranpose::composable]
+fn HandleCycleFixture() {
+    let state = cranpose_core::remember(|| {
+        TextFieldState::new("Type here with enough text for repeated selection handle sweeps")
+    })
+    .with(TextFieldState::clone);
+    CBox(
+        Modifier::empty()
+            .fill_max_size()
+            .background(Color(0.08, 0.10, 0.18, 1.0)),
+        BoxSpec::default(),
+        move || {
+            BasicTextField(
+                state,
+                Modifier::empty()
+                    .absolute_offset(FIELD_X, FIELD_Y)
+                    .size(Size::new(FIELD_WIDTH, FIELD_HEIGHT))
+                    .padding(12.0)
+                    .background(Color(0.15, 0.18, 0.25, 1.0)),
+                TextStyle::default(),
+            );
+        },
+    );
 }
 
 /// One user cycle: dismiss any menu, drag-select a band of text, grab the
@@ -312,7 +319,7 @@ fn run_cycle(robot: &Robot, left_x: f32, right_x: f32, line_y: f32) -> (f32, f32
     let drag_fps = robot.fps_stats().expect("drag-window fps stats");
     let _ = robot.mouse_up();
     let _ = robot.click((left_x + right_x) * 0.5, line_y);
-    let _ = robot.wait_for_idle();
+    let _ = robot.pump_frames(4);
     (drag_fps.work_avg_ms, drag_fps.work_p95_ms)
 }
 

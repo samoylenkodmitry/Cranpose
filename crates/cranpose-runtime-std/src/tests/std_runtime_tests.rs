@@ -15,7 +15,7 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
         state_slot: &Rc<RefCell<Option<MutableState<i32>>>>,
     ) {
         recompositions.set(recompositions.get() + 1);
-        let state = cranpose_core::useState(|| 0);
+        let state = cranpose_core::rememberMutableStateOf(|| 0);
         state_slot.borrow_mut().replace(state);
         let _ = state.value();
     }

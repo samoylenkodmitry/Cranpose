@@ -51,40 +51,35 @@ fn compose_row(with_background: bool) -> TestComposition {
 /// A `SwipeToDismiss` row (with a red bin background) inside a `LazyColumn`
 /// item — the real app shape where the lingering-strip bug appears.
 fn compose_lazy_row_with_background() -> TestComposition {
-    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
     run_test_composition(move || {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LazyColumn(
             Modifier::empty().fill_max_size(),
             list_state,
             LazyColumnSpec::default(),
             |scope| {
-                scope.items(
-                    1,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |_index| {
-                        let spec = SwipeToDismissSpec::default().with_background(|_side| {
-                            Box(
-                                Modifier::empty().fill_max_size().background(BIN_RED),
-                                BoxSpec::new(),
-                                || {},
-                            );
-                        });
-                        SwipeToDismiss(
-                            Modifier::empty().fill_max_width().height(48.0),
-                            spec,
+                scope.items(1, |_index| {
+                    let spec = SwipeToDismissSpec::default().with_background(|_side| {
+                        Box(
+                            Modifier::empty().fill_max_size().background(BIN_RED),
+                            BoxSpec::new(),
                             || {},
-                            || {
-                                Text(
-                                    "CONTENT".to_string(),
-                                    Modifier::empty(),
-                                    TextStyle::default(),
-                                );
-                            },
                         );
-                    },
-                );
+                    });
+                    SwipeToDismiss(
+                        Modifier::empty().fill_max_width().height(48.0),
+                        spec,
+                        || {},
+                        || {
+                            Text(
+                                "CONTENT".to_string(),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                });
             },
         );
     })

@@ -41,7 +41,7 @@ cranpose = { version = "0.1.95", features = ["desktop", "renderer-wgpu"] }
 ## Example
 
 State, layout, and input, in the shape the framework actually has: composables
-take a `Modifier`, a spec, and their content; state comes from `useState` and is
+take a `Modifier`, a spec, and their content; state comes from `rememberMutableStateOf` and is
 read with `.value()`.
 
 ```rust
@@ -57,7 +57,7 @@ struct Todo {
 
 #[composable]
 fn TodoApp() {
-    let todos = useState(|| {
+    let todos = rememberMutableStateOf(|| {
         vec![
             Todo { text: "Buy milk".into(), done: false },
             Todo { text: "Walk the dog".into(), done: true },
@@ -116,7 +116,7 @@ fn main() {
 ```
 
 A list that only composes what is on screen uses `LazyColumn` with
-`remember_lazy_list_state()` from `cranpose_foundation::lazy` instead of the
+`rememberLazyListState()` from `cranpose_foundation::lazy` instead of the
 `for` loop above.
 
 ## What is in the box
@@ -131,6 +131,7 @@ A list that only composes what is on screen uses `LazyColumn` with
 | `cranpose-liquid` | Glass component library: iOS-26-style materials, spring motion |
 | `cranpose-services` | HTTP, clipboard, share, notifications, file picker, haptics, purchases, camera, theme |
 | `cranpose-audio` | Real-time audio (AAudio on Android/Wear OS, cpal on desktop) |
+| `cranpose-media` | Desktop media playback backing `cranpose_services::media` (rodio/symphonia) |
 | `cranpose-storekit` | StoreKit 2 in-app purchases (iOS/macOS) |
 | `cranpose-testing` | The robot harness that drives real windows in tests |
 

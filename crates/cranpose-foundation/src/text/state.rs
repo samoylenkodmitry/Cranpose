@@ -539,16 +539,6 @@ impl TextFieldState {
             buffer.insert(&text);
         })
     }
-
-    /// Sets the text and selects all.
-    pub fn set_text_and_select_all(&self, text: impl Into<String>) -> bool {
-        let text = text.into();
-        self.edit(|buffer| {
-            buffer.clear();
-            buffer.insert(&text);
-            buffer.select_all();
-        })
-    }
 }
 
 impl Default for TextFieldState {
@@ -575,6 +565,58 @@ mod tests {
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         f()
+    }
+
+    #[test]
+    fn a_desired_column_is_remembered_until_it_is_cleared() {
+        with_test_runtime(|| {
+            let state = TextFieldState::new("Hello");
+            assert_eq!(
+                state.desired_column(),
+                None,
+                "a field nobody navigated vertically had a remembered column"
+            );
+
+            // Up/down navigation keeps the column the caret started from, so a
+            // walk down through short lines and back up returns to where it
+            // began rather than to the end of the shortest line it passed.
+            state.set_desired_column(Some(7));
+            assert_eq!(state.desired_column(), Some(7));
+
+            state.set_desired_column(None);
+            assert_eq!(state.desired_column(), None);
+        });
+    }
+
+    #[test]
+    fn flushing_an_undo_group_is_harmless_when_nothing_is_pending() {
+        with_test_runtime(|| {
+            let state = TextFieldState::new("Hello");
+            // A focus loss flushes whether or not anything coalesced.
+            state.flush_undo_group();
+            state.flush_undo_group();
+            assert_eq!(state.text(), "Hello");
+        });
+    }
+
+    #[test]
+    fn flushing_an_undo_group_breaks_the_coalescing_between_two_edits() {
+        with_test_runtime(|| {
+            let state = TextFieldState::new("");
+            state.edit(|buffer| buffer.insert("ab"));
+            state.flush_undo_group();
+            state.edit(|buffer| buffer.insert("cd"));
+            assert_eq!(state.text(), "abcd");
+
+            // Without the flush both inserts coalesce into one undo step and
+            // the first undo empties the field.
+            state.undo();
+            assert_eq!(
+                state.text(),
+                "ab",
+                "the flush did not break the two edits apart"
+            );
+        });
     }
 
     #[test]

@@ -9,7 +9,8 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose::LazyItems;
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
 use cranpose_ui::{Color, LinearArrangement, Modifier, TextStyle};
@@ -19,7 +20,7 @@ use std::time::{Duration, Instant};
 const ITEM_COUNT: usize = usize::MAX;
 
 fn test_app() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
 
     Column(
         Modifier::empty()
@@ -52,9 +53,7 @@ fn test_app() {
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(2.0)),
                 |scope| {
                     scope.items(
-                        ITEM_COUNT,
-                        Some(|i: usize| i as u64),
-                        None::<fn(usize) -> u64>,
+                        LazyItems::new(ITEM_COUNT).key(|i: usize| i as u64),
                         move |i| {
                             // Simple text item - just the index
                             let bg = if i % 2 == 0 {

@@ -10,9 +10,10 @@ mod markdown_fixture_client;
 mod perf_robot_stats;
 
 use cranpose::AppLauncher;
+use cranpose::LazyItems;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_foundation::lazy::{
-    remember_lazy_list_state, LazyLayoutStats, LazyListScope, LazyListState,
+    rememberLazyListState, LazyLayoutStats, LazyListScope, LazyListState,
 };
 use cranpose_services::{local_http_client, HttpClientRef};
 use cranpose_testing::{find_button_exact_in_semantics, find_text};
@@ -180,7 +181,7 @@ fn PerfHarnessApp(scenario: PerfScenario) {
         return;
     }
 
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     PERF_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
@@ -274,9 +275,7 @@ fn PerfScenarioList(list_state: LazyListState, scenario: PerfScenario) {
 fn populate_perf_items(scope: &mut impl LazyListScope, scenario: PerfScenario) {
     let item_count = scenario.item_count();
     scope.items(
-        item_count,
-        Some(|i: usize| i as u64),
-        None::<fn(usize) -> u64>,
+        LazyItems::new(item_count).key(|i: usize| i as u64),
         move |i| {
             PerfScenarioItem(i, scenario);
         },

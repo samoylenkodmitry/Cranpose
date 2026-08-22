@@ -82,7 +82,7 @@ fn absolute_offset_text_pixels_redraw_after_state_only_change() {
     let state_holder: Rc<RefCell<Option<MutableState<i32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let mut shell = AppShell::new(renderer, root_key, move || {
-        let start = cranpose_core::useState(|| 0i32);
+        let start = cranpose_core::rememberMutableStateOf(|| 0i32);
         *state_holder_for_app.borrow_mut() = Some(start);
         AbsoluteOffsetTextRedrawProbe(start);
     });

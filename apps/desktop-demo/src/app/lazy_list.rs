@@ -2,8 +2,9 @@
 //!
 //! This module contains the lazy list demonstration for the desktop-demo app.
 
+use cranpose::LazyItems;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
@@ -227,11 +228,11 @@ fn LifecycleListItem(index: usize, stats: MutableState<LifecycleStats>) {
 
 #[composable]
 pub fn lazy_list_example() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     super::TEST_LAZY_LIST_STATE.with(|cell| {
         *cell.borrow_mut() = Some(list_state);
     });
-    let item_count = cranpose_core::useState(|| DEFAULT_DEMO_ITEM_COUNT);
+    let item_count = cranpose_core::rememberMutableStateOf(|| DEFAULT_DEMO_ITEM_COUNT);
     let lifecycle_stats =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
             .with(|state| *state);
@@ -398,10 +399,10 @@ pub fn lazy_list_example() {
                     {
                         move |scope| {
                             scope.items(
-                                count,
-                                None::<fn(usize) -> u64>, // Auto-generate keys from index
-                                // Content type = index % 5 to match height groups
-                                Some(|index: usize| (index % 5) as u64),
+                                // Keys come from the index; the content type
+                                // matches the five height groups.
+                                LazyItems::new(count)
+                                    .content_type(|index: usize| (index % 5) as u64),
                                 move |index| {
                                     LifecycleListItem(index, lifecycle_stats);
                                     Text(

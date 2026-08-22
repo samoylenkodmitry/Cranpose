@@ -1,4 +1,4 @@
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::robot::create_headless_robot_test;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec, Text};
 use cranpose_ui::{Modifier, TextStyle};
@@ -6,12 +6,12 @@ use cranpose_ui::{Modifier, TextStyle};
 #[test]
 fn test_lazy_column_reverse_layout() {
     let mut robot = create_headless_robot_test(800, 600, || {
-        let state = remember_lazy_list_state();
+        let state = rememberLazyListState();
         // Enable reverse_layout
         let spec = LazyColumnSpec::default().reverse_layout(true);
 
         LazyColumn(Modifier::empty(), state, spec, |scope| {
-            scope.items(3, None::<fn(usize) -> u64>, None::<fn(usize) -> u64>, |i| {
+            scope.items(3, |i| {
                 // Items: "Item 0", "Item 1", "Item 2"
                 Text(
                     format!("Item {}", i),

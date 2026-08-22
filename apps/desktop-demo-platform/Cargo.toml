@@ -39,8 +39,6 @@ wasm-logger = { version = "0.2", optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }
 
-[target.'cfg(target_os = "android")'.dependencies]
-android-activity = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 console_error_panic_hook = "0.1"

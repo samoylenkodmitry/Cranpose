@@ -438,11 +438,6 @@ pub fn visible_bounds_in_viewport(
     }
 }
 
-pub fn find_center_by_text(robot: &cranpose::Robot, text: &str) -> Option<(f32, f32)> {
-    let (x, y, w, h) = find_bounds_by_text(robot, text)?;
-    Some((x + w / 2.0, y + h / 2.0))
-}
-
 pub fn find_in_subtree_by_text<'a>(
     elem: &'a SemanticElement,
     text: &str,

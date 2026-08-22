@@ -1,6 +1,6 @@
 use super::*;
 use cranpose_core::NodeId;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope, LazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -62,7 +62,7 @@ fn task_counts_across_reuse(nested: bool, scroll_back: bool) -> Vec<usize> {
     let held: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         *keeper.borrow_mut() = Some(list_state);
         LazyColumn(
             Modifier::empty().fill_max_size(),
@@ -70,9 +70,7 @@ fn task_counts_across_reuse(nested: bool, scroll_back: bool) -> Vec<usize> {
             LazyColumnSpec::default(),
             move |scope| {
                 scope.items(
-                    ROWS,
-                    Some(|index: usize| index as u64),
-                    None::<fn(usize) -> u64>,
+                    LazyItems::new(ROWS).key(|index: usize| index as u64),
                     move |index| ParkedRow(index, nested),
                 );
             },
@@ -206,20 +204,18 @@ fn badge_task_counts_across_swap(nested: bool) -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::useState(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(busy);
         match nested {
             true => {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 LazyColumn(
                     Modifier::empty().fill_max_size(),
                     list_state,
                     LazyColumnSpec::default(),
                     move |scope| {
                         scope.items(
-                            ROWS,
-                            Some(|index: usize| index as u64),
-                            None::<fn(usize) -> u64>,
+                            LazyItems::new(ROWS).key(|index: usize| index as u64),
                             move |index| BadgeRow(index, busy),
                         );
                     },
@@ -290,16 +286,14 @@ fn CapturedBusyRow(index: usize, busy: bool) {
 #[allow(non_snake_case)]
 fn CapturedList(state: cranpose_core::MutableState<bool>) {
     let busy_now = state.get();
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
             scope.items(
-                ROWS,
-                Some(|index: usize| index as u64),
-                None::<fn(usize) -> u64>,
+                LazyItems::new(ROWS).key(|index: usize| index as u64),
                 move |index| CapturedBusyRow(index, busy_now && index == 0),
             );
         },
@@ -310,7 +304,7 @@ fn task_counts_across_captured_swap() -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::useState(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(busy);
         CapturedList(busy);
     });
@@ -380,13 +374,13 @@ fn CapturedBadgeItemList(state: cranpose_core::MutableState<bool>) {
         StartOffset,
     };
     let busy_now = state.get();
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
-            scope.item(Some(1), None, move || {
+            scope.item_keyed(Some(1), None, move || {
                 Text(
                     "header".to_string(),
                     Modifier::empty().height(ROW_HEIGHT),
@@ -418,9 +412,7 @@ fn CapturedBadgeItemList(state: cranpose_core::MutableState<bool>) {
                 }
             });
             scope.items(
-                ROWS,
-                Some(|index: usize| index as u64 + 100),
-                None::<fn(usize) -> u64>,
+                LazyItems::new(ROWS).key(|index: usize| index as u64 + 100),
                 move |index| {
                     Text(
                         format!("row {index}"),
@@ -437,7 +429,7 @@ fn badge_task_counts_across_item_swap() -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::useState(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(busy);
         CapturedBadgeItemList(busy);
     });
@@ -528,7 +520,7 @@ fn toast_task_counts_across_shows(shows: usize) -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let shown = cranpose_core::useState(|| true);
+        let shown = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(shown);
         ToastHost(shown);
     });
@@ -582,14 +574,14 @@ fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
         StartOffset,
     };
     let banner = state.get();
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
             if banner {
-                scope.item(None, None, move || {
+                scope.item(move || {
                     Text(
                         "reading".to_string(),
                         Modifier::empty().height(ROW_HEIGHT),
@@ -597,7 +589,7 @@ fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
                     );
                 });
             }
-            scope.item(None, None, move || {
+            scope.item(move || {
                 Row(Modifier::empty(), RowSpec::new(), move || {
                     crate::widgets::CircularProgressIndicator(
                         Modifier::empty(),
@@ -622,9 +614,7 @@ fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
                 });
             });
             scope.items(
-                ROWS,
-                Some(|index: usize| index as u64 + 100),
-                None::<fn(usize) -> u64>,
+                LazyItems::new(ROWS).key(|index: usize| index as u64 + 100),
                 move |index| {
                     Text(
                         format!("row {index}"),
@@ -641,7 +631,7 @@ fn badge_task_counts_across_shifts(shifts: usize) -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let banner = cranpose_core::useState(|| false);
+        let banner = cranpose_core::rememberMutableStateOf(|| false);
         *keeper.borrow_mut() = Some(banner);
         ShiftingBadgeList(banner);
     });
@@ -678,16 +668,14 @@ fn a_badge_keeps_one_pair_of_loops_while_items_shift_around_it() {
 #[allow(non_snake_case)]
 fn CapturedBadgeList(state: cranpose_core::MutableState<bool>) {
     let busy_now = state.get();
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
             scope.items(
-                ROWS,
-                Some(|index: usize| index as u64),
-                None::<fn(usize) -> u64>,
+                LazyItems::new(ROWS).key(|index: usize| index as u64),
                 move |index| CapturedBadgeRow(index, busy_now && index == 0),
             );
         },
@@ -698,7 +686,7 @@ fn badge_task_counts_across_captured_swap() -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::useState(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(busy);
         CapturedBadgeList(busy);
     });
@@ -747,20 +735,18 @@ fn samples_across_swap(nested: bool) -> Vec<SwapSample> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let busy = cranpose_core::useState(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(busy);
         match nested {
             true => {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 LazyColumn(
                     Modifier::empty().fill_max_size(),
                     list_state,
                     LazyColumnSpec::default(),
                     move |scope| {
                         scope.items(
-                            ROWS,
-                            Some(|index: usize| index as u64),
-                            None::<fn(usize) -> u64>,
+                            LazyItems::new(ROWS).key(|index: usize| index as u64),
                             move |index| BusyRow(index, busy),
                         );
                     },
@@ -846,16 +832,14 @@ fn a_lazy_row_that_swaps_its_content_frees_the_slots_it_dropped() {
 #[composable]
 #[allow(non_snake_case)]
 fn BadgeListScreen(state: cranpose_core::MutableState<bool>) {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_size(),
         list_state,
         LazyColumnSpec::default(),
         move |scope| {
             scope.items(
-                ROWS,
-                Some(|index: usize| index as u64),
-                None::<fn(usize) -> u64>,
+                LazyItems::new(ROWS).key(|index: usize| index as u64),
                 move |index| {
                     SwipeToDismiss(
                         Modifier::empty().fill_max_width(),
@@ -929,8 +913,8 @@ fn task_counts_across_subcompose_swap(shape: usize) -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<bool>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let on_row = cranpose_core::useState(|| true);
-        let busy = cranpose_core::useState(|| true);
+        let on_row = cranpose_core::rememberMutableStateOf(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some(on_row);
         SwipeHost(on_row, busy, shape);
     });
@@ -1026,8 +1010,8 @@ fn task_counts_across_screen_swaps(rounds: usize) -> Vec<usize> {
     let held: Held = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let on_list = cranpose_core::useState(|| true);
-        let busy = cranpose_core::useState(|| true);
+        let on_list = cranpose_core::rememberMutableStateOf(|| true);
+        let busy = cranpose_core::rememberMutableStateOf(|| true);
         *keeper.borrow_mut() = Some((on_list, busy));
         ScreenHost(on_list, busy);
     });
@@ -1125,7 +1109,7 @@ fn banner_task_counts_across_finish() -> Vec<usize> {
     let held: Rc<RefCell<Option<cranpose_core::MutableState<usize>>>> = Rc::new(RefCell::new(None));
     let keeper = Rc::clone(&held);
     let mut composition = run_test_composition(move || {
-        let count = cranpose_core::useState(|| 1usize);
+        let count = cranpose_core::rememberMutableStateOf(|| 1usize);
         *keeper.borrow_mut() = Some(count);
         BannerHost(count);
     });

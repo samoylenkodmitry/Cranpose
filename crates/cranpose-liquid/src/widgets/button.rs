@@ -4,6 +4,7 @@
 use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
 use crate::motion::{liquid_press_scale, LiquidMotion};
 use crate::theme::{liquid_colors, liquid_typography};
+use crate::widgets::content_scope::ScopeContent;
 use cranpose_animation::{AnimationSpec, AnimationType, Easing};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
@@ -186,6 +187,43 @@ impl GlassIconButtonGroupItem {
         self.spec = spec;
         self
     }
+}
+
+/// The scope a group's actions are declared in.
+///
+/// Each call adds one circular action, in the order it is made, which is also
+/// the order they sit in left to right.
+pub struct GlassIconButtonGroupScope {
+    items: ScopeContent<GlassIconButtonGroupItem>,
+}
+
+impl GlassIconButtonGroupScope {
+    /// An action drawing `icon_path`, announced as `content_description`.
+    pub fn action(
+        &self,
+        icon_path: &'static str,
+        content_description: impl Into<String>,
+        on_click: impl FnMut() + 'static,
+    ) {
+        self.push(GlassIconButtonGroupItem::new(
+            icon_path,
+            content_description,
+            on_click,
+        ));
+    }
+
+    /// An action built out, for the material a particular action needs — see
+    /// [`GlassIconButtonGroupItem`].
+    pub fn push(&self, item: GlassIconButtonGroupItem) {
+        self.items.push(item);
+    }
+}
+
+/// Runs `content` and returns the actions it declared.
+fn collect_items(
+    content: impl FnOnce(&GlassIconButtonGroupScope),
+) -> Vec<GlassIconButtonGroupItem> {
+    ScopeContent::collect(|items| GlassIconButtonGroupScope { items }, content)
 }
 
 /// Geometry and interaction material for [`GlassIconButtonGroup`].
@@ -506,8 +544,9 @@ pub(crate) fn GlassIconButtonWithForegroundAlpha(
 pub fn GlassIconButtonGroup(
     modifier: Modifier,
     spec: GlassIconButtonGroupSpec,
-    items: Vec<GlassIconButtonGroupItem>,
+    content: impl FnOnce(&GlassIconButtonGroupScope),
 ) {
+    let items = collect_items(content);
     let count = items.len();
     if count == 0 {
         return;
@@ -1057,5 +1096,36 @@ mod tests {
             .with_spec(GlassButtonSpec::prominent());
         assert_eq!(item.content_description, "Confirm");
         assert_eq!(item.spec.style, GlassButtonStyle::Prominent);
+    }
+
+    /// Actions appear in declaration order, each carrying the callback it was
+    /// declared with — the group never dispatches a bare index anywhere.
+    #[test]
+    fn a_scope_declares_actions_in_order_with_their_callbacks() {
+        let fired = Rc::new(Cell::new(0usize));
+        let more = Rc::clone(&fired);
+        let confirm = Rc::clone(&fired);
+        let items = collect_items(|scope| {
+            scope.action("M0 0", "More", move || more.set(1));
+            scope.push(
+                GlassIconButtonGroupItem::new("M1 1", "Confirm", move || confirm.set(2))
+                    .with_spec(GlassButtonSpec::prominent()),
+            );
+        });
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content_description, "More");
+        assert_eq!(items[0].spec.style, GlassButtonStyle::Glass);
+        assert_eq!(items[1].spec.style, GlassButtonStyle::Prominent);
+
+        (items[0].on_click.borrow_mut())();
+        assert_eq!(fired.get(), 1);
+        (items[1].on_click.borrow_mut())();
+        assert_eq!(fired.get(), 2);
+    }
+
+    #[test]
+    fn a_group_with_no_actions_declares_none() {
+        assert!(collect_items(|_| {}).is_empty());
     }
 }

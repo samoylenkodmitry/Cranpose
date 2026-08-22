@@ -52,9 +52,6 @@ pub struct TextFieldHandleMetrics {
     /// Width the field wrapped its text at (`None` for single-line fields).
     /// Lets the handles resolve the same visual (wrapped) lines the caret does.
     pub wrap_width: Option<f32>,
-    /// Live pointer press on the text surface (window space) — the widget's
-    /// long-press → slide-to-menu gesture reads this stream.
-    pub press: Option<PointerPressTrack>,
 }
 
 /// Shared channel by which a `TextFieldModifierNode` publishes its live handle
@@ -79,6 +76,10 @@ struct TextFieldHandleControllerInner {
     /// widget's long-press watcher can take over the live pointer (the node
     /// then stops drag-selecting under it).
     gesture_claim: RefCell<Option<Rc<Cell<bool>>>>,
+    /// The field node's reactive primary-pointer stream. This stays separate
+    /// from draw-published geometry so every move reaches composables without
+    /// waiting for a render pass.
+    press_track: Cell<Option<MutableState<Option<PointerPressTrack>>>>,
 }
 
 impl TextFieldHandleController {
@@ -90,6 +91,7 @@ impl TextFieldHandleController {
                 metrics: Cell::new(None),
                 revision: mutableStateOf(0u64),
                 gesture_claim: RefCell::new(None),
+                press_track: Cell::new(None),
             }),
         }
     }
@@ -119,6 +121,20 @@ impl TextFieldHandleController {
         if !adopted {
             *slot = Some(Rc::clone(claim));
         }
+    }
+
+    pub(crate) fn adopt_press_track(&self, press_track: MutableState<Option<PointerPressTrack>>) {
+        if self.inner.press_track.get() != Some(press_track) {
+            self.inner.press_track.set(Some(press_track));
+            self.inner
+                .revision
+                .update(|value| *value = value.wrapping_add(1));
+        }
+    }
+
+    /// Reads the active primary-pointer stream reactively.
+    pub fn press(&self) -> Option<PointerPressTrack> {
+        self.inner.press_track.get().and_then(|state| state.get())
     }
 
     /// Claims the active press gesture for the widget layer: the node stops
@@ -368,7 +384,7 @@ pub(crate) struct TextFieldRefs {
     pub wrap_width: Rc<Cell<Option<f32>>>,
     /// Live primary-pointer press on the text surface (window space), for the
     /// widget layer's long-press → slide-to-menu gesture.
-    pub press_track: Rc<Cell<Option<PointerPressTrack>>>,
+    pub press_track: MutableState<Option<PointerPressTrack>>,
     /// Set by the widget when its long-press watcher claims the active
     /// gesture: the node then stops drag-selecting on Move and the press
     /// positions feed the menu slide instead.
@@ -402,7 +418,7 @@ impl TextFieldRefs {
             node_origin: Rc::new(Cell::new(Point { x: 0.0, y: 0.0 })),
             line_height: Rc::new(Cell::new(DEFAULT_LINE_HEIGHT)),
             wrap_width: Rc::new(Cell::new(None::<f32>)),
-            press_track: Rc::new(Cell::new(None::<PointerPressTrack>)),
+            press_track: mutableStateOf(None::<PointerPressTrack>),
             gesture_claimed: Rc::new(Cell::new(false)),
         }
     }
@@ -795,10 +811,17 @@ impl TextFieldModifierNode {
                     refs.drag_anchor.set(None);
                     refs.press_track.set(None);
                     refs.gesture_claimed.set(false);
+                    // The contextual menu reads the live press through metrics
+                    // published during drawing. Ensure the release reaches that
+                    // channel even when no visual state changed in the field
+                    // itself, so a continuous hold, slide, and release can run
+                    // the hovered menu action.
+                    crate::request_render_invalidation();
                 }
                 PointerEventKind::Cancel => {
                     refs.press_track.set(None);
                     refs.gesture_claimed.set(false);
+                    crate::request_render_invalidation();
                 }
                 _ => {}
             }
@@ -833,21 +856,6 @@ impl TextFieldModifierNode {
     /// Returns whether the field is focused.
     pub fn is_focused(&self) -> bool {
         *self.refs.is_focused.borrow()
-    }
-
-    /// Returns the is_focused Rc for closure capture.
-    pub fn is_focused_rc(&self) -> Rc<RefCell<bool>> {
-        self.refs.is_focused.clone()
-    }
-
-    /// Returns the content_offset Rc for closure capture.
-    pub fn content_offset_rc(&self) -> Rc<Cell<f32>> {
-        self.refs.content_offset.clone()
-    }
-
-    /// Returns the content_y_offset Rc for closure capture.
-    pub fn content_y_offset_rc(&self) -> Rc<Cell<f32>> {
-        self.refs.content_y_offset.clone()
     }
 
     /// Returns the shared cell the field's composited window origin is written
@@ -915,12 +923,6 @@ impl TextFieldModifierNode {
         text
     }
 
-    /// Returns a clone of the text field state for use in draw closures.
-    /// This allows reading selection at DRAW time rather than LAYOUT time.
-    pub fn get_state(&self) -> cranpose_foundation::text::TextFieldState {
-        self.state
-    }
-
     /// Updates the content offset (padding.left) for accurate click-to-position cursor placement.
     /// Called from slices collection where padding is known.
     pub fn set_content_offset(&self, offset: f32) {
@@ -984,31 +986,6 @@ impl TextFieldModifierNode {
         }
 
         text_changed || selection_changed
-    }
-
-    /// Positions cursor at a given x offset within the text.
-    /// Uses proper text layout hit testing for accurate proportional font support.
-    pub fn position_cursor_at_offset(&self, x_offset: f32) {
-        let text = self.state.text();
-        if text.is_empty() {
-            self.state.edit(|buffer| {
-                buffer.place_cursor_at_start();
-            });
-            return;
-        }
-
-        // Use proper text layout hit testing instead of character-based calculation.
-        // Map the viewport-relative offset into text space by adding the pan offset.
-        let byte_offset = crate::text::get_offset_for_position(
-            &crate::text::AnnotatedString::from(text.as_str()),
-            &self.style,
-            x_offset + self.refs.scroll_offset.get(),
-            0.0,
-        );
-
-        self.state.edit(|buffer| {
-            buffer.place_cursor_before_char(byte_offset);
-        });
     }
 
     // NOTE: Key event handling is done via TextFieldHandler::handle_key() which is
@@ -1177,7 +1154,7 @@ impl DrawModifierNode for TextFieldModifierNode {
         let handle_controller = self.handle_controller.clone();
         let node_origin = self.refs.node_origin.clone();
         let direct_manipulation = self.refs.direct_manipulation.clone();
-        let press_track = self.refs.press_track.clone();
+        let press_track = self.refs.press_track;
         let gesture_claimed = self.refs.gesture_claimed.clone();
 
         Some(Rc::new(move |scope| {
@@ -1197,7 +1174,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                         line_height: cached_line_height.get(),
                         glyph_box: crate::text::glyph_line_box(&style, cached_line_height.get()),
                         wrap_width: measured_wrap_width.get(),
-                        press: None,
                     });
                 }
                 return;
@@ -1222,6 +1198,7 @@ impl DrawModifierNode for TextFieldModifierNode {
             // and drive the finger selection handles.
             if let Some(controller) = &handle_controller {
                 controller.adopt_gesture_claim(&gesture_claimed);
+                controller.adopt_press_track(press_track);
                 controller.publish(TextFieldHandleMetrics {
                     focused: true,
                     direct_manipulation: direct_manipulation.get(),
@@ -1232,7 +1209,6 @@ impl DrawModifierNode for TextFieldModifierNode {
                     line_height,
                     glyph_box: crate::text::glyph_line_box(&style, line_height),
                     wrap_width: measured_wrap_width.get(),
-                    press: press_track.get(),
                 });
             }
             // Everything the field draws (selection, IME underline, cursor)
@@ -1840,7 +1816,10 @@ mod tests {
                 metrics.direct_manipulation,
                 "a touch tap must expose direct-manipulation handles"
             );
-            assert!(metrics.press.is_some(), "touch must publish the live press");
+            assert!(
+                controller.press().is_some(),
+                "touch must publish the live press"
+            );
 
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at).with_source(PointerSource::Mouse),
@@ -1853,7 +1832,10 @@ mod tests {
                 metrics.direct_manipulation,
                 "a mouse tap must expose the same direct-manipulation handles"
             );
-            assert!(metrics.press.is_some(), "mouse must publish the live press");
+            assert!(
+                controller.press().is_some(),
+                "mouse must publish the live press"
+            );
 
             handler(
                 PointerEvent::new(PointerEventKind::Down, at, at)
@@ -1868,7 +1850,7 @@ mod tests {
                 "a stylus contact must expose the same direct-manipulation handles"
             );
             assert!(
-                metrics.press.is_some(),
+                controller.press().is_some(),
                 "stylus must publish the live press"
             );
 

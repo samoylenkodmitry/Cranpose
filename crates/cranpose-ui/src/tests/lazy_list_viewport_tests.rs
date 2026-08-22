@@ -1,7 +1,7 @@
 use super::*;
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{
-    remember_lazy_list_state, remember_lazy_list_state_with_position, LazyListScope,
+    rememberLazyListState, rememberLazyListStateWithPosition, LazyItems, LazyListScope,
 };
 use cranpose_ui_graphics::Rect;
 use cranpose_ui_graphics::Size as ViewportSize;
@@ -16,7 +16,7 @@ thread_local! {
 #[test]
 fn lazy_column_unbounded_height_matches_effective_viewport() {
     let mut composition = run_test_composition(|| {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -26,17 +26,12 @@ fn lazy_column_unbounded_height_matches_effective_viewport() {
             list_state,
             LazyColumnSpec::default(),
             |scope| {
-                scope.items(
-                    100,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |_| {
-                        Spacer(Size {
-                            width: 0.0,
-                            height: 100.0,
-                        });
-                    },
-                );
+                scope.items(100, |_| {
+                    Spacer(Size {
+                        width: 0.0,
+                        height: 100.0,
+                    });
+                });
             },
         );
     });
@@ -186,7 +181,7 @@ fn lazy_column_jump_does_not_alias_remembered_item_state() {
     let mut composition = run_test_composition({
         let captured_slots = Rc::clone(&captured_slots);
         move || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             LAST_LAZY_STATE.with(|cell| {
                 *cell.borrow_mut() = Some(list_state);
             });
@@ -199,9 +194,9 @@ fn lazy_column_jump_does_not_alias_remembered_item_state() {
                     let captured_slots = Rc::clone(&captured_slots);
                     move |scope| {
                         scope.items(
-                            300,
-                            Some(|index: usize| index as u64),
-                            Some(|index: usize| (index % 3) as u64),
+                            LazyItems::new(300)
+                                .key(|index: usize| index as u64)
+                                .content_type(|index: usize| (index % 3) as u64),
                             {
                                 let captured_slots = Rc::clone(&captured_slots);
                                 move |index| {
@@ -317,7 +312,7 @@ fn lazy_column_jump_does_not_alias_remembered_item_state() {
 #[test]
 fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
     let mut composition = run_test_composition(|| {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -327,35 +322,30 @@ fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
             list_state,
             LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
             |scope| {
-                scope.items(
-                    120,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |index| {
-                        let height = match index % 9 {
-                            0 => 32.0,
-                            1 => 48.0,
-                            2 => 240.0,
-                            3 => 56.0,
-                            4 => 72.0,
-                            5 => 180.0,
-                            6 => 40.0,
-                            7 => 96.0,
-                            _ => 56.0,
-                        };
-                        Column(
-                            Modifier::empty().fill_max_width().height(height),
-                            ColumnSpec::default(),
-                            move || {
-                                Text(
-                                    format!("Item {}", index),
-                                    Modifier::empty(),
-                                    TextStyle::default(),
-                                );
-                            },
-                        );
-                    },
-                );
+                scope.items(120, |index| {
+                    let height = match index % 9 {
+                        0 => 32.0,
+                        1 => 48.0,
+                        2 => 240.0,
+                        3 => 56.0,
+                        4 => 72.0,
+                        5 => 180.0,
+                        6 => 40.0,
+                        7 => 96.0,
+                        _ => 56.0,
+                    };
+                    Column(
+                        Modifier::empty().fill_max_width().height(height),
+                        ColumnSpec::default(),
+                        move || {
+                            Text(
+                                format!("Item {}", index),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                });
             },
         );
     });
@@ -425,7 +415,7 @@ fn lazy_column_variable_height_reverse_scroll_keeps_rendered_items_ordered() {
 #[test]
 fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() {
     let mut composition = run_test_composition(|| {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -436,9 +426,7 @@ fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() 
             LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
             |scope| {
                 scope.items(
-                    240,
-                    None::<fn(usize) -> u64>,
-                    Some(|index: usize| (index % 5) as u64),
+                    LazyItems::new(240).content_type(|index: usize| (index % 5) as u64),
                     |index| {
                         let height = match index % 5 {
                             0 => 44.0,
@@ -529,7 +517,7 @@ fn lazy_column_content_type_reuse_reverse_scroll_keeps_rendered_items_ordered() 
 #[test]
 fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordered() {
     let mut composition = run_test_composition(|| {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -540,9 +528,7 @@ fn lazy_column_variable_height_bursty_reverse_scroll_keeps_rendered_items_ordere
             LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
             |scope| {
                 scope.items(
-                    240,
-                    None::<fn(usize) -> u64>,
-                    Some(|index: usize| (index % 4) as u64),
+                    LazyItems::new(240).content_type(|index: usize| (index % 4) as u64),
                     |index| {
                         let height = match index % 8 {
                             0 => 36.0,
@@ -656,7 +642,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
     let mut composition = run_test_composition({
         let tall_body = Rc::clone(&tall_body);
         move || {
-            let list_state = remember_lazy_list_state_with_position(0, 180.0);
+            let list_state = rememberLazyListStateWithPosition(0, 180.0);
             LAST_LAZY_STATE.with(|cell| {
                 *cell.borrow_mut() = Some(list_state);
             });
@@ -668,7 +654,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
                 {
                     let tall_body = Rc::clone(&tall_body);
                     move |scope| {
-                        scope.item(Some(0), None, {
+                        scope.item_keyed(Some(0), None, {
                             let tall_body = Rc::clone(&tall_body);
                             move || {
                                 Column(
@@ -697,7 +683,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
                             }
                         });
 
-                        scope.item(Some(1), None, move || {
+                        scope.item_keyed(Some(1), None, move || {
                             Column(
                                 Modifier::empty()
                                     .fill_max_width()
@@ -764,7 +750,7 @@ fn lazy_column_tall_text_item_keeps_rendered_height_in_sync_with_lazy_measuremen
 /// frame, scroll deltas dispatched between frames like the drag gesture does.
 fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -> (usize, f32) {
     let mut composition = run_test_composition(move || {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -774,17 +760,12 @@ fn drag_lazy_column_to_end(item_heights: &'static [f32], viewport_height: f32) -
             list_state,
             LazyColumnSpec::default(),
             move |scope| {
-                scope.items(
-                    item_heights.len(),
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    move |index| {
-                        Spacer(Size {
-                            width: 100.0,
-                            height: item_heights[index],
-                        });
-                    },
-                );
+                scope.items(item_heights.len(), move |index| {
+                    Spacer(Size {
+                        width: 100.0,
+                        height: item_heights[index],
+                    });
+                });
             },
         );
     });
@@ -868,7 +849,7 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
         50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 50.0, 800.0, 50.0, 50.0, 50.0, 50.0,
     ];
     let mut composition = run_test_composition(move || {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -877,17 +858,12 @@ fn unbounded_lazy_column_with_tall_item_reports_true_content_height() {
             list_state,
             LazyColumnSpec::default(),
             move |scope| {
-                scope.items(
-                    heights.len(),
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    move |index| {
-                        Spacer(Size {
-                            width: 100.0,
-                            height: heights[index],
-                        });
-                    },
-                );
+                scope.items(heights.len(), move |index| {
+                    Spacer(Size {
+                        width: 100.0,
+                        height: heights[index],
+                    });
+                });
             },
         );
     });
@@ -937,7 +913,7 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
         100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
     ];
     let mut composition = run_test_composition(move || {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LAST_LAZY_STATE.with(|cell| {
             *cell.borrow_mut() = Some(list_state);
         });
@@ -946,17 +922,12 @@ fn lazy_column_refills_when_viewport_grows_after_scroll_to_end() {
             list_state,
             LazyColumnSpec::default(),
             move |scope| {
-                scope.items(
-                    heights.len(),
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    move |index| {
-                        Spacer(Size {
-                            width: 100.0,
-                            height: heights[index],
-                        });
-                    },
-                );
+                scope.items(heights.len(), move |index| {
+                    Spacer(Size {
+                        width: 100.0,
+                        height: heights[index],
+                    });
+                });
             },
         );
     });

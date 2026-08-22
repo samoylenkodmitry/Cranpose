@@ -26,9 +26,17 @@ fn down(x: f32, y: f32) -> PointerEvent {
         .with_buttons(primary_buttons())
 }
 
+fn down_with_id(id: u64, x: f32, y: f32) -> PointerEvent {
+    down(x, y).with_id(id)
+}
+
 fn move_to(x: f32, y: f32) -> PointerEvent {
     PointerEvent::new(PointerEventKind::Move, point(x, y), point(x, y))
         .with_buttons(primary_buttons())
+}
+
+fn move_with_id(id: u64, x: f32, y: f32) -> PointerEvent {
+    move_to(x, y).with_id(id)
 }
 
 fn up(x: f32, y: f32) -> PointerEvent {
@@ -75,6 +83,13 @@ impl Harness {
 
     fn send(&self, event: &PointerEvent) {
         handle_swipe_event(&self.controller, event);
+    }
+
+    /// The swipe as an application sees it.
+    fn state(&self) -> SwipeDismissState {
+        SwipeDismissState {
+            controller: Rc::clone(&self.controller),
+        }
     }
 
     fn offset(&self) -> f32 {
@@ -219,6 +234,43 @@ fn tap_consumes_nothing() {
     let release = up(11.0, 10.0);
     harness.send(&release);
     assert!(!release.is_consumed());
+    assert_eq!(harness.offset(), 0.0);
+}
+
+#[test]
+fn the_first_pointer_id_owns_the_gesture() {
+    let harness = Harness::new(200.0, 0.5);
+    harness.send(&down_with_id(17, 10.0, 10.0));
+    let move_event = move_with_id(17, 40.0, 10.0);
+    harness.send(&move_event);
+    assert!(move_event.is_consumed());
+    assert_eq!(harness.offset(), 30.0);
+
+    let other_pointer = move_with_id(18, 100.0, 10.0);
+    harness.send(&other_pointer);
+    assert!(!other_pointer.is_consumed());
+    assert_eq!(harness.offset(), 30.0);
+}
+
+#[test]
+fn leading_edge_direction_rejects_interior_and_reverse_drags() {
+    let harness = Harness::new(200.0, 0.35);
+    harness
+        .controller
+        .direction
+        .set(SwipeDismissDirection::StartToEnd);
+    harness.controller.edge_width.set(Some(32.0));
+
+    harness.send(&down(80.0, 10.0));
+    let interior = move_to(130.0, 10.0);
+    harness.send(&interior);
+    assert!(!interior.is_consumed());
+    assert_eq!(harness.offset(), 0.0);
+
+    harness.send(&down(10.0, 10.0));
+    let reverse = move_to(-30.0, 10.0);
+    harness.send(&reverse);
+    assert!(reverse.is_consumed());
     assert_eq!(harness.offset(), 0.0);
 }
 
@@ -567,4 +619,111 @@ fn identity_change_resets_a_dismissed_controller() {
     harness.send(&up(180.0, 12.0));
     harness.pump_frames(240);
     assert_eq!(harness.dismiss_count.get(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// The swipe an application can read
+// ---------------------------------------------------------------------------
+
+/// A row at rest reports nothing happening, so a background bound to the state
+/// draws nothing before the finger arrives.
+#[test]
+fn a_row_at_rest_reports_no_swipe() {
+    let harness = Harness::new(200.0, 0.5);
+    let state = harness.state();
+    assert_eq!(state.offset(), 0.0);
+    assert_eq!(state.progress(), 0.0);
+    assert_eq!(state.side(), None);
+    assert!(!state.is_displaced());
+    assert!(!state.is_dismissed());
+}
+
+/// Progress is measured against the same threshold a release is judged by, so
+/// a label bound to it reaches full strength exactly when letting go would
+/// dismiss the row.
+#[test]
+fn progress_reaches_one_where_a_release_would_dismiss() {
+    let harness = Harness::new(200.0, 0.5);
+    let state = harness.state();
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(35.0, 10.0));
+    assert!(
+        (state.progress() - 0.25).abs() < 0.01,
+        "25 of a 100 threshold is a quarter of the way, got {}",
+        state.progress()
+    );
+    assert_eq!(state.side(), Some(SwipeDismissSide::Start));
+    assert!(state.is_displaced());
+
+    harness.send(&move_to(110.0, 10.0));
+    assert_eq!(
+        state.progress(),
+        1.0,
+        "at the threshold a release dismisses, so progress is complete"
+    );
+
+    harness.send(&move_to(190.0, 10.0));
+    assert_eq!(state.progress(), 1.0, "progress does not run past complete");
+}
+
+/// A leftward swipe reports the other edge, so a background can put its label
+/// on the side the row is leaving towards.
+#[test]
+fn the_reported_side_follows_the_direction_of_travel() {
+    let harness = Harness::new(200.0, 0.5);
+    let state = harness.state();
+    harness.send(&down(100.0, 10.0));
+    harness.send(&move_to(60.0, 10.0));
+    assert_eq!(state.side(), Some(SwipeDismissSide::End));
+    assert!(state.offset() < 0.0);
+}
+
+/// Before the row has been measured a fraction of its width would be a guess,
+/// so nothing is reported rather than a number that will change.
+#[test]
+fn an_unmeasured_row_reports_no_progress() {
+    let harness = Harness::new(f32::NAN, 0.5);
+    let state = harness.state();
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(90.0, 10.0));
+    assert_eq!(state.progress(), 0.0);
+}
+
+/// A dismissal is observable, so a screen can show an undo bar without being
+/// handed a callback.
+#[test]
+fn a_dismissal_is_reported_to_the_state() {
+    let mut harness = Harness::new(200.0, 0.5);
+    let state = harness.state();
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(150.0, 10.0));
+    harness.send(&up(150.0, 10.0));
+    harness.pump_frames(90);
+
+    assert!(state.is_dismissed());
+    assert_eq!(harness.dismiss_count.get(), 1);
+}
+
+/// Resetting from outside returns the row to rest — an undo, or a screen
+/// closing what the swipe opened.
+#[test]
+fn resetting_the_state_returns_the_row_to_rest() {
+    let mut harness = Harness::new(200.0, 0.5);
+    let state = harness.state();
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(150.0, 10.0));
+    harness.send(&up(150.0, 10.0));
+    harness.pump_frames(90);
+    assert!(state.is_dismissed());
+
+    state.reset();
+    assert_eq!(state.offset(), 0.0);
+    assert_eq!(state.progress(), 0.0);
+    assert_eq!(state.side(), None);
+    assert!(!state.is_displaced());
+    assert!(!state.is_dismissed());
+    assert_eq!(harness.collapse(), 1.0);
 }

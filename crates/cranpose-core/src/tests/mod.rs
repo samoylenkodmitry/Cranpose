@@ -568,7 +568,7 @@ fn child_reads_state(state: cranpose_core::State<i32>) -> NodeId {
 #[composable]
 fn parent_passes_state() -> NodeId {
     PARENT_RECOMPOSITIONS.with(|calls| calls.set(calls.get() + 1));
-    let state = cranpose_core::useState(|| 0);
+    let state = cranpose_core::rememberMutableStateOf(|| 0);
     CAPTURED_PARENT_STATE.with(|slot| {
         if slot.borrow().is_none() {
             *slot.borrow_mut() = Some(state);
@@ -580,7 +580,7 @@ fn parent_passes_state() -> NodeId {
 #[composable]
 fn side_effect_component() -> NodeId {
     SIDE_EFFECT_LOG.with(|log| log.borrow_mut().push("compose"));
-    let state = cranpose_core::useState(|| 0);
+    let state = cranpose_core::rememberMutableStateOf(|| 0);
     let _ = state.value();
     SIDE_EFFECT_STATE.with(|slot| {
         if slot.borrow().is_none() {
@@ -595,7 +595,7 @@ fn side_effect_component() -> NodeId {
 
 #[composable]
 fn disposable_effect_host() -> NodeId {
-    let state = cranpose_core::useState(|| 0);
+    let state = cranpose_core::rememberMutableStateOf(|| 0);
     DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = Some(state));
     DisposableEffect!(state.value(), |scope| {
         DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().push("start"));
@@ -653,6 +653,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
 
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
+mod internal_surface_tests;
 mod recompose_and_diff_tests;
 mod snapshot_state_tests;
 mod state_and_effect_tests;

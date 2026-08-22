@@ -264,6 +264,10 @@ fn update_native_element(native: &NativeAccessibilityElement, element: &Accessib
             AccessibilityRole::Tab => UIAccessibilityTraitButton,
             AccessibilityRole::Image => UIAccessibilityTraitImage,
             AccessibilityRole::Header => UIAccessibilityTraitHeader,
+            // VoiceOver treats a modal container as a header-like landmark it
+            // announces on entry; the modality itself is carried by
+            // `accessibilityViewIsModal` on the container view.
+            AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
         }
     };
     // SAFETY: as above — immutable framework constants.

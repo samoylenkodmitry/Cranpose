@@ -36,6 +36,9 @@
 
 use crate::registry::{RecoveryGate, ServiceRegistry};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 
 /// A product as the store describes it, in the user's locale and currency.
@@ -292,7 +295,39 @@ impl Purchases for PlatformPurchases {
 }
 
 /// Installs a platform purchase backend, replacing any previous one.
-static STORE_LISTENER: ServiceRegistry<dyn Fn() + Send + Sync> = ServiceRegistry::new();
+#[cfg(not(target_arch = "wasm32"))]
+type StoreListener = Arc<dyn Fn() + Send + Sync>;
+#[cfg(target_arch = "wasm32")]
+type StoreListener = std::rc::Rc<dyn Fn()>;
+
+#[cfg(not(target_arch = "wasm32"))]
+fn store_listeners() -> &'static Mutex<Vec<(u64, StoreListener)>> {
+    static LISTENERS: OnceLock<Mutex<Vec<(u64, StoreListener)>>> = OnceLock::new();
+    LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static STORE_LISTENERS: std::cell::RefCell<Vec<(u64, StoreListener)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+static NEXT_STORE_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
+
+/// A store observer installed by [`observe_store_news`].
+pub struct StoreObserver {
+    id: u64,
+}
+
+impl Drop for StoreObserver {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(mut listeners) = store_listeners().lock() {
+            listeners.retain(|(id, _)| *id != self.id);
+        }
+        #[cfg(target_arch = "wasm32")]
+        STORE_LISTENERS.with(|listeners| listeners.borrow_mut().retain(|(id, _)| *id != self.id));
+    }
+}
 
 /// Registers a callback run whenever the store has news, so an app can be told
 /// rather than having to ask.
@@ -303,15 +338,50 @@ static STORE_LISTENER: ServiceRegistry<dyn Fn() + Send + Sync> = ServiceRegistry
 /// the queue until something unrelated wakes the app. The listener closes that
 /// gap: it is the nudge, the queue is still the source of truth.
 ///
-/// Called from whatever thread the platform reports on, so the callback must be
-/// `Send + Sync` and should do as little as possible.
-pub fn set_store_listener(listener: impl Fn() + Send + Sync + 'static) {
-    STORE_LISTENER.set(Arc::new(listener));
+/// Native callbacks can arrive from a platform thread and therefore must be
+/// `Send + Sync`. Browser callbacks remain on their browser thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn observe_store_news(listener: impl Fn() + Send + Sync + 'static) -> StoreObserver {
+    let id = NEXT_STORE_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut listeners) = store_listeners().lock() {
+        listeners.push((id, Arc::new(listener)));
+    }
+    StoreObserver { id }
+}
+
+/// Registers a browser-thread callback run whenever the store has news.
+#[cfg(target_arch = "wasm32")]
+pub fn observe_store_news(listener: impl Fn() + 'static) -> StoreObserver {
+    let id = NEXT_STORE_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    STORE_LISTENERS.with(|listeners| {
+        listeners
+            .borrow_mut()
+            .push((id, std::rc::Rc::new(listener)))
+    });
+    StoreObserver { id }
 }
 
 /// Tells the app that the store has news. Called by a purchase backend.
 pub fn note_store_news() {
-    if let Some(listener) = STORE_LISTENER.get() {
+    #[cfg(not(target_arch = "wasm32"))]
+    let listeners = store_listeners()
+        .lock()
+        .map(|listeners| {
+            listeners
+                .iter()
+                .map(|(_, listener)| Arc::clone(listener))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    #[cfg(target_arch = "wasm32")]
+    let listeners = STORE_LISTENERS.with(|listeners| {
+        listeners
+            .borrow()
+            .iter()
+            .map(|(_, listener)| std::rc::Rc::clone(listener))
+            .collect::<Vec<_>>()
+    });
+    for listener in listeners {
         listener();
     }
 }
@@ -362,6 +432,37 @@ pub fn restore() {
 /// Convenience: take the next one-shot purchase event.
 pub fn take_event() -> Option<PurchaseEvent> {
     purchases().take_event()
+}
+
+/// The store's current state, observed for as long as this call stays in the
+/// composition.
+///
+/// The composition recomposes when the backend publishes news; nothing polls
+/// and no frame loop is required for a purchase that completes while the screen
+/// is idle.
+#[allow(non_snake_case)]
+pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
+    let updates = cranpose_core::rememberEventStream((), |sender| {
+        observe_store_news(move || sender.send(store_state()))
+    });
+    cranpose_core::collectAsState(updates, (), store_state())
+}
+
+/// One-shot purchase outcomes as a composition-scoped stream.
+///
+/// Each event is delivered exactly once. Collect it with
+/// [`cranpose_core::CollectEvents`].
+#[allow(non_snake_case)]
+pub fn rememberPurchaseEvents() -> cranpose_core::EventStream<PurchaseEvent> {
+    cranpose_core::rememberEventStream((), |sender| {
+        observe_store_news(move || {
+            // The backend queues events and nudges; draining here is the
+            // framework's job, and the application only ever sees the stream.
+            while let Some(event) = take_event() {
+                sender.send(event);
+            }
+        })
+    })
 }
 
 #[cfg(test)]
@@ -501,5 +602,19 @@ mod tests {
         assert_eq!(store_state().phase, StorePhase::Ready);
         assert_eq!(purchases.reconnects.load(Ordering::Acquire), 1);
         clear_platform_purchases();
+    }
+
+    #[test]
+    fn store_observers_receive_news_until_dropped() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&calls);
+        let observer = observe_store_news(move || {
+            seen.fetch_add(1, Ordering::Relaxed);
+        });
+        note_store_news();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        drop(observer);
+        note_store_news();
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }

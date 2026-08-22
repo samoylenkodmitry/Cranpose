@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 
 use cranpose::prelude::*;
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 
 const TITLE: &str = "Cranpose Isolated Demo";
 const SUBTITLE: &str = "Published crates only";
@@ -16,8 +16,8 @@ pub(crate) fn create_app() -> AppLauncher {
 
 #[composable]
 pub(crate) fn IsolatedDemoApp() {
-    let counter = useState(|| 0i32);
-    let accent = useState(|| false);
+    let counter = rememberMutableStateOf(|| 0i32);
+    let accent = rememberMutableStateOf(|| false);
 
     let accent_color = if accent.value() {
         Color::rgba(0.18, 0.62, 0.42, 1.0)

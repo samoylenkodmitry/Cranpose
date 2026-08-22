@@ -1,5 +1,5 @@
 use super::*;
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 
 thread_local! {
     static ROOT_RENDER_TEST_INVALIDATED: Cell<bool> = const { Cell::new(false) };
@@ -76,7 +76,7 @@ fn cranpose_test_rule_replays_root_render_requests_before_returning() {
         rule.set_content({
             let render_count = Rc::clone(&render_count);
             move || {
-                let root_trigger = useState(|| false);
+                let root_trigger = rememberMutableStateOf(|| false);
                 render_count.set(render_count.get() + 1);
                 cranpose_core::with_key(&"testing-root-render-probe", || {
                     let _ = root_trigger.value();
@@ -146,7 +146,7 @@ fn cranpose_test_rule_reports_idle_replay_limit_without_panicking() {
 fn cranpose_test_rule_reports_root_render_replay_limit_without_panicking() {
     run_test_composition(|rule| {
         let result = rule.set_content(|| {
-            let value = useState(|| 0usize);
+            let value = rememberMutableStateOf(|| 0usize);
             let current = value.value();
             cranpose_core::SideEffect(move || {
                 value.set_value(current + 1);

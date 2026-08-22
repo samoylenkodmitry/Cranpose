@@ -20,16 +20,18 @@
 //! [`request_exit`] is the other direction: the app, rather than the platform,
 //! deciding that it is time to leave.
 
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::{Arc, Mutex, OnceLock};
 
-type BackListener = Box<dyn Fn() + Send + Sync + 'static>;
+#[cfg(not(target_arch = "wasm32"))]
+type BackListener = Arc<dyn Fn() + Send + Sync + 'static>;
+#[cfg(target_arch = "wasm32")]
+type BackListener = std::rc::Rc<dyn Fn() + 'static>;
 
 static BACK_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static BACK_INTERCEPTION: AtomicBool = AtomicBool::new(false);
-static BACK_LISTENER: OnceLock<BackListener> = OnceLock::new();
+static NEXT_LISTENER_ID: AtomicU64 = AtomicU64::new(1);
 /// A flag rather than a count: closing twice is closing once.
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -37,7 +39,7 @@ static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// button handler).
 pub fn push_back_request() {
     BACK_REQUESTS.fetch_add(1, Ordering::SeqCst);
-    if let Some(listener) = BACK_LISTENER.get() {
+    if let Some(listener) = latest_back_listener() {
         listener();
     }
 }
@@ -56,11 +58,72 @@ pub fn push_back_request() {
 /// necessarily the UI thread, so the callback must be `Send + Sync`. It should
 /// do as little as possible — waking a parked task is the intended use.
 ///
-/// Only the first registration takes effect; a second is ignored, since two
-/// owners of the app's back handling would each see a request the other also
-/// consumed.
-pub fn set_back_request_listener(listener: impl Fn() + Send + Sync + 'static) {
-    let _ = BACK_LISTENER.set(Box::new(listener));
+/// Registrations form a stack. The most recently installed observer receives
+/// requests, matching nested Compose `BackHandler`s. Dropping it restores the
+/// observer beneath it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn observe_back_requests(listener: impl Fn() + Send + Sync + 'static) -> BackRequestObserver {
+    let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut listeners) = back_listeners().lock() {
+        listeners.push((id, Arc::new(listener)));
+    }
+    BackRequestObserver { id }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn observe_back_requests(listener: impl Fn() + 'static) -> BackRequestObserver {
+    let id = NEXT_LISTENER_ID.fetch_add(1, Ordering::Relaxed);
+    BACK_LISTENERS.with(|listeners| {
+        listeners
+            .borrow_mut()
+            .push((id, std::rc::Rc::new(listener)))
+    });
+    BackRequestObserver { id }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn back_listeners() -> &'static Mutex<Vec<(u64, BackListener)>> {
+    static LISTENERS: OnceLock<Mutex<Vec<(u64, BackListener)>>> = OnceLock::new();
+    LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static BACK_LISTENERS: std::cell::RefCell<Vec<(u64, BackListener)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn latest_back_listener() -> Option<BackListener> {
+    back_listeners()
+        .lock()
+        .ok()
+        .and_then(|listeners| listeners.last().map(|(_, listener)| Arc::clone(listener)))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn latest_back_listener() -> Option<BackListener> {
+    BACK_LISTENERS.with(|listeners| {
+        listeners
+            .borrow()
+            .last()
+            .map(|(_, listener)| std::rc::Rc::clone(listener))
+    })
+}
+
+/// A back observer installed by [`observe_back_requests`].
+pub struct BackRequestObserver {
+    id: u64,
+}
+
+impl Drop for BackRequestObserver {
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(mut listeners) = back_listeners().lock() {
+            listeners.retain(|(id, _)| *id != self.id);
+        }
+        #[cfg(target_arch = "wasm32")]
+        BACK_LISTENERS.with(|listeners| listeners.borrow_mut().retain(|(id, _)| *id != self.id));
+    }
 }
 
 /// Take (and clear) the number of pending back requests. Polled by the app; a
@@ -105,7 +168,7 @@ pub fn back_interception_enabled() -> bool {
 /// frame for the usual caller. An app that calls this from another thread while
 /// the loop is parked — nothing animating, no input — should wake it the same
 /// way it would for a back request; registering
-/// [`set_back_request_listener`] is enough, because this nudges that listener
+/// [`observe_back_requests`] is enough, because this nudges that listener
 /// too.
 ///
 /// Platform behaviour, and where it does nothing:
@@ -119,7 +182,7 @@ pub fn back_interception_enabled() -> bool {
 /// - **Web**: nothing. A page cannot close a tab it did not open.
 pub fn request_exit() {
     EXIT_REQUESTED.store(true, Ordering::SeqCst);
-    if let Some(listener) = BACK_LISTENER.get() {
+    if let Some(listener) = latest_back_listener() {
         // The same nudge a back request gets, and for the same reason: an app
         // that has gone idle has no frame loop to notice the flag, and the
         // platform drains it from that loop.
@@ -186,7 +249,7 @@ mod tests {
         let _guard = navigation_lock();
         let heard = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&heard);
-        set_back_request_listener(move || {
+        let _observer = observe_back_requests(move || {
             counter.fetch_add(1, Ordering::SeqCst);
         });
         let before = heard.load(Ordering::SeqCst);
@@ -207,6 +270,29 @@ mod tests {
             "an exit request has to wake an idle app the way a back request does"
         );
         let _ = take_exit_request();
+    }
+
+    #[test]
+    fn the_latest_back_observer_wins_until_it_is_dropped() {
+        let _guard = navigation_lock();
+        let first = Arc::new(AtomicUsize::new(0));
+        let second = Arc::new(AtomicUsize::new(0));
+        let first_seen = Arc::clone(&first);
+        let first_observer = observe_back_requests(move || {
+            first_seen.fetch_add(1, Ordering::SeqCst);
+        });
+        let second_seen = Arc::clone(&second);
+        let second_observer = observe_back_requests(move || {
+            second_seen.fetch_add(1, Ordering::SeqCst);
+        });
+        push_back_request();
+        assert_eq!(first.load(Ordering::SeqCst), 0);
+        assert_eq!(second.load(Ordering::SeqCst), 1);
+        drop(second_observer);
+        push_back_request();
+        assert_eq!(first.load(Ordering::SeqCst), 1);
+        drop(first_observer);
+        let _ = take_back_requests();
     }
 
     #[test]

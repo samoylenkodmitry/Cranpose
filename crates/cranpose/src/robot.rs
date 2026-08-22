@@ -221,6 +221,7 @@ pub(crate) enum RobotCommand {
     #[cfg(feature = "renderer-wgpu")]
     GetRenderCpuAllocationStats,
     GetRuntimeLeakDebugStats,
+    GetLiveUiTaskLabels,
     MeasureText {
         text: String,
         style: Box<cranpose_ui::text::TextStyle>,
@@ -251,6 +252,7 @@ pub(crate) enum RobotResponse {
     #[cfg(feature = "renderer-wgpu")]
     RenderCpuAllocationStats(Box<DebugCpuAllocationStats>),
     RuntimeLeakDebugStats(Box<RuntimeLeakDebugStats>),
+    LiveUiTaskLabels(Vec<(u64, String)>),
     TextMetrics(cranpose_ui::text::TextMetrics),
     Bool(bool),
     AppHookResult(Option<String>),
@@ -365,16 +367,6 @@ impl Robot {
     /// Move the active touch pointer (after [`touch_down`](Self::touch_down)).
     pub fn touch_move(&self, x: f32, y: f32) -> Result<(), String> {
         self.primary_pointer_move(x, y, PointerSource::Touch)
-    }
-
-    /// Move the active stylus contact.
-    pub fn stylus_move(&self, x: f32, y: f32) -> Result<(), String> {
-        self.primary_pointer_move(x, y, PointerSource::Stylus)
-    }
-
-    /// Move the active touch pointer and return after its frame is presented.
-    pub fn touch_move_and_wait_for_frame(&self, x: f32, y: f32) -> Result<(), String> {
-        self.primary_pointer_move_and_wait_for_frame(x, y, PointerSource::Touch)
     }
 
     /// Move the active stylus contact and return after its frame is presented.
@@ -1125,6 +1117,24 @@ impl Robot {
             .map_err(|e| format!("Failed to send runtime leak debug stats command: {}", e))?;
         match self.rx.recv() {
             Ok(RobotResponse::RuntimeLeakDebugStats(stats)) => Ok(*stats),
+            Ok(RobotResponse::Error(e)) => Err(e),
+            Ok(_) => Err("Unexpected response".to_string()),
+            Err(e) => Err(format!("Failed to receive response: {}", e)),
+        }
+    }
+
+    /// The tasks the runtime is still holding, by id and label.
+    ///
+    /// A leak assertion that can only say "one task is still queued" is a
+    /// failure nobody can act on: every run reports the same number and none of
+    /// them says which task, or what composed it. The labels are what turn that
+    /// into a name.
+    pub fn live_ui_task_labels(&self) -> Result<Vec<(u64, String)>, String> {
+        self.tx
+            .send(RobotCommand::GetLiveUiTaskLabels)
+            .map_err(|e| format!("Failed to send live UI task labels command: {}", e))?;
+        match self.rx.recv() {
+            Ok(RobotResponse::LiveUiTaskLabels(labels)) => Ok(labels),
             Ok(RobotResponse::Error(e)) => Err(e),
             Ok(_) => Err("Unexpected response".to_string()),
             Err(e) => Err(format!("Failed to receive response: {}", e)),

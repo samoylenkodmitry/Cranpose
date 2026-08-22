@@ -6,6 +6,7 @@
 //! A harness that reported one box for both would be indistinguishable from a
 //! correct one on any other widget, and useless on this one.
 
+use cranpose_foundation::lazy::LazyItems;
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
 use cranpose_ui::round_scaling_list::CentreAnchor;
 use cranpose_ui::widgets::wear::{
@@ -30,21 +31,24 @@ fn tappable_list(size: f32) -> PlacedSemanticsNode {
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             move |scope| {
-                scope.items(ROWS, move |index| {
-                    cranpose_ui::widgets::Box(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .height(ROW)
-                            .clickable(move |_| {
-                                let _ = index;
-                            })
-                            .semantics(move |config| {
-                                config.content_description = Some(format!("row {index}"));
-                            }),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                });
+                scope.items(
+                    LazyItems::new(ROWS).key(|index: usize| index as u64),
+                    move |index| {
+                        cranpose_ui::widgets::Box(
+                            Modifier::empty()
+                                .fill_max_width()
+                                .height(ROW)
+                                .clickable(move |_| {
+                                    let _ = index;
+                                })
+                                .semantics(move |config| {
+                                    config.content_description = Some(format!("row {index}"));
+                                }),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
             },
         );
     })
@@ -116,24 +120,24 @@ fn a_row_away_from_the_centre_line_is_drawn_smaller_than_it_was_measured() {
 }
 
 #[test]
-fn a_node_that_is_described_but_not_dispatchable_has_no_touch_box() {
+fn a_node_that_is_not_interactive_has_no_touch_box() {
     // The distinction the whole audit turns on: `touch_bounds` is `None` for a
     // node the hit graph carries no region for, so a caller cannot mistake a
     // label for a control that merely happens to be small.
     let root = tappable_list(WATCH);
-    let described_only: Vec<&PlacedSemanticsNode> = root
+    let non_interactive: Vec<&PlacedSemanticsNode> = root
         .flatten()
         .into_iter()
-        .filter(|node| !node.clickable)
+        .filter(|node| !node.interactive)
         .collect();
     assert!(
-        !described_only.is_empty(),
-        "a list has structure around its rows"
+        !non_interactive.is_empty(),
+        "a list has non-interactive structure around its rows"
     );
     assert!(
-        described_only
+        non_interactive
             .iter()
             .all(|node| node.touch_bounds.is_none()),
-        "nothing that cannot be clicked carries a touch box"
+        "nothing that cannot receive pointer input carries a touch box"
     );
 }

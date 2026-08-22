@@ -184,7 +184,7 @@ fn CrispControlBlock(modifier: Modifier) {
 fn RenderCrispnessContractApp() {
     let atlas = cranpose_core::remember(atlas_bitmap).with(|bitmap| bitmap.clone());
     let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(INITIAL_SCROLL)).with(|state| state.clone());
+        cranpose_core::remember(|| ScrollState::new(INITIAL_SCROLL)).with(|state| *state);
 
     Box(
         Modifier::empty()
@@ -226,7 +226,7 @@ fn RenderCrispnessContractApp() {
                 Modifier::empty()
                     .offset(SCROLLED_X, SCROLLED_Y)
                     .size(Size::new(BLOCK_W + 6.0, BLOCK_H))
-                    .vertical_scroll(scroll_state.clone(), false),
+                    .vertical_scroll(scroll_state, false),
                 BoxSpec::default().content_alignment(Alignment::TOP_START),
                 || {
                     CrispControlBlock(Modifier::empty());

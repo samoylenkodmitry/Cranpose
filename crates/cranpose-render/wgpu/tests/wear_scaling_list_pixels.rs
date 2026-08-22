@@ -13,6 +13,7 @@ mod support;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
+use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::round_scaling_list::CentreAnchor;
 use cranpose_ui::widgets::wear::{
@@ -71,21 +72,28 @@ fn a_wear_scaling_list_puts_its_rows_on_the_glass() {
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             |scope| {
-                scope.items(HEADERS.len() + 1, |index| {
-                    if index < HEADERS.len() {
-                        ListHeader(
-                            Modifier::empty(),
-                            ListHeaderSpec::default().colors(colors()),
-                            HEADERS[index].to_string(),
-                        );
-                    } else {
-                        Text(
-                            BODY.to_string(),
-                            Modifier::empty().fill_max_width(),
-                            WearTextStyle::BODY_LARGE.resolve(colors().content),
-                        );
-                    }
-                });
+                scope.items(
+                    LazyItems::new(HEADERS.len() + 1)
+                        .key(|index: usize| index as u64)
+                        // A header and a row are different shapes; keeping them
+                        // in separate pools stops one being reused as the other.
+                        .content_type(|index: usize| u64::from(index >= HEADERS.len())),
+                    |index| {
+                        if index < HEADERS.len() {
+                            ListHeader(
+                                Modifier::empty(),
+                                ListHeaderSpec::default().colors(colors()),
+                                HEADERS[index].to_string(),
+                            );
+                        } else {
+                            Text(
+                                BODY.to_string(),
+                                Modifier::empty().fill_max_width(),
+                                WearTextStyle::BODY_LARGE.resolve(colors().content),
+                            );
+                        }
+                    },
+                );
             },
         );
     });

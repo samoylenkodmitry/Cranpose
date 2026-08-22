@@ -293,34 +293,37 @@ impl TextFieldBuffer {
         self.selection = TextRange::cursor(pos);
     }
 
-    /// Places the cursor after the character at the given index.
-    pub fn place_cursor_after_char(&mut self, index: usize) {
-        let pos = (index + 1).min(self.text.len());
-        self.selection = TextRange::cursor(pos);
-    }
-
     /// Selects all text.
     pub fn select_all(&mut self) {
         self.selection = TextRange::all(self.text.len());
     }
 
-    /// Extends the selection to the left by one character.
-    /// If no selection exists, starts selection from current cursor position.
-    /// The anchor (end) stays fixed while the cursor (start) moves left.
+    /// Extends the selection one character to the left.
+    ///
+    /// `start` is the anchor and `end` is the moving cursor, which is what
+    /// makes this and [`Self::extend_selection_right`] inverses of each other:
+    /// shift-left followed by shift-right returns to where it began. Moving
+    /// whichever end happens to be smaller instead would leave the two growing
+    /// from opposite ends, and shift-right after shift-left would grow the
+    /// selection rather than shrink it.
+    ///
+    /// A reverse range (`start > end`) is how an anchor to the right of the
+    /// cursor is represented; see [`TextRange`].
     pub fn extend_selection_left(&mut self) {
-        if self.selection.start > 0 {
-            let new_start = self.prev_char_boundary(self.selection.start);
-            self.selection = TextRange::new(new_start, self.selection.end);
+        if self.selection.end > 0 {
+            let cursor = self.prev_char_boundary(self.selection.end);
+            self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
 
-    /// Extends the selection to the right by one character.
-    /// If no selection exists, starts selection from current cursor position.
-    /// The anchor (start stays at origin) while cursor (end) moves right.
+    /// Extends the selection one character to the right.
+    ///
+    /// The anchor stays where it is and the cursor moves; see
+    /// [`Self::extend_selection_left`].
     pub fn extend_selection_right(&mut self) {
         if self.selection.end < self.text.len() {
-            let new_end = self.next_char_boundary(self.selection.end);
-            self.selection = TextRange::new(self.selection.start, new_end);
+            let cursor = self.next_char_boundary(self.selection.end);
+            self.selection = TextRange::new(self.selection.start, cursor);
         }
     }
 

@@ -1,0 +1,20 @@
+[package]
+name = "cranpose-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Desktop media playback backend for Cranpose (rodio/symphonia)"
+
+[dependencies]
+cranpose-services = { workspace = true }
+log = "0.4"
+parking_lot = "0.12.5"
+
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
+rodio = { version = "0.22.2", default-features = false, features = ["playback", "symphonia-all"] }

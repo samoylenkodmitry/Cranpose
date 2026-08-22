@@ -5,7 +5,7 @@ use crate::{
 };
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
-    lazy::{remember_lazy_list_state, LazyListScope},
+    lazy::{rememberLazyListState, LazyListScope},
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
     PointerEventKind,
 };
@@ -153,24 +153,19 @@ fn lazy_edge_drag_updates_shared_effect() {
     with_test_runtime(|| {
         let mut list_state = None;
         let mut composition = crate::run_test_composition(|| {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
             list_state = Some(state);
             LazyColumn(
                 Modifier::empty().width(320.0).height(240.0),
                 state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        40,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |_| {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: 48.0,
-                            });
-                        },
-                    );
+                    scope.items(40, |_| {
+                        Spacer(Size {
+                            width: 0.0,
+                            height: 48.0,
+                        });
+                    });
                 },
             );
         });
@@ -622,7 +617,7 @@ fn lazy_touch_drag_up_scrolls_toward_later_items() {
     with_test_runtime(|| {
         let mut list_state = None;
         let _composition = crate::run_test_composition(|| {
-            list_state = Some(remember_lazy_list_state());
+            list_state = Some(rememberLazyListState());
         });
         let list_state = list_state.expect("lazy list state should be created");
 
@@ -876,7 +871,7 @@ fn lazy_scroll_motion_context_survives_modifier_recomposition_with_stale_pointer
     with_test_runtime(|| {
         let mut list_state = None;
         let _composition = crate::run_test_composition(|| {
-            list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+            list_state = Some(cranpose_foundation::lazy::rememberLazyListState());
         });
         let list_state = list_state.expect("lazy list state should be created");
 
@@ -915,24 +910,19 @@ fn lazy_wheel_scroll_preserves_input_delta_after_viewport_measurement() {
         let measure_wheel_delta = |list_height: f32, root_height: f32, wheel_delta: f32| {
             let mut list_state = None;
             let mut composition = crate::run_test_composition(|| {
-                let state = remember_lazy_list_state();
+                let state = rememberLazyListState();
                 list_state = Some(state);
                 LazyColumn(
                     Modifier::empty().fill_max_width().height(list_height),
                     state,
                     LazyColumnSpec::default(),
                     |scope| {
-                        scope.items(
-                            100,
-                            None::<fn(usize) -> u64>,
-                            None::<fn(usize) -> u64>,
-                            |_| {
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: 48.0,
-                                });
-                            },
-                        );
+                        scope.items(100, |_| {
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 48.0,
+                            });
+                        });
                     },
                 );
             });
@@ -1155,7 +1145,7 @@ fn lazy_list_fling_velocity_uses_event_timestamps() {
         crate::render_state::debug_reset_last_fling_velocity();
         let mut list_state = None;
         let _composition = crate::run_test_composition(|| {
-            list_state = Some(remember_lazy_list_state());
+            list_state = Some(rememberLazyListState());
         });
         let list_state = list_state.expect("lazy list state should be created");
 
@@ -1374,7 +1364,7 @@ fn drags_over_fully_realized_lazy_list_scroll_the_outer_container() {
     with_test_runtime(|| {
         let mut list_state = None;
         let _composition = crate::run_test_composition(|| {
-            list_state = Some(remember_lazy_list_state());
+            list_state = Some(rememberLazyListState());
         });
         let list_state = list_state.expect("lazy list state should be created");
 

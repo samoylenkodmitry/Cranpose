@@ -161,6 +161,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_pointer_nobody_touched_has_no_dispatch_order() {
+        let tracker = HitPathTracker::new();
+        assert_eq!(tracker.dispatch_order(PointerId::PRIMARY), None);
+    }
+
+    #[test]
+    fn a_dispatch_order_puts_a_shared_ancestor_after_every_child_that_survived() {
+        // A capture path runs leaf-first, so these are two overlapping
+        // siblings, 2 and 4, sharing ancestor 1. The ancestor has to be
+        // dispatched once, after both of them: interleaving it between the
+        // siblings would deliver to a parent before a child it still covers,
+        // which is hit z-order inverted.
+        let mut tracker = HitPathTracker::new();
+        tracker.add_hit_path(PointerId::PRIMARY, vec![vec![2, 1], vec![4, 1]]);
+
+        let order = tracker
+            .dispatch_order(PointerId::PRIMARY)
+            .expect("a tracked pointer has an order");
+
+        let ancestor = order
+            .iter()
+            .position(|node| *node == 1)
+            .expect("the ancestor is dispatched");
+        for child in [2, 4] {
+            let at = order
+                .iter()
+                .position(|node| *node == child)
+                .unwrap_or_else(|| panic!("child {child} was not dispatched"));
+            assert!(
+                at < ancestor,
+                "child {child} was dispatched after its ancestor"
+            );
+        }
+        assert_eq!(
+            order.iter().filter(|node| **node == 1).count(),
+            1,
+            "the shared ancestor was dispatched twice"
+        );
+    }
+
+    #[test]
     fn test_add_and_get_path() {
         let mut tracker = HitPathTracker::new();
         let paths: Vec<Vec<NodeId>> = vec![vec![1, 2, 3], vec![4, 5]];

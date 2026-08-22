@@ -2,7 +2,7 @@ use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
     composable, Button, ButtonSpec, Column, ColumnSpec, LinearArrangement, Modifier, Text,
@@ -126,7 +126,7 @@ fn main() {
 #[allow(non_snake_case)]
 fn probe_app() {
     ROOT_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
-    let mode = useState(|| ProbeMode::None);
+    let mode = rememberMutableStateOf(|| ProbeMode::None);
     let transition = rememberInfiniteTransition("idle-probe");
     let pulse = transition.animateFloat(
         0.0,

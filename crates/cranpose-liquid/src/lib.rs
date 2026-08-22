@@ -26,7 +26,7 @@ pub mod motion;
 pub mod theme;
 pub mod widgets;
 
-pub use dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
+pub use dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose};
 pub use material::{
     glass_light_direction, set_glass_light_direction, Glass, GlassDeformation, GlassDynamics,
     GlassShadow, GlassVariant, LiquidModifierExt, LiquidShape,
@@ -40,7 +40,7 @@ pub use widgets::*;
 
 /// Everything an app needs to build Liquid UI.
 pub mod prelude {
-    pub use crate::dynamics::{remember_liquid_dynamics, LiquidDynamics, LiquidPose};
+    pub use crate::dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose};
     pub use crate::icons;
     pub use crate::material::{
         Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,

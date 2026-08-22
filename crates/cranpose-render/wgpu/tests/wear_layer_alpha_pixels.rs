@@ -58,6 +58,7 @@ mod support;
 
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
+use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::round_scaling_list::CentreAnchor;
 use cranpose_ui::widgets::wear::{
@@ -151,25 +152,33 @@ fn render_faded_rows(fill: (f32, f32, f32)) -> Option<Probe> {
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             |scope| {
-                scope.items(ROWS, |_| {
-                    // A flat fill and nothing else: what is under test is the
-                    // composite, so the row must have no antialiased edge, no
-                    // rounded corner and no glyph anywhere near the sample.
-                    let fill = FILL_UNDER_TEST.with(Cell::get);
-                    Box(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .height(ROW)
-                            .background(Color(fill.0 / 255.0, fill.1 / 255.0, fill.2 / 255.0, 1.0)),
-                        BoxSpec::default(),
-                        || {
-                            Spacer(Size {
-                                width: 0.0,
-                                height: ROW,
-                            });
-                        },
-                    );
-                });
+                scope.items(
+                    LazyItems::new(ROWS).key(|index: usize| index as u64),
+                    |_| {
+                        // A flat fill and nothing else: what is under test is the
+                        // composite, so the row must have no antialiased edge, no
+                        // rounded corner and no glyph anywhere near the sample.
+                        let fill = FILL_UNDER_TEST.with(Cell::get);
+                        Box(
+                            Modifier::empty()
+                                .fill_max_width()
+                                .height(ROW)
+                                .background(Color(
+                                    fill.0 / 255.0,
+                                    fill.1 / 255.0,
+                                    fill.2 / 255.0,
+                                    1.0,
+                                )),
+                            BoxSpec::default(),
+                            || {
+                                Spacer(Size {
+                                    width: 0.0,
+                                    height: ROW,
+                                });
+                            },
+                        );
+                    },
+                );
             },
         );
     });
@@ -299,16 +308,19 @@ fn a_real_faded_row_capsule_composites_through_the_layer_too() {
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             move |scope| {
-                scope.items(WIDGET_ROWS, move |index| {
-                    SwitchButton(
-                        Modifier::empty().fill_max_width(),
-                        SwitchButtonSpec::default().colors(colors).progress(0.0),
-                        false,
-                        format!("Row {index}"),
-                        None,
-                        |_| {},
-                    );
-                });
+                scope.items(
+                    LazyItems::new(WIDGET_ROWS).key(|index: usize| index as u64),
+                    move |index| {
+                        SwitchButton(
+                            Modifier::empty().fill_max_width(),
+                            SwitchButtonSpec::default().colors(colors).progress(0.0),
+                            false,
+                            format!("Row {index}"),
+                            None,
+                            |_| {},
+                        );
+                    },
+                );
             },
         );
     });

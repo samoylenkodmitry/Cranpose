@@ -87,7 +87,7 @@ impl ImagePicker for PlatformImagePicker {
                 .with_title("Choose image")
                 .with_filter(FileFilter::new("Images", IMAGE_EXTENSIONS));
             match picker.pick_file(options).await {
-                Ok(Some(entry)) => match entry.read_bytes().await {
+                Ok(Some(entry)) => match entry.read_all().await {
                     Ok(bytes) => Ok(Some(bytes)),
                     Err(error) => Err(ImagePickerError::Failed(error.to_string())),
                 },

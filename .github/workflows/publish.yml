@@ -472,3 +472,27 @@ jobs:
           # cannot recurse into another Publish run.
           git pull --rebase origin "$DEFAULT_BRANCH"
           git push origin "HEAD:$DEFAULT_BRANCH"
+
+      # Bumping the version only claims the release is consumable. Building
+      # proves it, and this is the one place it can be proved: apps/isolated-demo
+      # resolves `cranpose` from crates.io and the Gradle plugin by version, the
+      # way a project copied out of this repository does. A release that cannot
+      # be built this way is broken for every application that is not this
+      # repository, and nothing else in the pipeline would notice.
+      - name: Build the isolated demo against the release
+        run: |
+          set -euo pipefail
+          cargo build --manifest-path apps/isolated-demo/Cargo.toml \
+            --features desktop --release
+
+      # The Android distribution is not on a remote repository yet, so the
+      # plugin and its libraries reach the demo through mavenLocal, exactly as
+      # they reach a developer following apps/isolated-demo/README.md.
+      # ANDROID_HOME comes from the runner's own environment; setting it here
+      # would override a working one with an empty string.
+      - name: Build the isolated demo's Android release
+        run: |
+          set -euo pipefail
+          ./android/gradlew -p android publishToMavenLocal
+          ./apps/isolated-demo/android/gradlew \
+            -p apps/isolated-demo/android :app:assembleRelease

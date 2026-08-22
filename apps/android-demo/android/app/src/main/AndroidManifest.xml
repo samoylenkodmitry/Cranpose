@@ -1,15 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    The demo declares only what is specific to it. The activity, its launcher
+    entry, the `android.app.lib_name` metadata and every framework permission
+    come from the Cranpose library and the optional service modules the Gradle
+    plugin added.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <!--
-        Required by the amplitude, waveform and predefined paths of
-        cranpose_services::Haptics, which drive Vibrator/VibrationEffect
-        directly. View.performHapticFeedback works without it, so a build that
-        omits this line loses the designed feels and keeps only the semantic
-        HapticFeedback constants.
-    -->
-    <uses-permission android:name="android.permission.VIBRATE" />
     <application
         android:allowBackup="true"
         android:label="Compose Demo"
@@ -17,28 +13,8 @@
         <!--
             Diagnostics only: lets `adb shell simpleperf` sample this release
             build without making it debuggable, so frame-pacing profiles are
-            taken on optimized code. Harmless to ship, but it exists here for
-            the on-device frame-pacing measurements.
+            taken on optimized code.
         -->
         <profileable android:shell="true" />
-        <!--
-            CranposeActivity extends NativeActivity and adds the
-            Storage Access Framework bridge used by cranpose's file picker.
-            The lib_name must match the cdylib name in Cargo.toml exactly.
-        -->
-        <activity
-            android:name="dev.cranpose.android.CranposeActivity"
-            android:exported="true"
-            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-            <!-- Fullscreen theme is a demo choice, not a framework requirement -->
-            <meta-data
-                android:name="android.app.lib_name"
-                android:value="desktop_app" />
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
     </application>
 </manifest>

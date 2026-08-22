@@ -1316,7 +1316,7 @@ mod carried_plan_tests {
             let scroll_state =
                 cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             *scroll_holder_for_comp.borrow_mut() = Some(scroll_state);
-            let alpha = cranpose_core::useState(|| 1.0f32);
+            let alpha = cranpose_core::rememberMutableStateOf(|| 1.0f32);
             *alpha_holder_for_comp.borrow_mut() = Some(alpha);
             Column(
                 Modifier::empty()
@@ -1439,7 +1439,7 @@ mod carried_plan_structure_tests {
         let column_holder_for_comp = column_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let rows = cranpose_core::useState(|| 12usize);
+            let rows = cranpose_core::rememberMutableStateOf(|| 12usize);
             *rows_holder_for_comp.borrow_mut() = Some(rows);
             let column_holder_for_content = column_holder_for_comp.clone();
             let column_id = Column(

@@ -52,7 +52,7 @@ pub struct ModifierNodeSlices {
     /// true on-screen rect here so a `BringIntoViewResponder` can scroll a
     /// focused descendant field's caret above the soft keyboard. `None` for
     /// nodes without a `report_window_rect` modifier.
-    viewport_window_rect: Option<Rc<std::cell::Cell<cranpose_ui_graphics::Rect>>>,
+    viewport_window_rect: Option<Rc<dyn crate::modifier_nodes::WindowRectSink>>,
     graphics_layer: Option<GraphicsLayer>,
     graphics_layer_resolver: Option<Rc<dyn Fn() -> GraphicsLayer>>,
     corner_shape: Option<RoundedCornerShape>,
@@ -274,7 +274,7 @@ impl ModifierNodeSlices {
     /// node carries a `report_window_rect` modifier. The layout pass writes the
     /// node's true on-screen viewport rect here so a `BringIntoViewResponder`
     /// can scroll a focused field's caret above the soft keyboard.
-    pub fn viewport_window_rect(&self) -> Option<Rc<std::cell::Cell<cranpose_ui_graphics::Rect>>> {
+    pub fn viewport_window_rect(&self) -> Option<Rc<dyn crate::modifier_nodes::WindowRectSink>> {
         self.viewport_window_rect.clone()
     }
 

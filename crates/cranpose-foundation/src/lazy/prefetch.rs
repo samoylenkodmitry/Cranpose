@@ -107,11 +107,6 @@ impl PrefetchScheduler {
     pub fn next_prefetch(&mut self) -> Option<usize> {
         self.prefetch_queue.pop_front()
     }
-
-    /// Returns all pending prefetch indices.
-    pub fn pending_prefetches(&self) -> &VecDeque<usize> {
-        &self.prefetch_queue
-    }
 }
 
 #[cfg(test)]

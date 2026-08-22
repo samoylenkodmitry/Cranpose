@@ -19,8 +19,10 @@ fn create_app() -> AppLauncher {
         .with_frame_pacing_controls(true)
 }
 
-#[cfg(all(feature = "android", target_os = "android", feature = "renderer-wgpu"))]
-mod android_entry;
+cranpose::android_main! {
+    launcher: create_app(),
+    content: desktop_demo::app::combined_app,
+}
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;

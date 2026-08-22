@@ -1,6 +1,6 @@
 use cranpose::AppLauncher;
 use cranpose_core::remember;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
@@ -12,7 +12,7 @@ use std::time::Duration;
 #[composable]
 fn overscroll_reproduction() {
     let state = remember(|| ScrollState::new(0.0)).with(|state| *state);
-    let lazy_state = remember_lazy_list_state();
+    let lazy_state = rememberLazyListState();
     let outer_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     let inner_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     Row(
@@ -43,25 +43,20 @@ fn overscroll_reproduction() {
                 lazy_state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        40,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            if index == 0 {
-                                Text(
-                                    "Lazy Overscroll Marker",
-                                    Modifier::empty(),
-                                    TextStyle::default(),
-                                );
-                            } else {
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: 48.0,
-                                });
-                            }
-                        },
-                    );
+                    scope.items(40, |index| {
+                        if index == 0 {
+                            Text(
+                                "Lazy Overscroll Marker",
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        } else {
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 48.0,
+                            });
+                        }
+                    });
                 },
             );
             Box(

@@ -8,6 +8,7 @@ mod composer;
 pub mod composer_context;
 mod composition;
 mod composition_locals;
+pub mod concurrency;
 mod debug_trace;
 mod emit;
 pub mod env_flags;
@@ -44,6 +45,11 @@ pub use composition_locals::{
     CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
 };
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
+pub use concurrency::{
+    collectAsState, delay, interval, launchBlocking, produceState, rememberCoroutineScope,
+    rememberEventStream, spawn_ui_task, withBlocking, CollectEvents, CoroutineScope, Delay,
+    EventChannel, EventSender, EventStream, EventStreamNext, ProduceScope,
+};
 #[doc(hidden)]
 pub use debug_trace::{
     debug_label_current_scope, debug_live_recompose_scope_count,
@@ -51,14 +57,15 @@ pub use debug_trace::{
 };
 pub use hooks::{
     derivedStateOf, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
-    mutableStateOf, ownedMutableStateOf, remember, rememberUpdatedState, remember_keyed,
-    try_mutableStateOf, useState, useStateRaw,
+    mutableStateOf, ownedMutableStateOf, remember, rememberKeyed, rememberMutableStateOf,
+    rememberMutableStateOfNeverEqual, rememberUpdatedState, try_mutableStateOf,
 };
 #[cfg(feature = "internal")]
 #[doc(hidden)]
 pub use hooks::{withFrameMillis, withFrameNanos};
 pub use launched_effect::{
     __launched_effect_async_impl, __launched_effect_impl, CancelToken, LaunchedEffectScope,
+    TaskSite,
 };
 pub use owned::Owned;
 pub use platform::{Clock, RuntimeScheduler};
@@ -66,7 +73,7 @@ pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, Ret
 #[doc(hidden)]
 pub use runtime::{
     current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
-    DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle,
+    DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle, UiDispatcher,
 };
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,

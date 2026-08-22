@@ -11,7 +11,7 @@ use crate::renderer::{HeadlessRenderer, RenderOp};
 use crate::widgets::{Popup, PopupHost};
 use crate::{layout::LayoutTree, Composition, LazyColumn, LazyColumnSpec};
 use cranpose_core::{location_key, MemoryApplier, NodeId};
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_ui_graphics::{DrawPrimitive, Point, Rect, Size};
 
 /// A distinctive brush color the overlay content paints, so it can be located
@@ -312,7 +312,7 @@ fn popup_inside_lazy_column_item_still_reaches_the_host() {
 
     let mut content = || {
         PopupHost(|| {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
             LazyColumn(
                 Modifier::empty().size(Size {
                     width: 200.0,
@@ -321,34 +321,29 @@ fn popup_inside_lazy_column_item_still_reaches_the_host() {
                 state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        1,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |_index| {
-                            Popup(
-                                Rect {
-                                    x: 120.0,
-                                    y: 90.0,
-                                    width: 0.0,
-                                    height: 0.0,
-                                },
-                                Point { x: 0.0, y: 0.0 },
-                                || {
-                                    Column(
-                                        Modifier::empty()
-                                            .size(Size {
-                                                width: 15.0,
-                                                height: 15.0,
-                                            })
-                                            .background(MARKER),
-                                        ColumnSpec::default(),
-                                        || {},
-                                    );
-                                },
-                            );
-                        },
-                    );
+                    scope.items(1, |_index| {
+                        Popup(
+                            Rect {
+                                x: 120.0,
+                                y: 90.0,
+                                width: 0.0,
+                                height: 0.0,
+                            },
+                            Point { x: 0.0, y: 0.0 },
+                            || {
+                                Column(
+                                    Modifier::empty()
+                                        .size(Size {
+                                            width: 15.0,
+                                            height: 15.0,
+                                        })
+                                        .background(MARKER),
+                                    ColumnSpec::default(),
+                                    || {},
+                                );
+                            },
+                        );
+                    });
                 },
             );
         });
@@ -399,7 +394,7 @@ fn popup_inside_lazy_column_item_is_removed_when_no_longer_composed() {
     let show = mutableStateOf(true);
     let mut content = move || {
         PopupHost(move || {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
             LazyColumn(
                 Modifier::empty().size(Size {
                     width: 200.0,
@@ -408,36 +403,31 @@ fn popup_inside_lazy_column_item_is_removed_when_no_longer_composed() {
                 state,
                 LazyColumnSpec::default(),
                 move |scope| {
-                    scope.items(
-                        1,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        move |_index| {
-                            if show.value() {
-                                Popup(
-                                    Rect {
-                                        x: 120.0,
-                                        y: 90.0,
-                                        width: 0.0,
-                                        height: 0.0,
-                                    },
-                                    Point { x: 0.0, y: 0.0 },
-                                    || {
-                                        Column(
-                                            Modifier::empty()
-                                                .size(Size {
-                                                    width: 15.0,
-                                                    height: 15.0,
-                                                })
-                                                .background(MARKER),
-                                            ColumnSpec::default(),
-                                            || {},
-                                        );
-                                    },
-                                );
-                            }
-                        },
-                    );
+                    scope.items(1, move |_index| {
+                        if show.value() {
+                            Popup(
+                                Rect {
+                                    x: 120.0,
+                                    y: 90.0,
+                                    width: 0.0,
+                                    height: 0.0,
+                                },
+                                Point { x: 0.0, y: 0.0 },
+                                || {
+                                    Column(
+                                        Modifier::empty()
+                                            .size(Size {
+                                                width: 15.0,
+                                                height: 15.0,
+                                            })
+                                            .background(MARKER),
+                                        ColumnSpec::default(),
+                                        || {},
+                                    );
+                                },
+                            );
+                        }
+                    });
                 },
             );
         });

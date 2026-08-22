@@ -5,7 +5,7 @@ use cranpose_core::{
     RecomposeOptions, RecomposeScope, SlotId, State, SubcomposeState,
 };
 use cranpose_foundation::lazy::{
-    remember_lazy_list_state_with_position, LazyListScope, LazyListState,
+    rememberLazyListStateWithPosition, LazyItems, LazyListScope, LazyListState,
 };
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -117,7 +117,7 @@ fn LazyListItem(index: usize) {
 
 #[composable]
 fn LazyListScrollContent(state_capture: Rc<Cell<Option<LazyListState>>>) {
-    let list_state = remember_lazy_list_state_with_position(LAZY_LIST_START_INDEX, 0.0);
+    let list_state = rememberLazyListStateWithPosition(LAZY_LIST_START_INDEX, 0.0);
     state_capture.set(Some(list_state));
 
     Column(
@@ -137,9 +137,11 @@ fn LazyListScrollContent(state_capture: Rc<Cell<Option<LazyListState>>>) {
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 |scope| {
                     scope.items(
-                        LAZY_LIST_TOTAL_ITEMS,
-                        Some(|index: usize| index as u64),
-                        Some(|index: usize| (index % SUBCOMPOSE_CONTENT_TYPES as usize) as u64),
+                        LazyItems::new(LAZY_LIST_TOTAL_ITEMS)
+                            .key(|index: usize| index as u64)
+                            .content_type(|index: usize| {
+                                (index % SUBCOMPOSE_CONTENT_TYPES as usize) as u64
+                            }),
                         LazyListItem,
                     );
                 },
@@ -164,7 +166,7 @@ fn AnimationFrameSection(progress: State<f32>, section: usize) {
 
 #[composable]
 fn AnimationFrameContent(state_capture: Rc<Cell<Option<MutableState<f32>>>>) {
-    let progress = cranpose_core::useState(|| 0.0_f32);
+    let progress = cranpose_core::rememberMutableStateOf(|| 0.0_f32);
     state_capture.set(Some(progress));
     let progress = progress.as_state();
     for section in 0..ANIMATION_FRAME_SECTIONS {

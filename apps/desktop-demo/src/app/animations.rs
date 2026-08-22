@@ -3,7 +3,7 @@
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle},
@@ -229,7 +229,7 @@ pub(crate) fn AnimationsTab() {
                             section_style.clone(),
                         );
 
-                        let list_state = remember_lazy_list_state();
+                        let list_state = rememberLazyListState();
                         LazyColumn(
                             Modifier::empty()
                                 .fill_max_width()
@@ -241,7 +241,7 @@ pub(crate) fn AnimationsTab() {
                             LazyColumnSpec::new()
                                 .vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                             |scope| {
-                                scope.item(Some(0), None, || {
+                                scope.item_keyed(Some(0), None, || {
                                     Text(
                                         "Static item: ready",
                                         Modifier::empty(),
@@ -255,7 +255,7 @@ pub(crate) fn AnimationsTab() {
                                     );
                                 });
 
-                                scope.item(Some(1), None, || {
+                                scope.item_keyed(Some(1), None, || {
                                     let lazy_pulse = PulseModel(800, "lazy_pulse");
                                     let display = (lazy_pulse.value.value() * 100.0).round() as i32;
                                     Text(
@@ -272,7 +272,7 @@ pub(crate) fn AnimationsTab() {
                                     );
                                 });
 
-                                scope.item(Some(2), None, || {
+                                scope.item_keyed(Some(2), None, || {
                                     Text(
                                         "Static item: complete",
                                         Modifier::empty(),

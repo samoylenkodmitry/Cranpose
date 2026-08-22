@@ -887,7 +887,7 @@ fn subcomposition_scope_inherits_source_owner_lifetime() {
 
     #[composable]
     fn owner() {
-        let state = useState(|| 0_i32);
+        let state = rememberMutableStateOf(|| 0_i32);
         OWNER_STATE.with(|slot| slot.replace(Some(state)));
         with_current_composer(|composer| {
             OWNER_SCOPE.with(|slot| {
@@ -1209,7 +1209,7 @@ fn render_stable_reports_root_render_replay_limit_without_panicking() {
     let root_key = location_key(file!(), line!(), column!());
 
     let mut render = || {
-        let value = useState(|| 0usize);
+        let value = rememberMutableStateOf(|| 0usize);
         let current = value.value();
         SideEffect(move || {
             value.set_value(current + 1);
@@ -1358,7 +1358,7 @@ fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_
     fn later_sibling(show_late: MutableState<bool>) {
         LATE_INVOCATIONS.with(|count| count.set(count.get() + 1));
         if show_late.value() {
-            let state = useState(|| 0i32);
+            let state = rememberMutableStateOf(|| 0i32);
             LATE_STATE.with(|slot| {
                 *slot.borrow_mut() = Some(state);
             });

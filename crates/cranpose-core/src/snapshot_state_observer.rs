@@ -683,9 +683,9 @@ impl ObservedIds {
                 }
             }
             ObservedIds::Large(large) => {
-                if !large.contains_key(&id) {
-                    large.insert(id, state.observation_lease());
-                }
+                // One lookup rather than two: this runs per observed state per
+                // read, which is the hottest path the observer has.
+                large.entry(id).or_insert_with(|| state.observation_lease());
             }
         }
     }

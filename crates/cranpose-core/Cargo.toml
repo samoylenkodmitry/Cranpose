@@ -29,4 +29,8 @@ internal = []
 cranpose-macros = { path = "../cranpose-macros" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# `delay` hands its deadline to the browser's own timer rather than spinning a
+# frame loop, so an idle wait costs nothing.
+web-sys = { version = "0.3", features = ["Window"] }

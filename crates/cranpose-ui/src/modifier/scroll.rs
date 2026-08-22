@@ -25,6 +25,7 @@
 
 use super::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
 use crate::current_density;
+use crate::draggable::DraggableState;
 use crate::fling_animation::{
     fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY,
 };
@@ -40,6 +41,7 @@ use cranpose_foundation::{
     NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD,
     MAX_FLING_VELOCITY,
 };
+use cranpose_ui_layout::Axis;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use web_time::Instant;
@@ -213,6 +215,22 @@ trait ScrollTarget: Clone {
     fn settle_policy(&self) -> Option<ScrollSettlePolicy> {
         None
     }
+
+    /// Whether releasing a fast drag should throw the target onwards.
+    ///
+    /// True for anything that scrolls. False for a control the finger places —
+    /// a scrollbar thumb, a sheet handle, a knob — where continuing to move
+    /// after the finger has left reads as the control slipping out of the
+    /// user's hand.
+    fn allows_fling(&self) -> bool {
+        true
+    }
+
+    /// Called when a drag starts and again when it ends, so a target can expose
+    /// the fact to its visuals.
+    fn set_dragging(&self, dragging: bool) {
+        let _ = dragging;
+    }
 }
 
 impl ScrollTarget for ScrollState {
@@ -302,6 +320,164 @@ impl ScrollTarget for LazyListState {
         } else {
             self.can_scroll_backward_non_reactive()
         }
+    }
+}
+
+/// Everything one drag-driven modifier needs to run a gesture: what receives the
+/// deltas, where the transient gesture state lives, which axis is being dragged,
+/// and an optional guard that can decline the gesture while it is in flight.
+///
+/// Scrolling, lazy scrolling and [`Modifier::draggable`] differ only in these
+/// fields; the event loop that reads pointers and drives the detector is the
+/// same for all three and lives in [`drag_gesture_input`].
+struct DragGesture<S: ScrollTarget> {
+    target: S,
+    gesture_state: Rc<RefCell<ScrollGestureState>>,
+    is_vertical: bool,
+    reverse_input: bool,
+    motion_context: ScrollMotionContext,
+    guard: Option<Rc<dyn Fn() -> bool>>,
+}
+
+/// The pointer handling shared by every drag-driven modifier.
+///
+/// Touch slop, axis locking, pointer selection, consumed-event yielding,
+/// velocity tracking, fling and settle all live behind this one loop, so a new
+/// drag-driven modifier inherits the same feel as scrolling instead of growing
+/// a second, subtly different gesture implementation.
+fn drag_gesture_input<K, S>(key: K, gesture: DragGesture<S>) -> Modifier
+where
+    K: std::hash::Hash + 'static,
+    S: ScrollTarget + 'static,
+{
+    let DragGesture {
+        target,
+        gesture_state,
+        is_vertical,
+        reverse_input,
+        motion_context,
+        guard,
+    } = gesture;
+
+    Modifier::empty().pointer_input(key, move |scope| {
+        let detector = ScrollGestureDetector::new(
+            gesture_state.clone(),
+            target.clone(),
+            is_vertical,
+            reverse_input,
+            motion_context.overscroll(),
+            motion_context.clone(),
+        );
+        let guard = guard.clone();
+
+        async move {
+            scope
+                .await_pointer_event_scope(|await_scope| async move {
+                    loop {
+                        let event = await_scope.await_pointer_event().await;
+
+                        // Drags track the primary pointer only; secondary
+                        // pointers belong to multi-touch gestures (pinch/zoom)
+                        // handled by other modifiers.
+                        if event.id != 0 {
+                            continue;
+                        }
+
+                        // An event another modifier already claimed ends this
+                        // gesture rather than being applied twice.
+                        if event.is_consumed() {
+                            if matches!(
+                                event.kind,
+                                PointerEventKind::Down
+                                    | PointerEventKind::Move
+                                    | PointerEventKind::Up
+                                    | PointerEventKind::Cancel
+                            ) {
+                                detector.on_cancel();
+                            }
+                            continue;
+                        }
+
+                        if let Some(ref guard) = guard {
+                            if !guard() {
+                                if matches!(
+                                    event.kind,
+                                    PointerEventKind::Up | PointerEventKind::Cancel
+                                ) {
+                                    detector.on_cancel();
+                                }
+                                continue;
+                            }
+                        }
+
+                        let should_consume = match event.kind {
+                            PointerEventKind::Down => {
+                                detector.on_down(event.position, event.time_ms)
+                            }
+                            PointerEventKind::Move => detector.on_move(
+                                event.position,
+                                event.buttons,
+                                event.time_ms,
+                                &event,
+                            ),
+                            PointerEventKind::Up => detector.on_up(event.time_ms),
+                            PointerEventKind::Cancel => detector.on_cancel(),
+                            PointerEventKind::Scroll => detector.on_scroll(
+                                if is_vertical {
+                                    event.scroll_delta.y
+                                } else {
+                                    event.scroll_delta.x
+                                },
+                                &event,
+                            ),
+                            // Rotary is opt-in via
+                            // `Modifier::on_rotary_scroll_event`; drag surfaces
+                            // ignore it.
+                            PointerEventKind::Zoom
+                            | PointerEventKind::RotaryScrollPre
+                            | PointerEventKind::RotaryScroll
+                            | PointerEventKind::Enter
+                            | PointerEventKind::Exit => false,
+                        };
+
+                        if should_consume {
+                            event.consume();
+                        }
+                    }
+                })
+                .await;
+        }
+    })
+}
+
+impl ScrollTarget for DraggableState {
+    /// A drag surface has no bounds of its own: whatever the caller does with
+    /// the delta is the answer, so the whole gesture is consumed.
+    fn apply_delta(&self, delta: f32) -> f32 {
+        self.drag_by(delta);
+        delta
+    }
+
+    fn apply_fling_delta(&self, delta: f32) -> f32 {
+        self.drag_by(delta);
+        delta
+    }
+
+    fn invalidate(&self) {
+        // Whatever the delta handler writes to invalidates on its own.
+    }
+
+    fn current_offset(&self) -> f32 {
+        self.offset()
+    }
+
+    /// A placed control stops where it is let go.
+    fn allows_fling(&self) -> bool {
+        false
+    }
+
+    fn set_dragging(&self, dragging: bool) {
+        DraggableState::set_dragging(self, dragging);
     }
 }
 
@@ -436,6 +612,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
 
         // Safety: detect missed Up events (hit test delivered to wrong target)
         if !buttons.contains(PointerButton::Primary) && gs.drag_down_position.is_some() {
+            if gs.is_dragging {
+                self.scroll_target.set_dragging(false);
+            }
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
@@ -478,6 +657,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 // gestures it cannot consume to its enclosing scrollable.
                 if self.scroll_target.can_consume(signed_main_delta) {
                     gs.is_dragging = true;
+                    self.scroll_target.set_dragging(true);
                     self.motion_context.set_active(true);
                 } else if self.scroll_target.can_scroll() {
                     edge_candidate = true;
@@ -648,6 +828,9 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
                 None
             };
 
+            if was_dragging {
+                self.scroll_target.set_dragging(false);
+            }
             gs.drag_down_position = None;
             gs.last_position = None;
             gs.is_dragging = false;
@@ -857,7 +1040,7 @@ impl<S: ScrollTarget + 'static> ScrollGestureDetector<S> {
     ///
     /// Returns `true` if we were dragging (event should be consumed).
     fn on_up(&self, time_ms: Option<i64>) -> bool {
-        self.finish_gesture(true, time_ms)
+        self.finish_gesture(self.scroll_target.allows_fling(), time_ms)
     }
 
     /// Handles pointer cancel event.
@@ -1426,36 +1609,6 @@ impl Modifier {
     pub fn vertical_scroll(self, state: ScrollState, reverse_scrolling: bool) -> Self {
         self.then(scroll_impl(state, true, reverse_scrolling, None))
     }
-
-    /// Creates a horizontally scrollable modifier with a guard that can disable scrolling.
-    pub fn horizontal_scroll_guarded(
-        self,
-        state: ScrollState,
-        reverse_scrolling: bool,
-        guard: impl Fn() -> bool + 'static,
-    ) -> Self {
-        self.then(scroll_impl(
-            state,
-            false,
-            reverse_scrolling,
-            Some(Rc::new(guard)),
-        ))
-    }
-
-    /// Creates a vertically scrollable modifier with a guard that can disable scrolling.
-    pub fn vertical_scroll_guarded(
-        self,
-        state: ScrollState,
-        reverse_scrolling: bool,
-        guard: impl Fn() -> bool + 'static,
-    ) -> Self {
-        self.then(scroll_impl(
-            state,
-            true,
-            reverse_scrolling,
-            Some(Rc::new(guard)),
-        ))
-    }
 }
 
 /// Internal implementation for scroll modifiers.
@@ -1481,98 +1634,18 @@ fn scroll_impl(
     });
 
     // Set up pointer input handler
-    let scroll_state = state;
-    let pointer_motion_context = motion_context.clone();
-    let key = (state.id(), is_vertical);
-    let pointer_input = Modifier::empty().pointer_input(key, move |scope| {
-        // Create detector inside the async closure to capture the cloned state
-        let detector = ScrollGestureDetector::new(
-            gesture_state.clone(),
-            scroll_state,
+    let pointer_input = drag_gesture_input(
+        (state.id(), is_vertical),
+        DragGesture {
+            target: state,
+            gesture_state,
             is_vertical,
-            false, // ScrollState handles reversing in layout, not input
-            pointer_motion_context.overscroll(),
-            pointer_motion_context.clone(),
-        );
-        let guard = guard.clone();
-
-        async move {
-            scope
-                .await_pointer_event_scope(|await_scope| async move {
-                    // Main event loop - processes events until scope is cancelled
-                    loop {
-                        let event = await_scope.await_pointer_event().await;
-
-                        // Scroll drags track the primary pointer only;
-                        // secondary pointers belong to multi-touch gestures
-                        // (pinch/zoom) handled by other modifiers.
-                        if event.id != 0 {
-                            continue;
-                        }
-
-                        if event.is_consumed() {
-                            if matches!(
-                                event.kind,
-                                PointerEventKind::Down
-                                    | PointerEventKind::Move
-                                    | PointerEventKind::Up
-                                    | PointerEventKind::Cancel
-                            ) {
-                                detector.on_cancel();
-                            }
-                            continue;
-                        }
-
-                        if let Some(ref guard) = guard {
-                            if !guard() {
-                                if matches!(
-                                    event.kind,
-                                    PointerEventKind::Up | PointerEventKind::Cancel
-                                ) {
-                                    detector.on_cancel();
-                                }
-                                continue;
-                            }
-                        }
-
-                        // Delegate to detector's lifecycle methods
-                        let should_consume = match event.kind {
-                            PointerEventKind::Down => {
-                                detector.on_down(event.position, event.time_ms)
-                            }
-                            PointerEventKind::Move => detector.on_move(
-                                event.position,
-                                event.buttons,
-                                event.time_ms,
-                                &event,
-                            ),
-                            PointerEventKind::Up => detector.on_up(event.time_ms),
-                            PointerEventKind::Cancel => detector.on_cancel(),
-                            PointerEventKind::Scroll => detector.on_scroll(
-                                if is_vertical {
-                                    event.scroll_delta.y
-                                } else {
-                                    event.scroll_delta.x
-                                },
-                                &event,
-                            ),
-                            // Rotary is opt-in via `Modifier::on_rotary_scroll_event`;
-                            // touch scroll containers ignore it.
-                            PointerEventKind::Zoom
-                            | PointerEventKind::RotaryScrollPre
-                            | PointerEventKind::RotaryScroll
-                            | PointerEventKind::Enter
-                            | PointerEventKind::Exit => false,
-                        };
-
-                        if should_consume {
-                            event.consume();
-                        }
-                    }
-                })
-                .await;
-        }
-    });
+            // `ScrollState` handles reversing in layout, not input.
+            reverse_input: false,
+            motion_context: motion_context.clone(),
+            guard,
+        },
+    );
 
     // Create layout modifier for applying scroll offset to content
     let overscroll = motion_context.overscroll();
@@ -1645,16 +1718,6 @@ impl Modifier {
         ))
     }
 
-    /// Creates a horizontally scrollable modifier for lazy lists.
-    pub fn lazy_horizontal_scroll(self, state: LazyListState, reverse_scrolling: bool) -> Self {
-        let motion_context = scroll_motion_context_for_key(ScrollMotionContextKey::LazyList {
-            state_identity: state.inner_ptr() as usize,
-            is_vertical: false,
-            reverse_scrolling,
-        });
-        self.lazy_horizontal_scroll_with_context(state, reverse_scrolling, motion_context)
-    }
-
     pub(crate) fn lazy_horizontal_scroll_with_context(
         self,
         state: LazyListState,
@@ -1694,79 +1757,75 @@ fn lazy_scroll_impl(
 
     Modifier::with_element(MotionContextAnimatedElement::new(motion_context.clone()))
         .then(translated_content_modifier)
-        .pointer_input(key, move |scope| {
-            // Use the same generic detector with LazyListState
-            let detector = ScrollGestureDetector::new(
-                gesture_state.clone(),
-                list_state,
+        .then(drag_gesture_input(
+            key,
+            DragGesture {
+                target: list_state,
+                gesture_state,
                 is_vertical,
-                reverse_scrolling,
-                motion_context.overscroll(),
-                motion_context.clone(),
-            );
+                reverse_input: reverse_scrolling,
+                motion_context,
+                guard: None,
+            },
+        ))
+}
 
-            async move {
-                scope
-                    .await_pointer_event_scope(|await_scope| async move {
-                        loop {
-                            let event = await_scope.await_pointer_event().await;
+// ============================================================================
+// General drag support
+// ============================================================================
 
-                            // Scroll drags track the primary pointer only;
-                            // secondary pointers belong to multi-touch
-                            // gestures handled by other modifiers.
-                            if event.id != 0 {
-                                continue;
-                            }
+impl Modifier {
+    /// Drags along `axis`, reporting each delta to `state`.
+    ///
+    /// The gesture is the one the scroll containers run — touch slop before a
+    /// drag begins, axis locking so a mostly-vertical drag never steals a
+    /// horizontal one, the primary pointer only, and yielding to whoever
+    /// consumed the event first — so a dragged control and a scrolled list feel
+    /// the same under a finger. Unlike a scroll, a release does not fling: a
+    /// control the user placed stays where it was let go.
+    ///
+    /// Deltas are logical pixels, positive to the right for [`Axis::Horizontal`]
+    /// and downwards for [`Axis::Vertical`].
+    pub fn draggable(self, axis: Axis, state: DraggableState) -> Self {
+        self.then(draggable_impl(axis, state, None))
+    }
 
-                            if event.is_consumed() {
-                                if matches!(
-                                    event.kind,
-                                    PointerEventKind::Down
-                                        | PointerEventKind::Move
-                                        | PointerEventKind::Up
-                                        | PointerEventKind::Cancel
-                                ) {
-                                    detector.on_cancel();
-                                }
-                                continue;
-                            }
+    /// Drags along `axis` only while `guard` says so.
+    ///
+    /// The guard is asked per event, so a control can stop accepting a drag
+    /// half way through one and the gesture ends rather than being applied to
+    /// a control that has since been disabled.
+    pub fn draggable_guarded(
+        self,
+        axis: Axis,
+        state: DraggableState,
+        guard: impl Fn() -> bool + 'static,
+    ) -> Self {
+        self.then(draggable_impl(axis, state, Some(Rc::new(guard))))
+    }
+}
 
-                            // Delegate to detector's lifecycle methods
-                            let should_consume = match event.kind {
-                                PointerEventKind::Down => {
-                                    detector.on_down(event.position, event.time_ms)
-                                }
-                                PointerEventKind::Move => detector.on_move(
-                                    event.position,
-                                    event.buttons,
-                                    event.time_ms,
-                                    &event,
-                                ),
-                                PointerEventKind::Up => detector.on_up(event.time_ms),
-                                PointerEventKind::Cancel => detector.on_cancel(),
-                                PointerEventKind::Scroll => detector.on_scroll(
-                                    if is_vertical {
-                                        event.scroll_delta.y
-                                    } else {
-                                        event.scroll_delta.x
-                                    },
-                                    &event,
-                                ),
-                                // Rotary is opt-in via
-                                // `Modifier::on_rotary_scroll_event`.
-                                PointerEventKind::Zoom
-                                | PointerEventKind::RotaryScrollPre
-                                | PointerEventKind::RotaryScroll
-                                | PointerEventKind::Enter
-                                | PointerEventKind::Exit => false,
-                            };
-
-                            if should_consume {
-                                event.consume();
-                            }
-                        }
-                    })
-                    .await;
-            }
-        })
+fn draggable_impl(
+    axis: Axis,
+    state: DraggableState,
+    guard: Option<Rc<dyn Fn() -> bool>>,
+) -> Modifier {
+    let is_vertical = axis.is_vertical();
+    let identity = state.identity();
+    drag_gesture_input(
+        (identity, is_vertical),
+        DragGesture {
+            target: state,
+            gesture_state: Rc::new(RefCell::new(ScrollGestureState::default())),
+            is_vertical,
+            reverse_input: false,
+            // A drag surface has no overscroll of its own: there is no edge to
+            // stretch, because the caller owns the bounds.
+            motion_context: scroll_motion_context_for_key(ScrollMotionContextKey::Draggable {
+                state_identity: identity,
+                is_vertical,
+            }),
+            guard,
+        },
+    )
 }

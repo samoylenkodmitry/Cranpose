@@ -362,7 +362,7 @@ impl LiquidDynamics {
 
 /// Remember one [`LiquidDynamics`] for the calling composition site.
 #[composable]
-pub fn remember_liquid_dynamics() -> Rc<LiquidDynamics> {
+pub fn rememberLiquidDynamics() -> Rc<LiquidDynamics> {
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer

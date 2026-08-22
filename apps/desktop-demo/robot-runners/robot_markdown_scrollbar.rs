@@ -5,7 +5,7 @@
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
-use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
+use cranpose_services::{local_http_client, HttpClientRef, StubHttpClient};
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
 };
@@ -20,11 +20,11 @@ const DEFAULT_TOP_SENTINEL: &str = "Line 001";
 const DEFAULT_DEEP_SENTINEL: &str = "Line 240";
 const MIN_EXPECTED_LINE_ADVANCE: usize = 20;
 
-struct MockMarkdownClient {
+struct MarkdownFixture {
     body: String,
 }
 
-impl MockMarkdownClient {
+impl MarkdownFixture {
     fn new() -> Self {
         if let Some(path) = std::env::var("CRANPOSE_MARKDOWN_FIXTURE_PATH")
             .ok()
@@ -40,13 +40,6 @@ impl MockMarkdownClient {
             body.push_str(&format!("- Line {i:03}\n"));
         }
         Self { body }
-    }
-}
-
-impl HttpClient for MockMarkdownClient {
-    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
-        let body = self.body.clone();
-        Box::pin(async move { Ok(body) })
     }
 }
 
@@ -426,7 +419,8 @@ fn main() {
             let _ = robot.exit();
         })
         .run({
-            let mock_client: HttpClientRef = Arc::new(MockMarkdownClient::new());
+            let mock_client: HttpClientRef =
+                Arc::new(StubHttpClient::with_body(MarkdownFixture::new().body));
             move || {
                 let local = local_http_client();
                 let client = mock_client.clone();

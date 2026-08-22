@@ -46,6 +46,7 @@ pub(crate) fn encode_elements(elements: &[AccessibilityElement], density: f32) -
                 AccessibilityRole::Tab => 7,
                 AccessibilityRole::Image => 8,
                 AccessibilityRole::Header => 9,
+                AccessibilityRole::Dialog => 10,
             };
             let (center_x, center_y) = element.bounds.center();
             let actions = element

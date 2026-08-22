@@ -1,10 +1,11 @@
 use cranpose_core::{location_key, Composition, Key, MemoryApplier};
 use cranpose_ui::{
-    composable, measure_layout, Column, ColumnSpec, HeadlessRenderer, LayoutMeasurements,
-    LayoutTree, Modifier, Row, RowSpec, Size, Text, TextStyle,
+    composable, measure_layout, AppContext, Column, ColumnSpec, HeadlessRenderer,
+    LayoutMeasurements, LayoutTree, Modifier, Row, RowSpec, Size, Text, TextStyle,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::hint::black_box;
+use std::rc::Rc;
 
 const SECTION_COUNT: usize = 4;
 const ROWS_PER_SECTION: usize = 64;
@@ -113,6 +114,7 @@ fn recursive_section(depth: usize, rows_per_level: usize, level: usize) {
 }
 
 struct PipelineFixture {
+    app_context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
     key: Key,
     sections: usize,
@@ -124,6 +126,7 @@ impl PipelineFixture {
     fn new(sections: usize, rows_per_section: usize, root_size: Size) -> Self {
         let key = location_key(file!(), line!(), column!());
         Self {
+            app_context: AppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             key,
             sections,
@@ -135,23 +138,32 @@ impl PipelineFixture {
     fn compose(&mut self) {
         let sections = self.sections;
         let rows_per_section = self.rows_per_section;
-        self.composition
-            .render(self.key, || pipeline_content(sections, rows_per_section))
-            .expect("composition");
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            self.composition
+                .render(self.key, || pipeline_content(sections, rows_per_section))
+                .expect("composition");
+        });
     }
 
     fn measure(&mut self) -> LayoutMeasurements {
         let root = self.composition.root().expect("composition root");
         let mut applier_guard = self.composition.applier_mut();
         let mut temp_applier = std::mem::take(&mut *applier_guard);
-        let measurements =
-            measure_layout(&mut temp_applier, root, self.root_size).expect("measure");
+        let app_context = Rc::clone(&self.app_context);
+        let measurements = app_context
+            .enter(|| measure_layout(&mut temp_applier, root, self.root_size).expect("measure"));
         *applier_guard = temp_applier;
         measurements
+    }
+
+    fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
+        self.app_context.enter(block)
     }
 }
 
 struct RecursiveFixture {
+    app_context: Rc<AppContext>,
     composition: Composition<MemoryApplier>,
     key: Key,
     depth: usize,
@@ -163,6 +175,7 @@ impl RecursiveFixture {
     fn new(depth: usize, rows_per_level: usize, root_size: Size) -> Self {
         let key = location_key(file!(), line!(), column!());
         Self {
+            app_context: AppContext::new(),
             composition: Composition::new(MemoryApplier::new()),
             key,
             depth,
@@ -174,21 +187,29 @@ impl RecursiveFixture {
     fn compose(&mut self) {
         let depth = self.depth;
         let rows_per_level = self.rows_per_level;
-        self.composition
-            .render(self.key, || {
-                recursive_pipeline_content(depth, rows_per_level)
-            })
-            .expect("composition");
+        let app_context = Rc::clone(&self.app_context);
+        app_context.enter(|| {
+            self.composition
+                .render(self.key, || {
+                    recursive_pipeline_content(depth, rows_per_level)
+                })
+                .expect("composition");
+        });
     }
 
     fn measure(&mut self) -> LayoutMeasurements {
         let root = self.composition.root().expect("composition root");
         let mut applier_guard = self.composition.applier_mut();
         let mut temp_applier = std::mem::take(&mut *applier_guard);
-        let measurements =
-            measure_layout(&mut temp_applier, root, self.root_size).expect("measure");
+        let app_context = Rc::clone(&self.app_context);
+        let measurements = app_context
+            .enter(|| measure_layout(&mut temp_applier, root, self.root_size).expect("measure"));
         *applier_guard = temp_applier;
         measurements
+    }
+
+    fn with_app_context<R>(&self, block: impl FnOnce() -> R) -> R {
+        self.app_context.enter(block)
     }
 }
 
@@ -283,7 +304,7 @@ fn bench_render(c: &mut Criterion) {
                 let renderer = HeadlessRenderer::new();
 
                 b.iter(|| {
-                    let scene = renderer.render(&layout_tree);
+                    let scene = fixture.with_app_context(|| renderer.render(&layout_tree));
                     black_box(scene);
                 });
             },
@@ -301,7 +322,7 @@ fn bench_full_pipeline(c: &mut Criterion) {
             fixture.compose();
             let measurements = fixture.measure();
             let layout_tree = measured_layout_tree(&measurements);
-            let scene = renderer.render(&layout_tree);
+            let scene = fixture.with_app_context(|| renderer.render(&layout_tree));
             black_box(scene);
         });
     });
@@ -381,7 +402,7 @@ fn bench_recursive_render(c: &mut Criterion) {
                 let layout_tree = measured_layout_tree(&measurements);
                 let renderer = HeadlessRenderer::new();
                 b.iter(|| {
-                    let scene = renderer.render(&layout_tree);
+                    let scene = fixture.with_app_context(|| renderer.render(&layout_tree));
                     black_box(scene);
                 });
             },

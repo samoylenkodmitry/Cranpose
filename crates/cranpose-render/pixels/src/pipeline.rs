@@ -683,8 +683,8 @@ fn text_decoration_rect(x: f32, y: f32, width: f32, thickness: f32) -> Rect {
     }
 }
 
-// See the note in the wgpu pipeline: these tests used to run against a
-// `#[cfg(test)]` replica instead of the rule the scene builder paints with.
+// See the note in the wgpu pipeline: these tests call the rule the scene
+// builder paints with, not a `#[cfg(test)]` replica of it.
 #[cfg(test)]
 use cranpose_render_common::scene_builder::resolve_text_measure_width;
 

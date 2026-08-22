@@ -120,6 +120,10 @@ impl WebAccessibilityBridge {
                     node.set_attribute("aria-level", "2")?;
                     node.set_text_content(Some(&element.label));
                 }
+                AccessibilityRole::Dialog => {
+                    node.set_attribute("role", "dialog")?;
+                    node.set_attribute("aria-modal", "true")?;
+                }
             }
             // ARIA has no direct `stateDescription`; the state a control is in
             // rides on the checked/selected attributes where the role has them,

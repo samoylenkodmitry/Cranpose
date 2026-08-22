@@ -92,7 +92,10 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
-use crate::modifier::{GraphicsLayer, Modifier, TransformOrigin};
+use crate::fling_animation::FlingAnimation;
+use crate::modifier::{
+    GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin,
+};
 use crate::round_scaling_list::{
     leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
     CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
@@ -106,8 +109,11 @@ use crate::subcompose_layout::{
 };
 use crate::widgets::wear::density::WearDensity;
 use crate::widgets::Layout;
-use cranpose_core::{remember, useState, MutableState, NodeId, SlotId};
-use cranpose_ui_graphics::{CompositingStrategy, Size};
+use cranpose_core::internal::FrameCallbackRegistration;
+use cranpose_core::{remember, rememberMutableStateOf, MutableState, NodeId, SlotId};
+use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
+use cranpose_foundation::{VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY};
+use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
 use std::cell::{Cell, RefCell};
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -180,6 +186,27 @@ pub struct WearScalingLayoutInfo {
     pub composed: usize,
 }
 
+/// One row from the last scaling-list measure pass, in the list's local
+/// coordinate space after scaling and placement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WearScalingItemInfo {
+    pub index: usize,
+    pub bounds: Rect,
+    pub centre: f32,
+    pub unscaled_height: f32,
+    pub scale: f32,
+    pub alpha: f32,
+}
+
+impl WearScalingItemInfo {
+    pub fn contains(self, point: Point) -> bool {
+        point.x >= self.bounds.x
+            && point.x < self.bounds.x + self.bounds.width
+            && point.y >= self.bounds.y
+            && point.y < self.bounds.y + self.bounds.height
+    }
+}
+
 impl WearScalingLayoutInfo {
     /// How far the content can travel: the first item's centre to the last's.
     pub fn travel(self) -> f32 {
@@ -206,8 +233,35 @@ pub struct WearScalingListState {
 
 struct WearScalingListInner {
     layout: Rc<RefCell<WearScalingLayoutInfo>>,
+    items: Rc<RefCell<Vec<WearScalingItemInfo>>>,
     heights: Rc<RefCell<ItemHeights>>,
     indicator: Rc<RefCell<IndicatorState>>,
+    /// The frame callback closing an animated scroll, cancelled by the next
+    /// scroll of any kind so a finger always wins against a running animation.
+    scroll_animation: RefCell<Option<FrameCallbackRegistration>>,
+    /// The facts about the list a screen reacts to, published on change rather
+    /// than every frame.
+    ///
+    /// The whole [`WearScalingLayoutInfo`] moves on every scroll frame, so a
+    /// screen that observed it would recompose sixty times a second to learn
+    /// things that did not change. These are written only when they actually
+    /// change, so "the list has 12 rows" or "there is nothing further down"
+    /// costs a recomposition when it becomes true and nothing while it stays
+    /// true.
+    summary: MutableState<WearScalingListSummary>,
+}
+
+/// The observable part of a scaling list's layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WearScalingListSummary {
+    /// How many rows the list holds.
+    pub item_count: usize,
+    /// How many of them the viewport can see.
+    pub visible_item_count: usize,
+    /// Whether there is anything further down to reach.
+    pub can_scroll_forward: bool,
+    /// Whether there is anything further up to reach.
+    pub can_scroll_backward: bool,
 }
 
 impl PartialEq for WearScalingListState {
@@ -405,24 +459,213 @@ impl WearScalingListState {
         self.anchor.set(anchor);
     }
 
+    /// Stops a running [`Self::animate_scroll_to_item`].
+    ///
+    /// Every other way of moving the list calls this first: a finger, a rotary
+    /// crown or a snap always wins against an animation the screen started, so
+    /// the list never fights the user.
+    pub fn cancel_scroll_animation(&self) {
+        self.inner().scroll_animation.borrow_mut().take();
+    }
+
     /// Scrolls by a distance in layout points, positive towards the end of the
     /// list, re-anchoring on whichever item the centre line lands in.
     ///
     /// The re-anchoring matters: leaving the index alone and letting the offset
     /// grow works until the anchored item scrolls off, after which the ramp is
     /// computed from an item nobody can see.
-    pub fn scroll_by(&self, delta: f32) {
+    pub fn scroll_by(&self, delta: f32) -> f32 {
         if !delta.is_finite() {
-            return;
+            return 0.0;
         }
-        let info = *self.inner().layout.borrow();
+        let inner = self.inner();
+        inner.scroll_animation.borrow_mut().take();
+        let info = *inner.layout.borrow();
         let anchor = self.anchor.get();
-        self.set_anchor(re_anchor(anchor, delta, info));
+        let available_before = info.scrolled();
+        let available_after = (info.travel() - available_before).max(0.0);
+        let applied = delta.clamp(-available_before, available_after);
+        if applied == 0.0 {
+            return 0.0;
+        }
+        let items = inner.items.borrow();
+        let target = info.viewport * 0.5 + applied;
+        let next = items
+            .iter()
+            .min_by(|left, right| {
+                (left.centre - target)
+                    .abs()
+                    .total_cmp(&(right.centre - target).abs())
+            })
+            .map_or_else(
+                || re_anchor(anchor, applied, info),
+                |item| CentreAnchor {
+                    index: item.index,
+                    offset: info.viewport * 0.5 - item.centre + applied,
+                },
+            );
+        drop(items);
+        self.set_anchor(next);
+        applied
+    }
+
+    pub fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.scroll_by(delta)
     }
 
     /// What the last measure pass worked out.
+    ///
+    /// Read outside composition — during draw, input, or a diagnostic — because
+    /// every field of it moves on every scroll frame. A screen reacting to the
+    /// list reads [`Self::summary`] and its named parts instead, which change
+    /// only when they mean something different.
     pub fn layout_info(&self) -> WearScalingLayoutInfo {
         *self.inner().layout.borrow()
+    }
+
+    /// The facts about the list a screen reacts to. Reactive: a scope that
+    /// reads this recomposes when one of them changes, and not while the list
+    /// merely scrolls.
+    pub fn summary(&self) -> WearScalingListSummary {
+        self.inner().summary.value()
+    }
+
+    /// How many rows the list holds. Reactive.
+    pub fn item_count(&self) -> usize {
+        self.summary().item_count
+    }
+
+    /// How many rows the viewport can see. Reactive.
+    pub fn visible_item_count(&self) -> usize {
+        self.summary().visible_item_count
+    }
+
+    /// Whether there is anything further down to reach. Reactive — this is what
+    /// a "scroll to top" button and an end-of-list loader watch.
+    pub fn can_scroll_forward(&self) -> bool {
+        self.summary().can_scroll_forward
+    }
+
+    /// Whether there is anything further up to reach. Reactive.
+    pub fn can_scroll_backward(&self) -> bool {
+        self.summary().can_scroll_backward
+    }
+
+    /// Puts `index` on the centre line at once.
+    ///
+    /// The position of a scaling list *is* a centre anchor, so this is exact
+    /// whether or not the target has ever been measured: the next measure pass
+    /// lays the list out around it. `offset` shifts the row off the centre line
+    /// by that many points, positive downwards.
+    pub fn scroll_to_item(&self, index: usize, offset: f32) {
+        self.cancel_scroll_animation();
+        let count = self.inner().heights.borrow().len();
+        let index = if count == 0 {
+            index
+        } else {
+            index.min(count - 1)
+        };
+        self.set_anchor(CentreAnchor {
+            index,
+            offset: if offset.is_finite() { offset } else { 0.0 },
+        });
+    }
+
+    /// How far `index` is from the centre line right now, in points.
+    ///
+    /// Exact for a row the last measure pass placed. For a row further away
+    /// than that, the distance is estimated from the heights the list has seen,
+    /// which is what makes an animated scroll to a far row start moving in the
+    /// right direction and at a sensible speed; each frame re-asks, so the
+    /// estimate is corrected as the real rows arrive.
+    pub fn distance_to_item(&self, index: usize, offset: f32) -> f32 {
+        let inner = self.inner();
+        let info = *inner.layout.borrow();
+        let centre_line = info.viewport * 0.5;
+        let offset = if offset.is_finite() { offset } else { 0.0 };
+        if let Some(item) = inner
+            .items
+            .borrow()
+            .iter()
+            .find(|item| item.index == index)
+            .copied()
+        {
+            return item.centre - offset - centre_line;
+        }
+
+        let anchor = self.anchor.get_non_reactive();
+        let heights = inner.heights.borrow();
+        let spacing_free = signed_span(&heights, anchor.index, index);
+        spacing_free - anchor.offset - offset
+    }
+
+    /// Whether `index` is a row this list has.
+    pub fn contains_item(&self, index: usize) -> bool {
+        index < self.inner().heights.borrow().len()
+    }
+
+    /// Brings `index` to the centre line over several frames.
+    ///
+    /// Each frame asks again how far away the row is and closes a fixed
+    /// fraction of what is left, so the animation corrects itself as the real
+    /// rows between here and there are measured — a list scrolled to its
+    /// thousandth row does not have to guess right on the first frame. Any
+    /// other scroll cancels it; see [`Self::cancel_scroll_animation`].
+    pub fn animate_scroll_to_item(&self, index: usize, offset: f32) {
+        self.cancel_scroll_animation();
+        if !self.contains_item(index) {
+            return;
+        }
+        self.step_scroll_animation(index, if offset.is_finite() { offset } else { 0.0 });
+    }
+
+    fn step_scroll_animation(&self, index: usize, offset: f32) {
+        let Some(runtime) = cranpose_core::current_runtime_handle() else {
+            // Without a runtime there are no frames to animate over; land on
+            // the row rather than doing nothing.
+            self.scroll_to_item(index, offset);
+            return;
+        };
+        let state = *self;
+        let registration = runtime.frame_clock().with_frame_nanos(move |_| {
+            let inner = state.inner();
+            inner.scroll_animation.borrow_mut().take();
+            let remaining = state.distance_to_item(index, offset);
+            if remaining.abs() <= SCROLL_ANIMATION_EPSILON {
+                state.scroll_to_item(index, offset);
+                return;
+            }
+            let step = remaining * SCROLL_ANIMATION_FRACTION;
+            let step = if step.abs() < SCROLL_ANIMATION_MIN_STEP {
+                SCROLL_ANIMATION_MIN_STEP.copysign(remaining)
+            } else {
+                step
+            };
+            let applied = state.scroll_by(step);
+            if applied == 0.0 {
+                // The list will not move any further in that direction; the row
+                // is as close to the centre as this list can bring it.
+                return;
+            }
+            state.step_scroll_animation(index, offset);
+        });
+        *self.inner().scroll_animation.borrow_mut() = Some(registration);
+    }
+
+    /// Rows placed by the last measure pass, with their transformed bounds.
+    pub fn visible_items(&self) -> Vec<WearScalingItemInfo> {
+        self.inner().items.borrow().clone()
+    }
+
+    /// Returns the topmost placed row containing `point`.
+    pub fn item_at(&self, point: Point) -> Option<WearScalingItemInfo> {
+        self.inner()
+            .items
+            .borrow()
+            .iter()
+            .rev()
+            .copied()
+            .find(|item| item.contains(point))
     }
 
     /// Reads the list the way `ScalingLazyColumnStateAdapter` reads one, for
@@ -484,18 +727,52 @@ fn re_anchor(anchor: CentreAnchor, delta: f32, info: WearScalingLayoutInfo) -> C
     anchor
 }
 
+/// How much of the remaining distance an animated scroll closes each frame.
+/// A geometric approach settles quickly without the overshoot a spring would
+/// add to a list whose rows are still being measured underneath it.
+const SCROLL_ANIMATION_FRACTION: f32 = 0.22;
+/// The slowest an animated scroll may crawl, so the last few points do not take
+/// a visible tail of frames.
+const SCROLL_ANIMATION_MIN_STEP: f32 = 1.0;
+/// Close enough to the centre line to snap and stop.
+const SCROLL_ANIMATION_EPSILON: f32 = 0.5;
+
+/// The distance from the top of item `from` to the top of item `to`, positive
+/// when `to` is further down the list.
+///
+/// Heights the list has not measured are the mean of the ones it has, which is
+/// what `ScalingLazyListState` does for the same question.
+fn signed_span(heights: &ItemHeights, from: usize, to: usize) -> f32 {
+    if from == to {
+        return 0.0;
+    }
+    let (low, high) = if from < to { (from, to) } else { (to, from) };
+    let span: f32 = (low..high).map(|index| heights.height_of(index)).sum();
+    if from < to {
+        span
+    } else {
+        -span
+    }
+}
+
 /// Remembers a scaling list's scroll position.
 #[composable]
 pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListState {
-    let anchor = useState(move || initial);
+    let anchor = rememberMutableStateOf(move || initial);
     let inner = remember(|| {
         let runtime = cranpose_core::current_runtime_handle()
             .expect("rememberWearScalingListState requires an active runtime");
         MutableState::with_runtime(
             Rc::new(WearScalingListInner {
                 layout: Rc::new(RefCell::new(WearScalingLayoutInfo::default())),
+                items: Rc::new(RefCell::new(Vec::new())),
                 heights: Rc::new(RefCell::new(ItemHeights::default())),
                 indicator: Rc::new(RefCell::new(IndicatorState::default())),
+                scroll_animation: RefCell::new(None),
+                summary: MutableState::with_runtime(
+                    WearScalingListSummary::default(),
+                    runtime.clone(),
+                ),
             }),
             runtime,
         )
@@ -598,26 +875,71 @@ impl WearScalingLazyColumnSpec {
 /// content does.
 #[derive(Default)]
 pub struct WearScalingListScope {
-    items: Vec<Rc<dyn Fn()>>,
+    items: Vec<WearScalingListItem>,
+}
+
+/// One declared row: what identifies it, what shape it is, and what it draws.
+#[derive(Clone)]
+pub(crate) struct WearScalingListItem {
+    /// The caller's key, or `None` to be keyed by position.
+    pub(crate) key: Option<u64>,
+    /// Which rows may reuse each other's composition slots. Rows of the same
+    /// content type are interchangeable; rows of different types are not, and
+    /// reusing one as the other throws away the whole subtree.
+    pub(crate) content_type: Option<u64>,
+    pub(crate) content: Rc<dyn Fn()>,
 }
 
 impl WearScalingListScope {
     /// One item.
+    ///
+    /// `key` is the row's identity. Without one the row is identified by its
+    /// position, so inserting or removing a row above it hands its remembered
+    /// state — a swipe displacement, an expanded flag, a running animation — to
+    /// whichever row moves into its slot. `content_type` groups rows that may
+    /// reuse each other's slots: a header and a track row that share a pool
+    /// throw away the whole subtree on every reuse.
+    pub fn item_keyed<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
+    where
+        F: Fn() + 'static,
+    {
+        self.items.push(WearScalingListItem {
+            key,
+            content_type,
+            content: Rc::new(content),
+        });
+    }
+
+    /// One row.
     pub fn item<F>(&mut self, content: F)
     where
         F: Fn() + 'static,
     {
-        self.items.push(Rc::new(content));
+        self.item_keyed(None, None, content);
     }
 
-    /// `count` items, each handed its index.
-    pub fn items<F>(&mut self, count: usize, item: F)
+    /// A run of rows, each handed its index.
+    ///
+    /// A count is enough for the ordinary list — `scope.items(rows.len(), ..)`.
+    /// Pass a [`LazyItems`] to name the identities or reuse classes described
+    /// on [`item_keyed`](Self::item_keyed).
+    pub fn items<I, F>(&mut self, items: I, item: F)
     where
+        I: Into<LazyItems>,
         F: Fn(usize) + Clone + 'static,
     {
-        for index in 0..count {
+        let items_spec = items.into();
+        let key = items_spec.key_fn();
+        let content_type = items_spec.content_type_fn();
+        for index in 0..items_spec.count() {
             let item = item.clone();
-            self.item(move || item(index));
+            self.item_keyed(
+                key.as_ref().map(|key| key(index)),
+                content_type
+                    .as_ref()
+                    .map(|content_type| content_type(index)),
+                move || item(index),
+            );
         }
     }
 
@@ -634,7 +956,7 @@ impl WearScalingListScope {
 /// be compared by value, so it is never skipped.
 #[derive(Clone)]
 pub struct WearScalingListContent {
-    items: Rc<Vec<Rc<dyn Fn()>>>,
+    items: Rc<Vec<WearScalingListItem>>,
 }
 
 impl PartialEq for WearScalingListContent {
@@ -649,6 +971,121 @@ impl Default for WearScalingListContent {
             items: Rc::new(Vec::new()),
         }
     }
+}
+
+fn wear_scaling_list_input(
+    modifier: Modifier,
+    state: WearScalingListState,
+    fling: Rc<FlingAnimation>,
+) -> Modifier {
+    let rotary_state = state;
+    let touch_state = state;
+    let touch_fling = Rc::clone(&fling);
+    modifier
+        .on_rotary_scroll_event(move |event| {
+            let delta = if event.vertical_scroll_pixels != 0.0 {
+                event.vertical_scroll_pixels
+            } else {
+                event.horizontal_scroll_pixels
+            };
+            rotary_state.dispatch_raw_delta(delta) != 0.0
+        })
+        .pointer_input(state.id(), move |scope: PointerInputScope| {
+            let fling = Rc::clone(&touch_fling);
+            async move {
+                scope
+                    .await_pointer_event_scope(|events| async move {
+                        let mut pointer = None;
+                        let mut down = Point::new(0.0, 0.0);
+                        let mut last = Point::new(0.0, 0.0);
+                        let mut dragging = false;
+                        let mut velocity = VelocityTracker1D::new();
+                        loop {
+                            let event = events.await_pointer_event().await;
+                            match event.kind {
+                                PointerEventKind::Down if pointer.is_none() => {
+                                    fling.cancel();
+                                    pointer = Some(event.id);
+                                    down = event.position;
+                                    last = event.position;
+                                    dragging = false;
+                                    velocity.reset();
+                                    if let Some(time) = event.time_ms {
+                                        velocity.add_data_point(time, event.position.y);
+                                    }
+                                }
+                                PointerEventKind::Move if pointer == Some(event.id) => {
+                                    if event.is_consumed() {
+                                        pointer = None;
+                                        dragging = false;
+                                        velocity.reset();
+                                        continue;
+                                    }
+                                    let dx = event.position.x - down.x;
+                                    let dy = event.position.y - down.y;
+                                    if !dragging && dy.abs() > DRAG_THRESHOLD && dy.abs() > dx.abs()
+                                    {
+                                        dragging = true;
+                                    } else if !dragging
+                                        && dx.abs() > DRAG_THRESHOLD
+                                        && dx.abs() >= dy.abs()
+                                    {
+                                        pointer = None;
+                                        velocity.reset();
+                                        continue;
+                                    }
+                                    if dragging {
+                                        let consumed = touch_state
+                                            .dispatch_raw_delta(last.y - event.position.y);
+                                        last = event.position;
+                                        if let Some(time) = event.time_ms {
+                                            velocity.add_data_point(time, event.position.y);
+                                        }
+                                        if consumed != 0.0 {
+                                            event.consume();
+                                        }
+                                    }
+                                }
+                                PointerEventKind::Up if pointer == Some(event.id) => {
+                                    if dragging {
+                                        if let Some(time) = event.time_ms {
+                                            velocity.add_data_point(time, event.position.y);
+                                        }
+                                        let speed = -velocity
+                                            .calculate_velocity_with_max(MAX_FLING_VELOCITY);
+                                        let fling_state = touch_state;
+                                        fling.start_fling(
+                                            0.0,
+                                            speed,
+                                            crate::current_density(),
+                                            move |delta| fling_state.dispatch_raw_delta(delta),
+                                            || {},
+                                        );
+                                        event.consume();
+                                    }
+                                    pointer = None;
+                                    dragging = false;
+                                    velocity.reset();
+                                }
+                                PointerEventKind::Cancel if pointer == Some(event.id) => {
+                                    pointer = None;
+                                    dragging = false;
+                                    velocity.reset();
+                                }
+                                PointerEventKind::Scroll => {
+                                    let consumed =
+                                        touch_state.dispatch_raw_delta(event.scroll_delta.y);
+                                    if consumed != 0.0 {
+                                        event.consume();
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    })
+                    .await;
+            }
+        })
 }
 
 /// One item of a scaling list, wrapped in the layer that shrinks and fades it.
@@ -807,6 +1244,12 @@ pub fn WearScalingLazyColumnNode(
         .with(|value| value.clone());
     let inputs = remember(|| Rc::new(RefCell::new(WearScalingListInputs::default())))
         .with(|value| value.clone());
+    let fling = remember(|| {
+        let runtime = cranpose_core::current_runtime_handle()
+            .expect("WearScalingLazyColumn requires an active runtime");
+        Rc::new(FlingAnimation::new(runtime))
+    })
+    .with(Rc::clone);
 
     // Reading the anchor here is what makes a scroll re-measure the list. The
     // per-item scale does NOT come back through composition — it rides the
@@ -841,20 +1284,21 @@ pub fn WearScalingLazyColumnNode(
         let transforms = transforms.clone();
         let inner = state.inner();
         let layout = Rc::clone(&inner.layout);
+        let items = Rc::clone(&inner.items);
         let heights = Rc::clone(&inner.heights);
         let indicator = Rc::clone(&inner.indicator);
+        let outputs = WearScalingMeasureOutputs {
+            transforms,
+            layout,
+            items,
+            heights,
+            indicator,
+            summary: inner.summary,
+        };
         move || {
             let policy: Rc<SubcomposeMeasurePolicy> = Rc::new(
                 move |scope: &mut SubcomposeMeasureScopeImpl<'_>, constraints: Constraints| {
-                    measure_wear_scaling_list(
-                        scope,
-                        constraints,
-                        &inputs.borrow(),
-                        &transforms,
-                        &layout,
-                        &heights,
-                        &indicator,
-                    )
+                    measure_wear_scaling_list(scope, constraints, &inputs.borrow(), &outputs)
                 },
             );
             policy
@@ -862,7 +1306,7 @@ pub fn WearScalingLazyColumnNode(
     })
     .with(|policy| policy.clone());
 
-    let modifier = modifier.clip_to_bounds();
+    let modifier = wear_scaling_list_input(modifier, state, fling).clip_to_bounds();
     // The state's layout cell is allocated once per remembered state and lives
     // exactly as long as it, so its address is a stable identity for the node.
     let list_id = state.id();
@@ -909,16 +1353,52 @@ struct WindowedRow {
     placed: PlacedRow,
 }
 
+struct WearScalingMeasureOutputs {
+    transforms: Rc<RefCell<Vec<WearItemTransform>>>,
+    layout: Rc<RefCell<WearScalingLayoutInfo>>,
+    items: Rc<RefCell<Vec<WearScalingItemInfo>>>,
+    heights: Rc<RefCell<ItemHeights>>,
+    indicator: Rc<RefCell<IndicatorState>>,
+    summary: MutableState<WearScalingListSummary>,
+}
+
+impl WearScalingMeasureOutputs {
+    /// Records what the measure pass worked out, and republishes the observable
+    /// summary only where it differs from what a screen was last told.
+    fn publish(&self, info: WearScalingLayoutInfo) {
+        *self.layout.borrow_mut() = info;
+        let travel = info.travel();
+        let scrolled = info.scrolled();
+        let summary = WearScalingListSummary {
+            item_count: info.item_count,
+            visible_item_count: info.visible,
+            can_scroll_forward: travel - scrolled > SCROLL_EPSILON,
+            can_scroll_backward: scrolled > SCROLL_EPSILON,
+        };
+        if self.summary.get_non_reactive() != summary {
+            self.summary.set(summary);
+        }
+    }
+}
+
+/// Below this the list is at an end: a fraction of a point of travel left is
+/// rounding, not somewhere to scroll to.
+const SCROLL_EPSILON: f32 = 0.5;
+
 /// Composes, measures and places only the items the viewport can reach.
 fn measure_wear_scaling_list(
     scope: &mut SubcomposeMeasureScopeImpl<'_>,
     constraints: Constraints,
     inputs: &WearScalingListInputs,
-    transforms: &Rc<RefCell<Vec<WearItemTransform>>>,
-    layout: &Rc<RefCell<WearScalingLayoutInfo>>,
-    heights: &Rc<RefCell<ItemHeights>>,
-    indicator: &Rc<RefCell<IndicatorState>>,
+    outputs: &WearScalingMeasureOutputs,
 ) -> MeasureResult {
+    let WearScalingMeasureOutputs {
+        transforms,
+        items,
+        heights,
+        indicator,
+        ..
+    } = outputs;
     let spec = inputs.spec;
     let top_aligned = spec.auto_centering.is_none();
     let scale = WearDensity::current().density();
@@ -956,11 +1436,12 @@ fn measure_wear_scaling_list(
     heights.borrow_mut().resize(count);
 
     if count == 0 {
-        *layout.borrow_mut() = WearScalingLayoutInfo {
+        items.borrow_mut().clear();
+        outputs.publish(WearScalingLayoutInfo {
             item_count: 0,
             viewport,
             ..WearScalingLayoutInfo::default()
-        };
+        });
         indicator.borrow_mut().clear();
         return scope
             .layout_with_placement_builder(width, viewport, |placements| placements.clear());
@@ -1121,6 +1602,8 @@ fn measure_wear_scaling_list(
     let mut visible = 0usize;
     let result = {
         let handles = transforms.borrow();
+        let mut placed_items = items.borrow_mut();
+        placed_items.clear();
         scope.layout_with_placement_builder(width, viewport, |placements| {
             placements.clear();
             for item in &window {
@@ -1139,6 +1622,19 @@ fn measure_wear_scaling_list(
                     continue;
                 }
                 visible += 1;
+                placed_items.push(WearScalingItemInfo {
+                    index: item.index,
+                    bounds: Rect {
+                        x: left + item_width * (1.0 - row.scale) * 0.5,
+                        y: row.top,
+                        width: item_width * row.scale,
+                        height: row.height,
+                    },
+                    centre: item.top + item.height * 0.5,
+                    unscaled_height: item.height,
+                    scale: row.scale,
+                    alpha: row.alpha,
+                });
                 for &(node_id, offset, root_width) in &item.roots {
                     let x = left + density.centre(item_width, root_width);
                     placements.push(Placement::new(node_id, x, row.top + offset, 0));
@@ -1158,7 +1654,7 @@ fn measure_wear_scaling_list(
         .sum();
     let first_top = anchored_top - before;
     let last_bottom = anchored_top + anchored_height + after;
-    *layout.borrow_mut() = WearScalingLayoutInfo {
+    outputs.publish(WearScalingLayoutInfo {
         item_count: count,
         viewport,
         first_centre: first_top + known.height_of(0) * 0.5,
@@ -1166,7 +1662,7 @@ fn measure_wear_scaling_list(
         content: last_bottom - first_top,
         visible,
         composed,
-    };
+    });
 
     result
 }
@@ -1196,10 +1692,23 @@ fn compose_and_measure_item(
         .unwrap_or_else(WearItemTransform::new);
     let strategy = inputs.spec.compositing_strategy;
     let item = inputs.content.items[index].clone();
-    let children: Vec<SubcomposeChild> = scope.subcompose(SlotId(index as u64), move || {
-        let item = item.clone();
-        WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {
-            item()
+    // A user key names the item; without one the row is keyed by position. The
+    // two are tagged apart so a caller's key can never collide with an index,
+    // which is the same rule the flat lazy list follows.
+    let key = match item.key {
+        Some(key) => LazyLayoutKey::User(key),
+        None => LazyLayoutKey::Index(index),
+    };
+    let slot_id = SlotId(key.to_slot_id());
+    let identity = item.key.map(|_| key.to_slot_id());
+    scope.update_content_type(slot_id, item.content_type);
+    let content = Rc::clone(&item.content);
+    let children: Vec<SubcomposeChild> = scope.subcompose(slot_id, move || {
+        let content = Rc::clone(&content);
+        crate::lazy_item::ProvideLazyItemKey(identity, || {
+            WearScalingItem(Modifier::empty(), transform.clone(), strategy, move || {
+                content()
+            });
         });
     });
 
@@ -1279,6 +1788,98 @@ mod tests {
         assert_eq!(empty.scrolled(), 0.0);
         let anchor = CentreAnchor::default();
         assert_eq!(re_anchor(anchor, 30.0, empty).offset, 30.0);
+    }
+
+    #[test]
+    fn a_declared_row_carries_its_key_and_content_type() {
+        let mut scope = WearScalingListScope::default();
+        scope.item_keyed(Some(7), Some(1), || {});
+        scope.items(
+            LazyItems::new(3)
+                .key(|index: usize| 100 + index as u64)
+                .content_type(|index: usize| (index % 2) as u64),
+            |_| {},
+        );
+        assert_eq!(scope.count(), 4);
+        assert_eq!(scope.items[0].key, Some(7));
+        assert_eq!(scope.items[0].content_type, Some(1));
+        assert_eq!(
+            scope.items[1..]
+                .iter()
+                .map(|item| item.key)
+                .collect::<Vec<_>>(),
+            [Some(100), Some(101), Some(102)]
+        );
+        assert_eq!(
+            scope.items[1..]
+                .iter()
+                .map(|item| item.content_type)
+                .collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(0)]
+        );
+    }
+
+    #[test]
+    fn a_row_declared_without_a_key_is_identified_by_its_position() {
+        let mut scope = WearScalingListScope::default();
+        scope.items(2, |_| {});
+        assert!(scope.items.iter().all(|item| item.key.is_none()));
+        assert!(scope.items.iter().all(|item| item.content_type.is_none()));
+    }
+
+    /// A caller's key and an index can name the same number, and a slot table
+    /// that let them collide would hand one row's composition to another.
+    #[test]
+    fn a_user_key_and_an_index_never_name_the_same_slot() {
+        assert_ne!(
+            LazyLayoutKey::User(3).to_slot_id(),
+            LazyLayoutKey::Index(3).to_slot_id()
+        );
+    }
+
+    fn summary_for(info: WearScalingLayoutInfo) -> (bool, bool) {
+        let travel = info.travel();
+        let scrolled = info.scrolled();
+        (
+            travel - scrolled > SCROLL_EPSILON,
+            scrolled > SCROLL_EPSILON,
+        )
+    }
+
+    #[test]
+    fn a_list_at_its_top_can_only_scroll_forward() {
+        // Viewport 200, first centre on the centre line: nothing scrolled yet.
+        let (forward, backward) = summary_for(info(10, 200.0, 100.0, 500.0));
+        assert!(forward);
+        assert!(!backward);
+    }
+
+    #[test]
+    fn a_list_at_its_end_can_only_scroll_backward() {
+        // Last centre on the centre line: the whole travel is behind it.
+        let (forward, backward) = summary_for(info(10, 200.0, -300.0, 100.0));
+        assert!(!forward);
+        assert!(backward);
+    }
+
+    #[test]
+    fn a_list_that_fits_can_scroll_neither_way() {
+        let (forward, backward) = summary_for(info(1, 200.0, 100.0, 100.0));
+        assert!(!forward);
+        assert!(!backward);
+    }
+
+    #[test]
+    fn an_unmeasured_height_is_the_mean_of_the_measured_ones() {
+        let mut heights = ItemHeights::default();
+        heights.resize(4);
+        heights.record(0, 30.0);
+        heights.record(1, 50.0);
+        assert_eq!(heights.height_of(0), 30.0);
+        assert_eq!(heights.height_of(3), 40.0, "the mean of 30 and 50");
+        assert_eq!(signed_span(&heights, 0, 2), 80.0);
+        assert_eq!(signed_span(&heights, 2, 0), -80.0);
+        assert_eq!(signed_span(&heights, 2, 2), 0.0);
     }
 
     #[test]

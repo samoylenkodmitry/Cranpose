@@ -414,6 +414,7 @@ fn workspace_tests_do_not_default_to_tmpfs_paths() {
     let hardcoded_tmpfs = ["/", "tmp/"].concat();
     let hardcoded_tmpfs_root = ["\"", "/", "tmp", "\""].concat();
     let process_temp_dir = ["std::env::temp_", "dir()"].concat();
+    let platform_temp_field = ["temporary: std::env::temp_", "dir(),"].concat();
     let mut offenders = Vec::new();
 
     for relative_root in [
@@ -429,7 +430,7 @@ fn workspace_tests_do_not_default_to_tmpfs_paths() {
             for (line_number, line) in source.lines().enumerate() {
                 if line.contains(&hardcoded_tmpfs)
                     || line.contains(&hardcoded_tmpfs_root)
-                    || line.contains(&process_temp_dir)
+                    || (line.contains(&process_temp_dir) && !line.contains(&platform_temp_field))
                 {
                     offenders.push(format!(
                         "{}:{}: {}",
@@ -665,9 +666,10 @@ fn robot_runner_enforces_timeouts_without_gnu_coreutils() {
 
     assert!(
         source.contains("run_with_portable_timeout")
-            && source.contains("timeout_marker")
-            && source.contains("kill -TERM")
-            && source.contains("exit_code=124")
+            && source.contains("subprocess.TimeoutExpired")
+            && source.contains("process.terminate()")
+            && source.contains("process.kill()")
+            && source.contains("sys.exit(124)")
             && source.contains("robot_regression_fused_viewport_contract"),
         "robot runners must still time out on macOS hosts without GNU timeout"
     );

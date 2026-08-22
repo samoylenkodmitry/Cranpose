@@ -66,6 +66,7 @@ impl Drop for TestServiceGuard {
         crate::camera::clear_platform_camera();
         crate::haptics::clear_platform_haptics();
         crate::image_picker::clear_platform_image_picker();
+        crate::media::clear_platform_media_player();
         crate::network_status::clear_platform_network_monitor();
         crate::notifier::clear_platform_notifier();
         crate::purchases::clear_platform_purchases();

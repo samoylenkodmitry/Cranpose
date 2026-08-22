@@ -59,6 +59,7 @@ pub(crate) enum AccessibilityRole {
     Tab,
     Image,
     Header,
+    Dialog,
 }
 
 impl AccessibilityRole {
@@ -71,6 +72,7 @@ impl AccessibilityRole {
             SemanticsWidgetRole::Tab => Self::Tab,
             SemanticsWidgetRole::Image => Self::Image,
             SemanticsWidgetRole::Header => Self::Header,
+            SemanticsWidgetRole::Dialog => Self::Dialog,
         }
     }
 }

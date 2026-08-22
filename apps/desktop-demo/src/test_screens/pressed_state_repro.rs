@@ -1,7 +1,7 @@
 //! Repro screen for pressed-state visuals driven by `pointer_input` Down events.
 //!
 //! Mirrors a Winamp-style sprite button: a Canvas draws one of two sprite-sheet
-//! regions depending on a `useState(bool)` that flips on pointer Down/Up.
+//! regions depending on a `rememberMutableStateOf(bool)` that flips on pointer Down/Up.
 
 use cranpose_ui::{
     composable, Box, BoxSpec, Brush, Canvas, Color, CornerRadii, ImageBitmap, Modifier,
@@ -37,7 +37,7 @@ fn sprite_sheet() -> ImageBitmap {
 #[allow(non_snake_case)]
 #[composable]
 pub fn PressedStateReproScreen() {
-    let is_pressed = cranpose_core::useState(|| false);
+    let is_pressed = cranpose_core::rememberMutableStateOf(|| false);
     let sheet: ImageBitmap = cranpose_core::remember(sprite_sheet).with(|b| b.clone());
     let src = if is_pressed.get() {
         Rect {

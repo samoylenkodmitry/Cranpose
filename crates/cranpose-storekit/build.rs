@@ -19,6 +19,8 @@ const LIB_NAME: &str = "cranpose_storekit_swift";
 fn main() {
     println!("cargo:rerun-if-changed=swift/storekit.swift");
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
 
     // Non-Apple targets: no-op. The crate's Rust side is cfg'd to match, so
     // Linux/Android/Windows/wasm see an empty crate and an empty build script.

@@ -1,0 +1,192 @@
+//! The Wear scaling list's scroll state, the image painter, and the
+//! scale-down overflow policy.
+//!
+//! A scaling list's position *is* an anchor plus an offset, so every question
+//! about it — how far away a row is, whether the list even has that row,
+//! whether an animation is running — is answered by arithmetic over what the
+//! last measure pass saw. Those answers decide whether a "scroll to item" moves
+//! in the right direction, which is not something a screenshot shows.
+
+use cranpose_ui::round_scaling_list::CentreAnchor;
+use cranpose_ui::run_test_composition;
+use cranpose_ui::widgets::image::Painter;
+use cranpose_ui::widgets::wear::scaling_list::rememberWearScalingListState;
+use cranpose_ui::TextOverflow;
+use cranpose_ui_graphics::ImageBitmap;
+
+#[test]
+fn a_fresh_scaling_list_has_no_rows_and_so_contains_none() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        assert!(
+            !state.contains_item(0),
+            "a list that has measured nothing claimed to hold a row"
+        );
+        assert_eq!(state.visible_item_count(), 0);
+    });
+}
+
+#[test]
+fn a_scaling_list_reports_the_anchor_it_is_given() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        assert_eq!(state.anchor(), CentreAnchor::default());
+
+        let moved = CentreAnchor {
+            index: 4,
+            offset: 12.0,
+        };
+        state.set_anchor(moved);
+        assert_eq!(state.anchor(), moved, "the anchor did not take");
+    });
+}
+
+#[test]
+fn an_animation_to_a_row_the_list_does_not_have_is_not_started() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        // Nothing is measured, so row 900 does not exist. Starting an animation
+        // towards it would leave the list creeping towards a row that will
+        // never arrive.
+        state.animate_scroll_to_item(900, 0.0);
+        assert_eq!(
+            state.anchor(),
+            CentreAnchor::default(),
+            "the list moved towards a row it does not have"
+        );
+    });
+}
+
+#[test]
+fn cancelling_an_animation_that_is_not_running_is_harmless() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        state.cancel_scroll_animation();
+        state.cancel_scroll_animation();
+        assert_eq!(state.anchor(), CentreAnchor::default());
+    });
+}
+
+#[test]
+fn a_distance_of_zero_is_reported_for_the_anchored_row_itself() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        // With nothing measured the estimate spans no rows, so the anchored row
+        // is on the centre line by definition. A non-zero answer here would
+        // make an animation start moving away from where it already is.
+        assert_eq!(state.distance_to_item(0, 0.0), 0.0);
+    });
+}
+
+#[test]
+fn a_distance_ignores_an_offset_that_is_not_a_number() {
+    run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        // A NaN offset would poison the anchor and freeze the list, so it is
+        // taken as no offset at all.
+        assert_eq!(
+            state.distance_to_item(0, f32::NAN),
+            state.distance_to_item(0, 0.0)
+        );
+    });
+}
+
+fn one_pixel() -> ImageBitmap {
+    ImageBitmap::from_rgba8(1, 1, vec![255, 0, 0, 255]).expect("a one-pixel bitmap")
+}
+
+#[test]
+fn a_bitmap_painter_hands_back_the_bitmap_it_was_built_from() {
+    let painter = Painter::from_bitmap(one_pixel());
+    let bitmap = painter.as_bitmap().expect("the painter lost its bitmap");
+    assert_eq!((bitmap.width(), bitmap.height()), (1, 1));
+}
+
+#[test]
+fn a_region_painter_still_reports_the_atlas_it_samples() {
+    // A region painter draws part of a bitmap, and whatever uploads textures
+    // needs the whole atlas, not the part.
+    let painter = Painter::from_bitmap_region(
+        one_pixel(),
+        cranpose_ui_graphics::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        Default::default(),
+    );
+    assert!(
+        painter.as_bitmap().is_some(),
+        "a region painter reported no source bitmap"
+    );
+}
+
+#[test]
+fn scale_down_reports_its_floor_and_the_other_policies_report_none() {
+    assert_eq!(
+        TextOverflow::ScaleDown {
+            min_font_size_sp: 8.0
+        }
+        .scale_down_min_font_size_sp(),
+        Some(8.0)
+    );
+    assert_eq!(TextOverflow::Clip.scale_down_min_font_size_sp(), None);
+    assert_eq!(TextOverflow::Ellipsis.scale_down_min_font_size_sp(), None);
+}
+
+#[test]
+fn a_scale_down_floor_that_cannot_be_drawn_at_is_normalised_away() {
+    // A floor of zero or below would let text shrink to nothing rather than
+    // clip, which reads to the user as text that vanished.
+    for impossible in [0.0, -4.0, f32::NAN] {
+        let floor = TextOverflow::ScaleDown {
+            min_font_size_sp: impossible,
+        }
+        .scale_down_min_font_size_sp()
+        .expect("scale-down always reports a floor");
+        assert!(floor > 0.0, "a floor of {impossible} normalised to {floor}");
+    }
+}
+
+#[test]
+fn the_wear_widgets_compose_against_a_scaling_list_state() {
+    use cranpose_ui::measure_layout;
+    use cranpose_ui::widgets::wear::scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec};
+    use cranpose_ui::widgets::wear::switch_button::{
+        SwitchButtonNode, SwitchButtonSpec, SwitchColors, SwitchGraphic,
+    };
+    use cranpose_ui::Modifier;
+
+    let mut composition = run_test_composition(|| {
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        ScrollIndicator(Modifier::empty(), state, ScrollIndicatorSpec::default());
+        SwitchButtonNode(
+            Modifier::empty(),
+            SwitchButtonSpec::default(),
+            true,
+            "Ring".to_string(),
+            Some("Vibrate too".to_string()),
+            || {},
+        );
+        SwitchGraphic(
+            Modifier::empty(),
+            SwitchButtonSpec::default(),
+            SwitchColors::of(SwitchButtonSpec::default().colors, false),
+        );
+    });
+
+    // Wear widgets draw through a canvas and a graphics layer, so composing is
+    // only half of it: measuring is where a layer with no size shows up.
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let measured = measure_layout(
+        &mut applier,
+        root,
+        cranpose_ui_graphics::Size::new(400.0, 400.0),
+    );
+    applier.clear_runtime_handle();
+    measured.expect("the wear screen measures");
+}

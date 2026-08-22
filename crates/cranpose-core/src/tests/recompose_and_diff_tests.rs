@@ -33,7 +33,7 @@ fn state_update_schedules_render() {
     let mut stored = None;
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let state = cranpose_core::useState(|| 10);
+            let state = cranpose_core::rememberMutableStateOf(|| 10);
             let _ = state.value();
             stored = Some(state);
         })
@@ -49,7 +49,7 @@ fn an_armed_frame_callback_is_not_a_reason_to_recompose() {
     let mut composition = test_composition();
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let state = cranpose_core::useState(|| 10);
+            let state = cranpose_core::rememberMutableStateOf(|| 10);
             let _ = state.value();
         })
         .expect("render succeeds");

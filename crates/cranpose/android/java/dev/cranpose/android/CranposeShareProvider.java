@@ -19,16 +19,9 @@ import java.io.FileNotFoundException;
  * other apps without a {@code file://} URI (forbidden since Android 7) and
  * without an androidx FileProvider dependency.
  *
- * <p>Apps declare it once in their manifest, with the authority
- * {@code <applicationId>.cranpose.share}:
- *
- * <pre>{@code
- * <provider
- *     android:name="dev.cranpose.android.CranposeShareProvider"
- *     android:authorities="${applicationId}.cranpose.share"
- *     android:exported="false"
- *     android:grantUriPermissions="true" />
- * }</pre>
+ * <p>The library's own manifest declares it, with the authority
+ * {@code <applicationId>.cranpose.share}, so an application that shares a file
+ * declares nothing.
  */
 public class CranposeShareProvider extends ContentProvider {
     /** The staging directory under the app's cache dir. */

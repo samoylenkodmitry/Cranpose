@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What every Cranpose application needs, contributed by the library so no
+    application repeats it.
+
+    The activity is declared here in full, including the launcher intent filter:
+    an application supplies its label, icon and theme through the manifest
+    placeholders the Cranpose Gradle plugin sets, and declares no activity of
+    its own. `android.app.lib_name` names the cdylib `NativeActivity` loads and
+    must match the Cargo package's library name, which the plugin also supplies.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application>
+        <activity
+            android:name="dev.cranpose.android.CranposeActivity"
+            android:exported="true"
+            android:label="${cranposeLabel}"
+            android:theme="${cranposeTheme}"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="${cranposeLibName}" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Sharing a file out. `cranpose_services::share` stages the payload in
+            the cache directory and hands the receiving application a content
+            URI, which is only readable through a provider; the authority is
+            derived from the application id so two Cranpose applications
+            installed side by side do not collide.
+        -->
+        <provider
+            android:name="dev.cranpose.android.CranposeShareProvider"
+            android:authorities="${applicationId}.cranpose.share"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

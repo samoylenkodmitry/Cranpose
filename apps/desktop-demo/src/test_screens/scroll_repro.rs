@@ -10,7 +10,7 @@ use cranpose_ui::{
 #[allow(non_snake_case)]
 #[composable]
 pub fn ScrollReproScreen() {
-    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
+    let list_state = cranpose_foundation::lazy::rememberLazyListState();
 
     Column(
         Modifier::empty()
@@ -50,14 +50,9 @@ pub fn ScrollReproScreen() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move |scope| {
-                    scope.items(
-                        100,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        move |index| {
-                            ReproItem(index + 1);
-                        },
-                    );
+                    scope.items(100, move |index| {
+                        ReproItem(index + 1);
+                    });
                 },
             );
         },

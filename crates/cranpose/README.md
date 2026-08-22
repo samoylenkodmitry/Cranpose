@@ -88,7 +88,7 @@ use cranpose::prelude::*;
 
 #[composable]
 fn CounterApp() {
-    let count = useState(|| 0);
+    let count = rememberMutableStateOf(|| 0);
 
     Column(Modifier.fill_max_size().padding(20.0), || {
         Text(format!("Count: {}", count.value()));

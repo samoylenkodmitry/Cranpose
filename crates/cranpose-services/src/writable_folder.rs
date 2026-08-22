@@ -1,34 +1,33 @@
 //! Cross-platform access to a user-chosen **writable** folder.
 //!
-//! This is the write-side complement of [`crate::file_picker`]: where the picker
-//! *reads* files the user selects, this lets an app persist its own data into a
-//! folder the user grants — a local directory on desktop, a Storage Access
-//! Framework tree on Android — and read it back on later runs. The motivating
-//! use is cross-device sync, where each device writes a small document into a
-//! shared folder (e.g. on a Tailnet/WebDAV mount) and reads its peers'.
+//! This is the write-side complement of [`crate::file_picker`]: where the
+//! choosers *read* content the user selects, this lets an app persist its own
+//! data into a folder the user grants — a local directory on desktop, a Storage
+//! Access Framework tree on Android — and read it back on later runs. The
+//! motivating use is cross-device sync, where each device writes a small
+//! document into a shared folder (e.g. on a Tailnet/WebDAV mount) and reads its
+//! peers'.
 //!
-//! Two halves, mirroring the picker:
-//! - [`pick_writable_folder`] — asynchronous, UI-thread. Presents the system
-//!   folder picker with a *persistent read/write* grant and resolves to an
-//!   opaque, durable **handle** string the app stores.
-//! - [`open_writable_folder`] — synchronous and thread-safe. Rebuilds a
-//!   [`WritableFolderStore`] from a stored handle. Its I/O methods are
-//!   synchronous and `Send + Sync`, so a background worker can call them without
-//!   touching the UI thread.
+//! Two halves:
+//! - [`crate::launcher::rememberWritableFolderLauncher`] presents the system
+//!   chooser and hands back the opaque, durable **handle** string the app
+//!   stores. The launcher owns the request across host recreation.
+//! - [`open_writable_folder`] is synchronous and thread-safe. It rebuilds a
+//!   [`WritableFolderStore`] from a stored handle, so a background worker can
+//!   read and write without touching the UI thread.
 //!
-//! Read-only or unreachable folders surface as [`FolderError::ReadOnly`] /
-//! [`FolderError::Io`] so callers can degrade gracefully. Backends: desktop
-//! (rfd + `std::fs`), Android (SAF tree URIs), iOS (security-scoped
-//! bookmarks). The web has no writable-folder concept and returns
-//! [`FolderError::Unsupported`].
+//! Stores expose whole-file operations, [`FolderEntry`] display metadata, and
+//! chunked [`FolderReader`]/[`FolderWriter`] streams for payloads that should
+//! not be buffered. Read-only or unreachable folders surface as
+//! [`FolderError::ReadOnly`] / [`FolderError::Io`] so callers can degrade
+//! gracefully. Backends: desktop (`std::fs`), Android (SAF tree URIs), iOS
+//! (security-scoped bookmarks). The web has no writable-folder concept and
+//! returns [`FolderError::Unsupported`].
 
-use crate::file_picker::{FilePickerError, PickerFuture};
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
 /// Errors produced by writable-folder I/O.
-#[derive(thiserror::Error, Debug, Clone)]
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum FolderError {
     /// The folder (or backing store) is read-only.
     #[error("writable folder is read-only")]
@@ -44,6 +43,40 @@ pub enum FolderError {
     Io(String),
 }
 
+/// Display metadata for one file in a writable folder.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FolderEntry {
+    /// The file name, as stored.
+    pub name: String,
+    /// Byte length.
+    pub len: u64,
+    /// Last-modified time in milliseconds since the Unix epoch, when the
+    /// provider reports one.
+    pub modified_millis: Option<u64>,
+}
+
+/// Chunked reader over one file in a writable folder.
+///
+/// Synchronous and `Send` so a worker thread can drain it.
+pub trait FolderReader: Send {
+    /// Reads the next chunk, or `None` at end of file.
+    fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, FolderError>;
+}
+
+/// Chunked writer over one file in a writable folder.
+///
+/// The file is only visible under its final name once [`finish`] succeeds;
+/// dropping a writer without finishing discards the partial write.
+///
+/// [`finish`]: FolderWriter::finish
+pub trait FolderWriter: Send {
+    /// Appends `bytes`.
+    fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), FolderError>;
+
+    /// Commits the file under its final name.
+    fn finish(self: Box<Self>) -> Result<(), FolderError>;
+}
+
 /// Synchronous, thread-safe access to a user-chosen writable folder.
 ///
 /// Implementations are `Send + Sync` so a background thread can read and write
@@ -56,11 +89,19 @@ pub trait WritableFolderStore: Send + Sync {
     /// Reads the file `name`.
     fn read(&self, name: &str) -> Result<Vec<u8>, FolderError>;
 
-    /// Lists the immediate child *file* names (directories excluded).
-    fn list(&self) -> Result<Vec<String>, FolderError>;
+    /// Lists the immediate child *files* with their display metadata
+    /// (directories excluded).
+    fn list(&self) -> Result<Vec<FolderEntry>, FolderError>;
 
     /// Removes the file `name`. Succeeds if it is already absent.
     fn remove(&self, name: &str) -> Result<(), FolderError>;
+
+    /// Opens a chunked reader over the file `name`.
+    fn open_read(&self, name: &str) -> Result<Box<dyn FolderReader>, FolderError>;
+
+    /// Opens a chunked writer that replaces the file `name` on
+    /// [`FolderWriter::finish`].
+    fn open_write(&self, name: &str) -> Result<Box<dyn FolderWriter>, FolderError>;
 
     /// Cheaply probes whether the folder is writable right now (e.g. detects a
     /// read-only WebDAV mount that still granted a write permission).
@@ -69,77 +110,44 @@ pub trait WritableFolderStore: Send + Sync {
     /// The durable handle (filesystem path / SAF tree URI) used to reopen this
     /// folder with [`open_writable_folder`] on a later run.
     fn handle(&self) -> String;
+
+    /// The folder's name as the user would recognise it. The default derives it
+    /// from the last component of [`handle`](WritableFolderStore::handle);
+    /// providers that know a nicer name (an SAF display name) override it.
+    fn display_name(&self) -> String {
+        let handle = self.handle();
+        handle
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\', ':'])
+            .find(|segment| !segment.is_empty())
+            .map(|segment| segment.to_string())
+            .unwrap_or(handle)
+    }
+
+    /// Display metadata for one file, without reading it.
+    ///
+    /// The default filters [`list`](WritableFolderStore::list); providers that
+    /// can stat a single file override it.
+    fn entry(&self, name: &str) -> Result<FolderEntry, FolderError> {
+        self.list()?
+            .into_iter()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| FolderError::NotFound(name.to_string()))
+    }
 }
 
 /// Shared handle to a [`WritableFolderStore`].
 pub type WritableFolderStoreRef = Arc<dyn WritableFolderStore>;
 
-/// Presents the system "pick a writable folder" UI. Platform-provided (Android);
-/// desktop/web use the built-in backend.
-pub trait WritableFolderPicker {
-    /// Resolves to the durable handle string, or `None` if the user cancelled.
-    fn pick(&self) -> PickerFuture<Result<Option<String>, FilePickerError>>;
-
-    /// Reclaims a grant whose result arrived after the composition that
-    /// requested it was torn down. On Android the activity (and the native app)
-    /// can be destroyed and recreated while the SAF picker is in front, so a
-    /// folder picked at that moment would otherwise be lost; the app drains this
-    /// on startup to recover it. Returns the recovered durable handle, usually
-    /// `None`. Backends that never lose a result keep the default.
-    fn take_resumed_pick(&self) -> Option<String> {
-        None
-    }
-}
-
-/// Shared handle to a [`WritableFolderPicker`].
-pub type WritableFolderPickerRef = Rc<dyn WritableFolderPicker>;
-
-thread_local! {
-    static PLATFORM_PICKER: RefCell<Option<WritableFolderPickerRef>> = const { RefCell::new(None) };
-}
-
-/// Registers the platform writable-folder picker (Android SAF). The cranpose
-/// crate's backend calls this during startup; once registered it takes
-/// precedence over the built-in desktop picker.
-pub fn set_platform_writable_folder_picker(picker: WritableFolderPickerRef) {
-    PLATFORM_PICKER.with(|cell| *cell.borrow_mut() = Some(picker));
-}
-
-/// Removes any registered platform picker (tests/teardown).
-pub fn clear_platform_writable_folder_picker() {
-    PLATFORM_PICKER.with(|cell| *cell.borrow_mut() = None);
-}
-
-fn registered_picker() -> Option<WritableFolderPickerRef> {
-    PLATFORM_PICKER.with(|cell| cell.borrow().clone())
-}
-
-/// Factory turning a stored handle into a [`WritableFolderStore`]. Unlike the
-/// picker this is thread-safe, so a worker thread can reopen the folder.
+/// Factory turning a stored handle into a [`WritableFolderStore`]. Thread-safe,
+/// so a worker thread can reopen the folder.
 type StoreFactory = Box<dyn Fn(&str) -> Option<WritableFolderStoreRef> + Send + Sync>;
 static STORE_FACTORY: OnceLock<StoreFactory> = OnceLock::new();
 
-/// Registers the platform store factory (Android). Called once at startup. No-op
-/// if already set.
+/// Registers the platform store factory (Android, iOS). Called once at startup.
+/// No-op if already set.
 pub fn set_writable_folder_store_factory(factory: StoreFactory) {
     let _ = STORE_FACTORY.set(factory);
-}
-
-/// Presents the writable-folder picker and resolves to a durable handle (or
-/// `None` if cancelled). Async; drive it from `LaunchedEffectAsync`.
-pub fn pick_writable_folder() -> PickerFuture<Result<Option<String>, FilePickerError>> {
-    if let Some(picker) = registered_picker() {
-        return picker.pick();
-    }
-    builtin_pick()
-}
-
-/// Reclaims a writable-folder grant orphaned by an activity recreation while the
-/// SAF picker was in front (see [`WritableFolderPicker::take_resumed_pick`]).
-/// Returns the recovered durable handle, or `None`. The app drains this on
-/// startup; backends that never lose a result return `None`.
-pub fn take_resumed_writable_folder() -> Option<String> {
-    registered_picker().and_then(|picker| picker.take_resumed_pick())
 }
 
 /// Reopens a writable folder from a stored handle. Synchronous and callable from
@@ -149,20 +157,6 @@ pub fn open_writable_folder(handle: &str) -> Option<WritableFolderStoreRef> {
         return factory(handle);
     }
     builtin_open(handle)
-}
-
-fn builtin_pick() -> PickerFuture<Result<Option<String>, FilePickerError>> {
-    #[cfg(all(
-        not(target_arch = "wasm32"),
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        feature = "file-picker-native"
-    ))]
-    {
-        return desktop::pick();
-    }
-    #[allow(unreachable_code)]
-    Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
 }
 
 fn builtin_open(handle: &str) -> Option<WritableFolderStoreRef> {
@@ -194,6 +188,41 @@ mod desktop;
 mod tests {
     use super::*;
 
+    struct FlatStore {
+        handle: String,
+    }
+
+    impl WritableFolderStore for FlatStore {
+        fn write(&self, _name: &str, _contents: &[u8]) -> Result<(), FolderError> {
+            Ok(())
+        }
+        fn read(&self, _name: &str) -> Result<Vec<u8>, FolderError> {
+            Ok(Vec::new())
+        }
+        fn list(&self) -> Result<Vec<FolderEntry>, FolderError> {
+            Ok(vec![FolderEntry {
+                name: "sync.json".into(),
+                len: 12,
+                modified_millis: Some(5),
+            }])
+        }
+        fn remove(&self, _name: &str) -> Result<(), FolderError> {
+            Ok(())
+        }
+        fn open_read(&self, _name: &str) -> Result<Box<dyn FolderReader>, FolderError> {
+            Err(FolderError::Unsupported)
+        }
+        fn open_write(&self, _name: &str) -> Result<Box<dyn FolderWriter>, FolderError> {
+            Err(FolderError::Unsupported)
+        }
+        fn is_writable(&self) -> bool {
+            true
+        }
+        fn handle(&self) -> String {
+            self.handle.clone()
+        }
+    }
+
     #[test]
     fn folder_error_messages_are_distinct() {
         assert_eq!(
@@ -206,19 +235,26 @@ mod tests {
     }
 
     #[test]
-    fn picker_registration_round_trips() {
-        struct Marker;
-        impl WritableFolderPicker for Marker {
-            fn pick(&self) -> PickerFuture<Result<Option<String>, FilePickerError>> {
-                Box::pin(async { Ok(Some("handle".to_string())) })
-            }
-        }
-        clear_platform_writable_folder_picker();
-        assert!(registered_picker().is_none());
-        set_platform_writable_folder_picker(Rc::new(Marker));
-        assert!(registered_picker().is_some());
-        let result = pollster::block_on(pick_writable_folder());
-        assert!(matches!(result, Ok(Some(handle)) if handle == "handle"));
-        clear_platform_writable_folder_picker();
+    fn the_default_display_name_is_the_last_handle_segment() {
+        let store = FlatStore {
+            handle: "/home/user/Shared Sync/".into(),
+        };
+        assert_eq!(store.display_name(), "Shared Sync");
+        let tree = FlatStore {
+            handle: "content://com.android.externalstorage.documents/tree/primary%3ASync".into(),
+        };
+        assert_eq!(tree.display_name(), "primary%3ASync");
+    }
+
+    #[test]
+    fn the_default_entry_lookup_filters_the_listing() {
+        let store = FlatStore {
+            handle: "sync-root".into(),
+        };
+        assert_eq!(store.entry("sync.json").unwrap().len, 12);
+        assert_eq!(
+            store.entry("absent.json"),
+            Err(FolderError::NotFound("absent.json".into()))
+        );
     }
 }

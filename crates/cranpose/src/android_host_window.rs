@@ -256,12 +256,12 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
         };
 
     let state = AndroidHostWindowState {
-        requested_size: cranpose_core::useState(move || initial_requested),
-        requested_position: cranpose_core::useState(|| Point::ZERO),
-        actual_size: cranpose_core::useState(|| Size::ZERO),
-        request_revision: cranpose_core::useState(move || initial_revision),
-        position_revision: cranpose_core::useState(|| 0_u64),
-        status: cranpose_core::useState(move || initial_status),
+        requested_size: cranpose_core::rememberMutableStateOf(move || initial_requested),
+        requested_position: cranpose_core::rememberMutableStateOf(|| Point::ZERO),
+        actual_size: cranpose_core::rememberMutableStateOf(|| Size::ZERO),
+        request_revision: cranpose_core::rememberMutableStateOf(move || initial_revision),
+        position_revision: cranpose_core::rememberMutableStateOf(|| 0_u64),
+        status: cranpose_core::rememberMutableStateOf(move || initial_status),
     };
 
     let owner = cranpose_core::remember(|| Rc::new(())).with(Rc::clone);

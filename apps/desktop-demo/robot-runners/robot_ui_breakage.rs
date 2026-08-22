@@ -10,7 +10,7 @@
 //!    Structure becomes `Column -> Row -> Text("Persistent")`.
 //! 3. Verify `Text("Persistent")` is still visible and has valid bounds.
 
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Text,
     TextStyle,
@@ -22,7 +22,7 @@ use std::time::Duration;
 
 #[composable]
 fn reproduction_app() {
-    let toggle = useState(|| false);
+    let toggle = rememberMutableStateOf(|| false);
 
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Button(

@@ -25,6 +25,7 @@ pub(crate) fn register() {
     set_platform_notifier(Arc::new(WebNotifier::default()));
     set_platform_haptics(Arc::new(WebHaptics));
     set_platform_device_info(Rc::new(WebDeviceInfo));
+    crate::web_media::install();
     register_network_monitor();
 }
 

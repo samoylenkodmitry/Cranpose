@@ -24,16 +24,17 @@ never silently pretend.
 | share sheet       | ■   | ■ ACTION_SEND + `CranposeShareProvider` | □ (save-dialog instead) | ■ Web Share API | |
 | notifier          | ■   | ■ channels + deep-link Java | ■ zero-dep CLI (notify-send/osascript/PowerShell) | ■ Notification API | |
 | network status    | □   | ■ ConnectivityManager Java | ● explicit assumption | ■ `navigator.onLine` | iOS NWPathMonitor still open |
-| device info       | ■   | ● /proc/meminfo | ● linux; □ mac/win | ■ `navigator.deviceMemory` (reflective) | |
+| device info       | ■ `NSProcessInfo` + `os_proc_available_memory` | ■ /proc + `getrusage`/`mallopt` | ■ `getrusage`; resident on linux | ● `navigator.deviceMemory` (reflective) | process readings — resident set, memory still available to this process, processor time, and returning free pages — sit beside the device total; every one is optional and a platform that will not say reports nothing rather than zero |
 | clipboard         | ■   | ■ ClipboardManager JNI | ■ arboard | ■ Async Clipboard API (`web_clipboard`) | web reads are a promise, so the bridge takes the *paste* (`request_paste`) instead of answering `read_text` |
 | back requests     | ■   | ■ back key → `push_back_request` behind `set_back_interception` | □ (apps map keys themselves) | □ | predictive back must stay off (`enableOnBackInvokedCallback=false`) |
 | safe-area insets  | ■   | ■ WindowInsets listener → `local_safe_area_insets` | ● zero | ● zero | replaced cranscan's marker-file bridge |
 | system theme      | ■ `window.theme()` polled | ■ uiMode + ConfigChanged | ■ winit `ThemeChanged` (+ cached env probe) | ■ `prefers-color-scheme` listener | drives LiquidTheme Auto |
 | image picker      | ■   | ● file-picker fallback | ● | ● | camera source stays iOS-only for now |
-| camera            | ■   | □ (cranscan keeps its system-camera round-trip; camera2 port is the next arc) | □ | □ | frames as RGBA `CameraFrame` |
+| camera            | ■ `AVCaptureSession` | ■ Camera2 (`CranposeCamera`) | □ | □ | frames pushed as `CameraFrame`, NV12 on Android and RGBA on iOS; observable state, bounded latest-wins analysis stream, stills asked for rather than waited on |
 | background activity | ■ | □ (FGS is app policy) | □ | □ | documented |
 | file save dialog  | □ (export picker still open) | ■ ACTION_CREATE_DOCUMENT | ■ rfd save | ■ browser download | `FilePicker::save_file`; killed cranscan's direct rfd |
 | launch arguments  | ● argv (`simctl launch`, `launchArguments`) | ■ intent extras + `onNewIntent` | ● argv | □ (query string still open) | `launch_args()`; `is_debuggable()` = `FLAG_DEBUGGABLE` on Android, `debug_assertions` elsewhere |
+| media playback    | ■ `AVAudioPlayer` + `AVAudioSession` + MediaPlayer | ■ `MediaPlayer` + `AudioManager` + `MediaSession` + `Visualizer` | ■ `cranpose-media` (rodio/symphonia) | ■ `<audio>` + Media Session + Web Audio | observable `PlaybackState`/`PlaybackProgress`; the audio-focus policy lives in the framework; analysis samples are capability-gated (iOS has none, Android needs `RECORD_AUDIO`); desktop and iOS play local files only; the equalizer is ten octave bands where the framework builds the filters, the device's own bands on Android, and absent on iOS |
 | in-app purchases  | ■ StoreKit 2 (`cranpose-storekit`) | ■ Play Billing (`playbilling` feature + `CranposeBilling`) | □ | □ | `purchases::store_state()` snapshot read from the frame loop; a platform without a store reports `StorePhase::Unavailable` and owns nothing, so a build with no backend never grants a paid entitlement by accident |
 
 ## Structural fixes
@@ -49,7 +50,7 @@ never silently pretend.
    listener, clipboard, haptics, ACTION_CREATE_DOCUMENT save). Java lives at
    `crates/cranpose/android/java/dev/cranpose/android/` (plus
    `CranposeShareProvider`, a zero-androidx content provider apps declare
-   once in their manifest). Apps extend it; cranscan's `CranScanActivity`
+   once in their manifest). Apps launch the framework-owned `CranposeActivity`
    shrank to billing + recognition service + camera + shared-in images.
 3. **`open_content_uri` stays** as a documented Android-only streaming
    utility: cranamp's audio engine streams tracks through it from the
@@ -63,9 +64,19 @@ never silently pretend.
 ## Still open
 
 - iOS network monitor (NWPathMonitor) and export-style save dialog.
-- Android camera2 backend for `cranpose_services::camera` (cranscan keeps its
-  app-side system-camera round-trip + preview until then).
 - Web camera (getUserMedia).
+- Network items for the desktop and iOS media backends. Both play local files;
+  `AVPlayer` and a streaming `rodio` source are what would close that, and
+  until then the URI is refused rather than downloaded into memory first.
+- Analysis samples on iOS. `AVAudioPlayer` metering gives an average and a peak
+  per channel, not the samples a visualiser draws, so
+  `MediaCapabilities::analysis` reports `false` rather than publishing
+  something else under that name.
+- An equalizer on iOS. Shaping playback needs an `AVAudioEngine` graph with an
+  `AVAudioUnitEQ` in it; `AVAudioPlayer` plays a file to the output and has
+  nowhere to put one, so `MediaCapabilities::equalizer` reports `false`. Moving
+  the iOS backend onto `AVAudioEngine` would close this and the analysis gap
+  above together.
 - Web launch arguments from the URL query string (`launch_args()` is empty on
   wasm today; the shell would install a snapshot from `location.search`).
 - `local_*()` accessor seams for `camera`/`device_info`/`network`/`background`.

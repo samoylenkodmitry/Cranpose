@@ -3,7 +3,7 @@
 //! This module provides the web event loop implementation using wasm-bindgen and WebGPU.
 
 use crate::{
-    launcher::AppSettings,
+    app_launcher::AppSettings,
     wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
@@ -123,6 +123,7 @@ pub async fn run(
     // Browser-backed service implementations (share, notifications, vibration,
     // online status) registered before the first composition.
     crate::web_services::register();
+    crate::web_host_surface::install();
 
     // Get the window and document
     let window = web_sys::window().ok_or("no global window exists")?;
@@ -821,6 +822,96 @@ pub async fn run(
         }) as Box<dyn FnMut(_)>);
         ime_textarea
             .add_event_listener_with_callback("compositionend", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // The canvas follows the page: a browser-window resize, an orientation
+    // change, or a zoom that moves the device pixel ratio all reshape it. The
+    // whole reshape — CSS box, drawing buffer, swapchain, composition viewport
+    // and density — happens in one place, and the same place serves an
+    // application that asks for a size through the host-surface service.
+    let reshape: Rc<dyn Fn(Option<(f32, f32)>)> = {
+        let canvas = canvas.clone();
+        let window = window.clone();
+        let app = app.clone();
+        let platform = platform.clone();
+        let surface = surface.clone();
+        let surface_config = surface_config.clone();
+        let surface_dirty = surface_dirty.clone();
+        let request_frame = request_frame.clone();
+        Rc::new(move |requested: Option<(f32, f32)>| {
+            if let Some((requested_width, requested_height)) = requested {
+                if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+                    let style = html_element.style();
+                    let _ = style.set_property("width", &format!("{requested_width}px"));
+                    let _ = style.set_property("height", &format!("{requested_height}px"));
+                }
+            }
+
+            let scale_factor = window.device_pixel_ratio();
+            let width = canvas.client_width().max(1) as u32;
+            let height = canvas.client_height().max(1) as u32;
+            let (buffer_width, buffer_height) =
+                crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
+            let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
+
+            let unchanged = {
+                let config = surface_config.borrow();
+                config.width == buffer_width && config.height == buffer_height
+            };
+            if unchanged && requested.is_none() {
+                return;
+            }
+
+            canvas.set_width(buffer_width);
+            canvas.set_height(buffer_height);
+            {
+                let mut config = surface_config.borrow_mut();
+                config.width = buffer_width;
+                config.height = buffer_height;
+                let mut app_mut = app.borrow_mut();
+                if let Some(device) = app_mut.renderer().try_device() {
+                    surface.configure(device, &config);
+                }
+                app_mut.renderer().set_root_scale(render_scale as f32);
+                app_mut.set_buffer_size(buffer_width, buffer_height);
+                app_mut.set_viewport(width as f32, height as f32);
+                app_mut.set_density(render_scale as f32);
+                app_mut.request_root_render();
+            }
+            platform.borrow_mut().set_scale_factor(scale_factor);
+            crate::web_host_surface::publish(width as f32, height as f32, render_scale as f32);
+            surface_dirty.set(true);
+            request_frame();
+        })
+    };
+
+    crate::web_host_surface::publish(width as f32, height as f32, effective_scale as f32);
+
+    {
+        let reshape = reshape.clone();
+        let closure = Closure::wrap(Box::new(move || reshape(None)) as Box<dyn FnMut()>);
+        window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // An application's resize request is applied on the next frame, on the
+    // browser thread that owns the canvas.
+    {
+        let reshape = reshape.clone();
+        let request_frame_for_requests = request_frame.clone();
+        let closure = Closure::wrap(Box::new(move || {
+            if let Some(size) = crate::web_host_surface::take_requested_size() {
+                reshape(Some(size));
+            }
+            request_frame_for_requests();
+        }) as Box<dyn FnMut()>);
+        // 60 ms is far below anything a person notices for a window resize and
+        // far above anything that costs measurable battery.
+        window.set_interval_with_callback_and_timeout_and_arguments_0(
+            closure.as_ref().unchecked_ref(),
+            60,
+        )?;
         closure.forget();
     }
 

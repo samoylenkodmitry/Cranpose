@@ -1545,13 +1545,31 @@ impl ModifierNodeElement for ClipToBoundsElement {
 /// coordinates, resolved through ancestor scroll placement + graphics-layer
 /// translation) here every pass. Scroll containers use it to expose their
 /// viewport bounds to a `BringIntoViewResponder`. Draws nothing.
+pub trait WindowRectSink {
+    fn set(&self, rect: cranpose_ui_graphics::Rect);
+}
+
+impl WindowRectSink for Cell<cranpose_ui_graphics::Rect> {
+    fn set(&self, rect: cranpose_ui_graphics::Rect) {
+        Cell::set(self, rect);
+    }
+}
+
+struct StateWindowRectSink(cranpose_core::MutableState<cranpose_ui_graphics::Rect>);
+
+impl WindowRectSink for StateWindowRectSink {
+    fn set(&self, rect: cranpose_ui_graphics::Rect) {
+        self.0.set(rect);
+    }
+}
+
 pub struct WindowRectReporterNode {
-    sink: Rc<Cell<cranpose_ui_graphics::Rect>>,
+    sink: Rc<dyn WindowRectSink>,
     state: NodeState,
 }
 
 impl WindowRectReporterNode {
-    pub fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
+    pub(crate) fn new(sink: Rc<dyn WindowRectSink>) -> Self {
         Self {
             sink,
             state: NodeState::new(),
@@ -1559,7 +1577,7 @@ impl WindowRectReporterNode {
     }
 
     /// The cell the layout pass writes this node's window rect into.
-    pub(crate) fn window_rect_sink(&self) -> Rc<Cell<cranpose_ui_graphics::Rect>> {
+    pub(crate) fn window_rect_sink(&self) -> Rc<dyn WindowRectSink> {
         self.sink.clone()
     }
 }
@@ -1606,12 +1624,18 @@ impl LayoutModifierNode for WindowRectReporterNode {
 /// across recompositions, swapping the sink cell when it changes.
 #[derive(Clone)]
 pub struct WindowRectReporterElement {
-    sink: Rc<Cell<cranpose_ui_graphics::Rect>>,
+    sink: Rc<dyn WindowRectSink>,
 }
 
 impl WindowRectReporterElement {
     pub fn new(sink: Rc<Cell<cranpose_ui_graphics::Rect>>) -> Self {
         Self { sink }
+    }
+
+    pub fn from_state(sink: cranpose_core::MutableState<cranpose_ui_graphics::Rect>) -> Self {
+        Self {
+            sink: Rc::new(StateWindowRectSink(sink)),
+        }
     }
 }
 
@@ -1631,7 +1655,7 @@ impl Eq for WindowRectReporterElement {}
 
 impl Hash for WindowRectReporterElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        std::ptr::hash(Rc::as_ptr(&self.sink), state);
+        std::ptr::hash(Rc::as_ptr(&self.sink).cast::<()>(), state);
     }
 }
 

@@ -1,108 +1,136 @@
-//! Web file picker backed by `rfd` (the browser file input / File System
-//! Access API).
+//! Web choosers backed by `rfd` (the browser file input) and the browser
+//! download for saving.
 //!
-//! Folder picking on the web requires the File System Access API
+//! Folder choosing on the web requires the File System Access API
 //! (`showDirectoryPicker`), which is Chromium-only and behind unstable
 //! bindings, so it is reported as unsupported here; native platforms (desktop,
-//! Android, iOS) provide system-provider folder picking.
+//! Android, iOS) provide system-provider folder choosing.
 
-use super::{
-    FilePickerError, FilePickerOptions, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
-    SaveFileRequest,
+use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
+use crate::content::{
+    BytesContent, ContentError, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata,
+    ContentSink, ContentSinkRef,
 };
+use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 
-/// "Saving" on the web is a browser download: the bytes become a Blob object
-/// URL clicked through a transient anchor. The user's browser decides the
-/// destination, so this resolves `Ok(true)` once the download is handed off.
-pub(super) fn save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(title) = &options.title {
+        dialog = dialog.set_title(title);
+    }
+    for filter in &options.filters {
+        let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(filter.label.clone(), &extensions);
+    }
+    dialog
+}
+
+async fn content_of(handle: rfd::FileHandle) -> ContentHandle {
+    let name = handle.file_name();
+    let bytes = handle.read().await;
+    BytesContent::new(ContentMetadata::named(name), bytes).handle()
+}
+
+pub(super) fn pick_file(
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Option<ContentHandle>, FilePickerError>> {
     Box::pin(async move {
-        let window =
-            web_sys::window().ok_or_else(|| FilePickerError::Failed("no window".to_string()))?;
+        match dialog(&options).pick_file().await {
+            None => Ok(None),
+            Some(handle) => Ok(Some(content_of(handle).await)),
+        }
+    })
+}
+
+pub(super) fn pick_files(
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Vec<ContentHandle>, FilePickerError>> {
+    Box::pin(async move {
+        let handles = dialog(&options).pick_files().await.unwrap_or_default();
+        let mut picked = Vec::with_capacity(handles.len());
+        for handle in handles {
+            picked.push(content_of(handle).await);
+        }
+        Ok(picked)
+    })
+}
+
+pub(super) fn pick_folder(
+    _options: FilePickerOptions,
+) -> PickerFuture<Result<Option<ContentFolderRef>, FilePickerError>> {
+    Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
+}
+
+pub(super) fn pick_writable_folder(
+    _options: FilePickerOptions,
+) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+    Box::pin(async { Err(FilePickerError::UnsupportedPlatform) })
+}
+
+/// "Saving" on the web is a browser download: the streamed bytes are buffered
+/// into a Blob object URL that a transient anchor clicks on
+/// [`ContentSink::finish`]. The browser owns the destination.
+pub(super) fn save_document(
+    request: SaveDocumentRequest,
+) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
+    Box::pin(async move {
+        Ok(Some(Rc::new(DownloadSink {
+            file_name: request.file_name,
+            mime_type: request.mime_type,
+            buffered: RefCell::new(Vec::new()),
+        }) as ContentSinkRef))
+    })
+}
+
+struct DownloadSink {
+    file_name: String,
+    mime_type: String,
+    buffered: RefCell<Vec<u8>>,
+}
+
+impl DownloadSink {
+    fn download(&self) -> Result<(), ContentError> {
+        let window = web_sys::window()
+            .ok_or_else(|| ContentError::Io("the document has no window".into()))?;
         let document = window
             .document()
-            .ok_or_else(|| FilePickerError::Failed("no document".to_string()))?;
+            .ok_or_else(|| ContentError::Io("the window has no document".into()))?;
 
-        let bytes = js_sys::Uint8Array::from(request.bytes.as_slice());
+        let buffered = self.buffered.borrow();
+        let bytes = js_sys::Uint8Array::from(buffered.as_slice());
         let parts = js_sys::Array::new();
         parts.push(&bytes.buffer());
         let options = web_sys::BlobPropertyBag::new();
-        options.set_type(&request.mime_type);
+        options.set_type(&self.mime_type);
         let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
-            .map_err(|error| FilePickerError::Failed(format!("blob failed: {error:?}")))?;
+            .map_err(|error| ContentError::Io(format!("blob failed: {error:?}")))?;
         let url = web_sys::Url::create_object_url_with_blob(&blob)
-            .map_err(|error| FilePickerError::Failed(format!("object URL failed: {error:?}")))?;
+            .map_err(|error| ContentError::Io(format!("object URL failed: {error:?}")))?;
 
         let anchor = document
             .create_element("a")
-            .map_err(|error| FilePickerError::Failed(format!("anchor failed: {error:?}")))?;
+            .map_err(|error| ContentError::Io(format!("anchor failed: {error:?}")))?;
         let _ = anchor.set_attribute("href", &url);
-        let _ = anchor.set_attribute("download", &request.file_name);
+        let _ = anchor.set_attribute("download", &self.file_name);
         if let Some(html_anchor) = anchor.dyn_ref::<web_sys::HtmlElement>() {
             html_anchor.click();
         }
         let _ = web_sys::Url::revoke_object_url(&url);
-        Ok(true)
-    })
+        Ok(())
+    }
 }
 
-pub(super) fn pick(
-    options: FilePickerOptions,
-    kind: PickedKind,
-) -> PickerFuture<Result<Option<PickedEntryRef>, FilePickerError>> {
-    Box::pin(async move {
-        match kind {
-            PickedKind::Folder => Err(FilePickerError::UnsupportedPlatform),
-            PickedKind::File => {
-                let mut dialog = rfd::AsyncFileDialog::new();
-                if let Some(title) = &options.title {
-                    dialog = dialog.set_title(title);
-                }
-                for filter in &options.filters {
-                    let extensions: Vec<&str> =
-                        filter.extensions.iter().map(String::as_str).collect();
-                    dialog = dialog.add_filter(filter.label.clone(), &extensions);
-                }
-                Ok(dialog
-                    .pick_file()
-                    .await
-                    .map(|handle| Rc::new(WebFileEntry { handle }) as PickedEntryRef))
-            }
-        }
-    })
-}
-
-/// A file chosen through the browser. The browser exposes only the file bytes,
-/// not a path, so reads go through the in-memory handle.
-struct WebFileEntry {
-    handle: rfd::FileHandle,
-}
-
-impl PickedEntry for WebFileEntry {
-    fn name(&self) -> String {
-        self.handle.file_name()
-    }
-
-    fn kind(&self) -> PickedKind {
-        PickedKind::File
-    }
-
-    fn display_path(&self) -> String {
-        self.handle.file_name()
-    }
-
-    fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
-        let handle = self.handle.clone();
-        Box::pin(async move { Ok(handle.read().await) })
-    }
-
-    fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
-        Box::pin(async {
-            Err(FilePickerError::WrongKind {
-                actual: "file",
-                expected: "folder",
-            })
+impl ContentSink for DownloadSink {
+    fn write_chunk(&self, bytes: Vec<u8>) -> ContentFuture<'_, Result<(), ContentError>> {
+        Box::pin(async move {
+            self.buffered.borrow_mut().extend_from_slice(&bytes);
+            Ok(())
         })
+    }
+
+    fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
+        Box::pin(async move { self.download() })
     }
 }

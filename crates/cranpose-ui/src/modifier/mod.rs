@@ -52,7 +52,7 @@ pub use cranpose_ui_graphics::{
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
-pub use focus::{FocusDirection, FocusRequester};
+pub use focus::FocusDirection;
 pub use graphics_layer::GlassMaterial;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
@@ -75,7 +75,7 @@ pub use slices::{
 pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 
 use crate::modifier_nodes::ClipToBoundsElement;
-use focus::{FocusRequesterElement, FocusTargetElement};
+use focus::FocusTargetElement;
 use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 use semantics::SemanticsElement;
 
@@ -515,16 +515,6 @@ impl Modifier {
         F: Fn(FocusState) + 'static,
     {
         let element = FocusTargetElement::with_callback(callback);
-        let modifier = Modifier::from_parts(vec![modifier_element(element)]);
-        self.then(modifier)
-    }
-
-    /// Attaches a focus requester to this component.
-    ///
-    /// The requester can be used to programmatically request focus for
-    /// this component from application code.
-    pub fn focus_requester(self, requester: &FocusRequester) -> Self {
-        let element = FocusRequesterElement::new(requester.token());
         let modifier = Modifier::from_parts(vec![modifier_element(element)]);
         self.then(modifier)
     }

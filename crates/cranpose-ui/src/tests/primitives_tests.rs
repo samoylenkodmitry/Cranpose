@@ -15,7 +15,7 @@ use cranpose_core::{
     self, location_key, Applier, Composer, Composition, ConcreteApplierHost, MemoryApplier, NodeId,
     Phase, SlotTable, SlotsHost, SnapshotStateObserver, State,
 };
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement, VerticalAlignment};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -357,7 +357,7 @@ fn PrimitiveStoriesListBranch(list_state: LazyListState) {
         list_state,
         LazyColumnSpec::default(),
         |scope| {
-            scope.item(Some(0), None, || {
+            scope.item_keyed(Some(0), None, || {
                 Text("Stories", Modifier::empty(), TextStyle::default());
             });
         },
@@ -384,18 +384,13 @@ fn PrimitiveScrollReactiveStoriesBranch(list_state: LazyListState) {
                 list_state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        40,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("Item {}", index),
-                                Modifier::empty(),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(40, |index| {
+                        Text(
+                            format!("Item {}", index),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
             CONDITIONAL_LAZY_LIST_NODE_ID.with(|slot| {
@@ -426,18 +421,13 @@ fn PrimitiveStoriesPaneWithIndicator(modifier: Modifier, list_state: LazyListSta
                                 list_state,
                                 LazyColumnSpec::default(),
                                 |scope| {
-                                    scope.items(
-                                        40,
-                                        None::<fn(usize) -> u64>,
-                                        None::<fn(usize) -> u64>,
-                                        |index| {
-                                            Text(
-                                                format!("Item {}", index),
-                                                Modifier::empty(),
-                                                TextStyle::default(),
-                                            );
-                                        },
-                                    );
+                                    scope.items(40, |index| {
+                                        Text(
+                                            format!("Item {}", index),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    });
                                 },
                             );
                             CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
@@ -494,18 +484,13 @@ fn PrimitiveStoriesPaneWithDynamicStatus(
                                 list_state,
                                 LazyColumnSpec::default(),
                                 |scope| {
-                                    scope.items(
-                                        40,
-                                        None::<fn(usize) -> u64>,
-                                        None::<fn(usize) -> u64>,
-                                        |index| {
-                                            Text(
-                                                format!("Item {}", index),
-                                                Modifier::empty(),
-                                                TextStyle::default(),
-                                            );
-                                        },
-                                    );
+                                    scope.items(40, |index| {
+                                        Text(
+                                            format!("Item {}", index),
+                                            Modifier::empty(),
+                                            TextStyle::default(),
+                                        );
+                                    });
                                 },
                             );
                             CONDITIONAL_LAZY_LIST_STATE.with(|slot| {
@@ -956,7 +941,7 @@ fn box_with_constraints_restores_conditional_lazy_list_branch_after_toggle() {
         "Thread",
         "restored lazy-list branch should render again",
         move |show_thread| {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -991,7 +976,7 @@ fn box_with_constraints_restored_lazy_list_branch_keeps_host_generation_during_s
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -1089,7 +1074,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_generation
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -1191,7 +1176,7 @@ fn box_with_constraints_restored_weighted_lazy_list_branch_keeps_host_during_sta
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),
@@ -1275,7 +1260,7 @@ fn box_with_constraints_restored_weighted_branch_after_header_toggle_keeps_host_
 
     composition
         .render(location_key(file!(), line!(), column!()), || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                 Column(
                     Modifier::empty().fill_max_size(),

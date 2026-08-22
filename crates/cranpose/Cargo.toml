@@ -75,6 +75,8 @@ ios = [
     "dep:objc2-core-media",
     "dep:objc2-core-video",
     "dep:objc2-core-foundation",
+    "dep:objc2-avf-audio",
+    "dep:objc2-media-player",
 ]
 android = [
     "cranpose-platform-android",
@@ -89,6 +91,7 @@ web = [
     "cranpose-services/uri-web",
     "cranpose-services/file-picker-web",
     "cranpose-services/system-theme-web",
+    "cranpose-services/preferences-web",
 ]
 # The real-time audio engine (`cranpose_audio`), registered into
 # `cranpose_services::audio`. Off by default: an app that plays no sound should
@@ -98,6 +101,13 @@ audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
 # Adds the desktop output device (cpal) so sound works while developing on
 # macOS, Windows or Linux. Linux builds need the ALSA development headers.
 audio-desktop = ["audio", "cranpose-audio/cpal-backend"]
+# The desktop media backend (`cranpose_media`), registered into
+# `cranpose_services::media`. Off by default because it links a system audio
+# library (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows) and carries the
+# `symphonia` decoders. Android, iOS and the web use the platform's own media
+# stack and need no feature. Harmless to enable on those targets — the backend
+# compiles away and the platform one stays installed.
+media-desktop = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
@@ -121,6 +131,7 @@ playbilling = []
 cranpose-app-shell = { workspace = true }
 cranpose-audio = { workspace = true, optional = true }
 cranpose-core = { workspace = true }
+cranpose-media = { workspace = true, optional = true }
 cranpose-ui = { workspace = true }
 cranpose-platform-desktop-winit = { workspace = true, optional = true }
 cranpose-platform-android = { workspace = true, optional = true }
@@ -169,6 +180,24 @@ web-sys = { version = "0.3", optional = true, features = [
     "Notification",
     "NotificationOptions",
     "NotificationPermission",
+    # Media playback (`web_media`): the element, the lock-screen artwork blob,
+    # and the Web Audio graph a visualiser reads.
+    "HtmlMediaElement",
+    "HtmlAudioElement",
+    "TimeRanges",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+    "BaseAudioContext",
+    "AudioContext",
+    "AudioNode",
+    "AudioDestinationNode",
+    "AnalyserNode",
+    "MediaElementAudioSourceNode",
+    "AudioParam",
+    "GainNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
 ] }
 js-sys = { version = "0.3", optional = true }
 log = "0.4"
@@ -192,16 +221,22 @@ wgpu = { version = "29.0", optional = true, default-features = false, features =
     "wgsl",
 ] }
 
+# The process readings in `process_info`: `getrusage`, `sysconf`, and on the
+# platforms that have them `mallopt` and `os_proc_available_memory`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "android")'.dependencies]
 android-activity = { workspace = true }
 android_logger = "0.15"
 jni = "0.22.4"
-libc = "0.2"
 ndk = "0.9.0"
 # Raw AChoreographer bindings for the vsync-phase probe in
 # `android_frame_telemetry`; the safe `ndk` crate does not wrap it.
 ndk-sys = "0.6.0"
 raw-window-handle = "0.6"
+zune-core = "0.5.3"
+zune-jpeg = "0.5.15"
 wgpu = { version = "29.0", optional = true, default-features = false, features = [
     "std",
     "parking_lot",
@@ -274,6 +309,7 @@ objc2-ui-kit = { version = "0.3", default-features = false, optional = true, fea
     "UIAccessibilityElement",
     "UIAccessibilityIdentification",
     "UIApplication",
+    "UIDevice",
     "UIDocumentPickerViewController",
     "UIFeedbackGenerator",
     "UIImage",
@@ -352,6 +388,24 @@ objc2-user-notifications = { version = "0.3", default-features = false, optional
     "UNNotificationSound",
     "UNNotificationTrigger",
     "UNError",
+] }
+# Media playback (`ios_media`): AVAudioPlayer for the item, AVAudioSession for
+# interruptions, and MediaPlayer for the lock screen and the remote commands.
+objc2-avf-audio = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "AVAudioPlayer",
+    "AVAudioSession",
+    "AVAudioSessionRoute",
+    "AVAudioSessionTypes",
+] }
+objc2-media-player = { version = "0.3.2", default-features = false, optional = true, features = [
+    "std",
+    "block2",
+    "MPMediaItem",
+    "MPNowPlayingInfoCenter",
+    "MPRemoteCommand",
+    "MPRemoteCommandCenter",
+    "MPRemoteCommandEvent",
 ] }
 
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "linux"), not(target_os = "windows"), not(target_os = "macos"), not(target_os = "ios")))'.dependencies]

@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::{Box, BoxSpec};
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
@@ -49,7 +49,7 @@ fn main() {
         })
         .run(|| {
             // Define the UI within the app
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
 
             LazyColumn(
                 Modifier::default().size(Size { width: 300.0, height: 400.0 }),
@@ -57,7 +57,7 @@ fn main() {
                 LazyColumnSpec::default(),
                 |scope| {
                     // Item 0: Height 100
-                    scope.item(Some(0), None, move || {
+                    scope.item_keyed(Some(0), None, move || {
                         Box(
                             Modifier::default()
                                 .size(Size { width: 100.0, height: 100.0 })
@@ -68,7 +68,7 @@ fn main() {
                     });
 
                     // Item 1: Height 50
-                    scope.item(Some(1), None, move || {
+                    scope.item_keyed(Some(1), None, move || {
                         Box(
                             Modifier::default()
                                 .size(Size { width: 100.0, height: 50.0 })
@@ -79,7 +79,7 @@ fn main() {
                     });
 
                     // Item 2: Height 200
-                    scope.item(Some(2), None, move || {
+                    scope.item_keyed(Some(2), None, move || {
                          Box(
                             Modifier::default()
                                 .size(Size { width: 100.0, height: 200.0 })

@@ -119,14 +119,6 @@ impl MutableSnapshot {
         })
     }
 
-    /// Create a new root mutable snapshot using the global runtime.
-    pub fn new_root(
-        read_observer: Option<ReadObserver>,
-        write_observer: Option<WriteObserver>,
-    ) -> Arc<Self> {
-        GlobalSnapshot::get_or_create().take_nested_mutable_snapshot(read_observer, write_observer)
-    }
-
     /// Create a new root mutable snapshot.
     pub fn new(
         id: SnapshotId,

@@ -10,8 +10,9 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose::LazyItems;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
@@ -65,9 +66,8 @@ fn variable_height_lazy_list(state: LazyListState, stats: MutableState<Lifecycle
             .content_padding(8.0, 8.0),
         |scope| {
             scope.items(
-                30, // More items to test with variable heights
-                Some(|i: usize| i as u64),
-                None::<fn(usize) -> u64>,
+                // More items to test with variable heights.
+                LazyItems::new(30).key(|i: usize| i as u64),
                 move |index| {
                     variable_height_item(index, stats);
                 },
@@ -81,7 +81,7 @@ fn varheight_test_app() {
     let stats: MutableState<LifecycleStats> =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
             .with(|state| *state);
-    let state = remember_lazy_list_state();
+    let state = rememberLazyListState();
 
     Column(
         Modifier::empty()

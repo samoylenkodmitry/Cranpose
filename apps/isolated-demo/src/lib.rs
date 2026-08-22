@@ -11,8 +11,10 @@ mod app;
 ))]
 mod fonts;
 
-#[cfg(target_os = "android")]
-mod native_entry;
+cranpose::android_main! {
+    launcher: app::create_app(),
+    content: app::IsolatedDemoApp,
+}
 
 #[cfg(all(feature = "web", target_arch = "wasm32"))]
 use wasm_bindgen::prelude::*;

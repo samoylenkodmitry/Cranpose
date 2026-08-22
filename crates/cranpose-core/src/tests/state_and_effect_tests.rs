@@ -600,7 +600,7 @@ fn disposable_effect_cleanup_can_update_use_state_during_group_removal() {
         composition
             .render(key, move || {
                 if show.get() {
-                    let local = useState(|| 0usize);
+                    let local = rememberMutableStateOf(|| 0usize);
                     let cleanup_calls = Rc::clone(&cleanup_calls);
                     DisposableEffect!((), move |_| {
                         let cleanup_calls = Rc::clone(&cleanup_calls);

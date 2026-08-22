@@ -78,7 +78,7 @@ impl LongPressWatcher {
 
     fn tick(self: Rc<Self>, now: u64) {
         self.registration.borrow_mut().take();
-        let Some(press) = self.controller.metrics().and_then(|m| m.press) else {
+        let Some(press) = self.controller.press() else {
             return; // press ended — the composition slot will drop us
         };
         let moved = (press.position.x - self.start.x)
@@ -244,6 +244,50 @@ impl Default for BasicTextFieldOptions {
     }
 }
 
+/// Scope passed to a basic text field decoration box.
+///
+/// The decoration may place arbitrary composables around the editable content,
+/// but must call [`inner_text_field`](Self::inner_text_field) exactly once.
+#[derive(Clone)]
+pub struct BasicTextFieldDecorationScope {
+    inner: Rc<dyn Fn() -> NodeId>,
+}
+
+impl BasicTextFieldDecorationScope {
+    pub fn inner_text_field(&self) -> NodeId {
+        (self.inner)()
+    }
+}
+
+impl PartialEq for BasicTextFieldDecorationScope {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+/// Creates an editable field and lets `decoration_box` place composable labels,
+/// placeholders, icons, buttons, prefixes, or suffixes around it.
+#[composable(no_skip)]
+pub fn BasicTextFieldDecorated<D>(
+    state: TextFieldState,
+    modifier: Modifier,
+    options: BasicTextFieldOptions,
+    decoration_box: D,
+) -> NodeId
+where
+    D: Fn(BasicTextFieldDecorationScope) -> NodeId + 'static,
+{
+    let inner_state = state;
+    let inner_modifier = modifier;
+    let inner_options = options;
+    let scope = BasicTextFieldDecorationScope {
+        inner: Rc::new(move || {
+            BasicTextFieldWithOptions(inner_state, inner_modifier.clone(), inner_options.clone())
+        }),
+    };
+    decoration_box(scope)
+}
+
 /// Creates an editable text field with custom options.
 ///
 /// This is the full version of `BasicTextField` with all configuration options.
@@ -275,13 +319,7 @@ pub fn BasicTextFieldWithOptions(
     let final_modifier = Modifier::from_parts(vec![text_field_modifier]);
     let combined_modifier = modifier.then(final_modifier);
 
-    // Use EmptyMeasurePolicy - TextFieldModifierNode handles all measurement
-    // This matches Jetpack Compose's BasicTextField architecture
-    let node = Layout(
-        combined_modifier,
-        EmptyMeasurePolicy,
-        || {}, // No children
-    );
+    let node = Layout(combined_modifier, EmptyMeasurePolicy, || {});
 
     // Scroll the focused field's caret above the soft keyboard (bug 2): asks the
     // nearest scroll container's `BringIntoViewResponder` to reveal the caret on
@@ -298,6 +336,25 @@ pub fn BasicTextFieldWithOptions(
     SelectionHandles(state, options.text_style, controller, options.cursor_color);
 
     node
+}
+
+#[cfg(test)]
+mod options_tests {
+    use super::*;
+
+    #[test]
+    fn default_options_use_default_line_limits() {
+        let options = BasicTextFieldOptions::default();
+        assert_eq!(options.line_limits, TextFieldLineLimits::default());
+    }
+
+    #[test]
+    fn decoration_scope_invokes_the_inner_field() {
+        let scope = BasicTextFieldDecorationScope {
+            inner: Rc::new(|| 73),
+        };
+        assert_eq!(scope.inner_text_field(), 73);
+    }
 }
 
 /// Window-space rect of the field's caret (the cursor line at byte `offset`),
@@ -389,6 +446,7 @@ fn SelectionHandles(
 ) {
     let selection = state.selection();
     let current_range = (selection.min(), selection.max());
+    let active_press = controller.press();
 
     // Whether the contextual menu is open. Reopens whenever the selection range
     // changes (a fresh selection), so tapping an action dismisses it until the
@@ -446,7 +504,7 @@ fn SelectionHandles(
         remember(|| Rc::new(Cell::new(None))).with(Rc::clone);
     let press_watcher_ref: Rc<RefCell<Option<Rc<LongPressWatcher>>>> =
         remember(|| Rc::new(RefCell::new(None))).with(Rc::clone);
-    match metrics.press {
+    match active_press {
         Some(press) => {
             let key = (press.start.x.to_bits(), press.start.y.to_bits());
             if press_watcher.get() != Some(key) {
@@ -698,7 +756,7 @@ fn SelectionHandles(
             // A claimed long-press feeds the menu its live finger position:
             // sliding over items highlights them, the release fires.
             let slide_point = if controller.gesture_claimed() {
-                metrics.press.map(|press| press.position)
+                active_press.map(|press| press.position)
             } else {
                 None
             };
@@ -902,7 +960,6 @@ mod tests {
                     line_height: 18.0,
                     glyph_box: (0.0, 18.0),
                     wrap_width: None,
-                    press: None,
                 });
                 SelectionHandles(
                     state,
@@ -966,7 +1023,6 @@ mod tests {
                     line_height: 18.0,
                     glyph_box: (0.0, 18.0),
                     wrap_width: None,
-                    press: None,
                 });
                 SelectionHandles(
                     state,
@@ -1042,7 +1098,6 @@ mod tests {
                             line_height: 18.0,
                             glyph_box: (0.0, 18.0),
                             wrap_width: None,
-                            press: None,
                         });
                         SelectionHandles(
                             state,
@@ -1100,7 +1155,7 @@ mod tests {
         use crate::renderer::HeadlessRenderer;
         use crate::widgets::PopupHost;
         use crate::{LazyColumn, LazyColumnSpec};
-        use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+        use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
         use cranpose_ui_graphics::Size;
 
         let mut composition = Composition::new(MemoryApplier::new());
@@ -1110,7 +1165,7 @@ mod tests {
         let mut content = move || {
             PopupHost(move || {
                 let state = state;
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 LazyColumn(
                     Modifier::empty().size(Size {
                         width: 300.0,
@@ -1120,35 +1175,29 @@ mod tests {
                     LazyColumnSpec::default(),
                     move |scope| {
                         let state = state;
-                        scope.items(
-                            1,
-                            None::<fn(usize) -> u64>,
-                            None::<fn(usize) -> u64>,
-                            move |_index| {
-                                let controller = TextFieldHandleController::new();
-                                if state.selection() != TextRange::new(0, 5) {
-                                    state.set_selection(TextRange::new(0, 5));
-                                }
-                                controller.publish(TextFieldHandleMetrics {
-                                    focused: true,
-                                    direct_manipulation,
-                                    node_origin: Point { x: 0.0, y: 40.0 },
-                                    padding_left: 0.0,
-                                    padding_top: 0.0,
-                                    scroll_offset: 0.0,
-                                    line_height: 18.0,
-                                    glyph_box: (0.0, 18.0),
-                                    wrap_width: None,
-                                    press: None,
-                                });
-                                SelectionHandles(
-                                    state,
-                                    TextStyle::default(),
-                                    controller,
-                                    Color(0.0, 0.478, 1.0, 1.0),
-                                );
-                            },
-                        );
+                        scope.items(1, move |_index| {
+                            let controller = TextFieldHandleController::new();
+                            if state.selection() != TextRange::new(0, 5) {
+                                state.set_selection(TextRange::new(0, 5));
+                            }
+                            controller.publish(TextFieldHandleMetrics {
+                                focused: true,
+                                direct_manipulation,
+                                node_origin: Point { x: 0.0, y: 40.0 },
+                                padding_left: 0.0,
+                                padding_top: 0.0,
+                                scroll_offset: 0.0,
+                                line_height: 18.0,
+                                glyph_box: (0.0, 18.0),
+                                wrap_width: None,
+                            });
+                            SelectionHandles(
+                                state,
+                                TextStyle::default(),
+                                controller,
+                                Color(0.0, 0.478, 1.0, 1.0),
+                            );
+                        });
                     },
                 );
             });
@@ -1380,7 +1429,6 @@ mod tests {
                 line_height: 18.0,
                 glyph_box: (0.0, 18.0),
                 wrap_width: None,
-                press: None,
             };
             for offset in 0..=text.len() {
                 if !text.is_char_boundary(offset) {
@@ -1445,7 +1493,6 @@ mod tests {
                 line_height,
                 glyph_box: (0.0, line_height),
                 wrap_width: Some(wrap_width),
-                press: None,
             };
 
             let end_tip =
@@ -1782,7 +1829,7 @@ mod tests {
         use crate::widgets::{Box, BoxSpec, PopupHost};
         use crate::{LazyColumn, LazyColumnSpec};
         use cranpose_core::Key;
-        use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+        use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
         use cranpose_ui_graphics::Size;
         use std::cell::RefCell;
 
@@ -1801,7 +1848,7 @@ mod tests {
                 let responder_slot = Rc::clone(&responder_slot);
                 let state_slot = Rc::clone(&state_slot);
                 PopupHost(move || {
-                    let list_state = remember_lazy_list_state();
+                    let list_state = rememberLazyListState();
                     *state_slot.borrow_mut() = Some(list_state);
                     let responder_slot = Rc::clone(&responder_slot);
                     LazyColumn(
@@ -1813,27 +1860,21 @@ mod tests {
                         LazyColumnSpec::default(),
                         move |scope| {
                             let responder_slot = Rc::clone(&responder_slot);
-                            scope.items(
-                                30,
-                                None::<fn(usize) -> u64>,
-                                None::<fn(usize) -> u64>,
-                                move |_index| {
-                                    if responder_slot.borrow().is_none() {
-                                        if let Some(r) = local_bring_into_view_responder().current()
-                                        {
-                                            *responder_slot.borrow_mut() = Some(r);
-                                        }
+                            scope.items(30, move |_index| {
+                                if responder_slot.borrow().is_none() {
+                                    if let Some(r) = local_bring_into_view_responder().current() {
+                                        *responder_slot.borrow_mut() = Some(r);
                                     }
-                                    Box(
-                                        Modifier::empty().size(Size {
-                                            width: 300.0,
-                                            height: 80.0,
-                                        }),
-                                        BoxSpec::default(),
-                                        || {},
-                                    );
-                                },
-                            );
+                                }
+                                Box(
+                                    Modifier::empty().size(Size {
+                                        width: 300.0,
+                                        height: 80.0,
+                                    }),
+                                    BoxSpec::default(),
+                                    || {},
+                                );
+                            });
                         },
                     );
                 });
