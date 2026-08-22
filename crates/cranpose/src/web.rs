@@ -420,8 +420,8 @@ pub async fn run(
         let wheel_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
-            let x = event.offset_x();
-            let y = event.offset_y();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
 
             // What the sample means -- zoom, rotary, axis-swapped scroll, or
@@ -458,8 +458,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x();
-            let y = event.offset_y();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -479,8 +479,8 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let _ = pointer_canvas.set_pointer_capture(event.pointer_id());
-            let x = event.offset_x();
-            let y = event.offset_y();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -501,8 +501,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x();
-            let y = event.offset_y();
+            let x = event.offset_x() as f64;
+            let y = event.offset_y() as f64;
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));

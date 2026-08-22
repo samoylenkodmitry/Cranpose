@@ -485,6 +485,19 @@ jobs:
           cargo build --manifest-path apps/isolated-demo/Cargo.toml \
             --features desktop --release
 
+      # The web is the one target whose build can differ from this
+      # repository's own: `apps/desktop-demo` compiles under the cargo
+      # configuration checked in here, and an application compiles under its
+      # own. apps/isolated-demo carries no cargo configuration, so this is the
+      # only place a release is proven to build for the browser the way an
+      # application builds it.
+      - name: Build the isolated demo for the web
+        run: |
+          set -euo pipefail
+          rustup target add --toolchain stable wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
+          apps/isolated-demo/build-web.sh
+
       # The Android distribution is not on a remote repository yet, so the
       # plugin and its libraries reach the demo through mavenLocal, exactly as
       # they reach a developer following apps/isolated-demo/README.md.
