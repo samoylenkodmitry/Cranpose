@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::widgets::{
     Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, LazyColumn, LazyColumnSpec,
@@ -46,7 +46,7 @@ fn main() {
 #[composable]
 #[allow(non_snake_case)]
 fn probe_app() {
-    let state = remember_lazy_list_state();
+    let state = rememberLazyListState();
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
@@ -64,25 +64,20 @@ fn probe_app() {
                 state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        100,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            if index == 0 {
-                                CircularProgressIndicator(
-                                    Modifier::empty(),
-                                    PROGRESS_INDICATOR_COLOR,
-                                    4.0,
-                                );
-                            } else {
-                                Spacer(Size {
-                                    width: 0.0,
-                                    height: 64.0,
-                                });
-                            }
-                        },
-                    );
+                    scope.items(100, |index| {
+                        if index == 0 {
+                            CircularProgressIndicator(
+                                Modifier::empty(),
+                                PROGRESS_INDICATOR_COLOR,
+                                4.0,
+                            );
+                        } else {
+                            Spacer(Size {
+                                width: 0.0,
+                                height: 64.0,
+                            });
+                        }
+                    });
                 },
             );
         },

@@ -1,0 +1,31 @@
+[package]
+name = "cranpose-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+description = "Desktop media playback backend for Cranpose (symphonia decoders, cpal output)"
+
+[dependencies]
+cranpose-services = { workspace = true }
+log = "0.4"
+parking_lot = "0.12.5"
+
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
+# The output device and the queue that feeds it come from the audio engine, so
+# the workspace has one real-time ring and one cpal. `default-features = false`
+# leaves the engine's own device backends off: this crate opens its own stream
+# and wants nothing else from that crate.
+cranpose-audio = { workspace = true }
+cpal = "0.18.1"
+symphonia = { version = "0.6.1", default-features = false, features = ["all", "opt-simd"] }
+
+[dev-dependencies]
+# Path-only dev-dep: stripped from the published manifest. Turns on the
+# workspace's shared test scratch directory for this crate's own tests.
+cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Media playback: the foreground service that keeps an item playing with the
+    app off screen, and the permissions Android requires to start it. Analysis
+    samples for a visualiser need RECORD_AUDIO, which an application that draws
+    one asks for itself — the framework reports the capability either way.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <application>
+        <service
+            android:name="dev.cranpose.android.CranposeMediaService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+    </application>
+</manifest>

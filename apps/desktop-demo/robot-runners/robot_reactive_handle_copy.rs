@@ -10,10 +10,10 @@ use cranpose_ui::{
 
 #[composable]
 fn reactive_handle_copy_screen() {
-    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     let interaction_source = rememberMutableInteractionSource();
-    let text_state = remember(|| TextFieldState::new("copyable")).with(|state| state.clone());
-    let zoom_state = remember(ZoomState::new).with(|state| state.clone());
+    let text_state = remember(|| TextFieldState::new("copyable")).with(|state| *state);
+    let zoom_state = remember(ZoomState::new).with(|state| *state);
     let wear_state = rememberWearScalingListState(CentreAnchor::default());
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Row(Modifier::empty(), RowSpec::default(), move || {

@@ -124,11 +124,6 @@ impl WearDensity {
         points * self.density
     }
 
-    /// Device pixels to points.
-    pub fn to_points(self, pixels: f32) -> f32 {
-        pixels / self.density
-    }
-
     /// Centres `content` in `available` the way Compose does: on a whole pixel.
     ///
     /// `Arrangement.Center` measures every child in whole pixels and rounds the

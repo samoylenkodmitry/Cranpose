@@ -33,15 +33,6 @@ impl SoftwareTextResources {
         }
     }
 
-    /// Resources backed by the app-provided font stack (all parseable
-    /// fonts participate in per-style resolution), falling back to the
-    /// embedded font when none parse.
-    pub fn from_app_fonts(fonts: &[&[u8]]) -> Self {
-        Self {
-            fonts: SoftwareTextFontSet::from_fonts_or_default(fonts),
-        }
-    }
-
     pub fn fonts(&self) -> &SoftwareTextFontSet {
         &self.fonts
     }

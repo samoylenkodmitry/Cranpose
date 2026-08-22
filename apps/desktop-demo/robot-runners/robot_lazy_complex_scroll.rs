@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, Row, RowSpec, Text,
@@ -63,7 +63,7 @@ fn main() {
             robot.exit().ok();
         })
         .run(|| {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
 
             Column(Modifier::default(), ColumnSpec::default(), move || {
                 // Controls
@@ -91,40 +91,35 @@ fn main() {
                     state,
                     LazyColumnSpec::default(),
                     |scope| {
-                        scope.items(
-                            100,
-                            None::<fn(usize) -> u64>,
-                            None::<fn(usize) -> u64>,
-                            move |index| {
-                                let height = match index % 3 {
-                                    0 => 50.0,
-                                    1 => 100.0,
-                                    _ => 150.0,
-                                };
-                                let color = match index % 3 {
-                                    0 => Color::RED,
-                                    1 => Color::GREEN,
-                                    _ => Color::BLUE,
-                                };
+                        scope.items(100, move |index| {
+                            let height = match index % 3 {
+                                0 => 50.0,
+                                1 => 100.0,
+                                _ => 150.0,
+                            };
+                            let color = match index % 3 {
+                                0 => Color::RED,
+                                1 => Color::GREEN,
+                                _ => Color::BLUE,
+                            };
 
-                                Box(
-                                    Modifier::default()
-                                        .size(Size {
-                                            width: 300.0,
-                                            height,
-                                        })
-                                        .background(color),
-                                    BoxSpec::new().content_alignment(Alignment::CENTER),
-                                    move || {
-                                        Text(
-                                            format!("Item {}", index),
-                                            Modifier::default(),
-                                            TextStyle::default(),
-                                        );
-                                    },
-                                );
-                            },
-                        );
+                            Box(
+                                Modifier::default()
+                                    .size(Size {
+                                        width: 300.0,
+                                        height,
+                                    })
+                                    .background(color),
+                                BoxSpec::new().content_alignment(Alignment::CENTER),
+                                move || {
+                                    Text(
+                                        format!("Item {}", index),
+                                        Modifier::default(),
+                                        TextStyle::default(),
+                                    );
+                                },
+                            );
+                        });
                     },
                 );
             });

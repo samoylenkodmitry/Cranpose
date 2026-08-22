@@ -1,13 +1,12 @@
 //! Vsync pacing for the `android_main` frame loop.
 //!
-//! The loop used to be paced by its own output: a `Fifo` present blocks until
-//! the display has taken the previous image, so "render every iteration" and
-//! "render once per vsync" were the same thing and nothing else was needed. As
-//! soon as the loop learned to *skip* presenting a frame identical to the one
-//! already on screen, that pacing disappeared with it - an app holding a frame
-//! await open (any game loop, any polling effect) asked for a frame, got no
-//! present, asked again, and the loop span at whatever rate the CPU could
-//! manage. Measured on a Pixel 9 Pro: a big core pinned at 2.97 GHz and
+//! The loop cannot pace itself on its own output. A `Fifo` present blocks until
+//! the display has taken the previous image, which makes "render every
+//! iteration" and "render once per vsync" the same thing — but only while every
+//! iteration presents. A loop that skips presenting a frame identical to the one
+//! already on screen has no such block, so an app holding a frame await open
+//! (any game loop, any polling effect) asks for a frame, gets no present, asks
+//! again, and spins at whatever rate the CPU can manage. Measured on a Pixel 9 Pro: a big core pinned at 2.97 GHz and
 //! 3062 mW on `CPU(BIG)/S3M_VDD_CPUCL2`, against 4.4 mW for the same screen
 //! under HWUI.
 //!

@@ -81,8 +81,10 @@ fn assert_idle_runtime_queues_empty(robot: &cranpose::Robot) {
         "idle static tab left frame callbacks queued: {stats:?}"
     );
     assert_eq!(
-        stats.runtime_stats.tasks_len, 0,
-        "idle static tab left runtime tasks queued: {stats:?}"
+        stats.runtime_stats.tasks_len,
+        0,
+        "idle static tab left runtime tasks queued: {:?}\nstats: {stats:?}",
+        robot.live_ui_task_labels().unwrap_or_default()
     );
     assert_eq!(
         stats.runtime_stats.invalid_scopes_len, 0,

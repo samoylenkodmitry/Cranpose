@@ -12,6 +12,7 @@ pub mod bring_into_view;
 pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
+pub mod draggable;
 mod draw;
 pub mod fling_animation;
 mod focus_dispatch;
@@ -19,8 +20,12 @@ pub mod font_scale;
 mod interaction;
 mod key_event;
 pub mod layout;
+pub mod layout_direction;
+pub mod lazy_item;
+pub mod modal;
 mod modifier;
 mod modifier_nodes;
+pub mod nine_patch;
 mod pointer_dispatch;
 mod primitives;
 mod render_state;
@@ -29,6 +34,7 @@ pub mod round_scaling_list;
 pub mod round_scroll_indicator;
 pub mod safe_area;
 pub mod scroll;
+pub mod scrollbar;
 mod semantics_dispatch;
 mod subcompose_layout;
 pub mod text;
@@ -61,6 +67,9 @@ pub use cursor_animation::{
 pub use bring_into_view::{
     local_bring_into_view_responder, scroll_delta_to_reveal, BringIntoViewResponder,
 };
+pub use cranpose_foundation::{
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+};
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
 pub use draw::{
@@ -76,12 +85,6 @@ pub use interaction::{
     MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
     PressInteractionRelease,
 };
-pub use safe_area::{local_ime_insets, local_safe_area_insets};
-// Re-export FocusManager from cranpose-foundation to avoid duplication
-pub use cranpose_foundation::nodes::input::focus::FocusManager;
-pub use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
-};
 pub use layout::{
     build_layout_tree_from_applier, build_semantics_tree_from_applier,
     build_semantics_tree_from_layout_tree,
@@ -94,6 +97,13 @@ pub use layout::{
     LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
     SemanticsNode, SemanticsRole, SemanticsTree,
 };
+pub use layout_direction::{
+    layout_direction, local_layout_direction, LayoutDirection, ProvideLayoutDirection,
+};
+pub use modal::{
+    clear_modals, dispatch_modal_back, local_modal_depth, modal_depth, ModalRegistration,
+};
+pub use safe_area::{local_ime_insets, local_safe_area_insets, window_insets, WindowInsets};
 // The accessibility vocabulary an app writes against. It is declared in
 // cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
 // against cranpose-ui and should not have to reach past it to describe a
@@ -104,11 +114,11 @@ pub use cranpose_foundation::{
 pub use modifier::{
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
-    FocusDirection, FocusRequester, GlassMaterial, GraphicsLayer, LayerShape, Modifier,
-    ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent, PointerEventKind,
-    PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground, ResolvedModifiers,
-    RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape, RuntimeShader,
-    SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
+    FocusDirection, GlassMaterial, GraphicsLayer, LayerShape, Modifier, ModifierLocalKey,
+    ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent,
+    PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground,
+    ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape,
+    RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
 };
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
@@ -121,18 +131,26 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    fade_in, fade_out, remember_svg, slide_in_vertically, slide_out_vertically, AnimatedVisibility,
-    BasicText, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions,
-    BasicTextWithOptions, BitmapPainter, Box, BoxScope, BoxSpec, BoxWithConstraints,
-    BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column,
-    ColumnSpec, ContentScale, Crossfade, EnterTransition, ExitTransition, ForEach, Image, Layout,
-    LayoutNode, Painter, Row, RowSpec, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text,
-    TextWithOptions, DEFAULT_ALPHA,
+    fade_in, fade_out, rememberSvg, slide_in_vertically, slide_out_vertically, AnimatedVisibility,
+    BasicText, BasicTextField, BasicTextFieldDecorated, BasicTextFieldDecorationScope,
+    BasicTextFieldOptions, BasicTextFieldWithOptions, BasicTextWithOptions, BitmapPainter,
+    BitmapRegionPainter, Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
+    BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale,
+    Crossfade, EnterTransition, ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row,
+    RowSpec, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions,
+    DEFAULT_ALPHA,
 };
 // Lazy list exports - single source from cranpose-foundation
-pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
+pub use cranpose_foundation::lazy::{
+    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
+};
+pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
+pub use lazy_item::{lazy_item_key, local_lazy_item_key, ProvideLazyItemKey};
+pub use nine_patch::{
+    nine_patch_quads, tile_count, tile_quads, NinePatchInsets, PatchFill, PatchQuad,
+};
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
@@ -151,7 +169,8 @@ pub use render_state::{
     MAX_FONT_SCALE, MIN_FONT_SCALE,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
-pub use scroll::{ScrollElement, ScrollNode, ScrollSettlePolicy, ScrollState};
+pub use scroll::{ScrollElement, ScrollMetrics, ScrollNode, ScrollSettlePolicy, ScrollState};
+pub use scrollbar::{content_delta_for_thumb_drag, thumb_geometry, ThumbBounds, ThumbGeometry};
 pub use semantics_dispatch::{
     clear_semantics_invalidations, has_pending_semantics_invalidations,
     process_semantics_invalidations, schedule_semantics_invalidation,
@@ -178,7 +197,11 @@ pub use text_modifier_node::{TextModifierElement, TextModifierNode};
 pub use widgets::clickable_text::ClickableText;
 pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
 pub use widgets::linked_text::LinkedText;
-pub use widgets::swipe_to_dismiss::{SwipeDismissSide, SwipeToDismiss, SwipeToDismissSpec};
+pub use widgets::slider::{Slider, SliderOrientation, SliderScope, SliderSpec};
+pub use widgets::swipe_to_dismiss::{
+    rememberSwipeDismissState, SwipeDismissDirection, SwipeDismissSide, SwipeDismissState,
+    SwipeToDismiss, SwipeToDismissBox, SwipeToDismissSpec,
+};
 pub use widgets::text_selection_menu::local_on_light_surface;
 
 // Debug utilities

@@ -1,7 +1,14 @@
 //! A bounded lock-free single-producer/single-consumer queue.
 //!
-//! This is the only channel between the UI thread and the audio thread. Both
-//! ends are wait-free: [`Producer::push`] and [`Consumer::pop`] are a pair of
+//! This is the workspace's only real-time queue. The mixer feeds its audio
+//! callback through it and so does [`cranpose_media`](https://docs.rs/cranpose-media),
+//! which is why it is exported rather than kept private: a second implementation
+//! would be a second place reaching past the borrow checker.
+//!
+//! It is the whole channel between a producer thread and an audio callback:
+//! the engine's UI thread pushes mixer commands, the media player's decode
+//! thread pushes samples, and in both cases the callback is the only reader.
+//! Both ends are wait-free: [`Producer::push`] and [`Consumer::pop`] are a pair of
 //! relaxed loads, one acquire load, one move and one release store. Nothing
 //! allocates, nothing locks, and neither side can block the other — which is
 //! what lets the audio callback stay inside its real-time budget.

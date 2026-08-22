@@ -1,11 +1,11 @@
 //! Bounded handoff between callers of [`cranpose_services::Haptics`] and the
 //! dedicated Android haptics delivery thread.
 //!
-//! Every vibrator call used to run on the calling thread, and a watch profile
-//! put the waveform path's JNI → binder round trip to `VibratorManagerService`
-//! at 0.88 ms per frame on the render thread (946 calls in 975 frames). The
-//! queue moves delivery onto the "cranpose-haptics" thread: callers enqueue
-//! and return.
+//! A vibrator call made on the calling thread costs that thread the JNI →
+//! binder round trip to `VibratorManagerService`: a watch profile measured the
+//! waveform path at 0.88 ms per frame on the render thread (946 calls in 975
+//! frames). The queue moves delivery onto the "cranpose-haptics" thread, so
+//! callers enqueue and return.
 //!
 //! The delivery contract, pinned down by the unit test:
 //!

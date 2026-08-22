@@ -145,6 +145,15 @@ impl Modifier {
         ))
     }
 
+    /// Publishes this node's composited window rect into observable state.
+    /// State changes schedule composition, so anchored overlays follow layout,
+    /// scrolling, graphics-layer translation, and viewport changes.
+    pub fn report_window_rect_state(self, sink: cranpose_core::MutableState<Rect>) -> Self {
+        self.then(Modifier::with_element(
+            crate::modifier_nodes::WindowRectReporterElement::from_state(sink),
+        ))
+    }
+
     /// Publishes this node's measured size (logical px) into `sink` on every
     /// measure pass — the `onSizeChanged` seam for consumers that need the
     /// resolved size outside layout (shader morph geometry, lens overlays).

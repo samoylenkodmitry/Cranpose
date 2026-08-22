@@ -1,122 +1,86 @@
-//! Desktop file picker backed by `rfd` (native dialogs).
+//! Desktop choosers backed by `rfd` (native dialogs).
 //!
 //! On Linux the `xdg-portal` backend surfaces mounted locations served by the
-//! desktop portal, including GVFS/WebDAV shares, so a picked folder may live on
+//! desktop portal, including GVFS/WebDAV shares, so a chosen folder may live on
 //! a remote provider just like on mobile.
 
-use super::{
-    FilePickerError, FilePickerOptions, PickedEntry, PickedEntryRef, PickedKind, PickerFuture,
-    SaveFileRequest,
+use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
+use crate::content::{
+    file_content, file_folder, ContentFolderRef, ContentHandle, ContentSinkRef, FileSink,
 };
-use std::path::PathBuf;
-use std::rc::Rc;
 
-pub(super) fn save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
+fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(title) = &options.title {
+        dialog = dialog.set_title(title);
+    }
+    for filter in &options.filters {
+        let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(filter.label.clone(), &extensions);
+    }
+    dialog
+}
+
+pub(super) fn pick_file(
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Option<ContentHandle>, FilePickerError>> {
     Box::pin(async move {
-        let handle = rfd::AsyncFileDialog::new()
-            .set_file_name(&request.file_name)
-            .save_file()
-            .await;
-        let Some(handle) = handle else {
-            return Ok(false);
-        };
-        std::fs::write(handle.path(), &request.bytes)
-            .map_err(|error| FilePickerError::Failed(format!("failed to save file: {error}")))?;
-        Ok(true)
+        Ok(dialog(&options)
+            .pick_file()
+            .await
+            .map(|handle| file_content(handle.path())))
     })
 }
 
-pub(super) fn pick(
+pub(super) fn pick_files(
     options: FilePickerOptions,
-    kind: PickedKind,
-) -> PickerFuture<Result<Option<PickedEntryRef>, FilePickerError>> {
+) -> PickerFuture<Result<Vec<ContentHandle>, FilePickerError>> {
     Box::pin(async move {
-        let mut dialog = rfd::AsyncFileDialog::new();
-        if let Some(title) = &options.title {
+        Ok(dialog(&options)
+            .pick_files()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|handle| file_content(handle.path()))
+            .collect())
+    })
+}
+
+pub(super) fn pick_folder(
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Option<ContentFolderRef>, FilePickerError>> {
+    Box::pin(async move {
+        Ok(dialog(&options)
+            .pick_folder()
+            .await
+            .map(|handle| file_folder(handle.path())))
+    })
+}
+
+pub(super) fn save_document(
+    request: SaveDocumentRequest,
+) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
+    Box::pin(async move {
+        let mut dialog = rfd::AsyncFileDialog::new().set_file_name(&request.file_name);
+        if let Some(title) = &request.title {
             dialog = dialog.set_title(title);
         }
-        for filter in &options.filters {
-            let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
-            dialog = dialog.add_filter(filter.label.clone(), &extensions);
-        }
-
-        let handle = match kind {
-            PickedKind::File => dialog.pick_file().await,
-            PickedKind::Folder => dialog.pick_folder().await,
+        let Some(handle) = dialog.save_file().await else {
+            return Ok(None);
         };
-
-        Ok(handle.map(|handle| {
-            Rc::new(FsEntry {
-                path: handle.path().to_path_buf(),
-                kind,
-            }) as PickedEntryRef
-        }))
+        Ok(Some(FileSink::create(handle.path())?.handle()))
     })
 }
 
-/// A picked filesystem path.
-struct FsEntry {
-    path: PathBuf,
-    kind: PickedKind,
-}
-
-impl PickedEntry for FsEntry {
-    fn name(&self) -> String {
-        self.path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.path.display().to_string())
-    }
-
-    fn kind(&self) -> PickedKind {
-        self.kind
-    }
-
-    fn display_path(&self) -> String {
-        self.path.display().to_string()
-    }
-
-    fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
-        if self.kind != PickedKind::File {
-            return Box::pin(async {
-                Err(FilePickerError::WrongKind {
-                    actual: "folder",
-                    expected: "file",
-                })
-            });
-        }
-        let path = self.path.clone();
-        Box::pin(async move {
-            std::fs::read(&path).map_err(|error| FilePickerError::ReadFailed(error.to_string()))
-        })
-    }
-
-    fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
-        if self.kind != PickedKind::Folder {
-            return Box::pin(async {
-                Err(FilePickerError::WrongKind {
-                    actual: "file",
-                    expected: "folder",
-                })
-            });
-        }
-        let path = self.path.clone();
-        Box::pin(async move {
-            let read = std::fs::read_dir(&path)
-                .map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-            let mut entries = Vec::new();
-            for entry in read {
-                let entry =
-                    entry.map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-                let path = entry.path();
-                let kind = if path.is_dir() {
-                    PickedKind::Folder
-                } else {
-                    PickedKind::File
-                };
-                entries.push(Rc::new(FsEntry { path, kind }) as PickedEntryRef);
-            }
-            Ok(entries)
-        })
-    }
+/// A desktop writable folder is just a directory the app keeps writing to, so
+/// its durable handle is the path itself.
+pub(super) fn pick_writable_folder(
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+    Box::pin(async move {
+        Ok(dialog(&options)
+            .pick_folder()
+            .await
+            .map(|handle| handle.path().display().to_string()))
+    })
 }

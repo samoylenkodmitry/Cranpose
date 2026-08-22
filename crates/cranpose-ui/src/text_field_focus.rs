@@ -7,7 +7,7 @@
 //! O(1) key dispatch: The focused field's handler is stored for direct invocation,
 //! avoiding O(N) tree scans on every keystroke.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use crate::key_event::KeyEvent;
@@ -103,6 +103,10 @@ pub trait FocusedTextFieldHandler {
 pub(crate) struct TextFieldFocusState {
     focused_field: RefCell<Option<Weak<RefCell<bool>>>>,
     focused_handler: RefCell<Option<Rc<dyn FocusedTextFieldHandler>>>,
+    /// The [`crate::modal::local_modal_depth`] the currently focused field was
+    /// composed at, so a closing modal can tell whether the field it guarded
+    /// is the one that just went away (see [`Self::focused_at_depth`]).
+    focused_modal_depth: Cell<usize>,
 }
 
 impl TextFieldFocusState {
@@ -110,6 +114,7 @@ impl TextFieldFocusState {
         Self {
             focused_field: RefCell::new(None),
             focused_handler: RefCell::new(None),
+            focused_modal_depth: Cell::new(0),
         }
     }
 
@@ -117,6 +122,7 @@ impl TextFieldFocusState {
         &self,
         is_focused: Rc<RefCell<bool>>,
         handler: Rc<dyn FocusedTextFieldHandler>,
+        modal_depth: usize,
     ) {
         let mut current = self.focused_field.borrow_mut();
 
@@ -129,6 +135,7 @@ impl TextFieldFocusState {
         *is_focused.borrow_mut() = true;
         *current = Some(Rc::downgrade(&is_focused));
         *self.focused_handler.borrow_mut() = Some(handler);
+        self.focused_modal_depth.set(modal_depth);
     }
 
     fn clear_focus(&self) {
@@ -142,6 +149,12 @@ impl TextFieldFocusState {
 
         *current = None;
         *self.focused_handler.borrow_mut() = None;
+        self.focused_modal_depth.set(0);
+    }
+
+    /// Whether a live field is focused and was composed at exactly `depth`.
+    fn focused_at_depth(&self, depth: usize) -> bool {
+        self.has_focused_field() && self.focused_modal_depth.get() == depth
     }
 
     fn has_focused_field(&self) -> bool {
@@ -256,13 +269,30 @@ impl TextFieldFocusState {
     }
 }
 
-/// Requests focus for a text field.
+/// Requests focus for a text field composed at [`crate::modal::local_modal_depth`]
+/// `modal_depth`.
+///
+/// Refused (a no-op) when `modal_depth` is shallower than the modal depth
+/// that is open right now — a field behind an open dialog must not be
+/// able to steal focus from it. A field inside the innermost dialog (or
+/// outside any dialog, while none is open) has `modal_depth` equal to the
+/// current modal depth and is granted focus normally.
 ///
 /// If another text field was previously focused, it will be unfocused first.
 /// The provided `is_focused` handle should be the field's focus state.
 /// The handler is stored for O(1) key dispatch.
-pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextFieldHandler>) {
-    crate::render_state::with_text_field_focus(|state| state.request_focus(is_focused, handler));
+pub fn request_focus(
+    is_focused: Rc<RefCell<bool>>,
+    handler: Rc<dyn FocusedTextFieldHandler>,
+    modal_depth: usize,
+) {
+    if modal_depth < crate::modal::current_modal_depth() {
+        return;
+    }
+
+    crate::render_state::with_text_field_focus(|state| {
+        state.request_focus(is_focused, handler, modal_depth)
+    });
 
     // Start cursor blink animation (timer-based, not continuous redraw)
     crate::cursor_animation::start_cursor_blink();
@@ -274,6 +304,19 @@ pub fn request_focus(is_focused: Rc<RefCell<bool>>, handler: Rc<dyn FocusedTextF
     // Only render invalidation needed - cursor is drawn via create_draw_closure()
     // which checks focus at draw time. No layout change occurs on focus.
     crate::request_render_invalidation();
+}
+
+/// Clears focus if the currently focused field was composed at exactly
+/// `depth` — called when the modal that occupied `depth` closes, so a field
+/// that went away with it does not strand the platform keyboard open. A
+/// field at another depth (outside that modal, or inside an unrelated one)
+/// is untouched.
+pub(crate) fn clear_focus_for_closed_modal(depth: usize) {
+    let owns_focus =
+        crate::render_state::with_text_field_focus(|state| state.focused_at_depth(depth));
+    if owns_focus {
+        clear_focus();
+    }
 }
 
 /// Clears focus from the currently focused text field.
@@ -393,7 +436,6 @@ pub fn focused_caret_geometry() -> Option<ImeCaretGeometry> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
 
     // Mock handler for testing
     struct MockHandler;
@@ -420,7 +462,7 @@ mod tests {
     fn request_focus_sets_flag() {
         let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
-        request_focus(focus.clone(), mock_handler());
+        request_focus(focus.clone(), mock_handler(), 0);
         assert!(*focus.borrow());
         clear_focus();
     }
@@ -431,10 +473,10 @@ mod tests {
         let focus1 = Rc::new(RefCell::new(false));
         let focus2 = Rc::new(RefCell::new(false));
 
-        request_focus(focus1.clone(), mock_handler());
+        request_focus(focus1.clone(), mock_handler(), 0);
         assert!(*focus1.borrow());
 
-        request_focus(focus2.clone(), mock_handler());
+        request_focus(focus2.clone(), mock_handler(), 0);
         assert!(!*focus1.borrow()); // First should be unfocused
         assert!(*focus2.borrow()); // Second should be focused
         clear_focus();
@@ -444,7 +486,7 @@ mod tests {
     fn clear_focus_unfocuses_current() {
         let _app_context = crate::render_state::app_context_test_scope();
         let focus = Rc::new(RefCell::new(false));
-        request_focus(focus.clone(), mock_handler());
+        request_focus(focus.clone(), mock_handler(), 0);
         assert!(*focus.borrow());
 
         clear_focus();
@@ -513,7 +555,7 @@ mod tests {
         let focus = Rc::new(RefCell::new(false));
         let handler = Rc::new(DispatchRecordingHandler::default());
 
-        request_focus(Rc::clone(&focus), handler.clone());
+        request_focus(Rc::clone(&focus), handler.clone(), 0);
         assert!(dispatch_delete_surrounding(3, 1));
         assert_eq!(handler.last_delete.get(), Some((3, 1)));
 
@@ -527,7 +569,7 @@ mod tests {
 
         {
             let focus = Rc::new(RefCell::new(false));
-            request_focus(Rc::clone(&focus), handler.clone());
+            request_focus(Rc::clone(&focus), handler.clone(), 0);
             assert!(has_focused_field());
         }
 
@@ -569,12 +611,12 @@ mod tests {
         crate::text_input_session::set_platform_text_input_handler(keyboard.clone());
 
         let focus = Rc::new(RefCell::new(false));
-        request_focus(focus.clone(), mock_handler());
+        request_focus(focus.clone(), mock_handler(), 0);
         assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
         // Tapping the (already focused) field again must re-request the
         // keyboard: the user may have dismissed it with the back gesture.
-        request_focus(focus, mock_handler());
+        request_focus(focus, mock_handler(), 0);
         assert_eq!(*keyboard.calls.borrow(), vec!["show", "show"]);
 
         clear_focus();
@@ -589,7 +631,7 @@ mod tests {
 
         {
             let focus = Rc::new(RefCell::new(false));
-            request_focus(focus, mock_handler());
+            request_focus(focus, mock_handler(), 0);
             // The focused field's Rc is dropped here (field removed from the
             // composition without an explicit clear_focus).
         }
@@ -611,14 +653,14 @@ mod tests {
         let second_focus = Rc::new(RefCell::new(false));
 
         first.enter(|| {
-            request_focus(first_focus.clone(), mock_handler());
+            request_focus(first_focus.clone(), mock_handler(), 0);
             assert!(has_focused_field());
             assert!(*first_focus.borrow());
         });
 
         second.enter(|| {
             assert!(!has_focused_field());
-            request_focus(second_focus.clone(), mock_handler());
+            request_focus(second_focus.clone(), mock_handler(), 0);
             assert!(has_focused_field());
             assert!(*second_focus.borrow());
         });

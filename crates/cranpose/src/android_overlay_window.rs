@@ -3,7 +3,7 @@
 use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    launcher::AndroidOverlayWindowOptions,
+    app_launcher::AndroidOverlayWindowOptions,
 };
 use cranpose_ui::{Point, Size};
 use jni::{

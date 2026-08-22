@@ -350,7 +350,13 @@ fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
     );
 
     for (frame, (a, b)) in flat.iter().zip(&culled).enumerate() {
-        for (i, (pa, pb)) in a.chunks_exact(4).zip(b.chunks_exact(4)).enumerate() {
+        for (i, (pa, pb)) in a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .enumerate()
+        {
             let (x, y) = (i as u32 % SIZE, i as u32 / SIZE);
             if display_clip_pixel_is_visible(
                 DisplayVisibleRegion::InscribedCircle,

@@ -1,5 +1,8 @@
 use cranpose_core::{location_key, Composition, CompositionLocalProvider, MemoryApplier};
-use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
+use cranpose_services::{
+    local_http_client, BytesBody, HttpClient, HttpClientRef, HttpControl, HttpFuture, HttpRequest,
+    HttpResponse,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -7,8 +10,18 @@ use std::sync::Arc;
 struct TestHttpClient;
 
 impl HttpClient for TestHttpClient {
-    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
-        Box::pin(async { Ok("ok".to_string()) })
+    fn send<'a>(
+        &'a self,
+        request: &'a HttpRequest,
+        _control: HttpControl,
+    ) -> HttpFuture<'a, HttpResponse> {
+        Box::pin(async move {
+            Ok(HttpResponse::new(
+                request.url.clone(),
+                200,
+                Arc::new(BytesBody::new("ok")),
+            ))
+        })
     }
 }
 

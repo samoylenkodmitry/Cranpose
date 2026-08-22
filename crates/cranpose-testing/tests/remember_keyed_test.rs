@@ -1,4 +1,4 @@
-//! `remember_keyed` contract: a slot reused with a DIFFERENT key re-runs
+//! `rememberKeyed` contract: a slot reused with a DIFFERENT key re-runs
 //! its initializer, while a stable key never recomputes. The position-only
 //! `remember` served a stale parsed icon when the accordion's "Sections" row
 //! took over the slot of a row that had cached a chevron path.
@@ -6,7 +6,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use cranpose_core::{remember_keyed, MutableState};
+use cranpose_core::{rememberKeyed, MutableState};
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;
@@ -15,7 +15,7 @@ use cranpose_ui::*;
 fn keyed_app(key: MutableState<&'static str>, init_runs: Rc<Cell<u32>>, seen: Rc<Cell<usize>>) {
     let current = key.get();
     let runs = Rc::clone(&init_runs);
-    let value = remember_keyed(current, move |k| {
+    let value = rememberKeyed(current, move |k| {
         runs.set(runs.get() + 1);
         k.len()
     });

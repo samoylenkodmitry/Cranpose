@@ -94,17 +94,78 @@ impl LazyLayoutKey {
     pub fn is_user_key(self) -> bool {
         matches!(self, LazyLayoutKey::User(_))
     }
-
-    /// Returns true if this is a default index-based key.
-    #[inline]
-    pub fn is_index_key(self) -> bool {
-        matches!(self, LazyLayoutKey::Index(_))
-    }
 }
 
 /// Marker type for lazy scope DSL.
 #[doc(hidden)]
 pub struct LazyScopeMarker;
+
+/// A run of lazy items: how many, and optionally how they are identified and
+/// reused.
+///
+/// A count converts into this on its own, so the ordinary list reads as
+/// `scope.items(20, |index| ...)` — the shape Compose gets from default
+/// arguments, which Rust does not have. A list whose contents move between
+/// compositions names a key so item state follows the item rather than the
+/// slot it happened to occupy:
+///
+/// ```rust,ignore
+/// scope.items(LazyItems::new(rows.len()).key(|index| rows[index].id), |index| {
+///     Row(&rows[index]);
+/// });
+/// ```
+#[derive(Clone, Default)]
+pub struct LazyItems {
+    count: usize,
+    key: Option<Rc<dyn Fn(usize) -> u64>>,
+    content_type: Option<Rc<dyn Fn(usize) -> u64>>,
+}
+
+impl LazyItems {
+    /// A run of `count` items with no key and no reuse class.
+    pub fn new(count: usize) -> Self {
+        Self {
+            count,
+            key: None,
+            content_type: None,
+        }
+    }
+
+    /// Gives each item a stable identity, so state, animations and scroll
+    /// position follow the item when the list is reordered or edited.
+    pub fn key(mut self, key: impl Fn(usize) -> u64 + 'static) -> Self {
+        self.key = Some(Rc::new(key));
+        self
+    }
+
+    /// Groups items into reuse classes, so a scrolling list recycles a row
+    /// into another row of the same shape rather than rebuilding it.
+    pub fn content_type(mut self, content_type: impl Fn(usize) -> u64 + 'static) -> Self {
+        self.content_type = Some(Rc::new(content_type));
+        self
+    }
+
+    /// How many items this run declares.
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// The identity function, if the caller named one.
+    pub fn key_fn(&self) -> Option<Rc<dyn Fn(usize) -> u64>> {
+        self.key.clone()
+    }
+
+    /// The reuse-class function, if the caller named one.
+    pub fn content_type_fn(&self) -> Option<Rc<dyn Fn(usize) -> u64>> {
+        self.content_type.clone()
+    }
+}
+
+impl From<usize> for LazyItems {
+    fn from(count: usize) -> Self {
+        Self::new(count)
+    }
+}
 
 /// Receiver scope for lazy list content definition.
 ///
@@ -116,7 +177,7 @@ pub struct LazyScopeMarker;
 /// ```rust,ignore
 /// lazy_column(modifier, state, |scope| {
 ///     // Single item
-///     scope.item(Some(0), None, || {
+///     scope.item_keyed(Some(0), None, || {
 ///         Text::new("Header")
 ///     });
 ///
@@ -127,32 +188,29 @@ pub struct LazyScopeMarker;
 /// });
 /// ```
 pub trait LazyListScope {
-    /// Adds a single item to the list.
+    /// Adds one item.
+    fn item<F>(&mut self, content: F)
+    where
+        F: Fn() + 'static,
+    {
+        self.item_keyed(None, None, content);
+    }
+
+    /// Adds one item with a stable identity and/or a reuse class.
     ///
-    /// # Arguments
-    /// * `key` - Optional stable key for the item
-    /// * `content_type` - Optional content type for efficient reuse
-    /// * `content` - Closure that emits the item content
-    fn item<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
+    /// `key` makes item state follow the item across reorders; `content_type`
+    /// groups it with the rows it may be recycled into.
+    fn item_keyed<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
     where
         F: Fn() + 'static;
 
-    /// Adds multiple items to the list.
+    /// Adds a run of items.
     ///
-    /// # Arguments
-    /// * `count` - Number of items to add
-    /// * `key` - Optional function to generate stable keys from index
-    /// * `content_type` - Optional function to generate content types from index
-    /// * `item_content` - Closure that emits content for each item
-    fn items<K, C, F>(
-        &mut self,
-        count: usize,
-        key: Option<K>,
-        content_type: Option<C>,
-        item_content: F,
-    ) where
-        K: Fn(usize) -> u64 + 'static,
-        C: Fn(usize) -> u64 + 'static,
+    /// A count is enough for the ordinary list — `scope.items(20, |index| ...)`.
+    /// Pass a [`LazyItems`] to name keys or reuse classes.
+    fn items<I, F>(&mut self, items: I, item_content: F)
+    where
+        I: Into<LazyItems>,
         F: Fn(usize) + 'static;
 }
 
@@ -395,7 +453,7 @@ impl Default for LazyListIntervalContent {
 }
 
 impl LazyListScope for LazyListIntervalContent {
-    fn item<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
+    fn item_keyed<F>(&mut self, key: Option<u64>, content_type: Option<u64>, content: F)
     where
         F: Fn() + 'static,
     {
@@ -411,17 +469,13 @@ impl LazyListScope for LazyListIntervalContent {
         self.total_count += 1;
     }
 
-    fn items<K, C, F>(
-        &mut self,
-        count: usize,
-        key: Option<K>,
-        content_type: Option<C>,
-        item_content: F,
-    ) where
-        K: Fn(usize) -> u64 + 'static,
-        C: Fn(usize) -> u64 + 'static,
+    fn items<I, F>(&mut self, items: I, item_content: F)
+    where
+        I: Into<LazyItems>,
         F: Fn(usize) + 'static,
     {
+        let items = items.into();
+        let count = items.count();
         if count == 0 {
             return;
         }
@@ -431,8 +485,8 @@ impl LazyListScope for LazyListIntervalContent {
         self.intervals.push(LazyListInterval {
             start_index,
             count,
-            key: key.map(|k| Rc::new(k) as Rc<dyn Fn(usize) -> u64>),
-            content_type: content_type.map(|c| Rc::new(c) as Rc<dyn Fn(usize) -> u64>),
+            key: items.key_fn(),
+            content_type: items.content_type_fn(),
             content: Rc::new(item_content),
         });
         self.total_count += count;
@@ -510,16 +564,11 @@ pub trait LazyListScopeExt: LazyListScope {
         // Note: to_vec() is O(n) allocation + copy. This is documented above.
         // For zero-copy, use items_slice_rc() or items_with_provider().
         let items_rc: Rc<[T]> = items.to_vec().into();
-        self.items(
-            items.len(),
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = items_rc.get(index) {
-                    item_content(item);
-                }
-            },
-        );
+        self.items(items.len(), move |index| {
+            if let Some(item) = items_rc.get(index) {
+                item_content(item);
+            }
+        });
     }
 
     /// Adds items from a `Vec<T>`, taking ownership.
@@ -543,16 +592,11 @@ pub trait LazyListScopeExt: LazyListScope {
     {
         let len = items.len();
         let items_rc: Rc<[T]> = Rc::from(items);
-        self.items(
-            len,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = items_rc.get(index) {
-                    item_content(item);
-                }
-            },
-        );
+        self.items(len, move |index| {
+            if let Some(item) = items_rc.get(index) {
+                item_content(item);
+            }
+        });
     }
 
     /// Adds indexed items from a collection (Slice, Vec, or Rc).
@@ -585,16 +629,11 @@ pub trait LazyListScopeExt: LazyListScope {
         F: Fn(usize, &T) + 'static,
     {
         let items_rc: Rc<[T]> = items.into();
-        self.items(
-            items_rc.len(),
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = items_rc.get(index) {
-                    item_content(index, item);
-                }
-            },
-        );
+        self.items(items_rc.len(), move |index| {
+            if let Some(item) = items_rc.get(index) {
+                item_content(index, item);
+            }
+        });
     }
 
     /// Adds items from a pre-existing `Rc<[T]>` without cloning.
@@ -616,16 +655,11 @@ pub trait LazyListScopeExt: LazyListScope {
         F: Fn(&T) + 'static,
     {
         let len = items.len();
-        self.items(
-            len,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = items.get(index) {
-                    item_content(item);
-                }
-            },
-        );
+        self.items(len, move |index| {
+            if let Some(item) = items.get(index) {
+                item_content(item);
+            }
+        });
     }
 
     /// Adds indexed items from a pre-existing `Rc<[T]>` without cloning.
@@ -647,16 +681,11 @@ pub trait LazyListScopeExt: LazyListScope {
         F: Fn(usize, &T) + 'static,
     {
         let len = items.len();
-        self.items(
-            len,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = items.get(index) {
-                    item_content(index, item);
-                }
-            },
-        );
+        self.items(len, move |index| {
+            if let Some(item) = items.get(index) {
+                item_content(index, item);
+            }
+        });
     }
 
     /// Adds items using a provider function for on-demand data access.
@@ -686,16 +715,11 @@ pub trait LazyListScopeExt: LazyListScope {
         P: Fn(usize) -> Option<T> + 'static,
         F: Fn(T) + 'static,
     {
-        self.items(
-            count,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = provider(index) {
-                    item_content(item);
-                }
-            },
-        );
+        self.items(count, move |index| {
+            if let Some(item) = provider(index) {
+                item_content(item);
+            }
+        });
     }
 
     /// Adds indexed items using a provider function for on-demand data access.
@@ -722,16 +746,11 @@ pub trait LazyListScopeExt: LazyListScope {
         P: Fn(usize) -> Option<T> + 'static,
         F: Fn(usize, T) + 'static,
     {
-        self.items(
-            count,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            move |index| {
-                if let Some(item) = provider(index) {
-                    item_content(index, item);
-                }
-            },
-        );
+        self.items(count, move |index| {
+            if let Some(item) = provider(index) {
+                item_content(index, item);
+            }
+        });
     }
 }
 
@@ -763,7 +782,7 @@ mod tests {
         let called = Rc::new(Cell::new(false));
         let called_clone = Rc::clone(&called);
 
-        content.item(Some(42), None, move || {
+        content.item_keyed(Some(42), None, move || {
             called_clone.set(true);
         });
 
@@ -778,12 +797,7 @@ mod tests {
     fn test_multiple_items() {
         let mut content = LazyListIntervalContent::new();
 
-        content.items(
-            5,
-            Some(|i| (i * 10) as u64),
-            None::<fn(usize) -> u64>,
-            |_i| {},
-        );
+        content.items(LazyItems::new(5).key(|i| (i * 10) as u64), |_i| {});
 
         assert_eq!(content.item_count(), 5);
         assert_eq!(content.get_key(0), LazyLayoutKey::User(0));
@@ -796,13 +810,13 @@ mod tests {
         let mut content = LazyListIntervalContent::new();
 
         // Header
-        content.item(Some(100), None, || {});
+        content.item_keyed(Some(100), None, || {});
 
         // Items
-        content.items(3, Some(|i| i as u64), None::<fn(usize) -> u64>, |_| {});
+        content.items(LazyItems::new(3).key(|i| i as u64), |_| {});
 
         // Footer
-        content.item(Some(200), None, || {});
+        content.item_keyed(Some(200), None, || {});
 
         assert_eq!(content.item_count(), 5);
         assert_eq!(content.get_key(0), LazyLayoutKey::User(100)); // Header
@@ -815,12 +829,7 @@ mod tests {
     #[test]
     fn test_with_interval() {
         let mut content = LazyListIntervalContent::new();
-        content.items(
-            5,
-            None::<fn(usize) -> u64>,
-            None::<fn(usize) -> u64>,
-            |_| {},
-        );
+        content.items(5, |_| {});
 
         let result = content.with_interval(3, |local_idx, interval| (local_idx, interval.count));
 
@@ -832,11 +841,11 @@ mod tests {
         let mut content = LazyListIntervalContent::new();
 
         // Item 0: User key = 0
-        content.item(Some(0), None, || {});
+        content.item_keyed(Some(0), None, || {});
         // Item 1: No key (default Index(1))
-        content.item(None, None, || {});
+        content.item(|| {});
         // Item 2: User key = 1
-        content.item(Some(1), None, || {});
+        content.item_keyed(Some(1), None, || {});
 
         // User key 0 should NOT equal default Index(0)
         assert_eq!(content.get_key(0), LazyLayoutKey::User(0));
@@ -1122,9 +1131,8 @@ mod tests {
 
         // Create a list with 20,000 items (above the old 10k limit)
         content.items(
-            20_000,
-            Some(|i| (i * 7) as u64), // Unique keys
-            None::<fn(usize) -> u64>,
+            // Unique keys.
+            LazyItems::new(20_000).key(|i| (i * 7) as u64),
             |_| {},
         );
 

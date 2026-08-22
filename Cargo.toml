@@ -22,6 +22,7 @@ members = [
     "apps/desktop-demo",
     "apps/desktop-demo-platform",
     "crates/cranpose-audio",
+    "crates/cranpose-media",
     "crates/cranpose-services",
     "crates/cranpose-storekit",
     "xtask",
@@ -50,6 +51,7 @@ cranpose-audio = { path = "crates/cranpose-audio", version = "0.1.95", default-f
 cranpose-core = { path = "crates/cranpose-core", version = "0.1.95" }
 cranpose-foundation = { path = "crates/cranpose-foundation", version = "0.1.95" }
 cranpose-macros = { path = "crates/cranpose-macros", version = "0.1.95" }
+cranpose-media = { path = "crates/cranpose-media", version = "0.1.95" }
 cranpose-platform-android = { path = "crates/cranpose-platform/android", version = "0.1.95" }
 cranpose-platform-desktop-winit = { path = "crates/cranpose-platform/desktop-winit", version = "0.1.95", default-features = false }
 cranpose-platform-web = { path = "crates/cranpose-platform/web", version = "0.1.95" }

@@ -16,11 +16,11 @@
 //!
 //! ```rust,ignore
 //! use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
-//! use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+//! use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 //!
-//! let state = remember_lazy_list_state();
+//! let state = rememberLazyListState();
 //! LazyColumn(Modifier::empty(), state, LazyColumnSpec::default(), |scope| {
-//!     scope.items(100, None::<fn(usize)->u64>, None::<fn(usize)->u64>, |i| {
+//!     scope.items(100, |i| {
 //!         Text(format!("Item {}", i), Modifier::empty());
 //!     });
 //! });
@@ -30,9 +30,9 @@
 //!
 //! ```rust,ignore
 //! use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
-//! use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScopeExt};
+//! use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt};
 //!
-//! let state = remember_lazy_list_state();
+//! let state = rememberLazyListState();
 //! LazyColumn(Modifier::empty(), state, LazyColumnSpec::default(), |scope| {
 //!     scope.items_slice(&my_data, |item| {
 //!         Text(item.name.clone(), Modifier::empty());

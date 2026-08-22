@@ -17210,7 +17210,7 @@ mod shape_batch_limits_tests {
 mod tests {
     use super::*;
     use crate::normalized_scene::visible_draw_rect;
-    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
     use cranpose_render_common::graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode};
     use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_render_common::scene_builder::build_graph_from_applier;
@@ -21864,24 +21864,19 @@ mod tests {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             *state_holder_for_comp.borrow_mut() = Some(list_state);
             let mut spec = LazyColumnSpec::new()
                 .vertical_arrangement(cranpose_ui::LinearArrangement::SpacedBy(6.0));
             spec.beyond_bounds_item_count = 0;
             LazyColumn(Modifier::empty().height(96.0), list_state, spec, |scope| {
-                scope.items(
-                    12,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |index| {
-                        Text(
-                            format!("WarmRow {index}"),
-                            Modifier::empty().height(32.0),
-                            TextStyle::default(),
-                        );
-                    },
-                );
+                scope.items(12, |index| {
+                    Text(
+                        format!("WarmRow {index}"),
+                        Modifier::empty().height(32.0),
+                        TextStyle::default(),
+                    );
+                });
             });
         });
 

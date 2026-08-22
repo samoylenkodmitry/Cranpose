@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_foundation::PointerButton;
 use cranpose_ui::{
     composable, text::SpanStyle, Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec,
@@ -120,7 +120,7 @@ fn solid_color_bitmap(width: u32, height: u32, color: Color) -> ImageBitmap {
     let b = (color.b().clamp(0.0, 1.0) * 255.0).round() as u8;
     let a = (color.a().clamp(0.0, 1.0) * 255.0).round() as u8;
     let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         px[0] = r;
         px[1] = g;
         px[2] = b;
@@ -402,8 +402,8 @@ fn InteractiveEffectsDemo() {
     let rect_h = 100.0;
     let corner = 20.0;
 
-    let blur_pos = cranpose_core::useState(|| Point { x: 16.0, y: 16.0 });
-    let glass_pos = cranpose_core::useState(|| Point { x: 244.0, y: 164.0 });
+    let blur_pos = cranpose_core::rememberMutableStateOf(|| Point { x: 16.0, y: 16.0 });
+    let glass_pos = cranpose_core::rememberMutableStateOf(|| Point { x: 244.0, y: 164.0 });
 
     Column(
         Modifier::empty(),
@@ -538,12 +538,12 @@ fn InteractiveEffectsDemo() {
 fn EffectSemanticsDemo() {
     let preview_w = 172.0;
     let preview_h = 80.0;
-    let offset_x = cranpose_core::useState(|| 20.0f32);
-    let offset_y = cranpose_core::useState(|| 12.0f32);
-    let blur_clamp_radius = cranpose_core::useState(|| 10.0f32);
-    let blur_decal_radius = cranpose_core::useState(|| 10.0f32);
-    let nested_parent_blur = cranpose_core::useState(|| 8.0f32);
-    let nested_child_backdrop_blur = cranpose_core::useState(|| 12.0f32);
+    let offset_x = cranpose_core::rememberMutableStateOf(|| 20.0f32);
+    let offset_y = cranpose_core::rememberMutableStateOf(|| 12.0f32);
+    let blur_clamp_radius = cranpose_core::rememberMutableStateOf(|| 10.0f32);
+    let blur_decal_radius = cranpose_core::rememberMutableStateOf(|| 10.0f32);
+    let nested_parent_blur = cranpose_core::rememberMutableStateOf(|| 8.0f32);
+    let nested_child_backdrop_blur = cranpose_core::rememberMutableStateOf(|| 12.0f32);
     let checkerboard: ImageBitmap =
         cranpose_core::remember(|| generate_chessboard_bitmap(18, 10)).with(|b| b.clone());
 
@@ -672,9 +672,9 @@ fn GraphicsLayerFieldsDemo() {
 
 #[composable]
 fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
-    let rotation_z = cranpose_core::useState(|| 18.0f32);
-    let origin_x = cranpose_core::useState(|| 0.0f32);
-    let origin_y = cranpose_core::useState(|| 0.0f32);
+    let rotation_z = cranpose_core::rememberMutableStateOf(|| 18.0f32);
+    let origin_x = cranpose_core::rememberMutableStateOf(|| 0.0f32);
+    let origin_y = cranpose_core::rememberMutableStateOf(|| 0.0f32);
     let panel_bitmap: ImageBitmap =
         cranpose_core::remember(|| solid_color_bitmap(124, 62, Color(0.25, 0.45, 0.9, 0.88)))
             .with(|b| b.clone());
@@ -806,10 +806,10 @@ fn RotationAndTransformOriginCard(checkerboard: ImageBitmap, preview_w: f32, pre
 
 #[composable]
 fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
-    let rotation_x = cranpose_core::useState(|| 26.0f32);
-    let rotation_y = cranpose_core::useState(|| -18.0f32);
-    let near_distance = cranpose_core::useState(|| 8.0f32);
-    let far_distance = cranpose_core::useState(|| 24.0f32);
+    let rotation_x = cranpose_core::rememberMutableStateOf(|| 26.0f32);
+    let rotation_y = cranpose_core::rememberMutableStateOf(|| -18.0f32);
+    let near_distance = cranpose_core::rememberMutableStateOf(|| 8.0f32);
+    let far_distance = cranpose_core::rememberMutableStateOf(|| 24.0f32);
     let near_bitmap: ImageBitmap =
         cranpose_core::remember(|| solid_color_bitmap(74, 56, Color(0.55, 0.35, 0.9, 0.88)))
             .with(|b| b.clone());
@@ -966,9 +966,9 @@ fn RotationAndCameraDistanceCard(checkerboard: ImageBitmap, preview_w: f32, prev
 
 #[composable]
 fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
-    let corner_radius = cranpose_core::useState(|| 22.0f32);
-    let overflow_x = cranpose_core::useState(|| 46.0f32);
-    let overflow_y = cranpose_core::useState(|| 36.0f32);
+    let corner_radius = cranpose_core::rememberMutableStateOf(|| 22.0f32);
+    let overflow_x = cranpose_core::rememberMutableStateOf(|| 46.0f32);
+    let overflow_y = cranpose_core::rememberMutableStateOf(|| 36.0f32);
     let panel_bitmap: ImageBitmap =
         cranpose_core::remember(|| solid_color_bitmap(84, 66, Color(0.15, 0.76, 0.44, 0.88)))
             .with(|b| b.clone());
@@ -1181,10 +1181,10 @@ fn ShapeAndClipCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
 
 #[composable]
 fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
-    let shadow_elevation = cranpose_core::useState(|| 20.0f32);
-    let ambient_alpha = cranpose_core::useState(|| 0.68f32);
-    let spot_alpha = cranpose_core::useState(|| 0.84f32);
-    let corner_radius = cranpose_core::useState(|| 12.0f32);
+    let shadow_elevation = cranpose_core::rememberMutableStateOf(|| 20.0f32);
+    let ambient_alpha = cranpose_core::rememberMutableStateOf(|| 0.68f32);
+    let spot_alpha = cranpose_core::rememberMutableStateOf(|| 0.84f32);
+    let corner_radius = cranpose_core::rememberMutableStateOf(|| 12.0f32);
     let panel_bitmap: ImageBitmap =
         cranpose_core::remember(|| solid_color_bitmap(68, 56, Color(0.88, 0.31, 0.26, 1.0)))
             .with(|b| b.clone());
@@ -1330,26 +1330,26 @@ fn ShadowFieldsCard(checkerboard: ImageBitmap, preview_w: f32, preview_h: f32) {
 
 #[composable]
 fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
-    let drop_radius = cranpose_core::useState(|| 24.0f32);
-    let drop_spread = cranpose_core::useState(|| 4.0f32);
-    let drop_offset_x = cranpose_core::useState(|| 8.0f32);
-    let drop_offset_y = cranpose_core::useState(|| 10.0f32);
-    let drop_alpha = cranpose_core::useState(|| 0.88f32);
-    let drop_color_mix = cranpose_core::useState(|| 0.15f32);
-    let drop_brush_mix = cranpose_core::useState(|| 0.0f32);
-    let drop_blend_mode = cranpose_core::useState(|| 0.0f32);
+    let drop_radius = cranpose_core::rememberMutableStateOf(|| 24.0f32);
+    let drop_spread = cranpose_core::rememberMutableStateOf(|| 4.0f32);
+    let drop_offset_x = cranpose_core::rememberMutableStateOf(|| 8.0f32);
+    let drop_offset_y = cranpose_core::rememberMutableStateOf(|| 10.0f32);
+    let drop_alpha = cranpose_core::rememberMutableStateOf(|| 0.88f32);
+    let drop_color_mix = cranpose_core::rememberMutableStateOf(|| 0.15f32);
+    let drop_brush_mix = cranpose_core::rememberMutableStateOf(|| 0.0f32);
+    let drop_blend_mode = cranpose_core::rememberMutableStateOf(|| 0.0f32);
 
-    let inner_radius = cranpose_core::useState(|| 10.0f32);
-    let inner_spread = cranpose_core::useState(|| 1.0f32);
-    let inner_offset_x = cranpose_core::useState(|| 6.0f32);
-    let inner_offset_y = cranpose_core::useState(|| 5.0f32);
-    let inner_alpha = cranpose_core::useState(|| 0.62f32);
-    let inner_color_mix = cranpose_core::useState(|| 0.15f32);
-    let inner_brush_mix = cranpose_core::useState(|| 0.0f32);
-    let inner_blend_mode = cranpose_core::useState(|| 0.0f32);
+    let inner_radius = cranpose_core::rememberMutableStateOf(|| 10.0f32);
+    let inner_spread = cranpose_core::rememberMutableStateOf(|| 1.0f32);
+    let inner_offset_x = cranpose_core::rememberMutableStateOf(|| 6.0f32);
+    let inner_offset_y = cranpose_core::rememberMutableStateOf(|| 5.0f32);
+    let inner_alpha = cranpose_core::rememberMutableStateOf(|| 0.62f32);
+    let inner_color_mix = cranpose_core::rememberMutableStateOf(|| 0.15f32);
+    let inner_brush_mix = cranpose_core::rememberMutableStateOf(|| 0.0f32);
+    let inner_blend_mode = cranpose_core::rememberMutableStateOf(|| 0.0f32);
 
-    let corner_radius = cranpose_core::useState(|| 12.0f32);
-    let controls_state = remember_lazy_list_state();
+    let corner_radius = cranpose_core::rememberMutableStateOf(|| 12.0f32);
+    let controls_state = rememberLazyListState();
     let card_h = preview_h + 196.0;
 
     Box(
@@ -1536,7 +1536,7 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                 controls_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
                 move |scope| {
-                    scope.item(Some(0), None, move || {
+                    scope.item_keyed(Some(0), None, move || {
                         Text(
                             "Compose 1.9 Shadow API",
                             Modifier::empty(),
@@ -1549,7 +1549,7 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             },
                         );
                     });
-                    scope.item(Some(1), None, move || {
+                    scope.item_keyed(Some(1), None, move || {
                         Text(
                             "radius/spread/offset/alpha/color/brush/blend + static Shadow(dp)",
                             Modifier::empty(),
@@ -1563,31 +1563,31 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         );
                     });
 
-                    scope.item(Some(2), None, move || {
+                    scope.item_keyed(Some(2), None, move || {
                         ValueSlider("drop_radius", drop_radius, 0.0, 40.0, 220.0);
                     });
-                    scope.item(Some(3), None, move || {
+                    scope.item_keyed(Some(3), None, move || {
                         ValueSlider("drop_spread", drop_spread, -8.0, 18.0, 220.0);
                     });
-                    scope.item(Some(4), None, move || {
+                    scope.item_keyed(Some(4), None, move || {
                         ValueSlider("drop_offset_x", drop_offset_x, -20.0, 20.0, 220.0);
                     });
-                    scope.item(Some(5), None, move || {
+                    scope.item_keyed(Some(5), None, move || {
                         ValueSlider("drop_offset_y", drop_offset_y, -20.0, 24.0, 220.0);
                     });
-                    scope.item(Some(6), None, move || {
+                    scope.item_keyed(Some(6), None, move || {
                         ValueSlider("drop_alpha", drop_alpha, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(7), None, move || {
+                    scope.item_keyed(Some(7), None, move || {
                         ValueSlider("drop_color_mix", drop_color_mix, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(8), None, move || {
+                    scope.item_keyed(Some(8), None, move || {
                         ValueSlider("drop_brush_mix", drop_brush_mix, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(9), None, move || {
+                    scope.item_keyed(Some(9), None, move || {
                         ValueSlider("drop_blend_mode", drop_blend_mode, 0.0, 3.0, 220.0);
                     });
-                    scope.item(Some(10), None, move || {
+                    scope.item_keyed(Some(10), None, move || {
                         Text(
                             format!(
                                 "drop blend: {}",
@@ -1604,31 +1604,31 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                         );
                     });
 
-                    scope.item(Some(11), None, move || {
+                    scope.item_keyed(Some(11), None, move || {
                         ValueSlider("inner_radius", inner_radius, 0.0, 24.0, 220.0);
                     });
-                    scope.item(Some(12), None, move || {
+                    scope.item_keyed(Some(12), None, move || {
                         ValueSlider("inner_spread", inner_spread, -10.0, 10.0, 220.0);
                     });
-                    scope.item(Some(13), None, move || {
+                    scope.item_keyed(Some(13), None, move || {
                         ValueSlider("inner_offset_x", inner_offset_x, -18.0, 18.0, 220.0);
                     });
-                    scope.item(Some(14), None, move || {
+                    scope.item_keyed(Some(14), None, move || {
                         ValueSlider("inner_offset_y", inner_offset_y, -18.0, 18.0, 220.0);
                     });
-                    scope.item(Some(15), None, move || {
+                    scope.item_keyed(Some(15), None, move || {
                         ValueSlider("inner_alpha", inner_alpha, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(16), None, move || {
+                    scope.item_keyed(Some(16), None, move || {
                         ValueSlider("inner_color_mix", inner_color_mix, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(17), None, move || {
+                    scope.item_keyed(Some(17), None, move || {
                         ValueSlider("inner_brush_mix", inner_brush_mix, 0.0, 1.0, 220.0);
                     });
-                    scope.item(Some(18), None, move || {
+                    scope.item_keyed(Some(18), None, move || {
                         ValueSlider("inner_blend_mode", inner_blend_mode, 0.0, 3.0, 220.0);
                     });
-                    scope.item(Some(19), None, move || {
+                    scope.item_keyed(Some(19), None, move || {
                         Text(
                             format!(
                                 "inner blend: {}",
@@ -1644,7 +1644,7 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
                             },
                         );
                     });
-                    scope.item(Some(20), None, move || {
+                    scope.item_keyed(Some(20), None, move || {
                         ValueSlider("corner_radius", corner_radius, 0.0, 20.0, 220.0);
                     });
                 },
@@ -1657,15 +1657,15 @@ fn ComposeShadowApiCard(preview_w: f32, preview_h: f32) {
 fn MaskApiDemo() {
     let preview_w = 188.0;
     let preview_h = 88.0;
-    let half_progress = cranpose_core::useState(|| 0.5f32);
-    let half_feather = cranpose_core::useState(|| 26.0f32);
-    let half_corner = cranpose_core::useState(|| 20.0f32);
-    let top_progress = cranpose_core::useState(|| 0.62f32);
-    let top_feather = cranpose_core::useState(|| 20.0f32);
-    let top_corner = cranpose_core::useState(|| 14.0f32);
-    let dst_alpha = cranpose_core::useState(|| 1.0f32);
-    let dst_fade_start = cranpose_core::useState(|| 24.0f32);
-    let dst_fade_end = cranpose_core::useState(|| 60.0f32);
+    let half_progress = cranpose_core::rememberMutableStateOf(|| 0.5f32);
+    let half_feather = cranpose_core::rememberMutableStateOf(|| 26.0f32);
+    let half_corner = cranpose_core::rememberMutableStateOf(|| 20.0f32);
+    let top_progress = cranpose_core::rememberMutableStateOf(|| 0.62f32);
+    let top_feather = cranpose_core::rememberMutableStateOf(|| 20.0f32);
+    let top_corner = cranpose_core::rememberMutableStateOf(|| 14.0f32);
+    let dst_alpha = cranpose_core::rememberMutableStateOf(|| 1.0f32);
+    let dst_fade_start = cranpose_core::rememberMutableStateOf(|| 24.0f32);
+    let dst_fade_end = cranpose_core::rememberMutableStateOf(|| 60.0f32);
     let checkerboard: ImageBitmap =
         cranpose_core::remember(|| generate_chessboard_bitmap(18, 9)).with(|b| b.clone());
 

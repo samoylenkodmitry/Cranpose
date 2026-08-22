@@ -1710,9 +1710,9 @@ impl Composer {
         self.set_recranpose_callback_boxed(Box::new(callback));
     }
 
-    /// Monomorphic core (`inline(never)` so fat LTO keeps one copy): the
-    /// observer wiring here used to be re-instantiated for every composable
-    /// call site through the generic entry point above.
+    /// Monomorphic core (`inline(never)` so fat LTO keeps one copy). The
+    /// generic entry point above would otherwise re-instantiate this observer
+    /// wiring for every composable call site.
     #[inline(never)]
     fn set_recranpose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
         if let Some(scope) = self.current_recranpose_scope() {

@@ -74,9 +74,6 @@ pulldown-cmark = { version = "0.13.3", default-features = false }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = { version = "0.11", optional = true }
 
-# Android-specific dependencies (only when building for Android)
-[target.'cfg(target_os = "android")'.dependencies]
-android-activity = { workspace = true }
 
 # WASM-specific dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -864,6 +861,16 @@ required-features = ["desktop", "robot-app"]
 [[example]]
 name = "robot_adaptive_frost"
 path = "robot-runners/robot_adaptive_frost.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_liquid_tab_bar_pill_containment"
+path = "robot-runners/robot_liquid_tab_bar_pill_containment.rs"
+required-features = ["desktop", "robot-app"]
+
+[[example]]
+name = "robot_liquid_dropdown_accordion"
+path = "robot-runners/robot_liquid_dropdown_accordion.rs"
 required-features = ["desktop", "robot-app"]
 
 [[example]]

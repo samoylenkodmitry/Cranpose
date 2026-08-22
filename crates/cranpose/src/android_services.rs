@@ -15,12 +15,17 @@ use crate::android_haptics_queue::{HapticCommand, HapticQueue};
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 use crate::android_launch_args::decode_launch_arguments;
 use cranpose_services::{
-    push_notification_deeplink, set_platform_haptics, set_platform_launch_args,
-    set_platform_network_monitor, set_platform_notifier, set_platform_share_sheet, HapticEffect,
-    HapticFeedback, HapticPattern, Haptics, LaunchArgs, NetworkMonitor, NetworkStatus, Notifier,
-    NotifyRequest, ShareContent, ShareError, ShareSheet,
+    publish_incoming_content, push_notification_deeplink, set_platform_app_updater,
+    set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
+    set_platform_launch_args, set_platform_network_monitor, set_platform_notifier,
+    set_platform_power_monitor, set_platform_share_sheet, AppUpdateCapabilities, AppUpdateError,
+    AppUpdateStatus, AppUpdater, BackgroundActivity, BatteryStatus, BundledAssetError,
+    BundledAssetReader, BundledAssets, GitHubReleaseUpdate, HapticEffect, HapticFeedback,
+    HapticPattern, Haptics, IncomingContent, LaunchArgs, NetworkMonitor, NetworkStatus, Notifier,
+    NotifyRequest, PackageDigest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent,
+    ShareError, ShareSheet, StreamingAssetReader, ThermalState, UpdatePackage,
 };
-use jni::objects::{JClass, JObject, JString, JValue};
+use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
 use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::rc::Rc;
@@ -77,6 +82,12 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
     set_platform_share_sheet(Rc::new(AndroidShareSheet { app: app.clone() }));
     set_platform_notifier(Arc::new(AndroidNotifier { app: app.clone() }));
     set_platform_network_monitor(Arc::new(AndroidNetworkMonitor { app: app.clone() }));
+    set_platform_power_monitor(Arc::new(AndroidPowerMonitor { app: app.clone() }));
+    set_platform_background_activity(Arc::new(AndroidBackgroundActivity { app: app.clone() }));
+    set_platform_bundled_assets(Arc::new(AndroidBundledAssets { app: app.clone() }));
+    set_platform_app_updater(Arc::new(AndroidAppUpdater { app: app.clone() }));
+    crate::android_camera::register(app.clone());
+    crate::android_media::register(app.clone());
     // Pulled rather than pushed from `onCreate`: `getIntent()` is populated
     // before the native thread starts, so reading it here is deterministic,
     // whereas a push would race the thread that consumes it.
@@ -93,6 +104,270 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
         // AAudio is a pure-NDK API, so the engine needs nothing from the
         // activity. The output device itself opens on the first sound.
         cranpose_audio::install();
+    }
+}
+
+struct AndroidAppUpdater {
+    app: android_activity::AndroidApp,
+}
+
+impl AppUpdater for AndroidAppUpdater {
+    fn capabilities(&self) -> AppUpdateCapabilities {
+        // Android is the one platform that both discovers a release and hands
+        // the package to a system installer.
+        AppUpdateCapabilities {
+            check: true,
+            install: true,
+        }
+    }
+
+    fn check(&self, source: &GitHubReleaseUpdate) -> Result<(), AppUpdateError> {
+        with_android_activity_env(&self.app, |env, activity| {
+            let repository = env
+                .new_string(&source.repository)
+                .map_err(|error| error.to_string())?;
+            let current_version = env
+                .new_string(&source.current_version)
+                .map_err(|error| error.to_string())?;
+            let asset_suffix = env
+                .new_string(&source.asset_suffix)
+                .map_err(|error| error.to_string())?;
+            env.call_method(
+                &activity,
+                jni_str!("cranposeCheckGitHubUpdate"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+                &[
+                    JValue::Object(repository.as_ref()),
+                    JValue::Object(current_version.as_ref()),
+                    JValue::Object(asset_suffix.as_ref()),
+                ],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        })
+        .map_err(AppUpdateError::Request)
+    }
+
+    fn install(&self, package: &UpdatePackage) -> Result<(), AppUpdateError> {
+        // The digest travels in the `sha256:<hex>` form the release feed
+        // publishes, so the Java installer names the same algorithm to
+        // `MessageDigest` that this framework would name to its own hasher.
+        let digest = package
+            .digest
+            .as_ref()
+            .map(PackageDigest::to_feed_string)
+            .unwrap_or_default();
+        with_android_activity_env(&self.app, |env, activity| {
+            let download_url = env
+                .new_string(&package.download_url)
+                .map_err(|error| error.to_string())?;
+            let digest = env.new_string(&digest).map_err(|error| error.to_string())?;
+            env.call_method(
+                &activity,
+                jni_str!("cranposeInstallUpdate"),
+                jni_sig!("(Ljava/lang/String;Ljava/lang/String;J)V"),
+                &[
+                    JValue::Object(download_url.as_ref()),
+                    JValue::Object(digest.as_ref()),
+                    JValue::Long(package.size.unwrap_or(0) as i64),
+                ],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        })
+        .map_err(AppUpdateError::Request)
+    }
+}
+
+struct AndroidBundledAssets {
+    app: android_activity::AndroidApp,
+}
+
+impl BundledAssets for AndroidBundledAssets {
+    fn read(&self, path: &str) -> Result<Vec<u8>, BundledAssetError> {
+        let result = with_android_activity_env(&self.app, |env, activity| {
+            let path_string = env.new_string(path).map_err(|error| error.to_string())?;
+            let path_object: &JObject = path_string.as_ref();
+            let value = env
+                .call_method(
+                    &activity,
+                    jni_str!("cranposeReadBundledAsset"),
+                    jni_sig!("(Ljava/lang/String;)[B"),
+                    &[JValue::Object(path_object)],
+                )
+                .and_then(|value| value.l())
+                .map_err(|error| {
+                    clear_pending_android_jni_exception(env);
+                    error.to_string()
+                })?;
+            if value.is_null() {
+                return Ok(None);
+            }
+            let bytes = JByteArray::cast_local(env, value).map_err(|error| error.to_string())?;
+            env.convert_byte_array(&bytes)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .map_err(|message| BundledAssetError::ReadFailed {
+            path: path.to_string(),
+            message,
+        })?;
+        result.ok_or_else(|| BundledAssetError::NotFound(path.to_string()))
+    }
+
+    fn open(&self, path: &str) -> Result<Box<dyn BundledAssetReader>, BundledAssetError> {
+        match self.asset_descriptor(path) {
+            Some(reader) => Ok(Box::new(reader)),
+            // A compressed asset has no descriptor to hand out: the bytes only
+            // exist once inflated. Storing a large asset uncompressed in the
+            // APK is what buys the streaming path.
+            None => Ok(Box::new(StreamingAssetReader::new(
+                path,
+                std::io::Cursor::new(self.read(path)?),
+            ))),
+        }
+    }
+
+    fn len(&self, path: &str) -> Option<u64> {
+        let manager = self.app.asset_manager();
+        let name = std::ffi::CString::new(path).ok()?;
+        Some(manager.open(&name)?.length() as u64)
+    }
+}
+
+impl AndroidBundledAssets {
+    /// A reader over the asset's own bytes inside the APK.
+    ///
+    /// `AAsset` is not thread-safe and the `ndk` crate marks it so, but the
+    /// descriptor it opens is an ordinary file descriptor into the package,
+    /// which a worker thread may own. Reading through the descriptor is what
+    /// lets a bundled model reach a loader without being materialised first.
+    fn asset_descriptor(&self, path: &str) -> Option<StreamingAssetReader<std::fs::File>> {
+        let manager = self.app.asset_manager();
+        let name = std::ffi::CString::new(path).ok()?;
+        let asset = manager.open(&name)?;
+        let descriptor = asset.open_file_descriptor().ok()?;
+        let mut file = std::fs::File::from(descriptor.fd);
+        std::io::Seek::seek(
+            &mut file,
+            std::io::SeekFrom::Start(descriptor.offset as u64),
+        )
+        .ok()?;
+        // The descriptor addresses the whole package, so the asset's end is a
+        // count rather than the end of the file.
+        Some(StreamingAssetReader::with_length(
+            path,
+            file,
+            descriptor.size as u64,
+        ))
+    }
+}
+
+struct AndroidBackgroundActivity {
+    app: android_activity::AndroidApp,
+}
+
+impl BackgroundActivity for AndroidBackgroundActivity {
+    fn set_active(&self, active: bool) {
+        let _ = with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeSetBackgroundActive"),
+                jni_sig!("(Z)V"),
+                &[JValue::Bool(active)],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        });
+    }
+}
+
+struct AndroidPowerMonitor {
+    app: android_activity::AndroidApp,
+}
+
+impl AndroidPowerMonitor {
+    fn call_int(&self, method: &'static jni::strings::JNIStr, fallback: i32) -> i32 {
+        with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(&activity, method, jni_sig!("()I"), &[])
+                .and_then(|value| value.i())
+                .map_err(|error| {
+                    clear_pending_android_jni_exception(env);
+                    error.to_string()
+                })
+        })
+        .unwrap_or(fallback)
+    }
+
+    fn call_bool(&self, method: &'static jni::strings::JNIStr, fallback: bool) -> bool {
+        with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(&activity, method, jni_sig!("()Z"), &[])
+                .and_then(|value| value.z())
+                .map_err(|error| {
+                    clear_pending_android_jni_exception(env);
+                    error.to_string()
+                })
+        })
+        .unwrap_or(fallback)
+    }
+}
+
+impl PowerMonitor for AndroidPowerMonitor {
+    fn capabilities(&self) -> PowerCapabilities {
+        PowerCapabilities {
+            thermal: true,
+            battery: true,
+            background_restriction: true,
+        }
+    }
+
+    fn thermal_state(&self) -> PowerReading<ThermalState> {
+        PowerReading::Known(match self.call_int(jni_str!("cranposeThermalStatus"), 0) {
+            i32::MIN..=0 => ThermalState::Normal,
+            1 => ThermalState::Light,
+            2 => ThermalState::Moderate,
+            3 => ThermalState::Severe,
+            4 => ThermalState::Critical,
+            5 => ThermalState::Emergency,
+            _ => ThermalState::Shutdown,
+        })
+    }
+
+    fn battery_status(&self) -> PowerReading<BatteryStatus> {
+        let packed = self.call_int(jni_str!("cranposeBatteryStatus"), 0x100 | 100);
+        PowerReading::Known(BatteryStatus {
+            percent: (packed & 0xff).clamp(0, 100) as u8,
+            charging: (packed & 0x100) != 0,
+        })
+    }
+
+    fn unrestricted_background_work(&self) -> PowerReading<bool> {
+        PowerReading::Known(self.call_bool(jni_str!("cranposeUnrestrictedBackgroundWork"), true))
+    }
+
+    fn request_unrestricted_background_work(&self) {
+        let _ = with_android_activity_env(&self.app, |env, activity| {
+            env.call_method(
+                &activity,
+                jni_str!("cranposeRequestUnrestrictedBackgroundWork"),
+                jni_sig!("()V"),
+                &[],
+            )
+            .map(|_| ())
+            .map_err(|error| {
+                clear_pending_android_jni_exception(env);
+                error.to_string()
+            })
+        });
     }
 }
 
@@ -783,6 +1058,98 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotifica
     }
 }
 
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomingContent<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    name: JString<'local>,
+    mime_type: JString<'local>,
+    uri: JString<'local>,
+) {
+    let shared = env.with_env(|env| -> jni::errors::Result<IncomingContent> {
+        let name = name.try_to_string(env)?;
+        let mime_type = mime_type.try_to_string(env)?;
+        let uri = uri.try_to_string(env)?;
+        let mut shared = IncomingContent::from_uri(uri);
+        if !name.is_empty() {
+            shared = shared.with_name(name);
+        }
+        if !mime_type.is_empty() {
+            shared = shared.with_mime_type(mime_type);
+        }
+        Ok(shared)
+    });
+    if let Outcome::Ok(shared) = shared.into_outcome() {
+        publish_incoming_content(shared);
+        wake_native_loop();
+    }
+}
+
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAppUpdateStatus<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    kind: jint,
+    version: JString<'local>,
+    download_url: JString<'local>,
+    downloaded: jlong,
+    total: jlong,
+    message: JString<'local>,
+    digest: JString<'local>,
+) {
+    let decoded = env.with_env(
+        |env| -> jni::errors::Result<(String, String, String, String)> {
+            Ok((
+                version.try_to_string(env)?,
+                download_url.try_to_string(env)?,
+                message.try_to_string(env)?,
+                digest.try_to_string(env)?,
+            ))
+        },
+    );
+    let Outcome::Ok((version, download_url, message, digest)) = decoded.into_outcome() else {
+        return;
+    };
+    let status = match kind {
+        1 => AppUpdateStatus::Checking,
+        2 => AppUpdateStatus::UpToDate,
+        3 => {
+            let mut package = UpdatePackage::new(version, download_url);
+            if total > 0 {
+                package = package.with_size(total as u64);
+            }
+            // A digest the feed did not publish, or published in a form this
+            // framework cannot check, leaves the package unverifiable — which
+            // `install_app_update` refuses rather than installing blind.
+            if let Some(digest) = PackageDigest::parse(&digest) {
+                package = package.with_digest(digest);
+            }
+            AppUpdateStatus::Available { package }
+        }
+        4 => AppUpdateStatus::Downloading {
+            downloaded: downloaded.max(0) as u64,
+            total: (total > 0).then_some(total as u64),
+        },
+        5 => AppUpdateStatus::AwaitingConfirmation,
+        6 => AppUpdateStatus::Installing,
+        7 => AppUpdateStatus::Error(if message.is_empty() {
+            "application update failed".to_string()
+        } else {
+            message
+        }),
+        8 => AppUpdateStatus::Verifying,
+        _ => AppUpdateStatus::Idle,
+    };
+    cranpose_services::set_app_update_status(status);
+    wake_native_loop();
+}
+
 /// A replacement launch intent arrived. The extras are parked and applied by
 /// the native loop, which is the thread that owns the launch-argument
 /// snapshot; the payload replaces the previous one wholesale, matching
@@ -806,25 +1173,5 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunch
     if let Ok(mut slot) = PENDING_LAUNCH_ARGS.lock() {
         *slot = Some(payload);
     }
-    wake_native_loop();
-}
-
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFileSaved<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    ok: jboolean,
-    error: JString<'local>,
-) {
-    let error = match env
-        .with_env(|env| -> jni::errors::Result<String> { error.try_to_string(env) })
-        .into_outcome()
-    {
-        Outcome::Ok(error) if !error.is_empty() => Some(error),
-        _ => None,
-    };
-    crate::android_file_picker::resolve_pending_save(token, ok, error);
     wake_native_loop();
 }

@@ -154,14 +154,20 @@ impl std::fmt::Debug for TextMenuItem {
 }
 
 /// Builds the consuming tap gesture for a menu button: it swallows the press,
-/// any moves, and the release, and fires `action` when the finger lifts after
-/// a press that started on this button. Every event is consumed so the tap
-/// can never fall through to the text field beneath the overlay. Keyed by the
-/// button label so recomposition reuses the running gesture task.
-pub(crate) fn menu_item_pointer_input(label: &str, action: Rc<dyn Fn()>) -> Modifier {
+/// any moves, and the release. It fires `action` when the finger lifts after
+/// a press that started on this button, or when an already-active continuous
+/// press slides onto this button and lifts. Every event is consumed so the
+/// gesture can never fall through to the text field beneath the overlay.
+/// Keyed by the button label so recomposition reuses the running gesture task.
+pub(crate) fn menu_item_pointer_input(
+    label: &str,
+    action: Rc<dyn Fn()>,
+    continuous_press: Rc<Cell<bool>>,
+) -> Modifier {
     let key = label.to_string();
     Modifier::empty().pointer_input(key, move |scope: PointerInputScope| {
         let action = Rc::clone(&action);
+        let continuous_press = Rc::clone(&continuous_press);
         async move {
             scope
                 .await_pointer_event_scope(|await_scope| async move {
@@ -181,7 +187,7 @@ pub(crate) fn menu_item_pointer_input(label: &str, action: Rc<dyn Fn()>) -> Modi
                                 event.consume();
                             }
                             PointerEventKind::Up => {
-                                if pressed {
+                                if pressed || continuous_press.get() {
                                     action();
                                 }
                                 pressed = false;
@@ -337,7 +343,7 @@ struct MenuMotion {
     /// Page-relative item index a live slide gesture hovers, and whether a
     /// slide was in flight last frame (its release fires the hovered item).
     slide_hover: Cell<Option<usize>>,
-    slide_live: Cell<bool>,
+    slide_live: Rc<Cell<bool>>,
 }
 
 /// The liquid-glass text edit menu.
@@ -366,7 +372,7 @@ pub fn LiquidTextMenu(
             page: Cell::new(0),
             disc_pressed: Rc::new(Cell::new(false)),
             slide_hover: Cell::new(None),
-            slide_live: Cell::new(false),
+            slide_live: Rc::new(Cell::new(false)),
         })
     })
     .with(Rc::clone);
@@ -558,6 +564,7 @@ pub fn LiquidTextMenu(
                                     .then(menu_item_pointer_input(
                                         &item.label,
                                         Rc::clone(&item.action),
+                                        Rc::clone(&motion.slide_live),
                                     )),
                                 menu_text_style(on_light),
                             );
@@ -712,7 +719,7 @@ mod tests {
             let ran = Rc::clone(&ran);
             Rc::new(move || ran.set(true))
         };
-        let modifier = menu_item_pointer_input("Copy", action);
+        let modifier = menu_item_pointer_input("Copy", action, Rc::new(Cell::new(false)));
         let (handler, _slices) = button_handler(&modifier);
 
         let press = down(5.0, 5.0);
@@ -742,7 +749,7 @@ mod tests {
             let ran = Rc::clone(&ran);
             Rc::new(move || ran.set(true))
         };
-        let modifier = menu_item_pointer_input("Cut", action);
+        let modifier = menu_item_pointer_input("Cut", action, Rc::new(Cell::new(false)));
         let (handler, _slices) = button_handler(&modifier);
 
         let release = up(5.0, 5.0);
@@ -752,6 +759,24 @@ mod tests {
             "a release on the menu is consumed so it never hits the field"
         );
         assert!(!ran.get(), "a release with no matching press must not act");
+    }
+
+    #[test]
+    fn menu_button_accepts_release_from_a_continuous_press() {
+        let _app_context = crate::render_state::app_context_test_scope();
+        let ran = Rc::new(Cell::new(false));
+        let action: Rc<dyn Fn()> = {
+            let ran = Rc::clone(&ran);
+            Rc::new(move || ran.set(true))
+        };
+        let modifier = menu_item_pointer_input("Copy", action, Rc::new(Cell::new(true)));
+        let (handler, _slices) = button_handler(&modifier);
+
+        let release = up(5.0, 5.0);
+        handler(release.clone());
+
+        assert!(release.is_consumed());
+        assert!(ran.get());
     }
 
     /// The measured layout constants: a 44 dp capsule with 20 dp label

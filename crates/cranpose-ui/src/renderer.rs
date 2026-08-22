@@ -43,11 +43,6 @@ impl RecordedRenderScene {
         &self.operations
     }
 
-    /// Consumes the scene and yields the owned operations.
-    pub fn into_operations(self) -> Vec<RenderOp> {
-        self.operations
-    }
-
     /// Returns an iterator over primitives that target the provided paint layer.
     pub fn primitives_for(&self, layer: PaintLayer) -> impl Iterator<Item = &DrawPrimitive> {
         self.operations.iter().filter_map(move |op| match op {

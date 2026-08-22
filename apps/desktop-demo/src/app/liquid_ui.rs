@@ -13,14 +13,14 @@ use cranpose::widgets::{
 };
 use cranpose::{
     composable, mutableStateOf, remember, Brush, Color, CornerRadii, GraphicsLayer, Modifier,
-    Point, PointerEventKind, PointerInputScope, Rect, ScrollState, Size,
+    MutableState, Point, PointerEventKind, PointerInputScope, Rect, ScrollState, Size,
 };
 use cranpose_foundation::{SemanticsConfiguration, SemanticsWidgetRole};
 use cranpose_ui::{Alignment, HorizontalAlignment, VerticalAlignment};
 use std::cell::RefCell;
 
 thread_local! {
-    static TAB_SWIPE_REFERENCE_PAGE_OVERRIDE: RefCell<Option<cranpose_core::MutableState<Option<usize>>>> = const { RefCell::new(None) };
+    static TAB_SWIPE_REFERENCE_PAGE_OVERRIDE: RefCell<Option<MutableState<Option<usize>>>> = const { RefCell::new(None) };
 }
 
 const PAGE_PADDING: f32 = 18.0;
@@ -96,6 +96,13 @@ fn tab_swipe_reference_tabs() -> Vec<LiquidTab> {
         LiquidTab::app_badge(icons::APPLE, "WWDC").with_icon_scale(WWDC_ICON_SCALE),
         LiquidTab::new(icons::ACCOUNT_CIRCLE, "Account").with_icon_scale(ACCOUNT_ICON_SCALE),
     ]
+}
+
+/// The reference destinations, declared into a tab bar's scope.
+fn tab_swipe_reference_bar(scope: &LiquidTabBarScope) {
+    for tab in tab_swipe_reference_tabs() {
+        scope.push(tab);
+    }
 }
 
 fn tab_swipe_reference_page(progress: f32) -> usize {
@@ -204,25 +211,27 @@ fn TouchedUpButtonGroup(
 ) {
     let more_confirmed = confirmed;
     let check_confirmed = confirmed;
-    let mut items = vec![GlassIconButtonGroupItem::new(
-        icons::MORE_HORIZ,
-        "More grouped action",
-        move || more_confirmed.set(false),
-    )];
-    if !confirmed.get() {
-        items.push(
-            GlassIconButtonGroupItem::new(icons::CHECK, "Confirm grouped action", move || {
-                check_confirmed.set(true)
-            })
-            .with_spec(action_spec),
-        );
-    }
+    let show_confirm = !confirmed.get();
     GlassIconButtonGroup(
         Modifier::empty(),
         GlassIconButtonGroupSpec::new(44.0)
             .with_spacing(14.0)
             .with_glue_radius(36.0),
-        items,
+        move |scope| {
+            scope.action(icons::MORE_HORIZ, "More grouped action", move || {
+                more_confirmed.set(false)
+            });
+            if show_confirm {
+                scope.push(
+                    GlassIconButtonGroupItem::new(
+                        icons::CHECK,
+                        "Confirm grouped action",
+                        move || check_confirmed.set(true),
+                    )
+                    .with_spec(action_spec),
+                );
+            }
+        },
     );
 }
 
@@ -903,15 +912,15 @@ fn StoreBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static) {
                             LiquidTabBar(
                                 Modifier::empty(),
                                 LiquidTabBarSpec::default(),
-                                vec![
-                                    LiquidTab::new(icons::DOCUMENT, "Today"),
-                                    LiquidTab::new(icons::ROCKET, "Games"),
-                                    LiquidTab::new(icons::LAYERS, "Apps"),
-                                    LiquidTab::new(icons::JOYSTICK, "Arcade"),
-                                    LiquidTab::new(icons::SEARCH, "Search"),
-                                ],
                                 selected,
                                 move |index| on_select(index),
+                                |scope| {
+                                    scope.tab(icons::DOCUMENT, "Today");
+                                    scope.tab(icons::ROCKET, "Games");
+                                    scope.tab(icons::LAYERS, "Apps");
+                                    scope.tab(icons::JOYSTICK, "Arcade");
+                                    scope.tab(icons::SEARCH, "Search");
+                                },
                             );
                         }
                     },
@@ -941,7 +950,7 @@ fn SortFilterStage(suggestion_offset: f32) {
         }))
     })
     .with(std::rc::Rc::clone);
-    let menu_gesture = remember_liquid_menu_gesture();
+    let menu_gesture = rememberLiquidMenuGesture();
 
     LiquidTheme(
         LiquidThemeSpec {
@@ -1179,12 +1188,6 @@ fn SortFilterStage(suggestion_offset: f32) {
                     });
 
                     // The dark accordion menu out of the pill.
-                    let items = sort_filter_menu_items(
-                        section.get(),
-                        sort_choice.get(),
-                        filter_choice.get(),
-                    );
-                    let labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
                     let dismiss_open = menu_open;
                     let dismiss_section = section;
                     LiquidMenu(
@@ -1192,20 +1195,13 @@ fn SortFilterStage(suggestion_offset: f32) {
                         anchor_rect.get(),
                         LiquidMenuSpec::new(290.0),
                         Vec::new(),
-                        items,
                         menu_gesture.clone(),
-                        move |index| match labels.get(index).map(String::as_str) {
-                            Some("Sort by") => section.set(if section.get() == 1 { 0 } else { 1 }),
-                            Some("Filter") => section.set(if section.get() == 2 { 0 } else { 2 }),
-                            Some("Sections") => sort_choice.set(0),
-                            Some("Newest to oldest") => sort_choice.set(1),
-                            Some("All conversations") => filter_choice.set(0),
-                            Some("External people") => filter_choice.set(1),
-                            _ => {}
-                        },
                         move || {
                             dismiss_open.set(false);
                             dismiss_section.set(0);
+                        },
+                        move |scope| {
+                            sort_filter_menu_content(scope, section, sort_choice, filter_choice)
                         },
                     );
                 },
@@ -1271,38 +1267,71 @@ fn SuggestionTile(title: &'static str, subtitle: &'static str) {
     );
 }
 
-/// The item list for the sort/filter accordion at a given expansion state.
-fn sort_filter_menu_items(
-    section: usize,
-    sort_choice: usize,
-    filter_choice: usize,
-) -> Vec<LiquidMenuItem> {
-    let mut items = vec![LiquidMenuItem::new("Sort by")
-        .keeps_open()
-        .subtitle("Sections. Unread messages on top.")];
-    if section == 1 {
-        items.push(
+/// The List/Grid view menu's rows, shared by both reference stages that show
+/// it: each row both reports the current view and switches to its own.
+fn view_mode_menu_content(scope: &LiquidMenuScope, selection: MutableState<usize>) {
+    scope.item(
+        LiquidMenuItem::new("List")
+            .icon(icons::LIST_OUTLINE)
+            .checked(selection.get() == 0),
+        move || selection.set(0),
+    );
+    scope.item(
+        LiquidMenuItem::new("Grid")
+            .icon(icons::GRID_OUTLINE)
+            .checked(selection.get() == 1),
+        move || selection.set(1),
+    );
+}
+
+/// The sort/filter accordion's rows: which section is unfolded decides which
+/// choices are declared, and each row carries the choice it makes.
+fn sort_filter_menu_content(
+    scope: &LiquidMenuScope,
+    section: MutableState<usize>,
+    sort_choice: MutableState<usize>,
+    filter_choice: MutableState<usize>,
+) {
+    // An accordion header folds the section it names and unfolds itself.
+    let fold =
+        move |target: usize| move || section.set(if section.get() == target { 0 } else { target });
+    scope.item(
+        LiquidMenuItem::new("Sort by")
+            .keeps_open()
+            .subtitle("Sections. Unread messages on top."),
+        fold(1),
+    );
+    if section.get() == 1 {
+        scope.item(
             LiquidMenuItem::new("Sections")
                 .icon(icons::LIST_OUTLINE)
-                .checked(sort_choice == 0),
+                .checked(sort_choice.get() == 0),
+            move || sort_choice.set(0),
         );
-        items.push(
+        scope.item(
             LiquidMenuItem::new("Newest to oldest")
                 .icon(icons::SCHEDULE)
-                .checked(sort_choice == 1),
+                .checked(sort_choice.get() == 1),
+            move || sort_choice.set(1),
         );
     }
-    items.push(
+    scope.item(
         LiquidMenuItem::new("Filter")
             .keeps_open()
             .section_start()
             .subtitle("All conversations"),
+        fold(2),
     );
-    if section == 2 {
-        items.push(LiquidMenuItem::new("All conversations").checked(filter_choice == 0));
-        items.push(LiquidMenuItem::new("External people").checked(filter_choice == 1));
+    if section.get() == 2 {
+        scope.item(
+            LiquidMenuItem::new("All conversations").checked(filter_choice.get() == 0),
+            move || filter_choice.set(0),
+        );
+        scope.item(
+            LiquidMenuItem::new("External people").checked(filter_choice.get() == 1),
+            move || filter_choice.set(1),
+        );
     }
-    items
 }
 
 /// The reference `bar_headers_folded` composition: colored section headers
@@ -1364,15 +1393,15 @@ fn StoreHeadersBarExample(selected: usize, on_select: impl Fn(usize) + 'static) 
                             LiquidTabBar(
                                 Modifier::empty(),
                                 LiquidTabBarSpec::default(),
-                                vec![
-                                    LiquidTab::new(icons::DOCUMENT, "Today"),
-                                    LiquidTab::new(icons::ROCKET, "Games"),
-                                    LiquidTab::new(icons::LAYERS, "Apps"),
-                                    LiquidTab::new(icons::JOYSTICK, "Arcade"),
-                                    LiquidTab::new(icons::SEARCH, "Search"),
-                                ],
                                 selected,
                                 move |index| on_select(index),
+                                |scope| {
+                                    scope.tab(icons::DOCUMENT, "Today");
+                                    scope.tab(icons::ROCKET, "Games");
+                                    scope.tab(icons::LAYERS, "Apps");
+                                    scope.tab(icons::JOYSTICK, "Arcade");
+                                    scope.tab(icons::SEARCH, "Search");
+                                },
                             );
                         }
                     },
@@ -1446,13 +1475,13 @@ fn OnWhiteBottomBarExample(selected: usize, on_select: impl Fn(usize) + 'static)
                         // 185px bar = 1.72x, i.e. 110dp cells against the 64dp
                         // bar. Narrower cells squash the held oval circular.
                         LiquidTabBarSpec::new(110.0),
-                        vec![
-                            LiquidTab::new(icons::TRANSLATE, "Translate"),
-                            LiquidTab::new(icons::CAMERA, "Camera"),
-                            LiquidTab::new(icons::GROUP, "Conversation"),
-                        ],
                         selected,
                         move |index| on_select(index),
+                        |scope| {
+                            scope.tab(icons::TRANSLATE, "Translate");
+                            scope.tab(icons::CAMERA, "Camera");
+                            scope.tab(icons::GROUP, "Conversation");
+                        },
                     );
                 },
             );
@@ -1715,7 +1744,7 @@ pub enum LiquidReferenceFixtureCase {
 fn MenuOpenReferenceStage() {
     let menu_open = remember(|| mutableStateOf(false)).with(|state| *state);
     let menu_selection = remember(|| mutableStateOf(0usize)).with(|state| *state);
-    let menu_gesture = remember_liquid_menu_gesture();
+    let menu_gesture = rememberLiquidMenuGesture();
     let menu_anchor_rect = remember(|| {
         std::rc::Rc::new(std::cell::Cell::new(Rect {
             x: 0.0,
@@ -1770,17 +1799,9 @@ fn MenuOpenReferenceStage() {
                         icons::MORE_HORIZ,
                     ),
                 ],
-                vec![
-                    LiquidMenuItem::new("List")
-                        .icon(icons::LIST_OUTLINE)
-                        .checked(selection.get() == 0),
-                    LiquidMenuItem::new("Grid")
-                        .icon(icons::GRID_OUTLINE)
-                        .checked(selection.get() == 1),
-                ],
                 menu_gesture.clone(),
-                move |index| selection.set(index),
                 move || menu_dismiss.set(false),
+                move |scope| view_mode_menu_content(scope, selection),
             );
         },
     );
@@ -1823,12 +1844,12 @@ fn TabSwipeReferenceStage() {
                     LiquidTabBarWithAccessory(
                         Modifier::empty(),
                         LiquidTabBarSpec::default(),
-                        tab_swipe_reference_tabs(),
                         tab_state.get(),
                         move |index| {
                             start_timeline.set(true);
                             callback_state.set(index);
                         },
+                        tab_swipe_reference_bar,
                         || LiquidTabBarSearchAccessory(|| {}),
                     );
                 },
@@ -1879,13 +1900,13 @@ pub fn LiquidReferenceFixture(case: LiquidReferenceFixtureCase) {
                     let state = selected;
                     LiquidSegmentedControl(
                         Modifier::empty().width(310.0),
-                        vec![
-                            "Receiving".to_string(),
-                            "Sending".to_string(),
-                            "Errored".to_string(),
-                        ],
                         state.get(),
                         move |index| state.set(index),
+                        |scope| {
+                            scope.segment("Receiving");
+                            scope.segment("Sending");
+                            scope.segment("Errored");
+                        },
                     );
                 });
             }
@@ -1934,7 +1955,7 @@ pub fn LiquidUiTab() {
     let chip = remember(|| mutableStateOf(0usize)).with(|s| *s);
     let menu_open = remember(|| mutableStateOf(false)).with(|s| *s);
     let menu_mode = remember(|| mutableStateOf(0usize)).with(|s| *s);
-    let menu_gesture = remember_liquid_menu_gesture();
+    let menu_gesture = rememberLiquidMenuGesture();
     let clicks = remember(|| mutableStateOf(0u32)).with(|s| *s);
     let scheme = if dark.get() {
         SchemeMode::Dark
@@ -2250,13 +2271,13 @@ pub fn LiquidUiTab() {
                                 // Reference control geometry: 900px over
                                 // 2.89 px/dp = 310dp, cells 103dp.
                                 Modifier::empty().width(310.0),
-                                vec![
-                                    "Receiving".to_string(),
-                                    "Sending".to_string(),
-                                    "Errored".to_string(),
-                                ],
                                 seg.get(),
                                 move |index| seg.set(index),
+                                |scope| {
+                                    scope.segment("Receiving");
+                                    scope.segment("Sending");
+                                    scope.segment("Errored");
+                                },
                             );
 
                             SectionTitle("CHIPS");
@@ -2390,17 +2411,9 @@ pub fn LiquidUiTab() {
                                 icons::MORE_HORIZ,
                             ),
                         ],
-                        vec![
-                            LiquidMenuItem::new("List")
-                                .icon(icons::LIST_OUTLINE)
-                                .checked(menu_selection.get() == 0),
-                            LiquidMenuItem::new("Grid")
-                                .icon(icons::GRID_OUTLINE)
-                                .checked(menu_selection.get() == 1),
-                        ],
                         menu_gesture.clone(),
-                        move |index| menu_selection.set(index),
                         move || menu_dismiss.set(false),
+                        move |scope| view_mode_menu_content(scope, menu_selection),
                     );
 
                     // ---- Floating tab bar ----
@@ -2421,9 +2434,9 @@ pub fn LiquidUiTab() {
                             LiquidTabBarWithAccessory(
                                 Modifier::empty(),
                                 LiquidTabBarSpec::default(),
-                                tab_swipe_reference_tabs(),
                                 tab_state.get(),
                                 move |index| tab_state2.set(index),
+                                tab_swipe_reference_bar,
                                 || {
                                     LiquidTabBarSearchAccessory(|| {});
                                 },

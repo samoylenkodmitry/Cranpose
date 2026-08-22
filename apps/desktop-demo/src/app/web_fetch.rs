@@ -39,8 +39,8 @@ async fn fetch_ipify(client: &HttpClientRef) -> Result<String, String> {
 
 #[composable]
 pub(crate) fn web_fetch_example() {
-    let fetch_status = cranpose_core::useState(|| FetchStatus::Idle);
-    let request_counter = cranpose_core::useState(|| 0u64);
+    let fetch_status = cranpose_core::rememberMutableStateOf(|| FetchStatus::Idle);
+    let request_counter = cranpose_core::rememberMutableStateOf(|| 0u64);
     let uri_handler = local_uri_handler().current();
     let http_client = local_http_client().current();
 

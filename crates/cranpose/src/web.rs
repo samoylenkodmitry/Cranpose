@@ -3,7 +3,7 @@
 //! This module provides the web event loop implementation using wasm-bindgen and WebGPU.
 
 use crate::{
-    launcher::AppSettings,
+    app_launcher::AppSettings,
     wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
 use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
@@ -15,6 +15,16 @@ use std::sync::Arc;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
+
+/// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
+/// out only when the render loop itself needs replacing (never); held behind
+/// `RefCell<Option<_>>` because it borrows the state its own frame closes
+/// over and cannot exist until that state does.
+type RenderLoop = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
+/// Reflows the canvas and its surface, optionally to a caller-requested CSS
+/// size, and republishes the resulting host-surface geometry.
+type ReshapeFn = Rc<dyn Fn(Option<(f32, f32)>)>;
 
 /// Maps a DOM `PointerEvent.pointerType` string onto the framework
 /// [`PointerSource`] so text fields show finger handles only for touch.
@@ -75,7 +85,7 @@ struct WebFrameTimer {
 struct WebPlatformFrameDriver<'a> {
     frame_timer: &'a Rc<WebFrameTimer>,
     frame_pending: &'a Rc<Cell<bool>>,
-    render_loop: &'a Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &'a RenderLoop,
 }
 
 impl PlatformFrameDriver for WebPlatformFrameDriver<'_> {
@@ -117,12 +127,13 @@ pub async fn run(
     let mut content = content;
     let content = {
         let env = Rc::clone(&platform_env);
-        move || env.compose_root(|| content())
+        move || env.compose_root(&mut content)
     };
 
     // Browser-backed service implementations (share, notifications, vibration,
     // online status) registered before the first composition.
     crate::web_services::register();
+    crate::web_host_surface::install();
 
     // Get the window and document
     let window = web_sys::window().ok_or("no global window exists")?;
@@ -289,6 +300,12 @@ pub async fn run(
     // then the static `with_fonts()` slices, then the embedded fallback.
     let fonts = settings.resolve_font_set();
     let mut renderer = WgpuRenderer::with_font_set(fonts);
+    // `init_gpu` takes `Arc<Device>`/`Arc<Queue>` because every other host
+    // (desktop, Android, iOS) shares this exact renderer entry point and
+    // those `wgpu` types are genuinely `Send + Sync` there. Only the web
+    // target's WebGPU backend wraps a JS object that is not, and there is no
+    // web-only `init_gpu` to hand an `Rc` to instead.
+    #[allow(clippy::arc_with_non_send_sync)]
     renderer.init_gpu(
         Arc::new(device),
         Arc::new(queue),
@@ -322,7 +339,7 @@ pub async fn run(
 
     let surface = Rc::new(surface);
     let surface_config = Rc::new(RefCell::new(surface_config));
-    let render_loop: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let render_loop: RenderLoop = Rc::new(RefCell::new(None));
     let frame_pending = Rc::new(Cell::new(false));
     let frame_timer = Rc::new(WebFrameTimer::default());
     // Starts true so the scene built during `AppShell` construction is presented
@@ -344,6 +361,16 @@ pub async fn run(
     // clipboard; without this they reach only an in-process one, so a copy on
     // the page could not leave it.
     crate::web_clipboard::install(&app, request_frame.clone());
+
+    // Files dropped onto the canvas arrive through the same incoming-content
+    // pipeline a share or a document intent uses on Android and iOS.
+    crate::web_drop::install(&canvas, request_frame.clone())?;
+
+    // Live battery readings where the browser has the Battery Status API.
+    // Registered against the render loop (not `web_services::register()`,
+    // which runs before one exists) so a level or charging change wakes a
+    // repaint instead of waiting for one for an unrelated reason.
+    crate::web_power::start_battery_probe(request_frame.clone());
 
     // Hidden editable element backing IME composition. Browsers only start
     // IME composition sessions (and mobile browsers only show their virtual
@@ -393,8 +420,8 @@ pub async fn run(
         let wheel_canvas = canvas.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: WheelEvent| {
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
 
             // What the sample means -- zoom, rotary, axis-swapped scroll, or
@@ -431,8 +458,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -452,8 +479,8 @@ pub async fn run(
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
             let _ = pointer_canvas.set_pointer_capture(event.pointer_id());
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -474,8 +501,8 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: PointerEvent| {
             event.prevent_default();
-            let x = event.offset_x() as f64;
-            let y = event.offset_y() as f64;
+            let x = event.offset_x();
+            let y = event.offset_y();
             let logical = platform.borrow().pointer_position(x, y);
             if let Ok(mut app_mut) = app.try_borrow_mut() {
                 app_mut.set_pointer_source(web_pointer_source(&event));
@@ -824,6 +851,96 @@ pub async fn run(
         closure.forget();
     }
 
+    // The canvas follows the page: a browser-window resize, an orientation
+    // change, or a zoom that moves the device pixel ratio all reshape it. The
+    // whole reshape — CSS box, drawing buffer, swapchain, composition viewport
+    // and density — happens in one place, and the same place serves an
+    // application that asks for a size through the host-surface service.
+    let reshape: ReshapeFn = {
+        let canvas = canvas.clone();
+        let window = window.clone();
+        let app = app.clone();
+        let platform = platform.clone();
+        let surface = surface.clone();
+        let surface_config = surface_config.clone();
+        let surface_dirty = surface_dirty.clone();
+        let request_frame = request_frame.clone();
+        Rc::new(move |requested: Option<(f32, f32)>| {
+            if let Some((requested_width, requested_height)) = requested {
+                if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
+                    let style = html_element.style();
+                    let _ = style.set_property("width", &format!("{requested_width}px"));
+                    let _ = style.set_property("height", &format!("{requested_height}px"));
+                }
+            }
+
+            let scale_factor = window.device_pixel_ratio();
+            let width = canvas.client_width().max(1) as u32;
+            let height = canvas.client_height().max(1) as u32;
+            let (buffer_width, buffer_height) =
+                crate::web_surface_scale::web_canvas_buffer_dimensions(width, height, scale_factor);
+            let render_scale = crate::web_surface_scale::web_canvas_buffer_scale(scale_factor);
+
+            let unchanged = {
+                let config = surface_config.borrow();
+                config.width == buffer_width && config.height == buffer_height
+            };
+            if unchanged && requested.is_none() {
+                return;
+            }
+
+            canvas.set_width(buffer_width);
+            canvas.set_height(buffer_height);
+            {
+                let mut config = surface_config.borrow_mut();
+                config.width = buffer_width;
+                config.height = buffer_height;
+                let mut app_mut = app.borrow_mut();
+                if let Some(device) = app_mut.renderer().try_device() {
+                    surface.configure(device, &config);
+                }
+                app_mut.renderer().set_root_scale(render_scale as f32);
+                app_mut.set_buffer_size(buffer_width, buffer_height);
+                app_mut.set_viewport(width as f32, height as f32);
+                app_mut.set_density(render_scale as f32);
+                app_mut.request_root_render();
+            }
+            platform.borrow_mut().set_scale_factor(scale_factor);
+            crate::web_host_surface::publish(width as f32, height as f32, render_scale as f32);
+            surface_dirty.set(true);
+            request_frame();
+        })
+    };
+
+    crate::web_host_surface::publish(width as f32, height as f32, effective_scale as f32);
+
+    {
+        let reshape = reshape.clone();
+        let closure = Closure::wrap(Box::new(move || reshape(None)) as Box<dyn FnMut()>);
+        window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref())?;
+        closure.forget();
+    }
+
+    // An application's resize request is applied on the next frame, on the
+    // browser thread that owns the canvas.
+    {
+        let reshape = reshape.clone();
+        let request_frame_for_requests = request_frame.clone();
+        let closure = Closure::wrap(Box::new(move || {
+            if let Some(size) = crate::web_host_surface::take_requested_size() {
+                reshape(Some(size));
+            }
+            request_frame_for_requests();
+        }) as Box<dyn FnMut()>);
+        // 60 ms is far below anything a person notices for a window resize and
+        // far above anything that costs measurable battery.
+        window.set_interval_with_callback_and_timeout_and_arguments_0(
+            closure.as_ref().unchecked_ref(),
+            60,
+        )?;
+        closure.forget();
+    }
+
     let frame_pending_for_loop = frame_pending.clone();
     let frame_timer_for_loop = frame_timer.clone();
     let render_loop_for_deadline = render_loop.clone();
@@ -885,7 +1002,7 @@ pub async fn run(
                     {
                         let mut app_mut = app.borrow_mut();
                         if let Some(device) = app_mut.renderer().try_device() {
-                            surface.configure(device, &*config);
+                            surface.configure(device, &config);
                         } else {
                             log::error!(
                                 "web surface reconfigure skipped: GPU renderer is not initialized"
@@ -998,7 +1115,7 @@ fn request_animation_frame(f: &Closure<dyn FnMut()>) -> bool {
 
 fn request_web_frame(
     frame_pending: &Cell<bool>,
-    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &RenderLoop,
     timer: Option<&WebFrameTimer>,
 ) {
     if let Some(timer) = timer {
@@ -1024,7 +1141,7 @@ fn request_web_frame_at_deadline(
     timer: &Rc<WebFrameTimer>,
     deadline: web_time::Instant,
     frame_pending: &Rc<Cell<bool>>,
-    render_loop: &Rc<RefCell<Option<Closure<dyn FnMut()>>>>,
+    render_loop: &RenderLoop,
 ) {
     if frame_pending.get() || timer.pending.get() {
         return;

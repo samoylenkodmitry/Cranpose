@@ -14,8 +14,10 @@ description = "Multiplatform system services for Cranpose (HTTP, URI, and OS int
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }
+directories = "6.0.0"
 log = "0.4"
 parking_lot = "0.12.5"
+sha2 = "0.11.0"
 thiserror = "2.0.18"
 web-time.workspace = true
 
@@ -29,6 +31,8 @@ web-http = [
     "dep:wasm-bindgen-futures",
     "dep:web-sys",
 ]
+# Durable web preferences (browser localStorage).
+preferences-web = ["dep:wasm-bindgen", "dep:web-sys"]
 uri-native = ["dep:open"]
 uri-android = ["dep:webbrowser"]
 uri-web = ["dep:web-sys"]
@@ -71,17 +75,24 @@ web-sys = { version = "0.3", features = [
     "File",
     "FileList",
     "HtmlElement",
+    "Headers",
     "MediaQueryList",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
     "Request",
     "RequestInit",
     "RequestMode",
     "Response",
+    "Storage",
     "Url",
     "Window",
 ], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "0.4.0"
+# Parses the GitHub release feed `GitHubAppUpdater` reads. Not built for wasm32:
+# that checker only ever registers on desktop and iOS.
+serde_json = "1.0.149"
 
 # Desktop and Android use rustls. iOS uses native-tls (Security.framework): the
 # rustls default crypto provider (aws-lc-sys) does not link for the device
@@ -97,4 +108,7 @@ webbrowser = { version = "1.2.1", optional = true }
 webpki-root-certs = { version = "1.0.7", optional = true }
 
 [dev-dependencies]
+# Path-only dev-dep: stripped from the published manifest. Turns on the
+# workspace's shared test scratch directory for this crate's own tests.
+cranpose-core = { path = "../cranpose-core", features = ["test-helpers"] }
 webpki-root-certs = "1.0.7"

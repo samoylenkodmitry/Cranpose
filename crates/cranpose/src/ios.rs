@@ -10,7 +10,7 @@
 //! winit starts `UIApplicationMain` from [`EventLoop::run_app`], so the iOS app
 //! binary needs no Objective-C entry point.
 
-use crate::launcher::{AppSettings, LaunchError};
+use crate::app_launcher::{AppSettings, LaunchError};
 use crate::wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame};
 use crate::winit_pointer::{
     is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
@@ -176,6 +176,15 @@ impl<F: FnMut() + 'static> IosApp<F> {
             shell.set_density(density);
             shell.set_buffer_size(width, height);
             shell.set_viewport(width as f32 / density, height as f32 / density);
+            // The host surface every target reports the same way, so an
+            // application reads its density and viewport without a UIKit call.
+            cranpose_services::publish_host_surface_size(
+                cranpose_services::host_surface::HostSurfaceSize {
+                    width: width as f32 / density,
+                    height: height as f32 / density,
+                    scale: density,
+                },
+            );
             shell.mark_dirty();
         }
     }
@@ -293,6 +302,21 @@ impl<F: FnMut() + 'static> IosApp<F> {
 }
 
 impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
+    fn resumed(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        if matches!(
+            cranpose_services::current_lifecycle_state(),
+            cranpose_services::LifecycleState::Created | cranpose_services::LifecycleState::Stopped
+        ) {
+            cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Started);
+        }
+        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Resumed);
+    }
+
+    fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Paused);
+        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Stopped);
+    }
+
     fn proxy_wake_up(&mut self, _event_loop: &dyn ActiveEventLoop) {
         // A runtime frame was requested (see the frame waker). Schedule a redraw
         // outside the redraw handler so it is actually serviced.
@@ -592,6 +616,12 @@ impl<F: FnMut() + 'static> ApplicationHandler for IosApp<F> {
     }
 }
 
+impl<F: FnMut() + 'static> Drop for IosApp<F> {
+    fn drop(&mut self) {
+        cranpose_services::dispatch_lifecycle_state(cranpose_services::LifecycleState::Destroyed);
+    }
+}
+
 /// Reads the window safe-area insets and converts them to logical pixels.
 fn safe_area_insets(window: &Arc<dyn Window>) -> EdgeInsets {
     let insets = window.safe_area();
@@ -648,10 +678,30 @@ pub fn try_run(settings: AppSettings, content: impl FnMut() + 'static) -> Result
     crate::ios_haptics::register();
     crate::ios_app_info::register();
     crate::ios_device_info::register();
+    // Over the top of it: the readings that need `libc`, including the memory
+    // iOS itself uses to decide when to stop this application.
+    crate::process_info::install();
     crate::ios_background::register();
     crate::ios_writable_folder::register();
     crate::ios_camera::register();
-    // Opt-in: only apps that sell something link StoreKit and the Swift shim.
+    crate::ios_media::register();
+    crate::ios_host::register();
+    crate::ios_bundled_assets::register();
+    // App Store Review Guideline 3.3.2 forbids an application from
+    // downloading and installing a replacement binary for itself, and unlike
+    // Android's `PackageInstaller` or desktop's own file replacement, iOS has
+    // no API an app can call to install an updated version of itself — so
+    // `AppUpdater::install` stays the trait's own `Unsupported` default here.
+    //
+    // Discovering that a newer version exists is a separate question from
+    // installing one, which is what `AppUpdateCapabilities` splits `check`
+    // and `install` apart to say honestly: this reads the same GitHub
+    // release feed desktop does and reports `Available`, so an application
+    // can point the reader at the App Store listing even though it cannot
+    // install the update itself.
+    cranpose_services::set_platform_app_updater(Arc::new(
+        cranpose_services::GitHubAppUpdater::new(),
+    ));
     #[cfg(feature = "storekit")]
     cranpose_storekit::register();
 

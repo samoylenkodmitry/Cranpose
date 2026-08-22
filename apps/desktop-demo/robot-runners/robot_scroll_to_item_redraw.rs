@@ -7,7 +7,7 @@
 //! so the UI wouldn't update until the next user scroll/click.
 
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
@@ -84,7 +84,7 @@ fn main() {
             robot.exit().ok();
         })
         .run(|| {
-            let state = remember_lazy_list_state();
+            let state = rememberLazyListState();
 
             Column(
                 Modifier::default().fill_max_size(),
@@ -119,35 +119,30 @@ fn main() {
                                 state,
                                 LazyColumnSpec::default(),
                                 |scope| {
-                                    scope.items(
-                                        100,
-                                        None::<fn(usize) -> u64>,
-                                        None::<fn(usize) -> u64>,
-                                        move |index| {
-                                            let bg = if index % 2 == 0 {
-                                                Color::rgb(0.2, 0.3, 0.4)
-                                            } else {
-                                                Color::rgb(0.3, 0.4, 0.5)
-                                            };
+                                    scope.items(100, move |index| {
+                                        let bg = if index % 2 == 0 {
+                                            Color::rgb(0.2, 0.3, 0.4)
+                                        } else {
+                                            Color::rgb(0.3, 0.4, 0.5)
+                                        };
 
-                                            Box(
-                                                Modifier::default()
-                                                    .size(Size {
-                                                        width: 300.0,
-                                                        height: 50.0,
-                                                    })
-                                                    .background(bg),
-                                                BoxSpec::new().content_alignment(Alignment::CENTER),
-                                                move || {
-                                                    Text(
-                                                        format!("Item {}", index),
-                                                        Modifier::default(),
-                                                        TextStyle::default(),
-                                                    );
-                                                },
-                                            );
-                                        },
-                                    );
+                                        Box(
+                                            Modifier::default()
+                                                .size(Size {
+                                                    width: 300.0,
+                                                    height: 50.0,
+                                                })
+                                                .background(bg),
+                                            BoxSpec::new().content_alignment(Alignment::CENTER),
+                                            move || {
+                                                Text(
+                                                    format!("Item {}", index),
+                                                    Modifier::default(),
+                                                    TextStyle::default(),
+                                                );
+                                            },
+                                        );
+                                    });
                                 },
                             );
                         },

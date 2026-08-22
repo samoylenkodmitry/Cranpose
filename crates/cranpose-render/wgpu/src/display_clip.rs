@@ -343,7 +343,9 @@ mod tests {
 
     fn triangles_of(mesh: &ComplementMesh, width: u32, height: u32) -> Vec<[[f64; 2]; 3]> {
         mesh.vertices
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|t| {
                 [
                     from_ndc(t[0], width, height),

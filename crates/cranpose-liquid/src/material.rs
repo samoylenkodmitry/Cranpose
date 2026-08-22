@@ -1370,4 +1370,81 @@ mod tests {
         assert_eq!(uniforms[110], 0.3);
         assert!(shader.output_padding() > 0.0);
     }
+
+    #[test]
+    fn optical_builders_hold_their_own_legal_range() {
+        let glass = Glass::regular()
+            .fold_depth(-4.0)
+            .optical_zoom(0.5)
+            .rim_reflection(9.0);
+        assert_eq!(glass.fold_depth, 0.0, "a fold cannot be negative deep");
+        assert_eq!(glass.optical_zoom, 1.0, "a lens never shrinks its face");
+        assert_eq!(
+            glass.rim_reflection, 2.0,
+            "the rim tops out at twice the line"
+        );
+
+        let glass = Glass::regular()
+            .fold_depth(6.0)
+            .optical_zoom(1.4)
+            .rim_reflection(0.25);
+        assert_eq!(glass.fold_depth, 6.0);
+        assert_eq!(glass.optical_zoom, 1.4);
+        assert_eq!(glass.rim_reflection, 0.25);
+    }
+
+    #[test]
+    fn ink_recolor_records_its_color_at_a_clamped_strength() {
+        let red = Color::from_rgb_u8(255, 0, 0);
+        let glass = Glass::regular().ink_recolor(red, 3.0);
+        assert_eq!(glass.ink_recolor, Some((red, 1.0)));
+
+        let glass = Glass::regular().ink_recolor(red, -1.0);
+        assert_eq!(glass.ink_recolor, Some((red, 0.0)));
+        assert_eq!(Glass::regular().ink_recolor, None, "no recolor by default");
+    }
+
+    #[test]
+    fn a_touched_up_surface_amplifies_what_it_already_is() {
+        let dynamics = GlassDynamics::default().touched_up(1.0, None, (10.0, 4.0));
+        assert!(
+            dynamics.highlight_boost > 0.0,
+            "a pressed surface goes brighter"
+        );
+        assert!(dynamics.saturation_boost > 0.0, "and more saturated");
+        assert_eq!(
+            dynamics.touch,
+            Some((10.0, 4.0, 1.0)),
+            "with no finger the glow sits at the surface's own heart"
+        );
+        assert_eq!(
+            dynamics.resting_tint, None,
+            "a touch never repaints the surface with another color"
+        );
+    }
+
+    #[test]
+    fn a_touch_glow_follows_the_finger_and_accumulates_to_full() {
+        let dynamics = GlassDynamics::default()
+            .touched_up(0.5, Some((3.0, 7.0)), (10.0, 4.0))
+            .touched_up(0.8, Some((3.0, 7.0)), (10.0, 4.0));
+        let (x, y, intensity) = dynamics.touch.expect("a pressed surface glows");
+        assert_eq!(
+            (x, y),
+            (3.0, 7.0),
+            "the glow tracks the finger, not the center"
+        );
+        assert_eq!(intensity, 1.0, "carried press saturates at full");
+    }
+
+    #[test]
+    fn an_unpressed_surface_is_left_exactly_as_it_was() {
+        let resting = GlassDynamics::default();
+        let untouched = resting
+            .clone()
+            .touched_up(0.0, Some((3.0, 7.0)), (10.0, 4.0));
+        assert_eq!(untouched.highlight_boost, resting.highlight_boost);
+        assert_eq!(untouched.saturation_boost, resting.saturation_boost);
+        assert_eq!(untouched.touch, None, "no press, no glow");
+    }
 }

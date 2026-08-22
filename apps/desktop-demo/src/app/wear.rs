@@ -16,6 +16,7 @@
 //! several hundred glyphs a frame. Comparing the two under the demo's pacing
 //! modes is the whole point of keeping it.
 
+use cranpose::LazyItems;
 use cranpose_core::{remember, LaunchedEffectAsync};
 use cranpose_ui::round_scaling_list::CentreAnchor;
 use cranpose_ui::widgets::wear::{
@@ -68,6 +69,20 @@ enum Row {
         secondary: Option<&'static str>,
     },
     Body(&'static str),
+}
+
+impl Row {
+    /// Which rows may reuse each other's composition slots. A header reused as
+    /// a switch throws away the whole subtree, so the four shapes are pooled
+    /// apart.
+    fn content_type(&self) -> u64 {
+        match self {
+            Row::Header(_) => 0,
+            Row::Switch { .. } => 1,
+            Row::Button { .. } => 2,
+            Row::Body(_) => 3,
+        }
+    }
 }
 
 fn rows() -> Vec<Row> {
@@ -201,54 +216,60 @@ pub fn wear_tab() {
                         move |scope| {
                             let rows = rows();
                             let toggle_state = toggle_state.clone();
-                            scope.items(rows.len(), move |index| {
-                                let row = rows[index].clone();
-                                let toggle_state = toggle_state.clone();
-                                match row {
-                                    Row::Header(label) => {
-                                        ListHeader(
-                                            Modifier::empty(),
-                                            ListHeaderSpec::default().colors(colors()),
-                                            label.to_string(),
-                                        );
+                            let types = rows.iter().map(Row::content_type).collect::<Vec<_>>();
+                            scope.items(
+                                LazyItems::new(rows.len())
+                                    .key(|index: usize| index as u64)
+                                    .content_type(move |index: usize| types[index]),
+                                move |index| {
+                                    let row = rows[index].clone();
+                                    let toggle_state = toggle_state.clone();
+                                    match row {
+                                        Row::Header(label) => {
+                                            ListHeader(
+                                                Modifier::empty(),
+                                                ListHeaderSpec::default().colors(colors()),
+                                                label.to_string(),
+                                            );
+                                        }
+                                        Row::Switch { label, index } => {
+                                            let checked = toggle_state.borrow().checked[index];
+                                            let sink = toggle_state.clone();
+                                            SwitchButton(
+                                                Modifier::empty().fill_max_width(),
+                                                SwitchButtonSpec::default()
+                                                    .colors(colors())
+                                                    .progress(if checked { 1.0 } else { 0.0 }),
+                                                checked,
+                                                label.to_string(),
+                                                None,
+                                                move |next| {
+                                                    sink.borrow_mut().checked[index] = next;
+                                                },
+                                            );
+                                        }
+                                        Row::Button { label, secondary } => {
+                                            WearButton(
+                                                Modifier::empty().fill_max_width(),
+                                                WearButtonSpec::default().colors(colors()),
+                                                label.to_string(),
+                                                secondary.map(str::to_string),
+                                                || {},
+                                            );
+                                        }
+                                        Row::Body(text) => {
+                                            Text(
+                                                text.to_string(),
+                                                Modifier::empty().fill_max_width(),
+                                                WearTextStyle::BODY_LARGE
+                                                    .at_size(12.0)
+                                                    .with_line_height(16.0)
+                                                    .resolve(colors().content),
+                                            );
+                                        }
                                     }
-                                    Row::Switch { label, index } => {
-                                        let checked = toggle_state.borrow().checked[index];
-                                        let sink = toggle_state.clone();
-                                        SwitchButton(
-                                            Modifier::empty().fill_max_width(),
-                                            SwitchButtonSpec::default()
-                                                .colors(colors())
-                                                .progress(if checked { 1.0 } else { 0.0 }),
-                                            checked,
-                                            label.to_string(),
-                                            None,
-                                            move |next| {
-                                                sink.borrow_mut().checked[index] = next;
-                                            },
-                                        );
-                                    }
-                                    Row::Button { label, secondary } => {
-                                        WearButton(
-                                            Modifier::empty().fill_max_width(),
-                                            WearButtonSpec::default().colors(colors()),
-                                            label.to_string(),
-                                            secondary.map(str::to_string),
-                                            || {},
-                                        );
-                                    }
-                                    Row::Body(text) => {
-                                        Text(
-                                            text.to_string(),
-                                            Modifier::empty().fill_max_width(),
-                                            WearTextStyle::BODY_LARGE
-                                                .at_size(12.0)
-                                                .with_line_height(16.0)
-                                                .resolve(colors().content),
-                                        );
-                                    }
-                                }
-                            });
+                                },
+                            );
                         },
                     );
                 },

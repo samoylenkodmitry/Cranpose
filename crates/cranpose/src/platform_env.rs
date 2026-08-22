@@ -68,7 +68,17 @@ impl PlatformEnvironment {
                 cranpose_services::local_system_theme().provides(theme),
                 cranpose_services::local_launch_args().provides(launch_args),
             ],
-            content,
+            || {
+                // Modality is a user-interface fact and the back gesture is a
+                // platform one; the shell is where they meet. While any modal
+                // surface is open the platform request goes to the innermost
+                // one, so the screen behind a dialog never reacts to a gesture
+                // aimed at the dialog.
+                crate::BackHandler(cranpose_ui::modal_depth() > 0, || {
+                    cranpose_ui::dispatch_modal_back();
+                });
+                content();
+            },
         );
     }
 }

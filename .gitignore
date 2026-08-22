@@ -39,3 +39,6 @@ docs/screenshots/text_scroll_exact_external_old_*/
 .cranpose-tmp/
 .codex
 review.md
+
+# Python bytecode from scripts/
+__pycache__/

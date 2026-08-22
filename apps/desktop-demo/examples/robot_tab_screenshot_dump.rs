@@ -88,13 +88,21 @@ fn dump_tab(robot: &cranpose::Robot, tab: DemoTab, shot_dir: &Path) {
         .invoke_app_hook("set-tab", slug)
         .unwrap_or_else(|err| panic!("failed to select tab '{slug}': {err}"));
 
+    // The dump includes tabs whose contract is to keep updating forever. A
+    // bounded frame pump gives every tab the same opportunity to apply the
+    // selection and build its first scene without treating animation as an
+    // idle condition.
+    robot
+        .pump_frames(3)
+        .unwrap_or_else(|err| panic!("failed to settle tab '{slug}': {err}"));
+
     if NONDETERMINISTIC_TABS.contains(&tab) {
         // Give network fetches (or a few more animation frames) a chance to
         // produce representative, if not bit-reproducible, content.
         std::thread::sleep(Duration::from_millis(settle_ms()));
-        std::thread::sleep(Duration::from_millis(1500));
-    } else {
-        let _ = robot.wait_for_idle();
+        robot
+            .pump_frames(3)
+            .unwrap_or_else(|err| panic!("failed to sample tab '{slug}': {err}"));
     }
 
     let screenshot = robot

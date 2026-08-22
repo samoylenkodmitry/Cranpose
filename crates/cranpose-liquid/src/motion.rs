@@ -532,4 +532,45 @@ mod tests {
         assert_eq!(spec.damping_ratio, 1.0);
         assert_eq!(spec.stiffness, 500.0);
     }
+
+    fn spring_of(animation: AnimationType) -> cranpose_animation::SpringSpec {
+        match animation {
+            AnimationType::Spring(spec) => spec,
+            other => panic!("expected a spring, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_stretching_blob_runs_its_leading_edge_ahead_of_its_trailing_edge() {
+        let leading = spring_of(LiquidMotion::blob_leading());
+        let trailing = spring_of(LiquidMotion::blob_trailing());
+        assert!(
+            leading.stiffness > trailing.stiffness,
+            "the edge that runs ahead has to be the stiffer one: \
+             leading {} vs trailing {}",
+            leading.stiffness,
+            trailing.stiffness
+        );
+        assert!(
+            leading.damping_ratio < 1.0 && trailing.damping_ratio < 1.0,
+            "both edges stay under-damped so the droplet keeps its elongation"
+        );
+    }
+
+    #[test]
+    fn every_named_motion_is_a_settled_spring() {
+        for (name, animation) in [
+            ("snappy", LiquidMotion::snappy()),
+            ("bouncy", LiquidMotion::bouncy()),
+            ("smooth", LiquidMotion::smooth()),
+            ("blob_leading", LiquidMotion::blob_leading()),
+            ("blob_trailing", LiquidMotion::blob_trailing()),
+            ("glide", LiquidMotion::glide()),
+        ] {
+            let spec = spring_of(animation);
+            assert!(spec.stiffness > 0.0, "{name} needs a stiffness");
+            assert!(spec.damping_ratio > 0.0, "{name} needs damping");
+            assert_eq!(spec.delay_millis, 0, "{name} starts on the frame it is set");
+        }
+    }
 }

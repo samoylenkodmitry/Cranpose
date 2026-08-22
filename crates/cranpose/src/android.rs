@@ -10,7 +10,7 @@ use crate::{
     android_overlay_window,
     android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
     android_text_input::{self, AndroidImeEvent},
-    launcher::{AndroidOverlayWindowOptions, AppSettings},
+    app_launcher::{AndroidOverlayWindowOptions, AppSettings},
     wgpu_surface::surface_present_required,
     wgpu_surface::{current_surface_texture, SurfaceFrame},
 };
@@ -782,6 +782,15 @@ fn update_android_shell_geometry(
         let height_dp = height as f32 / density;
         shell.set_viewport(width_dp, height_dp);
         let actual = Size::new(width_dp, height_dp);
+        // The host surface every target reports the same way, so an application
+        // reads its density and viewport without an Android API in its own code.
+        cranpose_services::publish_host_surface_size(
+            cranpose_services::host_surface::HostSurfaceSize {
+                width: width_dp,
+                height: height_dp,
+                scale: density,
+            },
+        );
         android_host_window::sync_android_host_window_actual_size(host_window_registry, actual);
         Some(actual)
     } else {
@@ -1717,6 +1726,10 @@ fn set_android_window_layout_px(
 /// Called by `AppLauncher::run_android()`. This is the framework-level
 /// entrypoint that manages the Android lifecycle and event loop.
 ///
+/// The tag log lines carry when an application does not name one with
+/// [`AppLauncher::with_log_tag`](crate::AppLauncher::with_log_tag).
+const DEFAULT_LOG_TAG: &str = "Cranpose";
+
 /// **Note:** Applications should use `AppLauncher` instead of calling this directly.
 pub fn run(
     app: android_activity::AndroidApp,
@@ -1730,7 +1743,7 @@ pub fn run(
     android_logger::init_once(
         android_logger::Config::default()
             .with_max_level(log::LevelFilter::Info)
-            .with_tag("ComposeRS")
+            .with_tag(settings.log_tag.as_deref().unwrap_or(DEFAULT_LOG_TAG))
             .with_filter(
                 android_logger::FilterBuilder::new()
                     .filter_level(log::LevelFilter::Info)
@@ -1806,6 +1819,11 @@ pub fn run(
     // Haptics, share sheet, notifier, network status (JNI backends of the
     // CranposeActivity capability hooks).
     crate::android_services::register(app.clone());
+    crate::android_host::install(app.clone());
+    // What this process is using, over the top of whatever the services above
+    // registered: the resident set Android kills by, and the allocator purge
+    // that is the only way to shrink it.
+    crate::process_info::install();
 
     // Seed the system theme from the boot configuration; live switches arrive
     // as `MainEvent::ConfigChanged`.
@@ -2302,6 +2320,9 @@ pub fn run(
                     }
                     MainEvent::Pause => {
                         log::info!("App paused");
+                        cranpose_services::dispatch_lifecycle_state(
+                            cranpose_services::LifecycleState::Paused,
+                        );
                         // Withdraw any outstanding soft-keyboard request and
                         // close the IME editor session so the OS cannot restore
                         // the keyboard on resume for an editor view the
@@ -2313,6 +2334,9 @@ pub fn run(
                     }
                     MainEvent::Resume { .. } => {
                         log::info!("App resumed");
+                        cranpose_services::dispatch_lifecycle_state(
+                            cranpose_services::LifecycleState::Resumed,
+                        );
                         // Never auto-reopen the soft keyboard on resume, even if a
                         // field is still focused: a warm resume keeps the field's
                         // caret/focus but must not resurrect the keyboard (the OS
@@ -2329,15 +2353,24 @@ pub fn run(
                     }
                     MainEvent::Start => {
                         log::info!("App started");
+                        cranpose_services::dispatch_lifecycle_state(
+                            cranpose_services::LifecycleState::Started,
+                        );
                     }
                     MainEvent::Stop => {
                         log::info!("App stopped");
+                        cranpose_services::dispatch_lifecycle_state(
+                            cranpose_services::LifecycleState::Stopped,
+                        );
                     }
                     MainEvent::SaveState { .. } => {
                         log::info!("Save state requested");
                     }
                     MainEvent::Destroy => {
                         log::info!("App destroy requested, will exit after this event");
+                        cranpose_services::dispatch_lifecycle_state(
+                            cranpose_services::LifecycleState::Destroyed,
+                        );
                         if overlay_window_options.is_some() {
                             android_overlay_window::hide_android_overlay_window(&app);
                         }

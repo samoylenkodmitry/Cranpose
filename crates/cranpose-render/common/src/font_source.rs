@@ -123,23 +123,6 @@ impl SoftwareTextFontRegistry {
         }
     }
 
-    /// Register one face read from `path`.
-    pub fn register_face_path(
-        &mut self,
-        family: &FontFamily,
-        weight: FontWeight,
-        style: FontStyle,
-        path: impl AsRef<Path>,
-    ) -> Result<(), FontLoadError> {
-        self.register_read_face(
-            &mut FontFileReads::default(),
-            family,
-            weight,
-            style,
-            path.as_ref(),
-        )
-    }
-
     fn register_read_face(
         &mut self,
         reads: &mut FontFileReads,

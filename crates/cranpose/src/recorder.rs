@@ -190,24 +190,6 @@ impl InputRecorder {
         self.events.push(RecordedEvent::MouseUp { time_ms });
     }
 
-    /// Record a key press event
-    pub fn record_key_down(&mut self, key: &str) {
-        let time_ms = self.elapsed_ms();
-        self.events.push(RecordedEvent::KeyDown {
-            time_ms,
-            key: key.to_string(),
-        });
-    }
-
-    /// Record a key release event
-    pub fn record_key_up(&mut self, key: &str) {
-        let time_ms = self.elapsed_ms();
-        self.events.push(RecordedEvent::KeyUp {
-            time_ms,
-            key: key.to_string(),
-        });
-    }
-
     /// Finish recording and generate the robot test file.
     ///
     /// The generated test uses a data-driven format with [`RobotAction`] enum
@@ -360,11 +342,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn workspace_test_output_path(filename: &str) -> PathBuf {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("../../target/test-output/cranpose-recorder");
-        std::fs::create_dir_all(&path).expect("create recorder test output directory");
-        path.push(filename);
-        path
+        crate::test_scratch_dir("recorder").join(filename)
     }
 
     #[test]

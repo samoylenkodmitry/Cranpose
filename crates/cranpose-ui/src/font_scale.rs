@@ -1,10 +1,10 @@
 //! The system font-size setting, as the curve it is and not the multiplier it
 //! looks like.
 //!
-//! A size in `Sp` used to be `sp * font_scale` dp, and on Android 13 and below
-//! that is exactly what the platform does. Android 14 replaced it: above a
-//! threshold setting the platform runs the sp value through a piecewise-linear
-//! table, so small text grows by the full setting and large text grows by less.
+//! On Android 13 and below the platform resolves a size in `Sp` as
+//! `sp * font_scale` dp. Android 14 does not: above a threshold setting it runs
+//! the sp value through a piecewise-linear table, so small text grows by the
+//! full setting and large text grows by less.
 //! `TypedValue.applyDimension(COMPLEX_UNIT_SP, ..)` answers from that table, and
 //! Jetpack Compose carries its own copy so its `Density` answers the same.
 //!

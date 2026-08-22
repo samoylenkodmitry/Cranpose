@@ -2,8 +2,28 @@
 
 use std::cell::RefCell;
 
+use crate::Modifier;
 use cranpose_core::{compositionLocalOf, CompositionLocal};
 use cranpose_ui_graphics::EdgeInsets;
+
+/// Insets needed to keep content clear of system UI and the on-screen keyboard.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct WindowInsets {
+    pub safe_area: EdgeInsets,
+    pub ime: EdgeInsets,
+}
+
+impl WindowInsets {
+    /// Combines overlapping insets by taking the largest obstruction on each edge.
+    pub fn combined(self) -> EdgeInsets {
+        EdgeInsets::from_components(
+            self.safe_area.left.max(self.ime.left),
+            self.safe_area.top.max(self.ime.top),
+            self.safe_area.right.max(self.ime.right),
+            self.safe_area.bottom.max(self.ime.bottom),
+        )
+    }
+}
 
 /// CompositionLocal carrying the platform safe-area insets in logical pixels.
 ///
@@ -49,9 +69,29 @@ pub fn local_ime_insets() -> CompositionLocal<EdgeInsets> {
     })
 }
 
+/// Returns the framework-owned insets currently visible to the composition.
+pub fn window_insets() -> WindowInsets {
+    WindowInsets {
+        safe_area: local_safe_area_insets().current(),
+        ime: local_ime_insets().current(),
+    }
+}
+
+impl Modifier {
+    /// Adds padding for explicit platform or application insets.
+    pub fn window_insets_padding(self, insets: EdgeInsets) -> Self {
+        self.padding_each(insets.left, insets.top, insets.right, insets.bottom)
+    }
+
+    /// Adds padding for system bars, display cutouts, and rounded display edges.
+    pub fn safe_area_padding(self) -> Self {
+        self.window_insets_padding(local_safe_area_insets().current())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{local_ime_insets, local_safe_area_insets};
+    use super::{local_ime_insets, local_safe_area_insets, WindowInsets};
     use cranpose_ui_graphics::EdgeInsets;
 
     #[test]
@@ -74,5 +114,27 @@ mod tests {
         assert!(local_ime_insets() == local_ime_insets());
         // The IME local is distinct from the safe-area local.
         assert!(local_ime_insets() != local_safe_area_insets());
+    }
+
+    #[test]
+    fn combined_insets_do_not_double_count_overlapping_edges() {
+        let combined = WindowInsets {
+            safe_area: EdgeInsets::from_components(2.0, 8.0, 4.0, 20.0),
+            ime: EdgeInsets::from_components(0.0, 0.0, 6.0, 100.0),
+        }
+        .combined();
+        assert_eq!(combined, EdgeInsets::from_components(2.0, 8.0, 6.0, 100.0));
+    }
+
+    #[test]
+    fn explicit_window_insets_become_padding() {
+        use crate::modifier::ModifierChainHandle;
+        use crate::Modifier;
+
+        let _app_context = crate::render_state::app_context_test_scope();
+        let insets = EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0);
+        let mut handle = ModifierChainHandle::new();
+        let _ = handle.update(&Modifier::empty().window_insets_padding(insets));
+        assert_eq!(handle.resolved_modifiers().padding(), insets);
     }
 }

@@ -3746,11 +3746,11 @@ fn effective_style_for_range(
 
 /// The line advance a style asks for on a given font, in layout points.
 ///
-/// The font used to be discarded here, which is why the "natural" line height
-/// was a flat `font_size * 1.4` guess. A style that asks for a line-height
-/// policy needs the font's real ascent and descent, and reading them at the
-/// font's own pixel size is what makes them em-relative rather than a restated
-/// `font_size`.
+/// A style that asks for a line-height policy needs the font's real ascent and
+/// descent, so the font is carried in rather than dropped: reading the metrics
+/// at the font's own pixel size is what makes them em-relative rather than a
+/// restated `font_size`. The flat `font_size * 1.4` below is only the fallback
+/// for a style that asks for nothing.
 fn line_height_for_style(style: &TextStyle, font_size: f32, font: &SoftwareTextFont) -> f32 {
     let asked = resolve_line_height(style, font_size * 1.4);
     if style.paragraph_style.line_height_style.is_none() {
@@ -4914,7 +4914,9 @@ mod tests {
     fn count_ink_pixels(image: &ImageBitmap) -> usize {
         image
             .pixels()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[3] > 0)
             .count()
     }

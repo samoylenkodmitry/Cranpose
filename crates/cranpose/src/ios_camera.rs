@@ -9,7 +9,8 @@
 
 use block2::RcBlock;
 use cranpose_services::{
-    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraStill, FlashMode,
+    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill,
+    FlashMode, FrameFormat,
 };
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
@@ -47,13 +48,12 @@ use std::time::Duration;
 /// `'BGRA'` — 32-bit BGRA, the pixel format we request from the video output.
 const PIXEL_FORMAT_32BGRA: u32 = 0x4247_5241;
 
-fn latest() -> &'static Mutex<Option<CameraFrame>> {
-    static SLOT: OnceLock<Mutex<Option<CameraFrame>>> = OnceLock::new();
-    SLOT.get_or_init(|| Mutex::new(None))
-}
+/// Which frame this is in the session, so a consumer can tell a repeat from a
+/// new one and count what it missed.
+static FRAME_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Recycled RGBA buffers for [`frame_from_sample`]. The delegate replaces
-/// [`latest`] ~25×/s; a fresh multi-MB `Vec` per frame fragments the app
+/// Recycled RGBA buffers for [`frame_from_sample`]. The delegate publishes a
+/// frame ~25×/s; a fresh multi-MB `Vec` per frame fragments the app
 /// heap against any concurrently running inference's transient buffers
 /// (measured on a phone: each SAM encode grew the process footprint ~500MB
 /// while frames interleaved, straight into a jetsam kill — with frame
@@ -103,19 +103,36 @@ pub(crate) fn register() {
 struct IosCamera;
 
 impl Camera for IosCamera {
-    fn start(&self) -> Result<String, CameraError> {
+    fn start(&self) -> Result<(), CameraError> {
         if session_slot().lock().map(|s| s.is_some()).unwrap_or(false) {
-            return Ok("camera".into());
+            cranpose_services::publish_camera_state(CameraState::Running {
+                device: "camera".to_string(),
+            });
+            return Ok(());
         }
-        start_session()
+        let device = start_session()?;
+        cranpose_services::publish_camera_state(CameraState::Running { device });
+        Ok(())
     }
 
-    fn latest_frame(&self) -> Option<CameraFrame> {
-        latest().lock().ok().and_then(|f| f.clone())
-    }
-
-    fn capture_still(&self) -> Option<CameraStill> {
-        capture_photo()
+    /// Asks the photo output for a still.
+    ///
+    /// The exposure and encode take as long as they take, so the request runs
+    /// on a thread of its own and the picture arrives through the framework's
+    /// still stream rather than by blocking whoever asked.
+    fn request_still(&self) -> Result<(), CameraError> {
+        if session_slot().lock().map(|s| s.is_none()).unwrap_or(true) {
+            return Err(CameraError::NotRunning);
+        }
+        std::thread::Builder::new()
+            .name("cranpose-camera-still".to_string())
+            .spawn(|| {
+                cranpose_services::publish_camera_still(capture_photo().ok_or_else(|| {
+                    CameraError::Failed("the still capture produced no image".to_string())
+                }));
+            })
+            .map_err(|error| CameraError::Failed(error.to_string()))?;
+        Ok(())
     }
 
     fn set_torch(&self, on: bool) -> bool {
@@ -206,9 +223,7 @@ impl Camera for IosCamera {
                 unsafe { holder.session.stopRunning() };
             }
         }
-        if let Ok(mut f) = latest().lock() {
-            *f = None;
-        }
+        FRAME_SEQUENCE.store(0, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -279,15 +294,16 @@ define_class!(
             _connection: &AVCaptureConnection,
         ) {
             if let Some(frame) = frame_from_sample(sample_buffer) {
-                if let Ok(mut slot) = latest().lock() {
-                    if let Some(old) = slot.replace(frame) {
-                        if let Ok(mut pool) = buffer_pool().lock() {
-                            if pool.len() < 3 {
-                                pool.push(old.rgba);
-                            }
+                // The framework keeps the newest frame and hands it to whoever
+                // is observing; the parked buffer here is only the recycling.
+                if let Some(old) = cranpose_services::latest_camera_frame() {
+                    if let Ok(mut pool) = buffer_pool().lock() {
+                        if pool.len() < 3 {
+                            pool.push(old.bytes);
                         }
                     }
                 }
+                cranpose_services::publish_camera_frame(frame);
             }
         }
     }
@@ -455,11 +471,16 @@ fn frame_from_sample(sample: &CMSampleBuffer) -> Option<CameraFrame> {
 
     unsafe { CVPixelBufferUnlockBaseAddress(pixel_buffer, flags) };
 
-    Some(CameraFrame {
-        width: out_w as u32,
-        height: out_h as u32,
+    // Already upright and already RGBA: the rotation happened in the same pass
+    // as the colour conversion above, so the frame needs no further turning.
+    CameraFrame::new(
+        out_w as u32,
+        out_h as u32,
+        FrameFormat::Rgba8,
+        0,
+        FRAME_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::AcqRel),
         rgba,
-    })
+    )
 }
 
 /// Picks the back camera, preferring an auto-switching virtual multi-camera

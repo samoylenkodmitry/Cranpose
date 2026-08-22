@@ -184,17 +184,6 @@ where
         }
     }
 
-    /// Find all clickable elements.
-    ///
-    /// Returns a finder that matches all elements with clickable semantics.
-    pub fn find_clickable(&mut self) -> ElementFinder<'_, R> {
-        self.wait_for_idle();
-        ElementFinder {
-            robot: self,
-            query: FinderQuery::Clickable,
-        }
-    }
-
     /// Get all text content currently visible on screen.
     ///
     /// This is useful for debugging or asserting on overall screen state.
@@ -244,7 +233,6 @@ where
 enum FinderQuery {
     Text(String),
     Position(f32, f32),
-    Clickable,
 }
 
 /// A finder for locating and interacting with UI elements.
@@ -272,11 +260,6 @@ where
                 all_text.iter().any(|t| t.contains(text))
             }
             FinderQuery::Position(x, y) => !self.robot.get_scene().hit_test(*x, *y).is_empty(),
-            FinderQuery::Clickable => {
-                // Check if there are any clickable elements
-                // This would require semantics traversal
-                true // Placeholder
-            }
         }
     }
 
@@ -292,11 +275,22 @@ where
                     .find(|(_, txt)| txt.as_ref().is_some_and(|t| t.contains(text)))
                     .map(|(rect, _)| rect)
             }
-            FinderQuery::Position(_x, _y) => {
-                // Get bounds from hit test
-                None // Placeholder
+            FinderQuery::Position(x, y) => {
+                let (x, y) = (*x, *y);
+                self.robot
+                    .get_all_rects()
+                    .into_iter()
+                    .map(|(rect, _)| rect)
+                    .filter(|rect| rect.contains(x, y))
+                    // The innermost box under the point is the one a caller
+                    // means; an ancestor covers the point too and would answer
+                    // with the whole screen.
+                    .min_by(|a, b| {
+                        (a.width * a.height)
+                            .partial_cmp(&(b.width * b.height))
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
             }
-            FinderQuery::Clickable => None,
         }
     }
 
@@ -356,17 +350,6 @@ where
     /// Panics if the element is not found.
     pub fn assert_exists(&mut self) {
         assert!(self.exists(), "Element not found: {:?}", self.query);
-    }
-
-    /// Assert that this element does not exist.
-    ///
-    /// Panics if the element is found.
-    pub fn assert_not_exists(&mut self) {
-        assert!(
-            !self.exists(),
-            "Element unexpectedly found: {:?}",
-            self.query
-        );
     }
 }
 

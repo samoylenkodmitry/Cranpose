@@ -941,12 +941,6 @@ where
             .enter(|| cranpose_ui::text_input_session::set_platform_text_input_handler(handler));
     }
 
-    /// Removes the platform soft-keyboard handler, if one is installed.
-    pub fn clear_platform_text_input(&mut self) {
-        let app_context = Rc::clone(&self.app_context);
-        app_context.enter(cranpose_ui::text_input_session::clear_platform_text_input_handler);
-    }
-
     /// Notifies the framework that the host app was paused/backgrounded.
     ///
     /// Withdraws any outstanding soft-keyboard request (and hides the keyboard)

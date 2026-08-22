@@ -1,6 +1,6 @@
 use cranpose::AppLauncher;
 use cranpose_foundation::{
-    lazy::remember_lazy_list_state, lazy::LazyListScope, SemanticsConfiguration,
+    lazy::rememberLazyListState, lazy::LazyListScope, SemanticsConfiguration,
 };
 use cranpose_testing::find_element_by_text_exact;
 use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
@@ -68,7 +68,7 @@ fn collect_visible_items(robot: &cranpose::Robot) -> Vec<(usize, f32)> {
 #[allow(non_snake_case)]
 #[composable]
 fn VariableHeightWheelReproScreen() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
 
     Column(
         Modifier::empty()
@@ -98,11 +98,7 @@ fn VariableHeightWheelReproScreen() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move |scope| {
-                    scope.items(
-                        200,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
+                    scope.items(200, |index| {
                             let repeat_count = match index % 8 {
                                 0 => 1,
                                 1 => 2,

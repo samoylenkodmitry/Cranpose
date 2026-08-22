@@ -12,7 +12,8 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose::LazyItems;
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
 use cranpose_ui::{Modifier, TextStyle};
@@ -23,7 +24,7 @@ fn test_app() {
     use cranpose_ui::Color;
     use cranpose_ui::LinearArrangement;
 
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
 
     Column(
         Modifier::empty()
@@ -56,9 +57,8 @@ fn test_app() {
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 |scope| {
                     scope.items(
-                        20,
-                        Some(|i: usize| i as u64), // Use index as key
-                        None::<fn(usize) -> u64>,
+                        // Use index as key.
+                        LazyItems::new(20).key(|i: usize| i as u64),
                         move |i| {
                             // Simple row with predictable content
                             let bg = if i % 2 == 0 {

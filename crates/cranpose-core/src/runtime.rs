@@ -593,6 +593,18 @@ impl RuntimeInner {
         }
     }
 
+    /// Whether a spawned task is still registered. A task that completed or was
+    /// cancelled is gone from the list.
+    fn has_task(&self, id: u64) -> bool {
+        // `poll_async_tasks` takes the list while polling, so a task being
+        // polled right now is momentarily absent. Only the UI thread polls, and
+        // only the UI thread asks, so that window is never observed.
+        self.tasks
+            .try_borrow()
+            .map(|tasks| tasks.iter().any(|entry| entry.id == id))
+            .unwrap_or(true)
+    }
+
     fn poll_async_tasks(&self) -> bool {
         let mut tasks_ref = self.tasks.borrow_mut();
         let tasks = std::mem::take(&mut *tasks_ref);
@@ -1152,6 +1164,14 @@ impl RuntimeHandle {
         }
     }
 
+    /// Whether the runtime still holds the spawned task `id`.
+    pub fn has_task(&self, id: u64) -> bool {
+        self.inner
+            .upgrade()
+            .map(|inner| inner.has_task(id))
+            .unwrap_or(false)
+    }
+
     /// Enqueues work from any thread to run on the UI thread.
     ///
     /// The closure must be `Send` because it may cross threads before executing
@@ -1339,8 +1359,13 @@ impl RuntimeHandle {
 }
 
 impl TaskHandle {
-    pub fn cancel(self) {
+    pub fn cancel(&self) {
         self.runtime.cancel_task(self.id);
+    }
+
+    /// Whether the spawned future has finished or been cancelled.
+    pub fn is_finished(&self) -> bool {
+        !self.runtime.has_task(self.id)
     }
 }
 

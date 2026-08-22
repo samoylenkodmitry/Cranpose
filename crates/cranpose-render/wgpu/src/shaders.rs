@@ -98,6 +98,32 @@ pub fn projective_blit_shader() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn the_blit_shaders_are_complete_wgsl_with_a_fragment_entry_point() {
+        // A shader assembled from fragments is only a shader if every fragment
+        // landed: a missing `@fragment` entry point fails at pipeline creation,
+        // which on some drivers shows as a blank surface rather than an error.
+        for (name, source) in [
+            ("blit", blit_shader()),
+            ("projective blit", projective_blit_shader()),
+        ] {
+            assert!(
+                source.contains("@fragment"),
+                "the {name} shader has no fragment entry point"
+            );
+            assert!(
+                source.contains("fn "),
+                "the {name} shader declares no functions at all"
+            );
+        }
+
+        // They are two different pipelines and must not have been assembled
+        // from the same pieces.
+        assert_ne!(blit_shader(), projective_blit_shader());
+    }
+
     use naga::back::glsl;
     use naga::ShaderStage;
 

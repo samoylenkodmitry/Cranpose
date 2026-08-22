@@ -73,7 +73,9 @@ fn atlas_bitmap() -> ImageBitmap {
 fn blue_leak_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| rgba[2] > 118 && rgba[2] > rgba[0].saturating_add(42))
         .count()
 }
@@ -113,7 +115,7 @@ fn edge_energy(screenshot: &cranpose::RobotScreenshot) -> f32 {
 
 fn unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     let mut colors = std::collections::HashSet::new();
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
     colors.len()
@@ -184,7 +186,7 @@ fn CrispControlBlock(modifier: Modifier) {
 fn RenderCrispnessContractApp() {
     let atlas = cranpose_core::remember(atlas_bitmap).with(|bitmap| bitmap.clone());
     let scroll_state =
-        cranpose_core::remember(|| ScrollState::new(INITIAL_SCROLL)).with(|state| state.clone());
+        cranpose_core::remember(|| ScrollState::new(INITIAL_SCROLL)).with(|state| *state);
 
     Box(
         Modifier::empty()
@@ -226,7 +228,7 @@ fn RenderCrispnessContractApp() {
                 Modifier::empty()
                     .offset(SCROLLED_X, SCROLLED_Y)
                     .size(Size::new(BLOCK_W + 6.0, BLOCK_H))
-                    .vertical_scroll(scroll_state.clone(), false),
+                    .vertical_scroll(scroll_state, false),
                 BoxSpec::default().content_alignment(Alignment::TOP_START),
                 || {
                     CrispControlBlock(Modifier::empty());

@@ -1882,10 +1882,9 @@ fn decoration_brush_for_span(
     )
 }
 
-// The tests below used to run against a `#[cfg(test)]` REPLICA of this rule
-// while the scene builder — the code that actually paints — carried a
-// different one. They now call the shared implementation, so they guard the
-// function that runs.
+// The tests below call the shared implementation rather than a `#[cfg(test)]`
+// replica of this rule, so they guard the function the scene builder — the code
+// that actually paints — runs.
 #[cfg(test)]
 use cranpose_render_common::scene_builder::resolve_text_measure_width;
 

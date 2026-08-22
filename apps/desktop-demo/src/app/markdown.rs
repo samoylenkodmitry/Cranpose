@@ -1,5 +1,5 @@
 use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
-use cranpose_foundation::lazy::remember_lazy_list_state;
+use cranpose_foundation::lazy::rememberLazyListState;
 use cranpose_foundation::text::TextFieldState;
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
@@ -422,8 +422,8 @@ const DEFAULT_URL: &str =
 #[composable]
 pub fn markdown_viewer_tab() {
     let url_state = cranpose_core::remember(|| TextFieldState::new(DEFAULT_URL)).with(|s| *s);
-    let fetch_state = cranpose_core::useState(|| FetchState::Idle);
-    let request_counter = cranpose_core::useState(|| 0u64);
+    let fetch_state = cranpose_core::rememberMutableStateOf(|| FetchState::Idle);
+    let request_counter = cranpose_core::rememberMutableStateOf(|| 0u64);
     let http_client = local_http_client().current();
 
     cranpose_core::LaunchedEffect!(request_counter.get(), move |scope| {
@@ -616,7 +616,7 @@ pub fn MarkdownScrollStabilityFixtureTab() {
 #[allow(non_snake_case)]
 #[composable]
 pub fn MarkdownScrollStressFixtureTab() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     MarkdownScrollStressFixtureTabWithState(list_state);
 }
 
@@ -740,7 +740,7 @@ fn markdown_scrollbar_style() -> LazyScrollbarStyle {
 #[allow(non_snake_case)]
 #[composable]
 fn render_markdown_blocks(blocks: Rc<[MarkdownBlock]>) {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     render_markdown_blocks_with_state(blocks, list_state);
 }
 

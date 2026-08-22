@@ -686,6 +686,10 @@ pub enum SemanticsWidgetRole {
     /// targets (`AccessibilityNodeInfo.setHeading`, `Role::Heading`,
     /// `<h*>`/`UIAccessibilityTraitHeader`).
     Header,
+    /// A modal surface that takes over the screen until it is dismissed.
+    /// Screen readers announce it and confine their traversal to it, which is
+    /// the accessible half of what makes a dialog modal.
+    Dialog,
 }
 
 /// A screen-reader action that is not a click, e.g. Compose's
@@ -887,6 +891,9 @@ pub struct SemanticsConfiguration {
     /// Controls this node drew itself instead of laying out. See
     /// [`CanvasSemanticsNode`].
     pub canvas_children: Vec<CanvasSemanticsNode>,
+    /// Whether this node takes over the screen: everything outside it is
+    /// inert, and a screen reader keeps its traversal inside.
+    pub is_modal: bool,
 }
 
 impl Default for SemanticsConfiguration {
@@ -904,6 +911,7 @@ impl Default for SemanticsConfiguration {
             text_selection: None,
             custom_actions: Vec::new(),
             canvas_children: Vec::new(),
+            is_modal: false,
         }
     }
 }
@@ -940,6 +948,7 @@ impl SemanticsConfiguration {
             .extend(other.custom_actions.iter().cloned());
         self.canvas_children
             .extend(other.canvas_children.iter().cloned());
+        self.is_modal |= other.is_modal;
     }
 
     /// Whether a screen reader should offer activation. A named click label is
@@ -2117,36 +2126,6 @@ impl ModifierNodeChain {
         }
     }
 
-    /// Calls `f` for every node in reverse order that matches `mask`.
-    pub fn for_each_backward_matching<F>(&self, mask: NodeCapabilities, mut f: F)
-    where
-        F: FnMut(ModifierChainNodeRef<'_>),
-    {
-        if mask.is_empty() {
-            self.for_each_backward(f);
-            return;
-        }
-
-        if !self.head().aggregate_child_capabilities().intersects(mask) {
-            return;
-        }
-
-        for node in self.tail_to_head() {
-            if node.kind_set().intersects(mask) {
-                f(node);
-            }
-        }
-    }
-
-    /// Returns a node reference for the entry at `index`.
-    pub fn node_ref_at(&self, index: usize) -> Option<ModifierChainNodeRef<'_>> {
-        if index >= self.entries.len() {
-            None
-        } else {
-            Some(self.make_node_ref(NodeLink::Entry(NodePath::root(index))))
-        }
-    }
-
     /// Returns the node reference that owns `node`.
     pub fn find_node_ref(&self, node: &dyn ModifierNode) -> Option<ModifierChainNodeRef<'_>> {
         fn node_data_ptr(node: &dyn ModifierNode) -> *const () {
@@ -2215,39 +2194,6 @@ impl ModifierNodeChain {
     pub fn has_nodes_for_invalidation(&self, kind: InvalidationKind) -> bool {
         self.aggregated_capabilities
             .contains(NodeCapabilities::for_invalidation(kind))
-    }
-
-    /// Visits every node in insertion order together with its capability mask.
-    pub fn visit_nodes<F>(&self, mut f: F)
-    where
-        F: FnMut(&dyn ModifierNode, NodeCapabilities),
-    {
-        for (link, cached_caps, _agg) in &self.ordered_nodes {
-            match link {
-                NodeLink::Head => {
-                    f(self.head_sentinel.as_ref(), *cached_caps);
-                }
-                NodeLink::Tail => {
-                    f(self.tail_sentinel.as_ref(), *cached_caps);
-                }
-                NodeLink::Entry(path) => {
-                    let node_borrow = self.entries[path.entry()].node.borrow();
-                    if path.delegates().is_empty() {
-                        f(&**node_borrow, *cached_caps);
-                    } else {
-                        let mut current: &dyn ModifierNode = &**node_borrow;
-                        for &delegate_index in path.delegates() {
-                            if let Some(delegate) = nth_delegate(current, delegate_index as usize) {
-                                current = delegate;
-                            } else {
-                                return; // Invalid delegate path
-                            }
-                        }
-                        f(current, *cached_caps);
-                    }
-                }
-            }
-        }
     }
 
     /// Visits every node mutably in insertion order together with its capability mask.
@@ -2704,46 +2650,6 @@ impl<'a> ModifierChainNodeRef<'a> {
                 f(node);
             }
         });
-    }
-
-    /// Finds the nearest ancestor focus target node.
-    ///
-    /// This is useful for focus navigation to find the parent focusable
-    /// component in the tree.
-    pub fn find_parent_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
-        let mut result = None;
-        self.clone()
-            .visit_ancestors_matching(false, NodeCapabilities::FOCUS, |node| {
-                if result.is_none() {
-                    result = Some(node);
-                }
-            });
-        result
-    }
-
-    /// Finds the first descendant focus target node.
-    ///
-    /// This is useful for focus navigation to find the first focusable
-    /// child component in the tree.
-    pub fn find_first_focus_target(&self) -> Option<ModifierChainNodeRef<'a>> {
-        let mut result = None;
-        self.clone()
-            .visit_descendants_matching(false, NodeCapabilities::FOCUS, |node| {
-                if result.is_none() {
-                    result = Some(node);
-                }
-            });
-        result
-    }
-
-    /// Returns true if this node or any ancestor has focus capability.
-    pub fn has_focus_capability_in_ancestors(&self) -> bool {
-        let mut found = false;
-        self.clone()
-            .visit_ancestors_matching(true, NodeCapabilities::FOCUS, |_| {
-                found = true;
-            });
-        found
     }
 }
 

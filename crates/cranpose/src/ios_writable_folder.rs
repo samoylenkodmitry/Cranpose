@@ -1,40 +1,28 @@
-//! iOS persistent writable folder built on `UIDocumentPickerViewController` +
-//! security-scoped bookmarks.
+//! iOS persistent writable folders, resolved from security-scoped bookmarks.
 //!
-//! The user picks a folder through the Files app; the granted security-scoped
-//! URL is serialized to a bookmark (hex-encoded) as the durable handle. Reopening
-//! resolves that bookmark on any thread and holds its security scope for the
-//! duration of each file operation — so scheduled auto-backups keep working
-//! across launches without re-prompting.
-//!
-//! Registered as the platform writable-folder picker + store factory (see
-//! [`cranpose_services::set_platform_writable_folder_picker`]) by the iOS backend.
+//! The user grants a folder through the chooser in [`crate::ios_file_picker`];
+//! the granted security-scoped URL is serialized to a bookmark (hex-encoded) as
+//! the durable handle. Reopening resolves that bookmark on any thread and holds
+//! its security scope for the duration of each file operation — so scheduled
+//! auto-backups keep working across launches without re-prompting.
 #![allow(unsafe_code)]
 
 use cranpose_services::{
-    set_platform_writable_folder_picker, set_writable_folder_store_factory, FilePickerError,
-    FolderError, PickerFuture, WritableFolderPicker, WritableFolderStore, WritableFolderStoreRef,
+    set_writable_folder_store_factory, FilePickerError, FolderEntry, FolderError, FolderReader,
+    FolderWriter, WritableFolderStore, WritableFolderStoreRef, DEFAULT_CHUNK_LEN,
 };
-use objc2::rc::Retained;
-use objc2::runtime::{Bool, ProtocolObject};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::runtime::Bool;
 use objc2_foundation::{
-    NSArray, NSData, NSObject, NSObjectProtocol, NSURLBookmarkCreationOptions,
-    NSURLBookmarkResolutionOptions, NSURL,
+    NSData, NSURLBookmarkCreationOptions, NSURLBookmarkResolutionOptions, NSURL,
 };
-use objc2_ui_kit::{UIDocumentPickerDelegate, UIDocumentPickerViewController};
-use objc2_uniform_type_identifiers::{UTType, UTTypeFolder};
-use std::cell::RefCell;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::rc::Rc;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use std::time::UNIX_EPOCH;
 
-/// Installs the iOS writable-folder picker and store factory.
+/// Installs the iOS writable-folder store factory.
 pub(crate) fn register() {
-    set_platform_writable_folder_picker(Rc::new(IosWritableFolderPicker));
     set_writable_folder_store_factory(Box::new(|handle| {
         Some(Arc::new(BookmarkStore {
             handle: handle.to_owned(),
@@ -42,120 +30,9 @@ pub(crate) fn register() {
     }));
 }
 
-struct IosWritableFolderPicker;
-
-impl WritableFolderPicker for IosWritableFolderPicker {
-    fn pick(&self) -> PickerFuture<Result<Option<String>, FilePickerError>> {
-        let Some(mtm) = MainThreadMarker::new() else {
-            return Box::pin(async {
-                Err(FilePickerError::Failed(
-                    "folder picker must be presented on the main thread".into(),
-                ))
-            });
-        };
-        match present(mtm) {
-            Ok(future) => Box::pin(future),
-            Err(error) => Box::pin(async move { Err(error) }),
-        }
-    }
-}
-
-type PickResult = Result<Option<String>, FilePickerError>;
-
-#[derive(Default)]
-struct PickSlot {
-    result: Option<PickResult>,
-    waker: Option<Waker>,
-}
-
-type SharedSlot = Rc<RefCell<PickSlot>>;
-
-struct PickFuture {
-    slot: SharedSlot,
-    _delegate: Retained<FolderPickerDelegate>,
-}
-
-impl Future for PickFuture {
-    type Output = PickResult;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<PickResult> {
-        let mut slot = self.slot.borrow_mut();
-        if let Some(result) = slot.result.take() {
-            Poll::Ready(result)
-        } else {
-            slot.waker = Some(context.waker().clone());
-            Poll::Pending
-        }
-    }
-}
-
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "CranposeWritableFolderPickerDelegate"]
-    #[ivars = SharedSlot]
-    struct FolderPickerDelegate;
-
-    unsafe impl NSObjectProtocol for FolderPickerDelegate {}
-
-    unsafe impl UIDocumentPickerDelegate for FolderPickerDelegate {
-        #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
-        fn did_pick(&self, _picker: &UIDocumentPickerViewController, urls: &NSArray<NSURL>) {
-            let result = match urls.firstObject() {
-                Some(url) => make_handle(&url).map(Some),
-                None => Ok(None),
-            };
-            self.resolve(result);
-        }
-
-        #[unsafe(method(documentPickerWasCancelled:))]
-        fn was_cancelled(&self, _picker: &UIDocumentPickerViewController) {
-            self.resolve(Ok(None));
-        }
-    }
-);
-
-impl FolderPickerDelegate {
-    fn new(slot: SharedSlot, mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(slot);
-        unsafe { msg_send![super(this), init] }
-    }
-
-    fn resolve(&self, result: PickResult) {
-        let mut slot = self.ivars().borrow_mut();
-        slot.result = Some(result);
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
-        }
-    }
-}
-
-fn present(mtm: MainThreadMarker) -> Result<PickFuture, FilePickerError> {
-    let root = crate::ios_file_picker::root_view_controller(mtm)
-        .ok_or_else(|| FilePickerError::Failed("no root view controller to present from".into()))?;
-
-    // SAFETY: `UTTypeFolder` is an immutable framework constant.
-    let folder: &UTType = unsafe { UTTypeFolder };
-    let content_types = NSArray::from_slice(&[folder]);
-    let picker = UIDocumentPickerViewController::initForOpeningContentTypes(
-        UIDocumentPickerViewController::alloc(mtm),
-        &content_types,
-    );
-
-    let slot: SharedSlot = Rc::new(RefCell::new(PickSlot::default()));
-    let delegate = FolderPickerDelegate::new(slot.clone(), mtm);
-    picker.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-    root.presentViewController_animated_completion(&picker, true, None);
-
-    Ok(PickFuture {
-        slot,
-        _delegate: delegate,
-    })
-}
-
-/// Serialize a picked security-scoped folder URL to a durable, hex-encoded
+/// Serializes a granted security-scoped folder URL to a durable, hex-encoded
 /// bookmark handle.
-fn make_handle(url: &NSURL) -> Result<String, FilePickerError> {
+pub(crate) fn bookmark_handle(url: &NSURL) -> Result<String, FilePickerError> {
     let accessed = unsafe { url.startAccessingSecurityScopedResource() };
     let data = url.bookmarkDataWithOptions_includingResourceValuesForKeys_relativeToURL_error(
         NSURLBookmarkCreationOptions::empty(),
@@ -218,16 +95,26 @@ impl WritableFolderStore for BookmarkStore {
         self.with_scope(|dir| std::fs::read(dir.join(name)))
     }
 
-    fn list(&self) -> Result<Vec<String>, FolderError> {
+    fn list(&self) -> Result<Vec<FolderEntry>, FolderError> {
         self.with_scope(|dir| {
-            let mut names = Vec::new();
+            let mut listing = Vec::new();
             for child in std::fs::read_dir(dir)? {
                 let child = child?;
-                if child.path().is_file() {
-                    names.push(child.file_name().to_string_lossy().into_owned());
+                let stat = child.metadata()?;
+                if !stat.is_file() {
+                    continue;
                 }
+                listing.push(FolderEntry {
+                    name: child.file_name().to_string_lossy().into_owned(),
+                    len: stat.len(),
+                    modified_millis: stat
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                        .map(|since| since.as_millis() as u64),
+                });
             }
-            Ok(names)
+            Ok(listing)
         })
     }
 
@@ -239,12 +126,132 @@ impl WritableFolderStore for BookmarkStore {
         })
     }
 
+    fn open_read(&self, name: &str) -> Result<Box<dyn FolderReader>, FolderError> {
+        let owned = name.to_string();
+        let (path, file) = self.with_scope(move |dir| {
+            let path = dir.join(&owned);
+            let file = File::open(&path)?;
+            Ok((path, file))
+        })?;
+        Ok(Box::new(BookmarkReader {
+            handle: self.handle.clone(),
+            path,
+            file: Some(file),
+        }))
+    }
+
+    fn open_write(&self, name: &str) -> Result<Box<dyn FolderWriter>, FolderError> {
+        let owned = name.to_string();
+        let (target, staging, file) = self.with_scope(move |dir| {
+            let target = dir.join(&owned);
+            let staging = dir.join(format!("{owned}.tmp"));
+            let file = File::create(&staging)?;
+            Ok((target, staging, file))
+        })?;
+        Ok(Box::new(BookmarkWriter {
+            handle: self.handle.clone(),
+            target,
+            staging,
+            file: Some(file),
+        }))
+    }
+
     fn is_writable(&self) -> bool {
         self.with_scope(|dir| Ok(dir.is_dir())).unwrap_or(false)
     }
 
     fn handle(&self) -> String {
         self.handle.clone()
+    }
+}
+
+/// A chunked reader whose scope is re-entered for each chunk, so a long read
+/// never holds a security-scoped resource open across an await point.
+struct BookmarkReader {
+    handle: String,
+    path: PathBuf,
+    file: Option<File>,
+}
+
+impl FolderReader for BookmarkReader {
+    fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, FolderError> {
+        let Some(file) = self.file.as_mut() else {
+            return Ok(None);
+        };
+        let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
+        let store = BookmarkStore {
+            handle: self.handle.clone(),
+        };
+        let path = self.path.clone();
+        let filled = store.with_scope(|_| {
+            let _ = &path;
+            let mut filled = 0;
+            while filled < buffer.len() {
+                match file.read(&mut buffer[filled..]) {
+                    Ok(0) => break,
+                    Ok(read) => filled += read,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(filled)
+        })?;
+        if filled == 0 {
+            self.file = None;
+            return Ok(None);
+        }
+        buffer.truncate(filled);
+        Ok(Some(buffer))
+    }
+}
+
+/// A chunked writer that stages beside the target and renames on commit.
+struct BookmarkWriter {
+    handle: String,
+    target: PathBuf,
+    staging: PathBuf,
+    file: Option<File>,
+}
+
+impl FolderWriter for BookmarkWriter {
+    fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), FolderError> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| FolderError::Io("folder writer is already finished".into()))?;
+        let store = BookmarkStore {
+            handle: self.handle.clone(),
+        };
+        store.with_scope(|_| file.write_all(bytes))
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), FolderError> {
+        let Some(mut file) = self.file.take() else {
+            return Ok(());
+        };
+        let store = BookmarkStore {
+            handle: self.handle.clone(),
+        };
+        let staging = self.staging.clone();
+        let target = self.target.clone();
+        store.with_scope(move |_| {
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&staging, &target)
+        })
+    }
+}
+
+impl Drop for BookmarkWriter {
+    fn drop(&mut self) {
+        if self.file.is_some() {
+            let store = BookmarkStore {
+                handle: self.handle.clone(),
+            };
+            let staging = self.staging.clone();
+            let _ = store.with_scope(move |_| std::fs::remove_file(&staging));
+        }
     }
 }
 

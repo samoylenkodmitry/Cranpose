@@ -21,7 +21,7 @@ pub use modifier_helpers::*;
 pub use nodes::input::{
     rotary_scroll_pixels_from_detents, PointerButton, PointerButtons, PointerEvent,
     PointerEventKind, PointerId, PointerPhase, PointerSource, RotaryScrollEvent,
-    DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+    RotaryStepAccumulator, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
 };
 
 pub mod prelude {

@@ -343,6 +343,41 @@ where
     popup_impl(anchor, offset, None, Rc::new(content));
 }
 
+/// Renders `anchor_content` normally and, while `expanded`, places
+/// `popup_content` relative to the anchor's measured window rectangle.
+#[composable]
+pub fn PopupAnchored<A, P>(
+    modifier: Modifier,
+    expanded: bool,
+    offset: Point,
+    anchor_content: A,
+    popup_content: P,
+) -> cranpose_core::NodeId
+where
+    A: Fn() + 'static,
+    P: Fn() + 'static,
+{
+    let anchor = cranpose_core::rememberMutableStateOf(|| {
+        Rect::from_origin_size(
+            Point { x: 0.0, y: 0.0 },
+            cranpose_ui_graphics::Size {
+                width: 0.0,
+                height: 0.0,
+            },
+        )
+    });
+    let measured = modifier.report_window_rect_state(anchor);
+    let anchor_content = Rc::new(anchor_content);
+    let popup_content = Rc::new(popup_content);
+    Box(measured, BoxSpec::default(), move || {
+        anchor_content();
+        if expanded {
+            let popup_content = Rc::clone(&popup_content);
+            Popup(anchor.get(), offset, move || popup_content());
+        }
+    })
+}
+
 /// A [`Popup`] with an outside-tap dismissal: the host renders a
 /// viewport-filling scrim beneath the content that calls `on_dismiss` — the
 /// analogue of Compose's `Popup(onDismissRequest = …)`. Menus and pickers use

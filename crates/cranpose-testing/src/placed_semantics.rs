@@ -22,7 +22,8 @@
 //!   (`cranpose-render-common`'s `a_shrunken_row_is_only_tappable_where_it_is_drawn`
 //!   settles that), so this is the box a finger has to find. It is `None` for a
 //!   node the hit graph carries no region for — a label, a header, anything that
-//!   is described but not dispatchable.
+//!   is described but not interactive. Gesture containers such as scrollable
+//!   lists are interactive even though they do not expose a click action.
 //!
 //! ## Every walk here reads the RETAINED tree, deliberately
 //!
@@ -74,6 +75,9 @@ pub struct PlacedSemanticsNode {
     /// Whether the node carries a click action, which is what separates a
     /// control from something merely described.
     pub clickable: bool,
+    /// Whether the renderer carries any pointer-dispatch region for the node.
+    /// This also includes gesture-only containers such as scrollable lists.
+    pub interactive: bool,
     pub toggled: Option<bool>,
     pub enabled: bool,
     /// The box the measure pass gave this node, in window coordinates.
@@ -241,6 +245,7 @@ fn join(
             .actions
             .iter()
             .any(|action| matches!(action, SemanticsAction::Click { .. })),
+        interactive: touch_bounds.contains_key(&node.node_id),
         toggled: node.toggled,
         enabled: node.enabled,
         layout_bounds: bounds,

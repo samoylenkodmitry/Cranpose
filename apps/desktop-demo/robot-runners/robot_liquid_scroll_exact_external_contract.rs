@@ -329,7 +329,7 @@ fn set_tab_hook(name: String, argument: String) -> Result<Option<String>, String
             .parse::<f32>()
             .map_err(|err| format!("invalid liquid content delta '{argument}': {err}"))?;
         let scroll = TEST_LIQUID_SCROLL_STATE
-            .with(|cell| cell.borrow().clone())
+            .with(|cell| *cell.borrow())
             .ok_or_else(|| "liquid scroll state was not installed".to_string())?;
         let consumed = scroll.dispatch_raw_delta(-content_delta);
         return Ok(Some(format!(

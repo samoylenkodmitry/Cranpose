@@ -2,8 +2,8 @@
 //!
 //! This module provides the desktop event loop implementation using winit.
 
+use crate::app_launcher::{AppSettings, LaunchError};
 use crate::desktop_input::dispatch_keyboard_input;
-use crate::launcher::{AppSettings, LaunchError};
 use crate::native_window::{
     self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
     NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
@@ -47,6 +47,14 @@ const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
 const ROBOT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(feature = "robot")]
 const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+/// A present wait is a wait on the compositor, and a compositor is allowed to
+/// refuse frames indefinitely: a window that is occluded, off-screen, on
+/// another desktop, or on a sleeping display answers every surface acquisition
+/// with `Occluded` or `Timeout` and never advances the presented-frame
+/// generation. Bound the wait the same way `wait_for_idle` is bounded so the
+/// driver thread reports what the surface did instead of parking forever.
+#[cfg(feature = "robot")]
+const ROBOT_PRESENT_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_DESKTOP_FRAME_TELEMETRY_THRESHOLD_MS: f64 = 4.0;
 
 #[cfg(feature = "robot")]
@@ -139,6 +147,7 @@ struct RobotController {
     idle_structure_clean_frames: u32,
     waiting_for_present_generation: Option<u64>,
     waiting_for_pump_present_generation: Option<u64>,
+    pump_present_started_at: Option<Instant>,
     scroll_sequence: Option<RobotScrollSequence>,
     synthetic_primary_down: bool,
 }
@@ -167,6 +176,7 @@ impl RobotController {
             idle_structure_clean_frames: 0,
             waiting_for_present_generation: None,
             waiting_for_pump_present_generation: None,
+            pump_present_started_at: None,
             scroll_sequence: None,
             synthetic_primary_down: false,
         };
@@ -200,6 +210,29 @@ impl RobotController {
     fn idle_wait_timed_out(&self, now: Instant) -> bool {
         self.idle_started_at.is_some_and(|started_at| {
             now.saturating_duration_since(started_at) >= ROBOT_IDLE_TIMEOUT
+        })
+    }
+
+    fn begin_pump_present_wait(&mut self, target_generation: u64) {
+        self.begin_pump_present_wait_at(target_generation, Instant::now());
+    }
+
+    /// Arming the wait also restarts its deadline, which is what a scroll
+    /// sequence re-arming after each presented step needs: every step is
+    /// progress, so only a surface that stops presenting altogether times out.
+    fn begin_pump_present_wait_at(&mut self, target_generation: u64, started_at: Instant) {
+        self.waiting_for_pump_present_generation = Some(target_generation);
+        self.pump_present_started_at = Some(started_at);
+    }
+
+    fn finish_pump_present_wait(&mut self) {
+        self.waiting_for_pump_present_generation = None;
+        self.pump_present_started_at = None;
+    }
+
+    fn pump_present_wait_timed_out(&self, now: Instant) -> bool {
+        self.pump_present_started_at.is_some_and(|started_at| {
+            now.saturating_duration_since(started_at) >= ROBOT_PRESENT_WAIT_TIMEOUT
         })
     }
 
@@ -593,6 +626,12 @@ struct App {
     vsync_interval: Duration,
     #[cfg(feature = "robot")]
     presented_frame_generation: u64,
+    /// Frames the surface has refused since the last successful present. A
+    /// window the compositor is not showing answers every acquisition with
+    /// `Occluded` or `Timeout`, so this is what turns a present-wait timeout
+    /// into a diagnosis instead of a bare deadline.
+    #[cfg(feature = "robot")]
+    unpresentable_frames_since_present: u32,
     #[cfg(feature = "robot")]
     robot_visible_surface_dirty: bool,
 }
@@ -666,6 +705,8 @@ impl App {
             vsync_interval: default_vsync_interval(),
             #[cfg(feature = "robot")]
             presented_frame_generation: 0,
+            #[cfg(feature = "robot")]
+            unpresentable_frames_since_present: 0,
             #[cfg(feature = "robot")]
             robot_visible_surface_dirty: false,
         }
@@ -3841,6 +3882,19 @@ fn update_app_viewport(
     let (logical_width, logical_height) = viewport;
     app.set_buffer_size(width, height);
     app.set_viewport(logical_width, logical_height);
+    // The host surface every target reports the same way, so an application
+    // reads its density and viewport without a winit call of its own.
+    cranpose_services::publish_host_surface_size(
+        cranpose_services::host_surface::HostSurfaceSize {
+            width: logical_width,
+            height: logical_height,
+            scale: if logical_width > 0.0 {
+                width as f32 / logical_width
+            } else {
+                1.0
+            },
+        },
+    );
 }
 
 fn surface_logical_viewport_size(width: u32, height: u32, scale_factor: f64) -> (f32, f32) {
@@ -4394,6 +4448,14 @@ impl ApplicationHandler for App {
                 }
                 event_loop.exit();
             }
+            // A file dropped on the window arrives the same way a shared or
+            // picked one does, so an application collects one stream of
+            // incoming content rather than a desktop path of its own.
+            WindowEvent::DragDropped { ref paths, .. } => {
+                for path in paths {
+                    crate::desktop_incoming::publish_file(path);
+                }
+            }
             WindowEvent::SurfaceResized(new_size) if new_size.width > 0 && new_size.height > 0 => {
                 let viewport = viewport_for_surface_size(
                     primary_viewport_override,
@@ -4683,6 +4745,11 @@ impl ApplicationHandler for App {
                             return;
                         }
                         SurfaceFrame::Skip => {
+                            #[cfg(feature = "robot")]
+                            {
+                                self.unpresentable_frames_since_present =
+                                    self.unpresentable_frames_since_present.saturating_add(1);
+                            }
                             return;
                         }
                     };
@@ -4729,12 +4796,23 @@ impl ApplicationHandler for App {
                     {
                         self.presented_frame_generation =
                             self.presented_frame_generation.saturating_add(1);
+                        self.unpresentable_frames_since_present = 0;
                         self.robot_visible_surface_dirty = false;
                     }
-                    if should_chain_no_vsync_redraw(
-                        frame_interval,
-                        app.frame_schedule().needs_frame,
-                    ) {
+                    // A driven app must return through `about_to_wait` between
+                    // frames because robot commands and idle waits are advanced
+                    // there. Chaining redraw events directly can starve that
+                    // phase on macOS while an animation is active.
+                    #[cfg(feature = "robot")]
+                    let robot_driven = self.robot_controller.is_some();
+                    #[cfg(not(feature = "robot"))]
+                    let robot_driven = false;
+                    if !robot_driven
+                        && should_chain_no_vsync_redraw(
+                            frame_interval,
+                            app.frame_schedule().needs_frame,
+                        )
+                    {
                         request_redraw_once(window, &mut self.primary_redraw_pending);
                     }
                 } else {
@@ -4761,6 +4839,17 @@ impl ApplicationHandler for App {
         if cranpose_services::take_exit_request() {
             event_loop.exit();
             return;
+        }
+        // A resize the application asked for through
+        // `cranpose_services::request_host_surface_size`. The window manager is
+        // free to clamp or ignore it; whatever it settles on arrives back
+        // through the ordinary resize path.
+        if let Some((width, height)) = crate::desktop_host_surface::take_requested_size() {
+            if let Some(window) = self.window.as_ref() {
+                let _ = window.request_surface_size(
+                    winit::dpi::LogicalSize::new(width as f64, height as f64).into(),
+                );
+            }
         }
         let now = Instant::now();
         if self.poll_native_window_global_primary_press() {
@@ -4879,7 +4968,7 @@ impl ApplicationHandler for App {
                             self.presented_frame_generation,
                         ) {
                             robot_visual_dirty = true;
-                            controller.waiting_for_pump_present_generation = Some(target);
+                            controller.begin_pump_present_wait(target);
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
@@ -4917,7 +5006,7 @@ impl ApplicationHandler for App {
                                 remaining: count.saturating_sub(1),
                             });
                             robot_visual_dirty = true;
-                            controller.waiting_for_pump_present_generation = Some(target);
+                            controller.begin_pump_present_wait(target);
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
@@ -4962,7 +5051,7 @@ impl ApplicationHandler for App {
                             })
                             .flatten();
                         if let Some(target) = present_target {
-                            controller.waiting_for_pump_present_generation = Some(target);
+                            controller.begin_pump_present_wait(target);
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
@@ -5164,6 +5253,11 @@ impl ApplicationHandler for App {
                                 app.debug_runtime_leak_stats(),
                             )));
                     }
+                    RobotCommand::GetLiveUiTaskLabels => {
+                        let _ = controller.tx.send(RobotResponse::LiveUiTaskLabels(
+                            app.runtime_handle().live_ui_task_labels(),
+                        ));
+                    }
                     RobotCommand::MeasureText { text, style } => {
                         let metrics = app.debug_enter_app_context(|| {
                             let text = cranpose_ui::text::AnnotatedString::from(text.as_str());
@@ -5295,7 +5389,7 @@ impl ApplicationHandler for App {
                             })
                             .flatten();
                         if let Some(target) = present_target {
-                            controller.waiting_for_pump_present_generation = Some(target);
+                            controller.begin_pump_present_wait(target);
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
@@ -5323,7 +5417,7 @@ impl ApplicationHandler for App {
                             })
                             .flatten();
                         if let Some(target) = present_target {
-                            controller.waiting_for_pump_present_generation = Some(target);
+                            controller.begin_pump_present_wait(target);
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
@@ -5355,27 +5449,40 @@ impl ApplicationHandler for App {
                 if self.presented_frame_generation >= target_generation {
                     if let Some(mut sequence) = controller.scroll_sequence.take() {
                         if sequence.remaining == 0 {
-                            controller.waiting_for_pump_present_generation = None;
+                            controller.finish_pump_present_wait();
                             self.robot_visible_surface_dirty = app.needs_redraw();
                             let _ = controller.tx.send(RobotResponse::Ok);
                         } else if app.pointer_scrolled(sequence.delta_x, sequence.delta_y) {
                             sequence.remaining = sequence.remaining.saturating_sub(1);
                             controller.scroll_sequence = Some(sequence);
-                            controller.waiting_for_pump_present_generation =
-                                Some(self.presented_frame_generation.saturating_add(1));
+                            controller.begin_pump_present_wait(
+                                self.presented_frame_generation.saturating_add(1),
+                            );
                             self.robot_visible_surface_dirty = true;
                             self.last_frame_start_time = None;
                             request_redraw_once(&window, &mut self.primary_redraw_pending);
                         } else {
-                            controller.waiting_for_pump_present_generation = None;
+                            controller.finish_pump_present_wait();
                             self.robot_visible_surface_dirty = app.needs_redraw();
                             let _ = controller.tx.send(RobotResponse::Ok);
                         }
                     } else {
-                        controller.waiting_for_pump_present_generation = None;
+                        controller.finish_pump_present_wait();
                         self.robot_visible_surface_dirty = app.needs_redraw();
                         let _ = controller.tx.send(RobotResponse::Ok);
                     }
+                } else if controller.pump_present_wait_timed_out(now) {
+                    controller.finish_pump_present_wait();
+                    controller.scroll_sequence = None;
+                    self.robot_visible_surface_dirty = app.needs_redraw();
+                    let _ = controller.tx.send(RobotResponse::Error(format!(
+                        "present wait: the window surface refused {} consecutive frames over {:?} \
+                         and never reached generation {target_generation} (currently {}); the \
+                         window is occluded, off-screen, or on a display that is not compositing",
+                        self.unpresentable_frames_since_present,
+                        ROBOT_PRESENT_WAIT_TIMEOUT,
+                        self.presented_frame_generation,
+                    )));
                 } else {
                     request_redraw_once(&window, &mut self.primary_redraw_pending);
                 }
@@ -5725,6 +5832,8 @@ pub fn try_run(
     mut settings: AppSettings,
     content: impl FnMut() + 'static,
 ) -> Result<(), LaunchError> {
+    register_application_id(settings.application_id.as_deref());
+
     let event_loop = EventLoop::builder()
         .build()
         .map_err(LaunchError::EventLoopCreate)?;
@@ -5750,6 +5859,41 @@ pub fn try_run(
         None
     };
 
+    // The window an application may ask to resize. Installed before the loop
+    // runs so a request made during the first composition is not dropped.
+    let surface_wake = event_proxy.clone();
+    crate::desktop_host_surface::install(move || surface_wake.wake_up());
+
+    // The media backend, on the same terms as every other platform: installed
+    // by the shell, opening no device until an item is opened.
+    #[cfg(feature = "media-desktop")]
+    cranpose_media::install();
+
+    // Heat and battery, so an application that paces itself by them paces
+    // itself on a laptop too rather than reading every desktop as unsupported.
+    crate::desktop_power::register();
+
+    // Resources shipped beside the executable, so an application declares what
+    // it ships rather than searching for it.
+    crate::desktop_bundled_assets::register();
+
+    // Desktop has no framework-owned installer to replace its own binary
+    // with, but it can still read a GitHub repository's release feed and
+    // tell an application a newer version exists.
+    cranpose_services::set_platform_app_updater(Arc::new(
+        cranpose_services::GitHubAppUpdater::new(),
+    ));
+
+    // Documents this process was launched to open, published before the first
+    // composition so the backlog is waiting for its first collector.
+    crate::desktop_incoming::publish_launch_documents();
+
+    // What this process is using. Wraps whatever device info is registered, so
+    // an application reads its own footprint through one contract on every
+    // target rather than writing the platform call itself.
+    #[cfg(unix)]
+    crate::process_info::install();
+
     let mut app = App::new(settings, content, Rc::clone(&launch_error), event_proxy);
 
     #[cfg(feature = "robot")]
@@ -5765,13 +5909,38 @@ pub fn try_run(
     run_result.map_err(LaunchError::EventLoopRun)
 }
 
+/// Scopes framework-owned storage for this desktop build.
+///
+/// A packaged application states its own id; a development build run straight
+/// out of `target/` has none, so the executable name is used — which keeps two
+/// unrelated demos from sharing one preferences file.
+fn register_application_id(configured: Option<&str>) {
+    let derived;
+    let application_id = match configured {
+        Some(application_id) => application_id,
+        None => {
+            derived = std::env::current_exe()
+                .ok()
+                .and_then(|path| {
+                    path.file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "cranpose-app".to_string());
+            derived.as_str()
+        }
+    };
+    if let Err(error) = cranpose_services::set_application_id(application_id) {
+        log::warn!("cranpose: `{application_id}` is not a usable application id: {error}");
+    }
+}
+
 /// Runs a desktop application and exits the process on success.
 ///
 /// Use [`try_run`] when the caller needs to handle launch failures explicitly.
 #[allow(unused_mut)]
 pub fn run(settings: AppSettings, content: impl FnMut() + 'static) -> ! {
     try_run(settings, content).unwrap_or_else(|error| {
-        crate::launcher::exit_after_launch_error("desktop launch failed", error)
+        crate::app_launcher::exit_after_launch_error("desktop launch failed", error)
     });
     std::process::exit(0)
 }
@@ -5875,6 +6044,7 @@ mod tests {
     #[cfg(feature = "robot")]
     use super::{
         bound_park_for_robot, ControlFlow, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
+        ROBOT_PRESENT_WAIT_TIMEOUT,
     };
     use super::{
         clamp_rect_to_monitor_delta, frame_interval_for_mode, free_running_frame,
@@ -5893,7 +6063,7 @@ mod tests {
         NativeWindowPollingDragSession, NativeWindowPositionObservation,
         NativeWindowPositionOrigin, PendingNativeWindowPositions, PrimaryPointerGesturePollAction,
     };
-    use crate::launcher::AppSettings;
+    use crate::app_launcher::AppSettings;
     use std::time::Instant;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
@@ -6170,9 +6340,10 @@ mod tests {
         controller.finish_idle_wait();
         assert!(!controller.awaiting_progress());
 
-        controller.waiting_for_pump_present_generation = Some(7);
+        controller.begin_pump_present_wait(7);
         assert!(controller.awaiting_progress());
-        controller.waiting_for_pump_present_generation = None;
+        controller.finish_pump_present_wait();
+        assert!(!controller.awaiting_progress());
 
         controller.begin_synthetic_primary_gesture();
         assert!(controller.awaiting_progress());
@@ -6193,6 +6364,59 @@ mod tests {
         assert!(controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT));
         controller.finish_idle_wait();
         assert!(!controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT * 2));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn a_present_wait_gives_up_when_the_surface_never_presents() {
+        // A window the compositor refuses to show answers every surface
+        // acquisition with `Occluded`, so the presented-frame generation the
+        // wait is parked on can never arrive. Before this bound, that parked
+        // the driver thread until the harness killed the process.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.begin_pump_present_wait_at(11, started_at);
+        assert!(!controller.pump_present_wait_timed_out(started_at));
+        assert!(
+            !controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT / 2)
+        );
+        assert!(controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT));
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn a_present_that_arrives_clears_the_wait_deadline() {
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.begin_pump_present_wait_at(11, started_at);
+        controller.finish_pump_present_wait();
+
+        assert!(controller.waiting_for_pump_present_generation.is_none());
+        assert!(
+            !controller.pump_present_wait_timed_out(started_at + ROBOT_PRESENT_WAIT_TIMEOUT * 4),
+            "a finished wait must not report a timeout on the next loop turn"
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn each_presented_scroll_step_restarts_the_wait_deadline() {
+        // A scroll sequence re-arms the wait after every presented step. Those
+        // steps are progress, so a long sequence must not inherit the deadline
+        // of its first step and fail midway.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.begin_pump_present_wait_at(11, started_at);
+        let next_step =
+            started_at + ROBOT_PRESENT_WAIT_TIMEOUT - std::time::Duration::from_millis(1);
+        controller.begin_pump_present_wait_at(12, next_step);
+
+        assert!(!controller
+            .pump_present_wait_timed_out(next_step + std::time::Duration::from_millis(2)));
+        assert!(controller.pump_present_wait_timed_out(next_step + ROBOT_PRESENT_WAIT_TIMEOUT));
     }
 
     #[test]

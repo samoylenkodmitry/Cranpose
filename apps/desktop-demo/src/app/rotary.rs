@@ -11,7 +11,7 @@
 //! Android `AXIS_SCROLL` detent maps to a negative `vertical_scroll_pixels`,
 //! which is Compose's convention.
 
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, text::TextUnit, Color, Column, ColumnSpec, Modifier, Text, TextStyle,
 };
@@ -30,10 +30,10 @@ fn heading_style(size: f32, color: Color) -> TextStyle {
 /// (bubble).
 #[composable]
 pub fn rotary_tab() {
-    let accumulated = useState(|| 0.0f32);
-    let last_delta = useState(|| 0.0f32);
-    let events = useState(|| 0u32);
-    let pre_events = useState(|| 0u32);
+    let accumulated = rememberMutableStateOf(|| 0.0f32);
+    let last_delta = rememberMutableStateOf(|| 0.0f32);
+    let events = rememberMutableStateOf(|| 0u32);
+    let pre_events = rememberMutableStateOf(|| 0u32);
 
     // Capture (pre) pass, root -> focused. Returning `false` lets the event
     // continue on to the bubble handler below; returning `true` would consume

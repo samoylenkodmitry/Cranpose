@@ -614,8 +614,8 @@ fn FireShaderBox(style: FireStyle) {
         "fire_t",
     );
 
-    let is_pressed = cranpose_core::useState(|| false);
-    let is_hovered = cranpose_core::useState(|| false);
+    let is_pressed = cranpose_core::rememberMutableStateOf(|| false);
+    let is_hovered = cranpose_core::rememberMutableStateOf(|| false);
 
     // Hover smoothly boosts intensity/smoke; press goes further
     let target_intensity = if is_pressed.get() {
@@ -736,7 +736,7 @@ fn FireShaderBox(style: FireStyle) {
 
 #[composable]
 fn HaloBorderBox(color: Color, corner_radius: f32, max_halo_width: f32, label: &'static str) {
-    let is_pressed = cranpose_core::useState(|| false);
+    let is_pressed = cranpose_core::rememberMutableStateOf(|| false);
 
     let target_press = if is_pressed.get() { 1.0f32 } else { 0.0f32 };
     let target_intensity = if is_pressed.get() { 1.6f32 } else { 1.0f32 };

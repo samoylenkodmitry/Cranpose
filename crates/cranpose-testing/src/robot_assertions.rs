@@ -274,24 +274,6 @@ pub fn find_button_bounds<E: SemanticElementLike>(elements: &[E], text: &str) ->
     None
 }
 
-/// Find all elements matching a role (e.g., "Layout", "Text").
-pub fn find_elements_by_role<E: SemanticElementLike>(elements: &[E], role: &str) -> Vec<Bounds> {
-    fn search<E: SemanticElementLike>(elem: &E, role: &str, results: &mut Vec<Bounds>) {
-        if elem.role() == role {
-            results.push(elem.bounds());
-        }
-        for child in elem.children() {
-            search(child, role, results);
-        }
-    }
-
-    let mut results = Vec::new();
-    for elem in elements {
-        search(elem, role, &mut results);
-    }
-    results
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

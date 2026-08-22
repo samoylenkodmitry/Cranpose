@@ -4,12 +4,15 @@ import android.app.NativeActivity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.content.pm.PackageInstaller;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
 import android.graphics.Rect;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
@@ -19,6 +22,9 @@ import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
@@ -35,9 +41,17 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 /**
  * A {@link NativeActivity} that exposes the Storage Access Framework to
@@ -64,6 +78,441 @@ import java.util.List;
  * tracks appear and can be played while the rest keep streaming in.
  */
 public class CranposeActivity extends NativeActivity {
+    private static native boolean nativeOnBackInvoked();
+    private static native void nativeOnIncomingContent(String name, String mimeType, String uri);
+    private static native void nativeOnAppUpdateStatus(int kind, String version,
+            String downloadUrl, long downloaded, long total, String message, String digest);
+    private static native void nativeOnCameraFrame(byte[] nv12, int width, int height,
+            int rotationDegrees, long sequence);
+    private static native void nativeOnCameraFrameDropped();
+    private static native void nativeOnCameraState(int kind, String detail);
+    private static native void nativeOnCameraStill(byte[] jpeg, String error);
+
+    /** One preview frame, in the format the sensor produced. */
+    static void onCameraFrame(
+            byte[] nv12, int width, int height, int rotationDegrees, long sequence) {
+        nativeOnCameraFrame(nv12, width, height, rotationDegrees, sequence);
+    }
+
+    /** A frame the device produced while the previous one was still in flight. */
+    static void onCameraFrameDropped() {
+        nativeOnCameraFrameDropped();
+    }
+
+    /** The session is producing frames from {@code device}. */
+    static void onCameraRunning(String device) {
+        nativeOnCameraState(CAMERA_RUNNING, device);
+    }
+
+    /** The session could not open, or ended on its own. */
+    static void onCameraFailed(String detail) {
+        nativeOnCameraState(CAMERA_FAILED, detail == null ? "" : detail);
+    }
+
+    /** The session stopped and the device was released. */
+    static void onCameraStopped() {
+        nativeOnCameraState(CAMERA_STOPPED, "");
+    }
+
+    /** A still, or the reason there is none. */
+    static void onCameraStill(byte[] jpeg, String error) {
+        nativeOnCameraStill(jpeg, error == null ? "" : error);
+    }
+
+    private static final int CAMERA_RUNNING = 1;
+    private static final int CAMERA_STOPPED = 2;
+    private static final int CAMERA_FAILED = 3;
+
+    private static native void nativeOnMediaState(int kind, String detail);
+    private static native void nativeOnMediaProgress(long positionMs, long durationMs,
+            long bufferedMs);
+    private static native void nativeOnMediaAudioFocus(int focus);
+    private static native void nativeOnMediaCommand(int command, long positionMs);
+    private static native void nativeOnMediaSamples(byte[] waveform, int sampleRate);
+
+    /** What the media stack is doing; see the constants on {@link CranposeMedia}. */
+    static void onMediaState(int kind, String detail) {
+        nativeOnMediaState(kind, detail == null ? "" : detail);
+    }
+
+    /** Where the open item is. Durations are negative when the item has none. */
+    static void onMediaProgress(long positionMs, long durationMs, long bufferedMs) {
+        nativeOnMediaProgress(positionMs, durationMs, bufferedMs);
+    }
+
+    /** What the rest of the device is doing with the output. */
+    static void onMediaAudioFocus(int focus) {
+        nativeOnMediaAudioFocus(focus);
+    }
+
+    /** A button pressed on the lock screen, the notification or a headset. */
+    static void onMediaCommand(int command, long positionMs) {
+        nativeOnMediaCommand(command, positionMs);
+    }
+
+    /** One block of waveform for a visualiser, as unsigned 8-bit samples. */
+    static void onMediaSamples(byte[] waveform, int sampleRate) {
+        nativeOnMediaSamples(waveform, sampleRate);
+    }
+    public void cranposeSetKeepScreenOn(boolean enabled) {
+        if (enabled) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+    public void cranposeMoveToBackground() { moveTaskToBack(true); }
+
+    public int cranposeThermalStatus() {
+        if (Build.VERSION.SDK_INT < 29) {
+            return 0;
+        }
+        android.os.PowerManager manager = getSystemService(android.os.PowerManager.class);
+        return manager == null ? 0 : manager.getCurrentThermalStatus();
+    }
+
+    public int cranposeBatteryStatus() {
+        try {
+            Intent battery = registerReceiver(
+                    null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (battery == null) {
+                return 0x100 | 100;
+            }
+            int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            int percent = level >= 0 && scale > 0 ? level * 100 / scale : 100;
+            int status = battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
+            boolean charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
+            return (percent & 0xff) | (charging ? 0x100 : 0);
+        } catch (Exception error) {
+            return 0x100 | 100;
+        }
+    }
+
+    public boolean cranposeUnrestrictedBackgroundWork() {
+        android.os.PowerManager manager = getSystemService(android.os.PowerManager.class);
+        return manager == null || manager.isIgnoringBatteryOptimizations(getPackageName());
+    }
+
+    public void cranposeRequestUnrestrictedBackgroundWork() {
+        runOnUiThread(() -> {
+            Intent settings = new Intent(
+                    android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+            try {
+                startActivity(settings);
+            } catch (android.content.ActivityNotFoundException first) {
+                try {
+                    startActivity(new Intent(android.provider.Settings.ACTION_SETTINGS));
+                } catch (android.content.ActivityNotFoundException ignored) {
+                }
+            }
+        });
+    }
+
+    public byte[] cranposeReadBundledAsset(String path) {
+        try (InputStream input = getAssets().open(path);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[65536];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        } catch (IOException error) {
+            return null;
+        }
+    }
+
+    private static final int UPDATE_CHECKING = 1;
+    private static final int UPDATE_CURRENT = 2;
+    private static final int UPDATE_AVAILABLE = 3;
+    private static final int UPDATE_DOWNLOADING = 4;
+    private static final int UPDATE_CONFIRMATION = 5;
+    private static final int UPDATE_INSTALLING = 6;
+    private static final int UPDATE_ERROR = 7;
+    private static final int UPDATE_VERIFYING = 8;
+
+    private String cranposeUpdateInstallAction() {
+        return getPackageName() + ".CRANPOSE_UPDATE_INSTALL_RESULT";
+    }
+
+    private final BroadcastReceiver cranposeUpdateInstallReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int status = intent.getIntExtra(
+                    PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE);
+            if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+                nativeOnAppUpdateStatus(UPDATE_CONFIRMATION, "", "", 0, 0, "", "");
+                Intent confirmation;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    confirmation = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+                } else {
+                    @SuppressWarnings("deprecation")
+                    Intent value = intent.getParcelableExtra(Intent.EXTRA_INTENT);
+                    confirmation = value;
+                }
+                if (confirmation != null) {
+                    confirmation.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    try {
+                        startActivity(confirmation);
+                    } catch (Exception error) {
+                        cranposeUpdateError(error);
+                    }
+                }
+            } else if (status == PackageInstaller.STATUS_SUCCESS) {
+                nativeOnAppUpdateStatus(UPDATE_INSTALLING, "", "", 0, 0, "", "");
+            } else {
+                String message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
+                nativeOnAppUpdateStatus(UPDATE_ERROR, "", "", 0, 0,
+                        message == null ? "installation failed" : message, "");
+            }
+        }
+    };
+
+    /** Queries a GitHub repository's latest release and selects one package asset. */
+    public void cranposeCheckGitHubUpdate(
+            String repository, String currentVersion, String assetSuffix) {
+        final String repo = repository == null ? "" : repository.trim();
+        final String current = currentVersion == null ? "" : currentVersion.trim();
+        final String suffix = assetSuffix == null ? "" : assetSuffix.trim();
+        new Thread(() -> {
+            try {
+                if (!repo.matches("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")) {
+                    throw new IllegalArgumentException("invalid GitHub repository");
+                }
+                nativeOnAppUpdateStatus(UPDATE_CHECKING, "", "", 0, 0, "", "");
+                URL url = new URL("https://api.github.com/repos/" + repo + "/releases/latest");
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestProperty("User-Agent", getPackageName());
+                connection.setRequestProperty("Accept", "application/vnd.github+json");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(15000);
+                int code = connection.getResponseCode();
+                if (code != HttpURLConnection.HTTP_OK) {
+                    throw new IOException("GitHub returned HTTP " + code);
+                }
+                JSONObject release = new JSONObject(cranposeReadText(connection.getInputStream()));
+                String tag = release.optString("tag_name", "");
+                String latest = tag.startsWith("v") ? tag.substring(1) : tag;
+                String packageUrl = "";
+                long packageSize = 0;
+                // GitHub publishes an asset's digest as `sha256:<hex>`, which is
+                // the form the framework parses. An asset without one is still
+                // offered, and refused at install time if it cannot be checked.
+                String packageDigest = "";
+                JSONArray assets = release.optJSONArray("assets");
+                if (assets != null) {
+                    for (int index = 0; index < assets.length(); index++) {
+                        JSONObject asset = assets.getJSONObject(index);
+                        if (asset.optString("name", "").endsWith(suffix)) {
+                            packageUrl = asset.optString("browser_download_url", "");
+                            packageSize = asset.optLong("size", 0);
+                            packageDigest = asset.optString("digest", "");
+                            break;
+                        }
+                    }
+                }
+                if (latest.isEmpty() || packageUrl.isEmpty()) {
+                    throw new IOException("latest release has no matching package");
+                }
+                if (cranposeIsNewerVersion(latest, current)) {
+                    nativeOnAppUpdateStatus(
+                            UPDATE_AVAILABLE, latest, packageUrl, 0, packageSize, "",
+                            packageDigest);
+                } else {
+                    nativeOnAppUpdateStatus(UPDATE_CURRENT, "", "", 0, 0, "", "");
+                }
+            } catch (Exception error) {
+                cranposeUpdateError(error);
+            }
+        }, "cranpose-update-check").start();
+    }
+
+    /**
+     * Downloads a package, checks it against the digest the release feed
+     * published, and hands it to Android's platform installer.
+     *
+     * <p>The digest is checked <em>before</em> the session is committed, and the
+     * session is abandoned when it does not match, so a package that arrived
+     * corrupted or was swapped in transit never reaches the installer. Android's
+     * own signature check still applies afterwards and catches a package signed
+     * by someone else; it does not catch one that arrived damaged.
+     *
+     * @param downloadUrl where the package is fetched from
+     * @param digestSpec  {@code sha256:<hex>}; the framework refuses a package
+     *                    without one before this is called
+     * @param expectedSize the size the feed published, or {@code 0}
+     */
+    public void cranposeInstallUpdate(String downloadUrl, String digestSpec, long expectedSize) {
+        final String source = downloadUrl == null ? "" : downloadUrl.trim();
+        final String digestRequest = digestSpec == null ? "" : digestSpec.trim();
+        final long announcedSize = Math.max(expectedSize, 0);
+        new Thread(() -> {
+            PackageInstaller.Session session = null;
+            try {
+                MessageDigest digest = cranposeUpdateDigest(digestRequest);
+                HttpURLConnection connection = (HttpURLConnection) new URL(source).openConnection();
+                connection.setRequestProperty("User-Agent", getPackageName());
+                connection.setInstanceFollowRedirects(true);
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(30000);
+                int code = connection.getResponseCode();
+                if (code != HttpURLConnection.HTTP_OK) {
+                    throw new IOException("package download returned HTTP " + code);
+                }
+                long declared = connection.getContentLengthLong();
+                long total = declared > 0 ? declared : announcedSize;
+                nativeOnAppUpdateStatus(UPDATE_DOWNLOADING, "", "", 0, total, "", "");
+
+                PackageInstaller installer = getPackageManager().getPackageInstaller();
+                PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+                        PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+                if (total > 0) {
+                    params.setSize(total);
+                }
+                int sessionId = installer.createSession(params);
+                session = installer.openSession(sessionId);
+                long written = 0;
+                try (InputStream input = connection.getInputStream();
+                        OutputStream output = session.openWrite("cranpose-update", 0, total)) {
+                    byte[] buffer = new byte[65536];
+                    int read;
+                    while ((read = input.read(buffer)) >= 0) {
+                        output.write(buffer, 0, read);
+                        digest.update(buffer, 0, read);
+                        written += read;
+                        nativeOnAppUpdateStatus(
+                                UPDATE_DOWNLOADING, "", "", written, total, "", "");
+                    }
+                    session.fsync(output);
+                }
+
+                nativeOnAppUpdateStatus(UPDATE_VERIFYING, "", "", written, total, "", "");
+                String actual = cranposeHex(digest.digest());
+                String expected = cranposeDigestValue(digestRequest);
+                if (!actual.equals(expected)) {
+                    throw new IOException(
+                            "the downloaded package does not match its digest (expected "
+                                    + expected + ", got " + actual + ")");
+                }
+                if (announcedSize > 0 && written != announcedSize) {
+                    throw new IOException("the downloaded package is " + written
+                            + " bytes, and the release feed said " + announcedSize);
+                }
+
+                Intent result = new Intent(cranposeUpdateInstallAction()).setPackage(getPackageName());
+                int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    flags |= PendingIntent.FLAG_MUTABLE;
+                }
+                PendingIntent pending = PendingIntent.getBroadcast(this, sessionId, result, flags);
+                session.commit(pending.getIntentSender());
+                session.close();
+                session = null;
+                nativeOnAppUpdateStatus(UPDATE_INSTALLING, "", "", 0, total, "", "");
+            } catch (Exception error) {
+                if (session != null) {
+                    session.abandon();
+                    session.close();
+                }
+                cranposeUpdateError(error);
+            }
+        }, "cranpose-update-install").start();
+    }
+
+    /**
+     * The digest engine for a {@code sha256:<hex>} request.
+     *
+     * <p>A missing digest, or one in a form this platform cannot compute, is a
+     * failure rather than a skip: a check nobody performs reads as a package
+     * that was verified. The framework refuses a package without a digest
+     * before the download starts, so reaching here without one is a bug rather
+     * than a release feed's omission.
+     */
+    private static MessageDigest cranposeUpdateDigest(String digestSpec) throws IOException {
+        if (digestSpec.isEmpty()) {
+            throw new IOException("the package carries no digest, so it cannot be checked");
+        }
+        int separator = digestSpec.indexOf(':');
+        if (separator <= 0) {
+            throw new IOException("unreadable package digest: " + digestSpec);
+        }
+        String algorithm = digestSpec.substring(0, separator).trim().toLowerCase(Locale.ROOT);
+        if (!algorithm.equals("sha256") && !algorithm.equals("sha-256")) {
+            throw new IOException("unsupported package digest algorithm: " + algorithm);
+        }
+        if (cranposeDigestValue(digestSpec).isEmpty()) {
+            throw new IOException("empty package digest: " + digestSpec);
+        }
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException error) {
+            throw new IOException("this device cannot compute SHA-256", error);
+        }
+    }
+
+    /** The hexadecimal half of a {@code sha256:<hex>} request, lower-cased. */
+    private static String cranposeDigestValue(String digestSpec) {
+        int separator = digestSpec.indexOf(':');
+        if (separator < 0) {
+            return "";
+        }
+        return digestSpec.substring(separator + 1).trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String cranposeHex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte value : bytes) {
+            out.append(Character.forDigit((value >> 4) & 0x0f, 16));
+            out.append(Character.forDigit(value & 0x0f, 16));
+        }
+        return out.toString();
+    }
+
+    private static String cranposeReadText(InputStream input) throws IOException {
+        try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = stream.read(buffer)) >= 0) {
+                output.write(buffer, 0, read);
+            }
+            return output.toString("UTF-8");
+        }
+    }
+
+    private static boolean cranposeIsNewerVersion(String latest, String current) {
+        int[] remote = cranposeParseVersion(latest);
+        int[] running = cranposeParseVersion(current);
+        for (int index = 0; index < remote.length; index++) {
+            if (remote[index] != running[index]) {
+                return remote[index] > running[index];
+            }
+        }
+        return false;
+    }
+
+    private static int[] cranposeParseVersion(String version) {
+        int[] parts = new int[] {0, 0, 0};
+        String[] values = version.trim().split("\\.");
+        for (int index = 0; index < parts.length && index < values.length; index++) {
+            String digits = values[index].replaceAll("[^0-9].*$", "");
+            if (!digits.isEmpty()) {
+                try {
+                    parts[index] = Integer.parseInt(digits);
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return parts;
+    }
+
+    private static void cranposeUpdateError(Throwable error) {
+        String message = error.getMessage();
+        nativeOnAppUpdateStatus(UPDATE_ERROR, "", "", 0, 0,
+                message == null ? error.getClass().getSimpleName() : message.replace('\n', ' '), "");
+    }
+
     /** Manifest meta-data key {@link NativeActivity} uses to name the native library. */
     private static final String NATIVE_LIB_NAME_META_DATA = "android.app.lib_name";
 
@@ -71,10 +520,11 @@ public class CranposeActivity extends NativeActivity {
     private static final String DEFAULT_NATIVE_LIB_NAME = "main";
 
     private static final int REQUEST_BASE = 0x0C9A0000;
+    private static final int REQUEST_CAMERA = REQUEST_BASE + 0x100;
     private static final int FLAG_FOLDER = 1;
-    private static final int FLAG_STREAMING = 2;
     private static final int FLAG_WRITABLE = 4;
     private static final int FLAG_SAVE = 8;
+    private static final int FLAG_MULTIPLE = 16;
 
     /** A fixed-name probe used by {@link #cranposeFolderWritable}; created and
      * deleted immediately, and ignored by listings. */
@@ -82,6 +532,177 @@ public class CranposeActivity extends NativeActivity {
 
     private long pendingToken;
     private CranposeAccessibilityProvider cranposeAccessibilityProvider;
+    private CranposeCamera cranposeCamera;
+    private CranposeMedia cranposeMedia;
+    private boolean cranposeBackgroundActive;
+    private boolean cranposePaused;
+
+    public void cranposeSetBackgroundActive(boolean active) {
+        cranposeBackgroundActive = active;
+        runOnUiThread(() -> {
+            if (active && cranposePaused) {
+                startCranposeBackgroundService();
+            } else if (!active) {
+                stopService(new Intent(this, CranposeBackgroundService.class));
+            }
+        });
+    }
+
+    private void startCranposeBackgroundService() {
+        Intent service = new Intent(this, CranposeBackgroundService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(service);
+            } else {
+                startService(service);
+            }
+        } catch (RuntimeException error) {
+            android.util.Log.w("cranpose", "background work service could not start", error);
+        }
+    }
+
+    private CranposeCamera cranposeCamera() {
+        if (cranposeCamera == null) {
+            cranposeCamera = new CranposeCamera(this);
+        }
+        return cranposeCamera;
+    }
+
+    public boolean cranposeCameraHasPermission() {
+        return checkSelfPermission(android.Manifest.permission.CAMERA)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    public void cranposeCameraStart() {
+        runOnUiThread(() -> {
+            if (!cranposeCameraHasPermission()) {
+                requestPermissions(new String[] {android.Manifest.permission.CAMERA}, REQUEST_CAMERA);
+                return;
+            }
+            cranposeCamera().start();
+        });
+    }
+
+    /** Asks for a still; it arrives through {@link #onCameraStill}. */
+    public void cranposeCameraRequestStill() {
+        runOnUiThread(() -> cranposeCamera().takeStill());
+    }
+
+    public void cranposeCameraStop() {
+        runOnUiThread(() -> {
+            if (cranposeCamera != null) {
+                cranposeCamera.stop();
+            }
+        });
+    }
+
+    public String cranposeCameraLenses() {
+        return cranposeCamera().lensList();
+    }
+
+    public String cranposeCameraLens() {
+        return cranposeCamera().currentLens();
+    }
+
+    public boolean cranposeCameraUseLens(String id) {
+        cranposeCamera().useLens(id);
+        return id != null && id.equals(cranposeCamera().currentLens());
+    }
+
+    public boolean cranposeCameraHasFlash() {
+        return cranposeCamera().hasFlash();
+    }
+
+    public boolean cranposeCameraSetFlash(int mode) {
+        if (!cranposeCamera().hasFlash()) {
+            return false;
+        }
+        cranposeCamera().setFlash(mode);
+        return true;
+    }
+
+    private CranposeMedia cranposeMedia() {
+        if (cranposeMedia == null) {
+            cranposeMedia = new CranposeMedia(this);
+        }
+        return cranposeMedia;
+    }
+
+    /** Opens {@code uri}; what happens next arrives through {@link #onMediaState}. */
+    public void cranposeMediaPrepare(String uri) {
+        runOnUiThread(() -> cranposeMedia().prepare(uri));
+    }
+
+    public void cranposeMediaPlay() {
+        runOnUiThread(() -> cranposeMedia().play());
+    }
+
+    public void cranposeMediaPause() {
+        runOnUiThread(() -> cranposeMedia().pause());
+    }
+
+    public void cranposeMediaStop() {
+        runOnUiThread(() -> {
+            if (cranposeMedia != null) {
+                cranposeMedia.stop();
+            }
+        });
+    }
+
+    public void cranposeMediaSeekTo(int positionMs) {
+        runOnUiThread(() -> cranposeMedia().seekTo(positionMs));
+    }
+
+    public void cranposeMediaSetVolume(float volume) {
+        runOnUiThread(() -> cranposeMedia().setVolume(volume));
+    }
+
+    public void cranposeMediaSetSpeed(float speed) {
+        runOnUiThread(() -> cranposeMedia().setSpeed(speed));
+    }
+
+    public void cranposeMediaSetLooping(boolean looping) {
+        runOnUiThread(() -> cranposeMedia().setLooping(looping));
+    }
+
+    public void cranposeMediaSetMetadata(String title, String artist) {
+        runOnUiThread(() -> cranposeMedia().setMetadata(title, artist));
+    }
+
+    public void cranposeMediaSetAnalysisEnabled(boolean enabled) {
+        runOnUiThread(() -> cranposeMedia().setAnalysisEnabled(enabled));
+    }
+
+    /** Whether this device will give a visualiser the samples it is playing. */
+    public boolean cranposeMediaSupportsAnalysis() {
+        return cranposeMedia().supportsAnalysis();
+    }
+
+    /**
+     * How long the item at {@code uri} is, in milliseconds, or {@code -1} where
+     * the container carries no duration. Reads the file, so native callers run
+     * it off the UI thread.
+     */
+    public int cranposeMediaProbeDurationMs(String uri) {
+        return cranposeMedia().probeDurationMs(uri);
+    }
+
+    /**
+     * The equalizer band centres this device has, in hertz. Empty where the
+     * device has no equalizer.
+     */
+    public int[] cranposeMediaEqualizerBands() {
+        return cranposeMedia().equalizerBandCenters();
+    }
+
+    /** The most a band can lift or cut on this device, in millibels. */
+    public int cranposeMediaEqualizerRange() {
+        return cranposeMedia().equalizerRangeMillibels();
+    }
+
+    public void cranposeMediaSetEqualizer(boolean enabled, int preampMillibels, int[] gains) {
+        runOnUiThread(() -> cranposeMedia().setEqualizer(enabled, preampMillibels, gains));
+    }
 
     private static native void nativeOnAccessibilityActivate(float x, float y);
 
@@ -380,16 +1001,23 @@ public class CranposeActivity extends NativeActivity {
      * activity when the SAF picker covers it on some devices, tearing down the
      * composition that was awaiting the result; the app drains this inbox on its
      * next start to recover the selection. {@code flags} are the request flags
-     * ({@link #FLAG_FOLDER}/{@link #FLAG_STREAMING}). Implemented in the cdylib. */
-    private static native void nativeRecordResumablePick(int flags, String uri, String name);
+     * ({@link #FLAG_FOLDER}/{@link #FLAG_MULTIPLE}/{@link #FLAG_WRITABLE}).
+     * Implemented in the cdylib. */
+    private static native void nativeRecordResumablePick(int flags, String entries);
 
     /** Implemented in the Rust cdylib. {@code entries} is newline-separated
-     * {@code uri\tname} rows (one for a file, every descendant for a folder). */
+     * {@code uri\tname\tmime\tsize\tmodified} rows — one per chosen document. */
     private static native void nativeOnFilePicked(
-            long token, boolean folder, String entries, boolean cancelled, String error);
+            long token, String entries, boolean cancelled, String error);
 
-    /** A folder was selected (or cancelled/failed); streaming may now begin. */
-    private static native void nativeOnFolderPicked(long token, boolean cancelled, String error);
+    /** A folder was granted (or cancelled/failed). {@code uri} is the tree URI. */
+    private static native void nativeOnFolderPicked(
+            long token, String uri, boolean cancelled, String error);
+
+    /** A save destination was created (or cancelled/failed). {@code uri} is the
+     * new document's URI, which the caller streams into. */
+    private static native void nativeOnDocumentCreated(
+            long token, String uri, boolean cancelled, String error);
 
     /** A streaming batch of discovered files ({@code uri\tname} rows). Returns
      * {@code false} once the consumer has gone away, so enumeration can stop. */
@@ -403,36 +1031,57 @@ public class CranposeActivity extends NativeActivity {
     private static native void nativeOnWritableFolderPicked(
             long token, String uri, boolean cancelled, String error);
 
-    /** Opens the document picker for a single file. Called from Rust over JNI. */
-    public void cranposePickFile(long token) {
+    /** Opens the document picker for a single file. {@code mimeTypes} is a
+     * newline-separated filter list, empty for any type. Called from Rust over
+     * JNI. */
+    public void cranposePickFile(long token, String mimeTypes) {
         pendingToken = token;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.setType("*/*");
-        launch(intent, token, 0);
+        launch(openDocumentIntent(mimeTypes), token, 0);
     }
 
-    /** Opens the document tree picker for a folder, delivered all at once.
-     * Called from Rust over JNI. */
+    /** Opens the document picker for several files at once. Called from Rust
+     * over JNI. */
+    public void cranposePickFiles(long token, String mimeTypes) {
+        pendingToken = token;
+        Intent intent = openDocumentIntent(mimeTypes);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        launch(intent, token, FLAG_MULTIPLE);
+    }
+
+    private Intent openDocumentIntent(String mimeTypes) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        String[] types = splitRows(mimeTypes);
+        if (types.length == 1) {
+            intent.setType(types[0]);
+        } else if (types.length > 1) {
+            intent.setType("*/*");
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, types);
+        } else {
+            intent.setType("*/*");
+        }
+        return intent;
+    }
+
+    private static String[] splitRows(String rows) {
+        if (rows == null || rows.isEmpty()) {
+            return new String[0];
+        }
+        return rows.split("\n");
+    }
+
+    /** Opens the document tree picker for a folder. The granted tree URI comes
+     * back through {@link #nativeOnFolderPicked}; enumeration is a separate
+     * request. Called from Rust over JNI. */
     public void cranposePickFolder(long token) {
         pendingToken = token;
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         launch(intent, token, FLAG_FOLDER);
     }
 
-    /** Opens the document tree picker for a folder whose files stream back as
-     * they are discovered. Called from Rust over JNI. */
-    public void cranposePickFolderStreaming(long token) {
-        pendingToken = token;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        launch(intent, token, FLAG_FOLDER | FLAG_STREAMING);
-    }
-
-    /** Streams files under an <em>already granted</em> tree URI, without showing
-     * any picker. Used by the resume path: a folder picked in a prior activity
-     * instance that was destroyed before its walk ran is re-walked here once the
-     * app restarts and reclaims the grant. Called from Rust over JNI. */
-    public void cranposeStreamGrantedFolder(long token, String uriString) {
+    /** Streams every file under an already-granted tree URI. Called from Rust
+     * over JNI once the application collects the folder's files. */
+    public void cranposeStreamFolder(long token, String uriString) {
         final Uri uri = Uri.parse(uriString);
         new Thread(() -> {
             String error = null;
@@ -442,7 +1091,39 @@ public class CranposeActivity extends NativeActivity {
                 error = failure.toString();
             }
             nativeOnFolderFinished(token, error);
-        }, "cranpose-folder-stream-resume").start();
+        }, "cranpose-folder-stream").start();
+    }
+
+    /** Lists the immediate children of a granted tree (or of one of its
+     * sub-documents) as {@code uri\tname\tmime\tsize\tmodified} rows.
+     * Directories carry the {@code vnd.android.document/directory} MIME type so
+     * the caller can tell them apart. Returns {@code null} on a read failure.
+     * Called from Rust over JNI. */
+    public String cranposeFolderChildren(String treeUriString, String documentId) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String docId = documentId == null || documentId.isEmpty()
+                    ? DocumentsContract.getTreeDocumentId(tree)
+                    : documentId;
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId);
+            Cursor cursor = queryChildrenWithRetry(childrenUri);
+            if (cursor == null) {
+                return null;
+            }
+            StringBuilder out = new StringBuilder();
+            try {
+                while (cursor.moveToNext()) {
+                    Uri childUri =
+                            DocumentsContract.buildDocumentUriUsingTree(tree, cursor.getString(0));
+                    appendDocumentRow(out, childUri, cursor);
+                }
+            } finally {
+                cursor.close();
+            }
+            return out.toString();
+        } catch (Exception error) {
+            return null;
+        }
     }
 
     /** Opens the document tree picker for a <em>writable</em> folder, taking a
@@ -474,6 +1155,43 @@ public class CranposeActivity extends NativeActivity {
             throw new IOException("no descriptor for " + uriString);
         }
         return descriptor.detachFd();
+    }
+
+    /**
+     * Opens a {@code content://} document for writing, truncating it first, and
+     * returns a detached file descriptor the Rust caller owns and closes. Used
+     * to stream a saved document instead of buffering it.
+     */
+    public int cranposeOpenUriWrite(String uriString) throws IOException {
+        ParcelFileDescriptor descriptor =
+                getContentResolver().openFileDescriptor(Uri.parse(uriString), "rwt");
+        if (descriptor == null) {
+            throw new IOException("no writable descriptor for " + uriString);
+        }
+        return descriptor.detachFd();
+    }
+
+    /** Metadata for one document as {@code name\tmime\tsize\tmodified}, or
+     * {@code null} when the provider cannot describe it. */
+    public String cranposeDocumentInfo(String uriString) {
+        Uri uri = Uri.parse(uriString);
+        String[] columns = {
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        };
+        try (Cursor cursor = getContentResolver().query(uri, columns, null, null, null)) {
+            if (cursor == null || !cursor.moveToFirst()) {
+                return null;
+            }
+            return sanitize(cursor.isNull(0) ? "" : cursor.getString(0))
+                    + '\t' + (cursor.isNull(1) ? "" : cursor.getString(1))
+                    + '\t' + (cursor.isNull(2) ? "" : Long.toString(cursor.getLong(2)))
+                    + '\t' + (cursor.isNull(3) ? "" : Long.toString(cursor.getLong(3)));
+        } catch (Exception error) {
+            return null;
+        }
     }
 
     /** Writes (overwriting) {@code contents} to a file named {@code name} in the
@@ -508,8 +1226,9 @@ public class CranposeActivity extends NativeActivity {
         }
     }
 
-    /** Lists immediate child file names (directories excluded), newline-joined.
-     * Returns {@code null} only on a hard read failure (an empty folder is ""). */
+    /** Lists immediate child files (directories excluded) as
+     * {@code name\tsize\tmodified} rows, newline-joined. Returns {@code null}
+     * only on a hard read failure (an empty folder is ""). */
     public String cranposeFolderList(String treeUriString) {
         try {
             Uri tree = Uri.parse(treeUriString);
@@ -530,7 +1249,9 @@ public class CranposeActivity extends NativeActivity {
                     if (out.length() > 0) {
                         out.append('\n');
                     }
-                    out.append(sanitize(name));
+                    out.append(sanitize(name))
+                            .append('\t').append(cursor.isNull(3) ? "" : Long.toString(cursor.getLong(3)))
+                            .append('\t').append(cursor.isNull(4) ? "" : Long.toString(cursor.getLong(4)));
                 }
             } finally {
                 cursor.close();
@@ -538,6 +1259,75 @@ public class CranposeActivity extends NativeActivity {
             return out.toString();
         } catch (Exception error) {
             return null;
+        }
+    }
+
+    /** Opens a child of the writable tree for reading and returns a detached
+     * descriptor, or -1 when the file is absent or unreadable. Called from the
+     * Rust worker thread over JNI so a large file streams instead of being
+     * buffered. */
+    public int cranposeFolderOpenRead(String treeUriString, String name) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String docId = findWritableChildId(tree, DocumentsContract.getTreeDocumentId(tree), name);
+            if (docId == null) {
+                return -1;
+            }
+            Uri docUri = DocumentsContract.buildDocumentUriUsingTree(tree, docId);
+            ParcelFileDescriptor descriptor =
+                    getContentResolver().openFileDescriptor(docUri, "r");
+            return descriptor == null ? -1 : descriptor.detachFd();
+        } catch (Exception error) {
+            return -1;
+        }
+    }
+
+    /** Creates (or truncates) a child of the writable tree and returns a
+     * detached write descriptor, or -1 on failure. Callers stage under a
+     * temporary name and commit with {@link #cranposeFolderCommit}. */
+    public int cranposeFolderOpenWrite(String treeUriString, String name) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, treeDocId);
+            String docId = findWritableChildId(tree, treeDocId, name);
+            Uri docUri = docId != null
+                    ? DocumentsContract.buildDocumentUriUsingTree(tree, docId)
+                    : createDocumentWithRetry(parent, name);
+            if (docUri == null) {
+                return -1;
+            }
+            ParcelFileDescriptor descriptor =
+                    getContentResolver().openFileDescriptor(docUri, "rwt");
+            return descriptor == null ? -1 : descriptor.detachFd();
+        } catch (Exception error) {
+            return -1;
+        }
+    }
+
+    /** Replaces {@code finalName} with the staged {@code stagingName}. Returns 0
+     * on success, 1 when the tree is read-only, 2 otherwise. */
+    public int cranposeFolderCommit(String treeUriString, String stagingName, String finalName) {
+        try {
+            Uri tree = Uri.parse(treeUriString);
+            String treeDocId = DocumentsContract.getTreeDocumentId(tree);
+            String stagingId = findWritableChildId(tree, treeDocId, stagingName);
+            if (stagingId == null) {
+                return 2;
+            }
+            String existingId = findWritableChildId(tree, treeDocId, finalName);
+            if (existingId != null) {
+                DocumentsContract.deleteDocument(getContentResolver(),
+                        DocumentsContract.buildDocumentUriUsingTree(tree, existingId));
+            }
+            Uri staged = DocumentsContract.buildDocumentUriUsingTree(tree, stagingId);
+            return DocumentsContract.renameDocument(getContentResolver(), staged, finalName) == null
+                    ? 2
+                    : 0;
+        } catch (SecurityException error) {
+            return 1;
+        } catch (Exception error) {
+            return 2;
         }
     }
 
@@ -667,10 +1457,12 @@ public class CranposeActivity extends NativeActivity {
         try {
             startActivityForResult(intent, REQUEST_BASE | flags);
         } catch (Exception error) {
-            if ((flags & FLAG_STREAMING) != 0) {
-                nativeOnFolderPicked(token, false, error.toString());
+            if ((flags & FLAG_FOLDER) != 0) {
+                nativeOnFolderPicked(token, null, false, error.toString());
+            } else if ((flags & FLAG_SAVE) != 0) {
+                nativeOnDocumentCreated(token, null, false, error.toString());
             } else {
-                nativeOnFilePicked(token, (flags & FLAG_FOLDER) != 0, null, false, error.toString());
+                nativeOnFilePicked(token, null, false, error.toString());
             }
         }
     }
@@ -684,137 +1476,114 @@ public class CranposeActivity extends NativeActivity {
         }
         final long token = pendingToken;
         final int flags = requestCode & 0x0000FFFF;
-        if (handleSaveResult(flags, resultCode, data)) {
+        final boolean ok = resultCode == RESULT_OK && data != null;
+        final Uri primary = ok ? data.getData() : null;
+
+        if ((flags & FLAG_SAVE) != 0) {
+            if (primary == null) {
+                nativeOnDocumentCreated(token, null, true, null);
+            } else {
+                nativeOnDocumentCreated(token, primary.toString(), false, null);
+            }
             return;
         }
-        final boolean folder = (flags & FLAG_FOLDER) != 0;
-        final boolean streaming = (flags & FLAG_STREAMING) != 0;
-        final boolean ok = resultCode == RESULT_OK && data != null && data.getData() != null;
 
         if ((flags & FLAG_WRITABLE) != 0) {
-            if (!ok) {
+            if (primary == null) {
                 nativeOnWritableFolderPicked(token, null, true, null);
                 return;
             }
-            final Uri tree = data.getData();
             try {
-                getContentResolver().takePersistableUriPermission(tree,
+                getContentResolver().takePersistableUriPermission(primary,
                         Intent.FLAG_GRANT_READ_URI_PERMISSION
                                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
                 // Record the grant in the resume inbox before delivering it, so a
                 // pick whose activity was recreated mid-prompt (tearing down the
                 // awaiting composition) can still be reclaimed on the next start.
                 // Live delivery below clears the inbox on the happy path.
-                nativeRecordResumablePick(flags, tree.toString(), sanitize(displayName(tree, "folder")));
-                nativeOnWritableFolderPicked(token, tree.toString(), false, null);
+                nativeRecordResumablePick(flags, primary.toString());
+                nativeOnWritableFolderPicked(token, primary.toString(), false, null);
             } catch (Exception error) {
                 nativeOnWritableFolderPicked(token, null, false, error.toString());
             }
             return;
         }
 
-        if (streaming) {
-            if (!ok) {
-                nativeOnFolderPicked(token, true, null);
+        if ((flags & FLAG_FOLDER) != 0) {
+            if (primary == null) {
+                nativeOnFolderPicked(token, null, true, null);
                 return;
             }
-            final Uri uri = data.getData();
-            // Take a persistable grant and record the selection in the resume
-            // inbox *before* delivering it, so that if this activity was recreated
-            // (the SAF picker covered and destroyed it, tearing down the awaiting
-            // composition) the next app start can still reclaim it. The live
-            // delivery below clears the inbox on the happy path.
             try {
                 getContentResolver().takePersistableUriPermission(
-                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        primary, Intent.FLAG_GRANT_READ_URI_PERMISSION);
             } catch (SecurityException ignored) {
             }
-            nativeRecordResumablePick(flags, uri.toString(), sanitize(displayName(uri, "folder")));
-            // Resolve the selection immediately so the UI stays responsive, then
-            // walk the (possibly slow) tree off the main thread, streaming files
-            // back in batches. This is what keeps a huge WebDAV folder from
-            // freezing the app — the first tracks play while the rest arrive.
-            nativeOnFolderPicked(token, false, null);
-            new Thread(() -> {
-                String error = null;
-                try {
-                    streamTree(uri, token);
-                } catch (Exception failure) {
-                    error = failure.toString();
-                }
-                nativeOnFolderFinished(token, error);
-            }, "cranpose-folder-stream").start();
+            // Record the grant *before* delivering it, so that if this activity
+            // was recreated (the SAF picker covered and destroyed it, tearing down
+            // the awaiting composition) the next app start can still reclaim it.
+            // Live delivery clears the inbox on the happy path.
+            nativeRecordResumablePick(flags, primary.toString());
+            nativeOnFolderPicked(token, primary.toString(), false, null);
             return;
         }
 
-        if (!ok) {
-            nativeOnFilePicked(token, folder, null, true, null);
+        final List<Uri> documents = pickedDocuments(data, primary);
+        if (documents.isEmpty()) {
+            nativeOnFilePicked(token, null, true, null);
             return;
         }
-        final Uri uri = data.getData();
-        if (!folder) {
-            // A single-file pick can also be lost to an activity recreation, so
-            // record it for resume. (A persistable grant needs the request intent
-            // to carry FLAG_GRANT_PERSISTABLE_URI_PERMISSION; the in-process grant
-            // is enough for the common case where the process outlives the pick.)
-            nativeRecordResumablePick(flags, uri.toString(), sanitize(displayName(uri, "file")));
-        }
-        // Enumerating a tree only reads metadata (no byte copy), but a deep tree
-        // can still take a moment, so resolve it off the main thread and never
-        // block the UI — that previously froze the app on large folders.
+        // Describing documents only reads provider metadata, but a slow provider
+        // can still take a moment, so never do it on the UI thread.
         new Thread(() -> {
             try {
-                String entries = folder ? enumerateTree(uri) : describeFile(uri);
-                nativeOnFilePicked(token, folder, entries, false, null);
+                String entries = describeDocuments(documents);
+                // A single- or multi-file pick can also be lost to an activity
+                // recreation, so record it for resume before delivering.
+                nativeRecordResumablePick(flags, entries);
+                nativeOnFilePicked(token, entries, false, null);
             } catch (Exception error) {
-                nativeOnFilePicked(token, folder, null, false, error.toString());
+                nativeOnFilePicked(token, null, false, error.toString());
             }
         }, "cranpose-file-picker").start();
     }
 
-    private String describeFile(Uri uri) {
-        return uri.toString() + "\t" + sanitize(displayName(uri, "file"));
+    /** Every document the user chose: the {@code ClipData} items of a
+     * multi-selection, or the single {@code getData()} URI. */
+    private static List<Uri> pickedDocuments(Intent data, Uri primary) {
+        List<Uri> documents = new ArrayList<>();
+        ClipData clip = data == null ? null : data.getClipData();
+        if (clip != null) {
+            for (int index = 0; index < clip.getItemCount(); index++) {
+                Uri uri = clip.getItemAt(index).getUri();
+                if (uri != null) {
+                    documents.add(uri);
+                }
+            }
+        }
+        if (documents.isEmpty() && primary != null) {
+            documents.add(primary);
+        }
+        return documents;
     }
 
-    private String enumerateTree(Uri treeUri) {
-        try {
-            getContentResolver().takePersistableUriPermission(
-                    treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (SecurityException ignored) {
-        }
+    private String describeDocuments(List<Uri> documents) {
         StringBuilder out = new StringBuilder();
-        collectTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri), out);
+        for (Uri uri : documents) {
+            if (out.length() > 0) {
+                out.append('\n');
+            }
+            String info = cranposeDocumentInfo(uri.toString());
+            out.append(uri.toString()).append('\t')
+                    .append(info == null
+                            ? sanitize(displayName(uri, "file")) + "\t\t\t"
+                            : info);
+        }
         return out.toString();
     }
 
-    private void collectTree(Uri treeUri, String documentId, StringBuilder out) {
-        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId);
-        // Same resilience as the streaming walk: retry a slow provider and skip a
-        // folder that stays unreadable rather than aborting the whole enumeration.
-        Cursor cursor = queryChildrenWithRetry(childrenUri);
-        try {
-            if (cursor == null) {
-                return;
-            }
-            while (cursor.moveToNext()) {
-                String childId = cursor.getString(0);
-                String name = cursor.getString(1);
-                String mime = cursor.getString(2);
-                if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
-                    collectTree(treeUri, childId, out);
-                } else {
-                    Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId);
-                    if (out.length() > 0) {
-                        out.append('\n');
-                    }
-                    out.append(childUri.toString()).append('\t').append(sanitize(name));
-                }
-            }
-        } finally {
-            if (cursor != null) {
-                cursor.close();
-            }
-        }
+    private String describeFile(Uri uri) {
+        return uri.toString() + "\t" + sanitize(displayName(uri, "file"));
     }
 
     /** Walks {@code treeUri} depth-first, flushing files to Rust in batches as
@@ -852,7 +1621,6 @@ public class CranposeActivity extends NativeActivity {
                     return false;
                 }
                 String childId = cursor.getString(0);
-                String name = cursor.getString(1);
                 String mime = cursor.getString(2);
                 if (DocumentsContract.Document.MIME_TYPE_DIR.equals(mime)) {
                     if (!collectTreeStreaming(treeUri, childId, batch)) {
@@ -860,7 +1628,7 @@ public class CranposeActivity extends NativeActivity {
                     }
                 } else {
                     Uri childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childId);
-                    batch.add(childUri, name);
+                    batch.add(childUri, cursor);
                 }
             }
         } finally {
@@ -878,6 +1646,8 @@ public class CranposeActivity extends NativeActivity {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
                 DocumentsContract.Document.COLUMN_MIME_TYPE,
+                DocumentsContract.Document.COLUMN_SIZE,
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
         };
         int errorAttempt = 0;
         int loadingAttempt = 0;
@@ -950,14 +1720,11 @@ public class CranposeActivity extends NativeActivity {
             this.token = token;
         }
 
-        void add(Uri uri, String name) {
+        void add(Uri uri, Cursor cursor) {
             if (stopped) {
                 return;
             }
-            if (rows.length() > 0) {
-                rows.append('\n');
-            }
-            rows.append(uri.toString()).append('\t').append(sanitize(name));
+            appendDocumentRow(rows, uri, cursor);
             count++;
             if (count >= FOLDER_BATCH_SIZE) {
                 flush();
@@ -979,6 +1746,20 @@ public class CranposeActivity extends NativeActivity {
         boolean stopped() {
             return stopped;
         }
+    }
+
+    /** Appends one {@code uri\tname\tmime\tsize\tmodified} row read from a
+     * children cursor positioned on the document. The projection is the one
+     * {@link #queryChildrenWithRetry} requests. */
+    private void appendDocumentRow(StringBuilder out, Uri uri, Cursor cursor) {
+        if (out.length() > 0) {
+            out.append('\n');
+        }
+        out.append(uri.toString())
+                .append('\t').append(sanitize(cursor.isNull(1) ? "" : cursor.getString(1)))
+                .append('\t').append(cursor.isNull(2) ? "" : cursor.getString(2))
+                .append('\t').append(cursor.isNull(3) ? "" : Long.toString(cursor.getLong(3)))
+                .append('\t').append(cursor.isNull(4) ? "" : Long.toString(cursor.getLong(4)));
     }
 
     private String displayName(Uri uri, String fallback) {
@@ -1020,9 +1801,6 @@ public class CranposeActivity extends NativeActivity {
     private static final int REQ_NOTIFY_PERMISSION = 0x0C9B;
 
     /** Bytes staged for an in-flight ACTION_CREATE_DOCUMENT save. */
-    private byte[] pendingSaveBytes;
-    private long pendingSaveToken;
-
     private ConnectivityManager.NetworkCallback cranposeNetworkCallback;
 
     /** Current network state (online, metered) changed. */
@@ -1037,9 +1815,6 @@ public class CranposeActivity extends NativeActivity {
 
     /** A new launching intent replaced the old one; carries re-encoded extras. */
     private static native void nativeOnLaunchArguments(String payload);
-
-    /** An ACTION_CREATE_DOCUMENT save finished. */
-    private static native void nativeOnFileSaved(long token, boolean ok, String error);
 
     /**
      * Loads the app's native library into this class loader so that the {@code native}
@@ -1115,6 +1890,28 @@ public class CranposeActivity extends NativeActivity {
         installInsetsListener();
         registerNetworkCallback();
         dispatchDeeplink(getIntent());
+        dispatchIncomingShares(getIntent());
+        registerBackCallback();
+        IntentFilter updateFilter = new IntentFilter(cranposeUpdateInstallAction());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(
+                    cranposeUpdateInstallReceiver, updateFilter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(cranposeUpdateInstallReceiver, updateFilter);
+        }
+    }
+
+    private void registerBackCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        OnBackInvokedCallback callback = () -> {
+            if (!nativeOnBackInvoked()) {
+                finish();
+            }
+        };
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
     }
 
     @Override
@@ -1130,13 +1927,92 @@ public class CranposeActivity extends NativeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         dispatchDeeplink(intent);
+        dispatchIncomingShares(intent);
         // setIntent above is what makes getIntent() — and therefore the encoder —
         // report the new extras, mirroring what a Compose activity sees.
         nativeOnLaunchArguments(cranposeEncodeLaunchArguments());
     }
 
+    private void dispatchIncomingShares(Intent intent) {
+        if (intent == null || (!Intent.ACTION_SEND.equals(intent.getAction())
+                && !Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction()))) {
+            return;
+        }
+        ArrayList<Uri> uris = new ArrayList<>();
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            Uri uri = incomingStream(intent);
+            if (uri != null) {
+                uris.add(uri);
+            }
+        } else {
+            ArrayList<Uri> shared = incomingStreams(intent);
+            if (shared != null) {
+                uris.addAll(shared);
+            }
+        }
+        String mimeType = intent.getType() == null ? "" : intent.getType();
+        // The URI is published, not the bytes: the framework opens it through the
+        // content resolver when the application actually reads it, so sharing a
+        // multi-gigabyte video costs nothing until it is used.
+        new Thread(() -> {
+            for (Uri uri : uris) {
+                if (!"content".equalsIgnoreCase(uri.getScheme())) {
+                    continue;
+                }
+                try {
+                    android.content.pm.ProviderInfo provider =
+                            getPackageManager().resolveContentProvider(uri.getAuthority(), 0);
+                    if (provider != null && getPackageName().equals(provider.packageName)) {
+                        continue;
+                    }
+                    nativeOnIncomingContent(
+                            sanitize(displayName(uri, "shared")), mimeType, uri.toString());
+                } catch (Exception error) {
+                    android.util.Log.w("cranpose", "incoming share failed", error);
+                }
+            }
+        }, "cranpose-incoming-share").start();
+    }
+
+    @Override
+    protected void onPause() {
+        cranposePaused = true;
+        if (cranposeBackgroundActive) {
+            startCranposeBackgroundService();
+        }
+        if (cranposeCamera != null) {
+            cranposeCamera.stop();
+        }
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        cranposePaused = false;
+        stopService(new Intent(this, CranposeBackgroundService.class));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_CAMERA && grantResults.length > 0
+                && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            cranposeCamera().start();
+        }
+    }
+
     @Override
     protected void onDestroy() {
+        stopService(new Intent(this, CranposeBackgroundService.class));
+        try {
+            unregisterReceiver(cranposeUpdateInstallReceiver);
+        } catch (IllegalArgumentException ignored) {
+        }
+        if (cranposeCamera != null) {
+            cranposeCamera.stop();
+        }
         if (cranposeNetworkCallback != null) {
             try {
                 ConnectivityManager manager =
@@ -1569,6 +2445,22 @@ public class CranposeActivity extends NativeActivity {
         }).start();
     }
 
+    @SuppressWarnings("deprecation")
+    private static Uri incomingStream(Intent intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri.class);
+        }
+        return intent.getParcelableExtra(Intent.EXTRA_STREAM);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static ArrayList<Uri> incomingStreams(Intent intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri.class);
+        }
+        return intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+    }
+
     private String sanitizeFileName(String name) {
         String cleaned = name == null ? "file" : name.replaceAll("[/\\\\ ]", "_");
         return cleaned.isEmpty() ? "file" : cleaned;
@@ -1639,55 +2531,21 @@ public class CranposeActivity extends NativeActivity {
         });
     }
 
-    /** Presents ACTION_CREATE_DOCUMENT and writes the staged bytes to the
-     * chosen destination. Called from Rust over JNI. */
-    @SuppressWarnings("deprecation")
-    public void cranposeSaveFile(final long token, final String fileName,
-            final String mimeType, final byte[] bytes) {
+    /** Presents ACTION_CREATE_DOCUMENT so the user names a destination. The new
+     * document's URI comes back through {@link #nativeOnDocumentCreated}; the
+     * caller then streams into it with {@link #cranposeOpenUriWrite}. Called
+     * from Rust over JNI. */
+    public void cranposeCreateDocument(final long token, final String fileName,
+            final String mimeType) {
         runOnUiThread(() -> {
-            pendingSaveBytes = bytes;
-            pendingSaveToken = token;
+            pendingToken = token;
             Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             intent.setType(mimeType == null || mimeType.isEmpty()
                     ? "application/octet-stream"
                     : mimeType);
             intent.putExtra(Intent.EXTRA_TITLE, fileName);
-            try {
-                startActivityForResult(intent, REQUEST_BASE | FLAG_SAVE);
-            } catch (Exception error) {
-                pendingSaveBytes = null;
-                nativeOnFileSaved(token, false, error.toString());
-            }
+            launch(intent, token, FLAG_SAVE);
         });
-    }
-
-    /** Handles the ACTION_CREATE_DOCUMENT result (invoked from
-     * {@link #onActivityResult}). Returns whether the request was a save. */
-    private boolean handleSaveResult(int flags, int resultCode, Intent data) {
-        if ((flags & FLAG_SAVE) == 0) {
-            return false;
-        }
-        final byte[] bytes = pendingSaveBytes;
-        final long token = pendingSaveToken;
-        pendingSaveBytes = null;
-        if (resultCode != RESULT_OK || data == null || data.getData() == null) {
-            nativeOnFileSaved(token, false, "");
-            return true;
-        }
-        final Uri destination = data.getData();
-        new Thread(() -> {
-            try (OutputStream out = getContentResolver().openOutputStream(destination)) {
-                if (out == null) {
-                    nativeOnFileSaved(token, false, "destination not writable");
-                    return;
-                }
-                out.write(bytes == null ? new byte[0] : bytes);
-                nativeOnFileSaved(token, true, "");
-            } catch (Exception error) {
-                nativeOnFileSaved(token, false, error.toString());
-            }
-        }).start();
-        return true;
     }
 }

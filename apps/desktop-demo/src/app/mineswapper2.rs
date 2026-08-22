@@ -1,4 +1,4 @@
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_ui::{
     composable, Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii,
     LinearArrangement, Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
@@ -88,14 +88,12 @@ impl MineswapperGame {
         self.is_lost = false;
         self.is_won = false;
         self.revealed_count = 0;
-        for cell in &mut self.cells {
-            *cell = MineswapperCell {
-                is_mine: false,
-                is_revealed: false,
-                is_flagged: false,
-                adjacent: 0,
-            };
-        }
+        self.cells.fill(MineswapperCell {
+            is_mine: false,
+            is_revealed: false,
+            is_flagged: false,
+            adjacent: 0,
+        });
 
         let mut rng = seed | 1;
         let mut placed = 0;
@@ -235,9 +233,10 @@ fn random_seed() -> u64 {
 
 #[composable]
 pub fn mineswapper2_tab() {
-    let preset_state = useState(|| GRID_PRESETS[0]);
-    let game_state = useState(|| MineswapperGame::new_from_preset(GRID_PRESETS[0], random_seed()));
-    let flag_mode = useState(|| MineswapperTool::Reveal);
+    let preset_state = rememberMutableStateOf(|| GRID_PRESETS[0]);
+    let game_state =
+        rememberMutableStateOf(|| MineswapperGame::new_from_preset(GRID_PRESETS[0], random_seed()));
+    let flag_mode = rememberMutableStateOf(|| MineswapperTool::Reveal);
 
     Column(
         Modifier::empty()

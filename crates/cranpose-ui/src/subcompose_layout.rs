@@ -494,28 +494,6 @@ impl<'a> SubcomposeMeasureScope for SubcomposeMeasureScopeImpl<'a> {
 }
 
 impl<'a> SubcomposeMeasureScopeImpl<'a> {
-    /// Subcomposes content and assigns estimated sizes to children.
-    ///
-    /// This is used by lazy layouts where true measurement happens later.
-    /// The `estimate_size` function provides size estimates based on index.
-    pub fn subcompose_with_size<Content, F>(
-        &mut self,
-        slot_id: SlotId,
-        content: Content,
-        estimate_size: F,
-    ) -> Vec<SubcomposeChild>
-    where
-        Content: FnMut() + 'static,
-        F: Fn(usize) -> Size,
-    {
-        let nodes = self.perform_subcompose(slot_id, content);
-        nodes
-            .into_iter()
-            .enumerate()
-            .map(|(i, node_id)| SubcomposeChild::with_size(node_id, estimate_size(i)))
-            .collect()
-    }
-
     /// Returns the number of active slots in the subcompose state.
     ///
     /// Used by lazy layouts to report statistics about slot usage.
@@ -958,11 +936,6 @@ impl SubcomposeLayoutNode {
     /// Mark this node as needing semantics recomputation.
     pub fn mark_needs_semantics(&self) {
         self.needs_semantics.set(true);
-    }
-
-    /// Returns true when semantics need to be recomputed.
-    pub fn needs_semantics_flag(&self) -> bool {
-        self.needs_semantics.get()
     }
 
     pub(crate) fn clear_needs_semantics(&self) {

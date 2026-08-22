@@ -11,6 +11,7 @@
 
 #![cfg(feature = "embedded-default-font")]
 
+use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_common::graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode};
 use cranpose_render_common::graph_scene::{HitGeometry, Scene};
 use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
@@ -80,13 +81,16 @@ fn scaling_list_scene() -> LayerNode {
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             |scope| {
-                scope.items(ROWS.len(), |index| {
-                    Text(
-                        ROWS[index].to_string(),
-                        Modifier::empty().fill_max_width(),
-                        WearTextStyle::BODY_LARGE.resolve(colors().content),
-                    );
-                });
+                scope.items(
+                    LazyItems::new(ROWS.len()).key(|index: usize| index as u64),
+                    |index| {
+                        Text(
+                            ROWS[index].to_string(),
+                            Modifier::empty().fill_max_width(),
+                            WearTextStyle::BODY_LARGE.resolve(colors().content),
+                        );
+                    },
+                );
             },
         );
     });
@@ -173,17 +177,20 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
             state,
             WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
             move |scope| {
-                scope.items(count, move |index| {
-                    let sink = Rc::clone(&sink);
-                    cranpose_ui::widgets::Box(
-                        Modifier::empty()
-                            .fill_max_width()
-                            .height(TAP_ROW)
-                            .clickable(move |_| sink.borrow_mut().push(index)),
-                        BoxSpec::default(),
-                        || {},
-                    );
-                });
+                scope.items(
+                    LazyItems::new(count).key(|index: usize| index as u64),
+                    move |index| {
+                        let sink = Rc::clone(&sink);
+                        cranpose_ui::widgets::Box(
+                            Modifier::empty()
+                                .fill_max_width()
+                                .height(TAP_ROW)
+                                .clickable(move |_| sink.borrow_mut().push(index)),
+                            BoxSpec::default(),
+                            || {},
+                        );
+                    },
+                );
             },
         );
     });
@@ -239,19 +246,29 @@ fn tappable_list_scene(count: usize) -> (Scene, Vec<usize>, Rc<RefCell<Vec<usize
         &mut SceneSink { scene: &mut scene },
         None,
     );
-    // The rows are pushed in tree order, so a hit's index in `hits` is the
-    // item's index in the list. Keep the ids so a hit can be named.
-    let ids = (0..scene.hits.len()).collect();
+    // The list itself owns a viewport-sized pointer-input region for
+    // scrolling. Rows are the fixed-height regions declared above.
+    let ids = scene
+        .hits
+        .iter()
+        .filter(|hit| (hit.local_bounds.height - TAP_ROW).abs() < f32::EPSILON)
+        .map(|hit| hit.node_id)
+        .collect();
     scene.replace_graph(graph);
     (scene, ids, tapped)
 }
 
 /// Which row a point lands on, or `None` for a point that hits nothing.
 fn row_at(scene: &Scene, x: f32, y: f32) -> Option<usize> {
-    let node_ids: Vec<_> = scene.hits.iter().map(|hit| hit.node_id).collect();
+    let node_ids: Vec<_> = scene
+        .hits
+        .iter()
+        .filter(|hit| (hit.local_bounds.height - TAP_ROW).abs() < f32::EPSILON)
+        .map(|hit| hit.node_id)
+        .collect();
     let hits = scene.hit_test(x, y);
-    hits.first()
-        .and_then(|hit| node_ids.iter().position(|id| *id == hit.node_id()))
+    hits.iter()
+        .find_map(|hit| node_ids.iter().position(|id| *id == hit.node_id()))
 }
 
 #[test]

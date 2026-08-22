@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_core::{useState, MutableState};
+use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_ui::{composable, Column, ColumnSpec, LinearArrangement, Modifier, Text, TextStyle};
 use std::cell::RefCell;
 use std::path::Path;
@@ -100,7 +100,7 @@ fn main() {
 #[composable]
 #[allow(non_snake_case)]
 fn resume_probe() {
-    let state = useState(|| ResumeState::Attached);
+    let state = rememberMutableStateOf(|| ResumeState::Attached);
     RESUME_STATE.with(|slot| *slot.borrow_mut() = Some(state));
     let label = match state.get() {
         ResumeState::Attached => "Attached",

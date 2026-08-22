@@ -10,7 +10,7 @@
 //! #[composable]
 //! fn Game() {
 //!     let bank = rememberSoundBank(CUES);
-//!     let combo = useState(|| 0u32);
+//!     let combo = rememberMutableStateOf(|| 0u32);
 //!     // A combo counter raises the pitch of the same cue.
 //!     bank.play_with(0, PlaybackParams::new().pitch_semitones(combo.value() as f32));
 //! }
@@ -913,7 +913,7 @@ impl Index<usize> for SoundBank {
 pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {
     let key = sound_bank_key(specs);
     let player = local_audio().current();
-    cranpose_core::remember_keyed((key, Arc::as_ptr(&player) as *const () as usize), |_| {
+    cranpose_core::rememberKeyed((key, Arc::as_ptr(&player) as *const () as usize), |_| {
         SoundBank::load(Arc::clone(&player), specs)
     })
 }

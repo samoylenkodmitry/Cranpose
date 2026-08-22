@@ -139,9 +139,9 @@ fn main() -> ExitCode {
                     .background(BACKDROP),
                 BoxSpec::default(),
                 move || {
-                    let state = state.clone();
+                    let state = state;
                     BasicTextFieldWithOptions(
-                        state.clone(),
+                        state,
                         Modifier::empty()
                             .absolute_offset(FIELD_X, FIELD_Y)
                             .size(Size {

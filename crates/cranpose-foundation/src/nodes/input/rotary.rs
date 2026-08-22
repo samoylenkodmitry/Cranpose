@@ -154,6 +154,45 @@ impl RotaryScrollEvent {
     }
 }
 
+/// Turns continuous rotary travel into discrete steps while retaining sub-step
+/// travel between events. The input and step size use the same caller-chosen
+/// unit, typically platform-resolved pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RotaryStepAccumulator {
+    pixels_per_step: f32,
+    pending_pixels: f32,
+}
+
+impl RotaryStepAccumulator {
+    /// Creates an accumulator for the given amount of travel per step.
+    pub fn new(pixels_per_step: f32) -> Self {
+        assert!(
+            pixels_per_step.is_finite() && pixels_per_step > 0.0,
+            "rotary step size must be finite and positive"
+        );
+        Self {
+            pixels_per_step,
+            pending_pixels: 0.0,
+        }
+    }
+
+    /// Adds a rotary delta and returns all whole steps crossed by this event.
+    pub fn accept(&mut self, pixels: f32) -> i32 {
+        if !pixels.is_finite() || pixels == 0.0 {
+            return 0;
+        }
+        self.pending_pixels += pixels;
+        let steps = (self.pending_pixels / self.pixels_per_step).trunc() as i32;
+        self.pending_pixels -= steps as f32 * self.pixels_per_step;
+        steps
+    }
+
+    /// Drops any partial step retained from previous events.
+    pub fn reset(&mut self) {
+        self.pending_pixels = 0.0;
+    }
+}
+
 /// Converts a raw Android `AXIS_SCROLL` detent value into pixels using
 /// Compose's sign convention: positive detents (crown turned up/away) produce a
 /// **negative** pixel amount.
@@ -172,6 +211,23 @@ mod tests {
         assert_eq!(event.vertical_scroll_pixels, -12.0);
         assert_eq!(event.horizontal_scroll_pixels, 3.5);
         assert_eq!(event.uptime_millis, 4_200);
+    }
+
+    #[test]
+    fn step_accumulator_retains_partial_travel_and_emits_every_crossed_step() {
+        let mut steps = RotaryStepAccumulator::new(10.0);
+        assert_eq!(steps.accept(6.0), 0);
+        assert_eq!(steps.accept(6.0), 1);
+        assert_eq!(steps.accept(29.0), 3);
+        assert_eq!(steps.accept(-12.0), -1);
+    }
+
+    #[test]
+    fn step_accumulator_reset_drops_partial_travel() {
+        let mut steps = RotaryStepAccumulator::new(10.0);
+        assert_eq!(steps.accept(9.0), 0);
+        steps.reset();
+        assert_eq!(steps.accept(1.0), 0);
     }
 
     #[test]

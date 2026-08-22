@@ -209,22 +209,6 @@ impl AwaitPointerEventScope {
         }
         .await
     }
-
-    pub async fn with_timeout_or_null<R, F, Fut>(&self, _time_millis: u64, block: F) -> Option<R>
-    where
-        F: FnOnce(&AwaitPointerEventScope) -> Fut,
-        Fut: Future<Output = R>,
-    {
-        Some(block(self).await)
-    }
-
-    pub async fn with_timeout<R, F, Fut>(&self, _time_millis: u64, block: F) -> R
-    where
-        F: FnOnce(&AwaitPointerEventScope) -> Fut,
-        Fut: Future<Output = R>,
-    {
-        block(self).await
-    }
 }
 
 struct NextPointerEvent {

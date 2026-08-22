@@ -67,7 +67,7 @@ fn crossfade_composition(
         let alive = Rc::clone(&alive);
         let target_slot = Rc::clone(&target_slot);
         run_test_composition(move || {
-            let target = cranpose_core::useState(move || initial);
+            let target = cranpose_core::rememberMutableStateOf(move || initial);
             target_slot.borrow_mut().replace(target);
             CrossfadeHost(target, Rc::clone(&alive));
         })

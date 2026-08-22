@@ -9,6 +9,7 @@ use crate::material::{
 };
 use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography};
+use crate::widgets::content_scope::ScopeContent;
 use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
@@ -87,23 +88,109 @@ fn segmented_strain(stretch: f32) -> f32 {
     1.0 + (stretch - 1.0) * SEGMENTED_STRAIN_RESPONSE
 }
 
-/// A segmented control. `labels` are equal-width segments; `selected` is the
-/// active index; `on_select` receives the committed index. Segments tap AND
+/// One segment: what accessibility announces, and what it draws.
+struct LiquidSegment {
+    description: String,
+    content: Rc<dyn Fn(bool)>,
+}
+
+/// The scope a segmented control's content is declared in.
+///
+/// Each call adds one equal-width segment, in the order it is made, which is
+/// also the order the indices passed to `on_select` count in.
+pub struct LiquidSegmentedControlScope {
+    segments: ScopeContent<LiquidSegment>,
+}
+
+impl LiquidSegmentedControlScope {
+    /// A segment showing `label`, styled by the control: the selected one is
+    /// told apart by weight, never by dimming the rest.
+    pub fn segment(&self, label: impl Into<String>) {
+        let label = label.into();
+        let text = label.clone();
+        self.segment_content(label, move |selected| {
+            SegmentLabel(text.clone(), selected);
+        });
+    }
+
+    /// A segment the caller draws.
+    ///
+    /// `selected` says whether this is the active segment, so content can
+    /// respond the way the built-in label's weight does. `description` is what
+    /// accessibility announces, which content alone cannot supply.
+    pub fn segment_content(
+        &self,
+        description: impl Into<String>,
+        content: impl Fn(bool) + 'static,
+    ) {
+        self.segments.push(LiquidSegment {
+            description: description.into(),
+            content: Rc::new(content),
+        });
+    }
+}
+
+/// Runs `content` and returns the segments it declared.
+fn collect_segments(content: impl FnOnce(&LiquidSegmentedControlScope)) -> Vec<LiquidSegment> {
+    ScopeContent::collect(|segments| LiquidSegmentedControlScope { segments }, content)
+}
+
+/// The label a plain segment draws.
+#[composable]
+#[allow(non_snake_case)]
+fn SegmentLabel(label: String, selected: bool) {
+    let colors = liquid_colors();
+    let typography = liquid_typography();
+    let style = TextStyle {
+        span_style: SpanStyle {
+            // Every reference label reads near-black (tap-flight/drag
+            // strips) — selection is told by weight and the pill, never by
+            // dimming the unselected cells.
+            color: Some(colors.label),
+            // Reference "Sending" spans 63dp of the 103dp cell; the
+            // subheadline's 15dp rendered 55dp.
+            font_size: cranpose_ui::text::TextUnit::Sp(17.0),
+            // The reference weight step is a whisper (regular -> medium);
+            // semibold-vs-medium read as a black blob against the airy target.
+            font_weight: Some(if selected {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::NORMAL
+            }),
+            ..typography.subheadline.span_style.clone()
+        },
+        ..typography.subheadline.clone()
+    };
+    Text(label, Modifier::empty(), style);
+}
+
+/// A segmented control. `content` declares equal-width segments; `selected` is
+/// the active index; `on_select` receives the committed index. Segments tap AND
 /// swipe: dragging slides the indicator with the finger as a glass lens.
+///
+/// ```rust,ignore
+/// LiquidSegmentedControl(Modifier::empty().width(310.0), selected.get(), move |index| {
+///     selected.set(index)
+/// }, |scope| {
+///     scope.segment("Receiving");
+///     scope.segment("Sending");
+///     scope.segment("Errored");
+/// });
+/// ```
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidSegmentedControl(
     modifier: Modifier,
-    labels: Vec<String>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
+    content: impl FnOnce(&LiquidSegmentedControlScope),
 ) {
     let colors = liquid_colors();
-    let typography = liquid_typography();
-    let count = labels.len().max(1);
+    let segments = collect_segments(content);
+    let count = segments.len().max(1);
     let selected = selected.min(count - 1);
     let on_select: Rc<dyn Fn(usize)> = Rc::new(on_select);
-    let labels = Rc::new(labels);
+    let segments = Rc::new(segments);
 
     let pressed = remember(|| mutableStateOf(false)).with(|s| *s);
 
@@ -143,12 +230,10 @@ pub fn LiquidSegmentedControl(
     });
 
     Box(track.then(modifier), BoxSpec::default(), move || {
-        let labels = Rc::clone(&labels);
-        let typography = typography.clone();
+        let segments = Rc::clone(&segments);
         let on_select = Rc::clone(&on_select);
         BoxWithConstraints(Modifier::empty().padding(TRACK_PADDING), move |scope| {
-            let labels = Rc::clone(&labels);
-            let typography = typography.clone();
+            let segments = Rc::clone(&segments);
             let on_select = Rc::clone(&on_select);
             let total_width = scope.constraints().max_width.max(1.0);
             let segment_width = total_width / count as f32;
@@ -197,45 +282,21 @@ pub fn LiquidSegmentedControl(
             // semantics (robot/a11y); pointer handling lives on the swipe
             // surface below.
             Row(Modifier::empty(), RowSpec::default(), move || {
-                for (index, label) in labels.iter().enumerate() {
+                for (index, segment) in segments.iter().enumerate() {
                     let is_selected = index == visual_index;
-                    let style = TextStyle {
-                        span_style: SpanStyle {
-                            // Every reference label reads near-black
-                            // (tap-flight/drag strips) — selection is told
-                            // by weight and the pill, never by dimming the
-                            // unselected cells.
-                            color: Some(colors.label),
-                            // Reference "Sending" spans 63dp of the 103dp
-                            // cell; the subheadline's 15dp rendered 55dp.
-                            font_size: cranpose_ui::text::TextUnit::Sp(17.0),
-                            // The reference weight step is a whisper
-                            // (regular -> medium); semibold-vs-medium read
-                            // as a black blob against the airy target.
-                            font_weight: Some(if is_selected {
-                                FontWeight::MEDIUM
-                            } else {
-                                FontWeight::NORMAL
-                            }),
-                            ..typography.subheadline.span_style.clone()
-                        },
-                        ..typography.subheadline.clone()
-                    };
-                    let label_for_semantics = label.clone();
+                    let description = segment.description.clone();
                     let cell = Modifier::empty()
                         .size(Size::new(segment_width, SEGMENT_HEIGHT))
                         .semantics(move |config| {
                             config.role = Some(SemanticsWidgetRole::Button);
                             config.is_clickable = true;
-                            config.content_description = Some(label_for_semantics.clone());
+                            config.content_description = Some(description.clone());
                         });
-                    let label = label.clone();
+                    let content = Rc::clone(&segment.content);
                     Box(
                         cell,
                         BoxSpec::default().content_alignment(Alignment::CENTER),
-                        move || {
-                            Text(label.clone(), Modifier::empty(), style.clone());
-                        },
+                        move || content(is_selected),
                     );
                 }
             });
@@ -430,5 +491,32 @@ mod tests {
         // Max fluid stretch elongates ~1.15x like the reference mid-drag
         // oval — never a two-cell worm.
         assert!(segmented_strain(crate::dynamics::STRETCH_MAX) < 1.20);
+    }
+
+    /// A plain segment announces its own label; a drawn one announces the
+    /// description the caller supplies, because its content cannot.
+    #[test]
+    fn a_scope_records_what_each_segment_announces() {
+        let drawn = Rc::new(std::cell::Cell::new(0u32));
+        let counted = Rc::clone(&drawn);
+        let segments = collect_segments(|scope| {
+            scope.segment("Sending");
+            scope.segment_content("Received", move |selected| {
+                counted.set(counted.get() + u32::from(selected));
+            });
+        });
+
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].description, "Sending");
+        assert_eq!(segments[1].description, "Received");
+        // The declaration stores content; it does not draw it.
+        assert_eq!(drawn.get(), 0);
+        (segments[1].content)(true);
+        assert_eq!(drawn.get(), 1);
+    }
+
+    #[test]
+    fn a_control_with_no_segments_declares_none() {
+        assert!(collect_segments(|_| {}).is_empty());
     }
 }

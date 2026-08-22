@@ -11,7 +11,7 @@ mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
 use cranpose::AppLauncher;
-use cranpose_core::{remember, useState, MutableState};
+use cranpose_core::{remember, rememberMutableStateOf, MutableState};
 use cranpose_foundation::{
     text::{TextFieldLineLimits, TextFieldState},
     DrawScope, SemanticsConfiguration,
@@ -1196,14 +1196,14 @@ impl UiIcon {
 #[allow(non_snake_case)]
 #[composable]
 fn LeetcodeDailyFullLayoutApp() {
-    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     let saved_draft = remember(PostDraft::default).with(|draft| draft.clone());
     let fields = remember({
         let saved_draft = saved_draft.clone();
         move || EditorFields::from_draft(&saved_draft)
     })
     .with(|fields| fields.clone());
-    let ui_preferences = useState(UiPreferences::default);
+    let ui_preferences = rememberMutableStateOf(UiPreferences::default);
     let startup_interactive_queue = remember({
         let initial_queue = ui_preferences.value().interactive_queue().to_vec();
         move || initial_queue
@@ -1216,15 +1216,15 @@ fn LeetcodeDailyFullLayoutApp() {
     .with(|preferences| preferences.clone());
     let autosave_destination =
         remember(|| "Autosave: robot fixture".to_string()).with(Clone::clone);
-    let preview_state = useState(PreviewState::placeholder);
-    let preview_loading = useState(|| false);
-    let compose_preview_state = useState(PreviewState::placeholder);
-    let compose_loading = useState(|| false);
-    let compose_error = useState(String::new);
-    let telegram_post_link = useState(String::new);
-    let status = useState(|| "Ready.".to_string());
-    let busy_action = useState(|| None::<LongAction>);
-    let active_queue_target = useState(|| None::<String>);
+    let preview_state = rememberMutableStateOf(PreviewState::placeholder);
+    let preview_loading = rememberMutableStateOf(|| false);
+    let compose_preview_state = rememberMutableStateOf(PreviewState::placeholder);
+    let compose_loading = rememberMutableStateOf(|| false);
+    let compose_error = rememberMutableStateOf(String::new);
+    let telegram_post_link = rememberMutableStateOf(String::new);
+    let status = rememberMutableStateOf(|| "Ready.".to_string());
+    let busy_action = rememberMutableStateOf(|| None::<LongAction>);
+    let active_queue_target = rememberMutableStateOf(|| None::<String>);
     let current_draft = PostDraft::from_fields(&fields);
     let markdown_preview = current_draft.blog_template();
     let theme = ui_preferences.value().theme;
@@ -1235,7 +1235,6 @@ fn LeetcodeDailyFullLayoutApp() {
         }),
         BoxSpec::default(),
         {
-            let scroll_state = scroll_state.clone();
             let fields = fields.clone();
             let markdown_preview = markdown_preview.clone();
             let autosave_destination = autosave_destination.clone();
@@ -1244,7 +1243,6 @@ fn LeetcodeDailyFullLayoutApp() {
             let startup_interactive_queue = startup_interactive_queue.clone();
             move || {
                 Column(Modifier::empty().fill_max_size(), ColumnSpec::default(), {
-                    let scroll_state = scroll_state.clone();
                     let fields = fields.clone();
                     let markdown_preview = markdown_preview.clone();
                     let autosave_destination = autosave_destination.clone();
@@ -1253,7 +1251,6 @@ fn LeetcodeDailyFullLayoutApp() {
                     let startup_interactive_queue = startup_interactive_queue.clone();
                     move || {
                         BoxWithConstraints(Modifier::empty().fill_max_width().weight(1.0), {
-                            let scroll_state = scroll_state.clone();
                             let fields = fields.clone();
                             let markdown_preview = markdown_preview.clone();
                             let autosave_destination = autosave_destination.clone();
@@ -1286,7 +1283,7 @@ fn LeetcodeDailyFullLayoutApp() {
                                         let layout_preferences = layout_preferences.clone();
                                         let startup_interactive_queue =
                                             startup_interactive_queue.clone();
-                                        let workspace_scroll_state = scroll_state.clone();
+                                        let workspace_scroll_state = scroll_state;
                                         move || {
                                             ActionsCard(
                                                 fields.clone(),
@@ -1311,8 +1308,7 @@ fn LeetcodeDailyFullLayoutApp() {
                                                     theme,
                                                 );
                                             }
-                                            let viewport_scroll_state =
-                                                workspace_scroll_state.clone();
+                                            let viewport_scroll_state = workspace_scroll_state;
                                             BoxWithConstraints(
                                                 Modifier::empty()
                                                     .fill_max_width()
@@ -1326,7 +1322,6 @@ fn LeetcodeDailyFullLayoutApp() {
                                                     let saved_draft = saved_draft.clone();
                                                     let layout_preferences =
                                                         layout_preferences.clone();
-                                                    let active_queue_target = active_queue_target;
                                                     move |viewport_scope| {
                                                         let viewport_width =
                                                             viewport_scope.max_width().0;
@@ -1343,7 +1338,7 @@ fn LeetcodeDailyFullLayoutApp() {
                                                                         },
                                                                     ),
                                                                 theme,
-                                                                viewport_scroll_state.clone(),
+                                                                viewport_scroll_state,
                                                                 viewport_width,
                                                                 viewport_height,
                                                             ),
@@ -1371,14 +1366,13 @@ fn LeetcodeDailyFullLayoutApp() {
                                                                 let active_queue_target =
                                                                     active_queue_target;
                                                                 let viewport_scroll_state =
-                                                                    viewport_scroll_state.clone();
+                                                                    viewport_scroll_state;
                                                                 move || {
                                                                     Column(
                                                                         Modifier::empty()
                                                                             .fill_max_size()
                                                                             .vertical_scroll(
-                                                                                viewport_scroll_state
-                                                                                    .clone(),
+                                                                                viewport_scroll_state,
                                                                                 false,
                                                                             )
                                                                             .padding_each(
@@ -1949,11 +1943,10 @@ fn InteractiveQueuePanel(
         return;
     }
 
-    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| state.clone());
+    let scroll_state = remember(|| ScrollState::new(0.0)).with(|state| *state);
     glass_panel(Modifier::empty().fill_max_width(), theme, 14.0, 10.0, {
         let fields = fields.clone();
         let queue = queue.clone();
-        let scroll_state = scroll_state.clone();
         move || {
             Column(
                 Modifier::empty().fill_max_width(),
@@ -1962,14 +1955,12 @@ fn InteractiveQueuePanel(
                     let fields = fields.clone();
                     let queue = queue.clone();
                     let current_queue = ui_preferences.value().interactive_queue().to_vec();
-                    let scroll_state = scroll_state.clone();
                     move || {
                         Text("Interactive Queue", Modifier::empty(), eyebrow_style(theme));
                         BoxWithConstraints(Modifier::empty().fill_max_width(), {
                             let fields = fields.clone();
                             let row_queue = queue.clone();
                             let row_current_queue = current_queue.clone();
-                            let scroll_state = scroll_state.clone();
                             move |scope| {
                                 let _viewport_width = scope.max_width().0;
                                 Row(
@@ -1977,7 +1968,7 @@ fn InteractiveQueuePanel(
                                         .fill_max_width()
                                         .height(58.0)
                                         .clip_to_bounds()
-                                        .horizontal_scroll(scroll_state.clone(), false),
+                                        .horizontal_scroll(scroll_state, false),
                                     RowSpec::default().horizontal_arrangement(
                                         LinearArrangement::spaced_by(INTERACTIVE_QUEUE_CHIP_GAP),
                                     ),
@@ -2488,24 +2479,24 @@ fn parse_field_queue_key(item_key: &str) -> Option<(EditorFieldId, FieldQueueCom
 
 fn field_state(fields: &EditorFields, field: EditorFieldId) -> TextFieldState {
     match field {
-        EditorFieldId::Date => fields.date.clone(),
-        EditorFieldId::ProblemTitle => fields.problem_title.clone(),
-        EditorFieldId::ProblemUrl => fields.problem_url.clone(),
-        EditorFieldId::Difficulty => fields.difficulty.clone(),
-        EditorFieldId::BlogPostUrl => fields.blog_post_url.clone(),
-        EditorFieldId::SubstackUrl => fields.substack_url.clone(),
-        EditorFieldId::YoutubeUrl => fields.youtube_url.clone(),
-        EditorFieldId::ReferenceUrl => fields.reference_url.clone(),
-        EditorFieldId::TelegramText => fields.telegram_text.clone(),
-        EditorFieldId::ProblemTldr => fields.problem_tldr.clone(),
-        EditorFieldId::Intuition => fields.intuition.clone(),
-        EditorFieldId::Approach => fields.approach.clone(),
-        EditorFieldId::TimeComplexity => fields.time_complexity.clone(),
-        EditorFieldId::SpaceComplexity => fields.space_complexity.clone(),
-        EditorFieldId::KotlinRuntimeMs => fields.kotlin_runtime_ms.clone(),
-        EditorFieldId::KotlinCode => fields.kotlin_code.clone(),
-        EditorFieldId::RustRuntimeMs => fields.rust_runtime_ms.clone(),
-        EditorFieldId::RustCode => fields.rust_code.clone(),
+        EditorFieldId::Date => fields.date,
+        EditorFieldId::ProblemTitle => fields.problem_title,
+        EditorFieldId::ProblemUrl => fields.problem_url,
+        EditorFieldId::Difficulty => fields.difficulty,
+        EditorFieldId::BlogPostUrl => fields.blog_post_url,
+        EditorFieldId::SubstackUrl => fields.substack_url,
+        EditorFieldId::YoutubeUrl => fields.youtube_url,
+        EditorFieldId::ReferenceUrl => fields.reference_url,
+        EditorFieldId::TelegramText => fields.telegram_text,
+        EditorFieldId::ProblemTldr => fields.problem_tldr,
+        EditorFieldId::Intuition => fields.intuition,
+        EditorFieldId::Approach => fields.approach,
+        EditorFieldId::TimeComplexity => fields.time_complexity,
+        EditorFieldId::SpaceComplexity => fields.space_complexity,
+        EditorFieldId::KotlinRuntimeMs => fields.kotlin_runtime_ms,
+        EditorFieldId::KotlinCode => fields.kotlin_code,
+        EditorFieldId::RustRuntimeMs => fields.rust_runtime_ms,
+        EditorFieldId::RustCode => fields.rust_code,
     }
 }
 
@@ -3122,7 +3113,7 @@ fn EditorField(
         EditorFieldId::Date => labeled_field(
             field.label(),
             field.field_id(),
-            fields.date.clone(),
+            fields.date,
             saved_draft.date.clone(),
             1,
             1,
@@ -3135,7 +3126,7 @@ fn EditorField(
         EditorFieldId::ProblemTitle => labeled_field(
             field.label(),
             field.field_id(),
-            fields.problem_title.clone(),
+            fields.problem_title,
             saved_draft.problem_title.clone(),
             1,
             1,
@@ -3148,7 +3139,7 @@ fn EditorField(
         EditorFieldId::ProblemUrl => labeled_field(
             field.label(),
             field.field_id(),
-            fields.problem_url.clone(),
+            fields.problem_url,
             saved_draft.problem_url.clone(),
             1,
             1,
@@ -3161,7 +3152,7 @@ fn EditorField(
         EditorFieldId::Difficulty => labeled_field(
             field.label(),
             field.field_id(),
-            fields.difficulty.clone(),
+            fields.difficulty,
             saved_draft.difficulty.clone(),
             1,
             1,
@@ -3174,7 +3165,7 @@ fn EditorField(
         EditorFieldId::BlogPostUrl => labeled_field(
             field.label(),
             field.field_id(),
-            fields.blog_post_url.clone(),
+            fields.blog_post_url,
             saved_draft.blog_post_url.clone(),
             1,
             1,
@@ -3187,7 +3178,7 @@ fn EditorField(
         EditorFieldId::SubstackUrl => labeled_field(
             field.label(),
             field.field_id(),
-            fields.substack_url.clone(),
+            fields.substack_url,
             saved_draft.substack_url.clone(),
             1,
             1,
@@ -3200,7 +3191,7 @@ fn EditorField(
         EditorFieldId::YoutubeUrl => labeled_field(
             field.label(),
             field.field_id(),
-            fields.youtube_url.clone(),
+            fields.youtube_url,
             saved_draft.youtube_url.clone(),
             1,
             1,
@@ -3213,7 +3204,7 @@ fn EditorField(
         EditorFieldId::ReferenceUrl => labeled_field(
             field.label(),
             field.field_id(),
-            fields.reference_url.clone(),
+            fields.reference_url,
             saved_draft.reference_url.clone(),
             1,
             1,
@@ -3226,7 +3217,7 @@ fn EditorField(
         EditorFieldId::TelegramText => labeled_field(
             field.label(),
             field.field_id(),
-            fields.telegram_text.clone(),
+            fields.telegram_text,
             saved_draft.telegram_text.clone(),
             1,
             2,
@@ -3239,7 +3230,7 @@ fn EditorField(
         EditorFieldId::ProblemTldr => labeled_field(
             field.label(),
             field.field_id(),
-            fields.problem_tldr.clone(),
+            fields.problem_tldr,
             saved_draft.problem_tldr.clone(),
             3,
             6,
@@ -3252,7 +3243,7 @@ fn EditorField(
         EditorFieldId::Intuition => labeled_field(
             field.label(),
             field.field_id(),
-            fields.intuition.clone(),
+            fields.intuition,
             saved_draft.intuition.clone(),
             6,
             14,
@@ -3265,7 +3256,7 @@ fn EditorField(
         EditorFieldId::Approach => labeled_field(
             field.label(),
             field.field_id(),
-            fields.approach.clone(),
+            fields.approach,
             saved_draft.approach.clone(),
             6,
             14,
@@ -3278,7 +3269,7 @@ fn EditorField(
         EditorFieldId::TimeComplexity => labeled_field(
             field.label(),
             field.field_id(),
-            fields.time_complexity.clone(),
+            fields.time_complexity,
             saved_draft.time_complexity.clone(),
             1,
             2,
@@ -3291,7 +3282,7 @@ fn EditorField(
         EditorFieldId::SpaceComplexity => labeled_field(
             field.label(),
             field.field_id(),
-            fields.space_complexity.clone(),
+            fields.space_complexity,
             saved_draft.space_complexity.clone(),
             1,
             2,
@@ -3304,7 +3295,7 @@ fn EditorField(
         EditorFieldId::KotlinRuntimeMs => labeled_field(
             field.label(),
             field.field_id(),
-            fields.kotlin_runtime_ms.clone(),
+            fields.kotlin_runtime_ms,
             saved_draft.kotlin_runtime_ms.clone(),
             1,
             1,
@@ -3317,7 +3308,7 @@ fn EditorField(
         EditorFieldId::KotlinCode => labeled_code_field(
             field.label(),
             field.field_id(),
-            fields.kotlin_code.clone(),
+            fields.kotlin_code,
             saved_draft.kotlin_code.clone(),
             10,
             18,
@@ -3329,7 +3320,7 @@ fn EditorField(
         EditorFieldId::RustRuntimeMs => labeled_field(
             field.label(),
             field.field_id(),
-            fields.rust_runtime_ms.clone(),
+            fields.rust_runtime_ms,
             saved_draft.rust_runtime_ms.clone(),
             1,
             1,
@@ -3342,7 +3333,7 @@ fn EditorField(
         EditorFieldId::RustCode => labeled_code_field(
             field.label(),
             field.field_id(),
-            fields.rust_code.clone(),
+            fields.rust_code,
             saved_draft.rust_code.clone(),
             10,
             18,
@@ -4070,19 +4061,16 @@ fn labeled_field(
                 ),
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
-                    let state = state.clone();
                     move || {
                         Spacer(Size::new(44.0, 0.0));
-                        let field_state = state.clone();
+                        let field_state = state;
                         Column(
                             Modifier::empty().weight(1.0),
                             ColumnSpec::default()
                                 .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
                             {
-                                let field_state = field_state.clone();
                                 move || {
                                     Text(label, Modifier::empty(), label_style(theme, is_changed));
-                                    let field_state = field_state.clone();
                                     ComposeBox(
                                         Modifier::empty()
                                             .fill_max_width()
@@ -4092,7 +4080,7 @@ fn labeled_field(
                                         BoxSpec::default(),
                                         move || {
                                             BasicTextFieldWithOptions(
-                                                field_state.clone(),
+                                                field_state,
                                                 Modifier::empty().fill_max_width(),
                                                 BasicTextFieldOptions {
                                                     text_style: field_text_style(theme),
@@ -4116,7 +4104,7 @@ fn labeled_field(
                         field_action_buttons(
                             label,
                             field_id,
-                            state.clone(),
+                            state,
                             status,
                             allow_paste,
                             ui_preferences,
@@ -4162,19 +4150,16 @@ fn labeled_code_field(
                 ),
                 RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(16.0)),
                 {
-                    let state = state.clone();
                     move || {
                         Spacer(Size::new(44.0, 0.0));
-                        let field_state = state.clone();
+                        let field_state = state;
                         Column(
                             Modifier::empty().weight(1.0),
                             ColumnSpec::default()
                                 .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
                             {
-                                let field_state = field_state.clone();
                                 move || {
                                     Text(label, Modifier::empty(), label_style(theme, is_changed));
-                                    let field_state = field_state.clone();
                                     ComposeBox(
                                         Modifier::empty()
                                             .fill_max_width()
@@ -4184,7 +4169,7 @@ fn labeled_code_field(
                                         BoxSpec::default(),
                                         move || {
                                             BasicTextFieldWithOptions(
-                                                field_state.clone(),
+                                                field_state,
                                                 Modifier::empty().fill_max_width(),
                                                 BasicTextFieldOptions {
                                                     text_style: code_field_style(theme),
@@ -4208,7 +4193,7 @@ fn labeled_code_field(
                         field_action_buttons(
                             label,
                             field_id,
-                            state.clone(),
+                            state,
                             status,
                             true,
                             ui_preferences,
@@ -4237,7 +4222,7 @@ fn field_action_buttons(
         RowSpec::default().horizontal_arrangement(LinearArrangement::spaced_by(10.0)),
         move || {
             if allow_paste {
-                let paste_state = state.clone();
+                let paste_state = state;
                 let paste_status = status;
                 subtle_button(
                     "Paste".to_string(),
@@ -4251,7 +4236,7 @@ fn field_action_buttons(
                 );
             }
 
-            let clear_state = state.clone();
+            let clear_state = state;
             let clear_status = status;
             subtle_button(
                 "Clear".to_string(),
@@ -7676,8 +7661,10 @@ fn screenshot_abs_difference_score(
     }
     Some(
         left.pixels
-            .chunks_exact(4)
-            .zip(right.pixels.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(right.pixels.as_chunks::<4>().0)
             .map(|(left, right)| {
                 left.iter()
                     .zip(right)
@@ -8713,7 +8700,7 @@ fn screenshot_red_strength_edge_energy(screenshot: &cranpose::RobotScreenshot) -
 
 fn screenshot_unique_rgb_count(screenshot: &cranpose::RobotScreenshot) -> usize {
     let mut colors = HashSet::new();
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         colors.insert([rgba[0], rgba[1], rgba[2]]);
     }
     colors.len()
@@ -8769,7 +8756,7 @@ fn screenshot_color_health(screenshot: &cranpose::RobotScreenshot) -> Screenshot
     let mut blue_cyan_pixels = 0usize;
     let mut dark_pixels = 0usize;
 
-    for rgba in screenshot.pixels.chunks_exact(4) {
+    for rgba in screenshot.pixels.as_chunks::<4>().0 {
         let pixel = [rgba[0], rgba[1], rgba[2], rgba[3]];
         if pixel[3] == 0 {
             continue;

@@ -248,11 +248,12 @@ fn main() {
             assert!(cranpose_services::network_status().online);
             assert_eq!(network.reconnects.load(Ordering::Acquire), 1);
 
-            cranpose_services::set_store_listener(|| {
+            let first_store_observer = cranpose_services::observe_store_news(|| {
                 FIRST_STORE_LISTENER_CALLS.fetch_add(1, Ordering::Relaxed);
             });
             cranpose_services::note_store_news();
-            cranpose_services::set_store_listener(|| {
+            drop(first_store_observer);
+            let _second_store_observer = cranpose_services::observe_store_news(|| {
                 SECOND_STORE_LISTENER_CALLS.fetch_add(1, Ordering::Relaxed);
             });
             cranpose_services::note_store_news();

@@ -233,11 +233,17 @@ fn measure_lazy_list_item(
             .record_candidate_miss();
     }
 
+    // Only a user key is an identity: an index key names the position, which is
+    // exactly the identity that leaks per-item state onto the wrong row when the
+    // list shifts. See `crate::lazy_item`.
+    let item_identity = key.is_user_key().then_some(key_slot_id);
     let Some(item_content) = inputs
         .content
         .with_interval(index, |local_index, interval| {
             let content = Rc::clone(&interval.content);
-            move || (content)(local_index)
+            move || {
+                crate::lazy_item::ProvideLazyItemKey(item_identity, || (content)(local_index));
+            }
         })
     else {
         return LazyListMeasuredItem::new(index, key_slot_id, content_type, 1.0, 0.0);
@@ -1327,10 +1333,10 @@ fn LazyRowNode(
 /// # Example
 ///
 /// ```rust,ignore
-/// let state = remember_lazy_list_state();
+/// let state = rememberLazyListState();
 /// LazyColumn(Modifier::empty(), state, LazyColumnSpec::default(), |scope| {
 ///     // Single header item
-///     scope.item(Some(0), None, || {
+///     scope.item_keyed(Some(0), None, || {
 ///         Text("Header", Modifier::empty());
 ///     });
 ///
@@ -1369,7 +1375,7 @@ fn LazyRowNode(
 /// # Example
 ///
 /// ```rust,ignore
-/// let state = remember_lazy_list_state();
+/// let state = rememberLazyListState();
 /// LazyColumn(
 ///     Modifier::fill_max_size(),
 ///     state,
@@ -1408,9 +1414,9 @@ where
 /// # Example
 ///
 /// ```rust,ignore
-/// let state = remember_lazy_list_state();
+/// let state = rememberLazyListState();
 /// LazyRow(Modifier::empty(), state, LazyRowSpec::default(), |scope| {
-///     scope.items(10, None::<fn(usize)->u64>, None::<fn(usize)->u64>, |i| {
+///     scope.items(10, |i| {
 ///         Text(format!("Item {}", i), Modifier::empty());
 ///     });
 /// });
@@ -1626,7 +1632,7 @@ mod tests {
         let mut state = None;
         composition
             .render(key, || {
-                state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+                state = Some(cranpose_foundation::lazy::rememberLazyListState());
             })
             .expect("lazy list state render should succeed");
         let state = state.expect("lazy list state should be captured");

@@ -23,10 +23,16 @@ web-time = { workspace = true }
 default = []
 std-hash = []
 internal = []
+# The workspace's one answer to where a test writes real files.
+test-helpers = []
 
 [dev-dependencies]
 # Path-only dev-dep: stripped from the published manifest (publish order ignores dev edges).
 cranpose-macros = { path = "../cranpose-macros" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# `delay` hands its deadline to the browser's own timer rather than spinning a
+# frame loop, so an idle wait costs nothing.
+web-sys = { version = "0.3", features = ["Window"] }

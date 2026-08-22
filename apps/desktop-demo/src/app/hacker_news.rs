@@ -1,4 +1,5 @@
 use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
+use cranpose::LazyItems;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
@@ -1369,7 +1370,7 @@ fn StoriesPane(
                             .content_padding(4.0, 4.0),
                         move |scope| match list_news_state_for_items.clone() {
                             NewsState::Idle => {
-                                scope.item(Some(0), None, move || {
+                                scope.item_keyed(Some(0), None, move || {
                                     StatusCard(
                                         Modifier::empty().fill_max_width(),
                                         "Idle".to_string(),
@@ -1383,7 +1384,7 @@ fn StoriesPane(
                                 });
                             }
                             NewsState::Loading => {
-                                scope.item(Some(0), None, move || {
+                                scope.item_keyed(Some(0), None, move || {
                                     StatusCard(
                                         Modifier::empty().fill_max_width(),
                                         "Loading stories…".to_string(),
@@ -1399,7 +1400,7 @@ fn StoriesPane(
                             }
                             NewsState::Error(message) => {
                                 let message = message.clone();
-                                scope.item(Some(0), None, move || {
+                                scope.item_keyed(Some(0), None, move || {
                                     StatusCard(
                                         Modifier::empty().fill_max_width(),
                                         "Story load failed".to_string(),
@@ -1413,12 +1414,10 @@ fn StoriesPane(
                             NewsState::Success(data) => {
                                 let stories = Arc::new(data.stories.clone());
                                 scope.items(
-                                    stories.len(),
-                                    Some({
+                                    LazyItems::new(stories.len()).key({
                                         let stories = Arc::clone(&stories);
                                         move |index: usize| stories[index].id
                                     }),
-                                    None::<fn(usize) -> u64>,
                                     {
                                         let stories = Arc::clone(&stories);
                                         move |index| {
@@ -1446,7 +1445,7 @@ fn StoriesPane(
                                     },
                                 );
 
-                                scope.item(Some(STORY_LIST_FOOTER_KEY), None, {
+                                scope.item_keyed(Some(STORY_LIST_FOOTER_KEY), None, {
                                     let data = data.clone();
                                     move || {
                                         if data.has_more() {
@@ -1775,7 +1774,7 @@ fn ThreadPane(
                             let story = story_for_list.clone();
                             move || {
                                 let comment_list_state =
-                                    cranpose_foundation::lazy::remember_lazy_list_state();
+                                    cranpose_foundation::lazy::rememberLazyListState();
                                 let scrollbar_style = hacker_news_scrollbar_style(palette);
                                 AutoLoadMoreComments(
                                     comment_list_state,
@@ -1812,16 +1811,20 @@ fn ThreadPane(
                                                     let data = data_for_items.clone();
                                                     let story = story.clone();
                                                     move |scope| {
-                                                        scope.item(Some(THREAD_STORY_KEY), None, {
-                                                            let story = story.clone();
-                                                            move || {
-                                                                StorySummaryCard(
-                                                                    story.clone(),
-                                                                    palette,
-                                                                );
-                                                            }
-                                                        });
-                                                        scope.item(
+                                                        scope.item_keyed(
+                                                            Some(THREAD_STORY_KEY),
+                                                            None,
+                                                            {
+                                                                let story = story.clone();
+                                                                move || {
+                                                                    StorySummaryCard(
+                                                                        story.clone(),
+                                                                        palette,
+                                                                    );
+                                                                }
+                                                            },
+                                                        );
+                                                        scope.item_keyed(
                                                             Some(THREAD_DISCUSSION_KEY),
                                                             None,
                                                             {
@@ -1842,15 +1845,13 @@ fn ThreadPane(
                                                             },
                                                         );
                                                         scope.items(
-                                                            comments.len(),
-                                                            Some({
+                                                            LazyItems::new(comments.len()).key({
                                                                 let comments =
                                                                     Arc::clone(&comments);
                                                                 move |index: usize| {
                                                                     comments[index].id
                                                                 }
                                                             }),
-                                                            None::<fn(usize) -> u64>,
                                                             {
                                                                 let comments =
                                                                     Arc::clone(&comments);
@@ -1862,7 +1863,7 @@ fn ThreadPane(
                                                                 }
                                                             },
                                                         );
-                                                        scope.item(Some(THREAD_FOOTER_KEY), None, {
+                                                        scope.item_keyed(Some(THREAD_FOOTER_KEY), None, {
                                                             let data = data.clone();
                                                             move || {
                                                                 if data.comments.is_empty()
@@ -1909,17 +1910,17 @@ fn ThreadPane(
 pub fn HackerNewsTab() {
     #[cfg(test)]
     DebugScopeTag("HackerNewsTab");
-    let news_state = cranpose_core::useState(|| NewsState::Idle);
-    let thread_state = cranpose_core::useState(|| ThreadState::Idle);
-    let refresh_trigger = cranpose_core::useState(|| 0u64);
-    let load_more_trigger = cranpose_core::useState(|| 0u64);
-    let thread_refresh_trigger = cranpose_core::useState(|| 0u64);
-    let comment_load_more_trigger = cranpose_core::useState(|| 0u64);
-    let comment_auto_load_guard = cranpose_core::useState(|| 0usize);
-    let selected_story_state = cranpose_core::useState(|| None::<Story>);
-    let theme_override = cranpose_core::useState(|| None::<bool>);
-    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
-    let auto_load_guard = cranpose_core::useState(|| 0usize);
+    let news_state = cranpose_core::rememberMutableStateOf(|| NewsState::Idle);
+    let thread_state = cranpose_core::rememberMutableStateOf(|| ThreadState::Idle);
+    let refresh_trigger = cranpose_core::rememberMutableStateOf(|| 0u64);
+    let load_more_trigger = cranpose_core::rememberMutableStateOf(|| 0u64);
+    let thread_refresh_trigger = cranpose_core::rememberMutableStateOf(|| 0u64);
+    let comment_load_more_trigger = cranpose_core::rememberMutableStateOf(|| 0u64);
+    let comment_auto_load_guard = cranpose_core::rememberMutableStateOf(|| 0usize);
+    let selected_story_state = cranpose_core::rememberMutableStateOf(|| None::<Story>);
+    let theme_override = cranpose_core::rememberMutableStateOf(|| None::<bool>);
+    let list_state = cranpose_foundation::lazy::rememberLazyListState();
+    let auto_load_guard = cranpose_core::rememberMutableStateOf(|| 0usize);
     let http_client = local_http_client().current();
 
     let selected_story = selected_story_state.get();
@@ -2106,9 +2107,9 @@ pub const HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE: &str = "Robot HN Story 024"
 #[allow(non_snake_case)]
 #[composable]
 pub fn HackerNewsScrollStabilityFixtureTab() {
-    let list_state = cranpose_foundation::lazy::remember_lazy_list_state();
-    let selected_story_state = cranpose_core::useState(|| None::<Story>);
-    let thread_refresh_trigger = cranpose_core::useState(|| 0u64);
+    let list_state = cranpose_foundation::lazy::rememberLazyListState();
+    let selected_story_state = cranpose_core::rememberMutableStateOf(|| None::<Story>);
+    let thread_refresh_trigger = cranpose_core::rememberMutableStateOf(|| 0u64);
     let palette = HackerNewsPalette::new(true);
     let news_state = NewsState::Success(scroll_stability_news_data());
 
@@ -2163,7 +2164,7 @@ mod tests {
     };
     use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider};
     use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
-    use cranpose_services::{HttpClient, HttpClientRef, HttpFuture};
+    use cranpose_services::HttpClientRef;
     use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
     use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
     use serde_json::json;
@@ -2235,17 +2236,24 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl HttpClient for TrackingHttpClient {
-        fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
-            Box::pin(async move {
-                let id = parse_story_id(url);
-                self.tracker.record_request_start();
-                std::thread::sleep(Duration::from_millis(20 + (5 * (id % 3))));
-                self.tracker.record_request_end();
-                Ok(format!(
-                    r#"{{"id":{id},"title":"Story {id}","by":"user{id}","score":{id},"time":0,"kids":[],"type":"story"}}"#
-                ))
-            })
+    impl TrackingHttpClient {
+        /// This fixture as an HTTP client. The fixture itself stays reachable,
+        /// so a test can still ask it what it saw.
+        fn as_client(self: &Arc<Self>) -> HttpClientRef {
+            let inner = Arc::clone(self);
+            Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
+                inner.text_for(url)
+            }))
+        }
+
+        fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
+            let id = parse_story_id(url);
+            self.tracker.record_request_start();
+            std::thread::sleep(Duration::from_millis(20 + (5 * (id % 3))));
+            self.tracker.record_request_end();
+            Ok(format!(
+                r#"{{"id":{id},"title":"Story {id}","by":"user{id}","score":{id},"time":0,"kids":[],"type":"story"}}"#
+            ))
         }
     }
 
@@ -2272,19 +2280,26 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl HttpClient for CommentThreadHttpClient {
-        fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
-            Box::pin(async move {
-                let id = parse_story_id(url);
-                self.tracker.record_request_start();
-                std::thread::sleep(Duration::from_millis(self.latency_ms));
-                self.tracker.record_request_end();
-                self.responses.get(&id).cloned().ok_or_else(|| {
-                    cranpose_services::HttpError::RequestFailed {
-                        url: url.to_string(),
-                        message: format!("Missing comment payload for {id}"),
-                    }
-                })
+    impl CommentThreadHttpClient {
+        /// This fixture as an HTTP client. The fixture itself stays reachable,
+        /// so a test can still ask it what it saw.
+        fn as_client(self: &Arc<Self>) -> HttpClientRef {
+            let inner = Arc::clone(self);
+            Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
+                inner.text_for(url)
+            }))
+        }
+
+        fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
+            let id = parse_story_id(url);
+            self.tracker.record_request_start();
+            std::thread::sleep(Duration::from_millis(self.latency_ms));
+            self.tracker.record_request_end();
+            self.responses.get(&id).cloned().ok_or_else(|| {
+                cranpose_services::HttpError::RequestFailed {
+                    url: url.to_string(),
+                    message: format!("Missing comment payload for {id}"),
+                }
             })
         }
     }
@@ -2403,29 +2418,36 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    impl HttpClient for RegressionHttpClient {
-        fn get_text<'a>(&'a self, url: &'a str) -> HttpFuture<'a, String> {
-            let response = if url.ends_with("/topstories.json") {
-                Ok(self.topstories_json())
-            } else if let Some(id) = Self::parse_item_id(url) {
-                if let Some(payload) = self.comment_json(id) {
-                    Ok(payload)
-                } else if self.ids.contains(&id) {
-                    Ok(self.story_json(id))
-                } else {
-                    Err(cranpose_services::HttpError::RequestFailed {
-                        url: url.to_string(),
-                        message: "unknown mock item".to_string(),
-                    })
-                }
+    impl RegressionHttpClient {
+        /// This fixture as an HTTP client. The fixture itself stays reachable,
+        /// so a test can still ask it what it saw.
+        fn as_client(self: &Arc<Self>) -> HttpClientRef {
+            let inner = Arc::clone(self);
+            Arc::new(cranpose_services::StubHttpClient::from_text(move |url| {
+                inner.text_for(url)
+            }))
+        }
+
+        fn text_for(&self, url: &str) -> Result<String, cranpose_services::HttpError> {
+            if url.ends_with("/topstories.json") {
+                return Ok(self.topstories_json());
+            }
+            let Some(id) = Self::parse_item_id(url) else {
+                return Err(cranpose_services::HttpError::RequestFailed {
+                    url: url.to_string(),
+                    message: "unknown mock endpoint".to_string(),
+                });
+            };
+            if let Some(payload) = self.comment_json(id) {
+                Ok(payload)
+            } else if self.ids.contains(&id) {
+                Ok(self.story_json(id))
             } else {
                 Err(cranpose_services::HttpError::RequestFailed {
                     url: url.to_string(),
-                    message: "unknown mock endpoint".to_string(),
+                    message: "unknown mock item".to_string(),
                 })
-            };
-
-            Box::pin(async move { response })
+            }
         }
     }
 
@@ -2962,7 +2984,7 @@ mod tests {
     #[test]
     fn fetch_stories_page_loads_native_items_in_parallel() {
         let client_impl = Arc::new(TrackingHttpClient::new());
-        let client: HttpClientRef = client_impl.clone();
+        let client: HttpClientRef = client_impl.as_client();
         let ids = vec![11, 22, 33, 44];
 
         let stories =
@@ -2989,7 +3011,7 @@ mod tests {
             ]),
             0,
         ));
-        let client: HttpClientRef = client_impl;
+        let client: HttpClientRef = client_impl.as_client();
         let story = Story {
             id: 500,
             kids: vec![1, 2],
@@ -3029,7 +3051,7 @@ mod tests {
             ]),
             20,
         ));
-        let client: HttpClientRef = client_impl.clone();
+        let client: HttpClientRef = client_impl.as_client();
         let story = Story {
             id: 700,
             kids: vec![1, 2, 3, 4],
@@ -3059,7 +3081,7 @@ mod tests {
             ]),
             0,
         ));
-        let client: HttpClientRef = client_impl;
+        let client: HttpClientRef = client_impl.as_client();
         let story = Story {
             id: 701,
             kids: vec![1, 2],
@@ -3085,7 +3107,7 @@ mod tests {
     #[test]
     fn single_pane_back_navigation_settles_after_opening_comments() {
         let _guard = test_guard();
-        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new());
+        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new()).as_client();
 
         let mut robot = create_headless_robot_test(390, 844, {
             let mock_client = mock_client.clone();
@@ -3247,7 +3269,8 @@ mod tests {
     #[test]
     fn restored_single_pane_story_list_keeps_same_host_during_drag() {
         let _guard = test_guard();
-        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new_with_story_count(60));
+        let mock_client: HttpClientRef =
+            Arc::new(RegressionHttpClient::new_with_story_count(60)).as_client();
 
         let mut robot = create_headless_robot_test(390, 844, {
             let mock_client = mock_client.clone();
@@ -3349,7 +3372,8 @@ mod tests {
     #[test]
     fn restored_single_pane_programmatic_scroll_keeps_same_list_host() {
         let _guard = test_guard();
-        let mock_client: HttpClientRef = Arc::new(RegressionHttpClient::new_with_story_count(60));
+        let mock_client: HttpClientRef =
+            Arc::new(RegressionHttpClient::new_with_story_count(60)).as_client();
 
         let mut robot = create_headless_robot_test(390, 844, {
             let mock_client = mock_client.clone();

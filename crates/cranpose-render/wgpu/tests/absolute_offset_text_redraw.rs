@@ -47,7 +47,9 @@ fn AbsoluteOffsetTextRedrawProbe(start: MutableState<i32>) {
 fn bright_pixel_count(frame: &CapturedFrame) -> usize {
     frame
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|pixel| pixel[0] > 120 && pixel[1] > 80 && pixel[2] > 35)
         .count()
 }
@@ -57,8 +59,10 @@ fn changed_pixel_count(before: &CapturedFrame, after: &CapturedFrame, threshold:
     assert_eq!(before.height, after.height);
     before
         .pixels
-        .chunks_exact(4)
-        .zip(after.pixels.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(after.pixels.as_chunks::<4>().0)
         .filter(|(before, after)| {
             before[0].abs_diff(after[0]) > threshold
                 || before[1].abs_diff(after[1]) > threshold
@@ -82,7 +86,7 @@ fn absolute_offset_text_pixels_redraw_after_state_only_change() {
     let state_holder: Rc<RefCell<Option<MutableState<i32>>>> = Rc::new(RefCell::new(None));
     let state_holder_for_app = Rc::clone(&state_holder);
     let mut shell = AppShell::new(renderer, root_key, move || {
-        let start = cranpose_core::useState(|| 0i32);
+        let start = cranpose_core::rememberMutableStateOf(|| 0i32);
         *state_holder_for_app.borrow_mut() = Some(start);
         AbsoluteOffsetTextRedrawProbe(start);
     });

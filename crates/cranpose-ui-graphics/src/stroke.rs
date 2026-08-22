@@ -477,6 +477,33 @@ mod tests {
         (a - b).abs() < 0.15
     }
 
+    /// What a pinch or a scale-on-press does to an arc: the ring grows about a
+    /// point without opening or closing. The angles must survive untouched, or
+    /// a progress ring would appear to jump backwards while being scaled.
+    #[test]
+    fn scaling_an_arc_moves_its_centre_and_its_radii_and_nothing_else() {
+        let arc = ArcGeometry::new(
+            Point { x: 10.0, y: 20.0 },
+            4.0,
+            10.0,
+            FRAC_PI_2,
+            PI,
+            StrokeCap::Round,
+        );
+        let moved = arc.scaled_about(Point { x: 100.0, y: 200.0 }, 2.5);
+
+        assert_eq!(moved.center, Point { x: 100.0, y: 200.0 });
+        assert_eq!(moved.inner_radius, 10.0);
+        assert_eq!(moved.outer_radius, 25.0);
+        assert_eq!(moved.start_angle, arc.start_angle);
+        assert_eq!(moved.sweep_angle, arc.sweep_angle);
+        assert_eq!(moved.cap, arc.cap);
+
+        // Scaling by one is the identity apart from the centre it is told.
+        let same = arc.scaled_about(arc.center, 1.0);
+        assert_eq!(same, arc);
+    }
+
     #[test]
     fn exact_floor_is_bit_equal_to_floorf() {
         let mut probes: Vec<f32> = vec![

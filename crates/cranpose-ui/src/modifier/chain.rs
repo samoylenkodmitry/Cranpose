@@ -12,7 +12,7 @@ use cranpose_foundation::{
 use super::{
     local::ModifierLocalManager, modifier_debug_enabled, DimensionConstraint, EdgeInsets,
     LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
-    ModifierLocalToken, Point, ResolvedModifierLocal, ResolvedModifiers,
+    ModifierLocalToken, Point, ResolvedModifiers,
 };
 use crate::modifier_nodes::{
     AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
@@ -146,11 +146,6 @@ impl ModifierChainHandle {
         &mut self.chain
     }
 
-    /// Returns mutable access to the modifier node context.
-    pub fn context_mut(&self) -> std::cell::RefMut<'_, BasicModifierNodeContext> {
-        self.context.borrow_mut()
-    }
-
     /// Returns mutable references to both the chain and context.
     /// This is a convenience method for measurement that avoids borrow conflicts.
     pub fn chain_and_context_mut(
@@ -180,14 +175,6 @@ impl ModifierChainHandle {
         self.capabilities.contains(NodeCapabilities::DRAW)
     }
 
-    pub fn has_pointer_input_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::POINTER_INPUT)
-    }
-
-    pub fn has_semantics_nodes(&self) -> bool {
-        self.capabilities.contains(NodeCapabilities::SEMANTICS)
-    }
-
     /// Drains invalidations requested during the last update cycle.
     pub fn take_invalidations(&self) -> Vec<ModifierInvalidation> {
         self.context.borrow_mut().take_invalidations()
@@ -195,13 +182,6 @@ impl ModifierChainHandle {
 
     pub fn resolved_modifiers(&self) -> ResolvedModifiers {
         self.resolved
-    }
-
-    pub fn resolve_modifier_local(
-        &self,
-        token: &ModifierLocalToken,
-    ) -> Option<ResolvedModifierLocal> {
-        self.modifier_locals.borrow().resolve(token)
     }
 
     pub fn modifier_locals_handle(&self) -> ModifierLocalsHandle {

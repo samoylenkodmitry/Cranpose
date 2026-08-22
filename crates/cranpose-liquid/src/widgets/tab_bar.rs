@@ -8,6 +8,7 @@ use crate::material::{
 };
 use crate::motion::LiquidMotion;
 use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
+use crate::widgets::content_scope::ScopeContent;
 use cranpose_macros::composable;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
 use cranpose_ui::widgets::{
@@ -107,8 +108,9 @@ const FLIGHT_ELLIPSE_BLEND: f32 = 0.25;
 /// Resting bubble width over the cell pitch. Measured on the reference
 /// (bottom-bar-click f_0000: bubble 96 over pitch 87.5): the bubble is
 /// barely wider than its cell, so a CELL-CENTERED rest keeps its edge
-/// flush inside the pill even at the end cells — the end overhang
-/// (tab·0.05) never exceeds [`BLOB_MARGIN`].
+/// flush inside the pill even at the end cells. The overhang this factor
+/// asks for (tab·0.05) is what [`tab_lens_rest_width`] caps at
+/// [`BLOB_MARGIN`], which is the whole reason an end cell is legal.
 const TAB_LENS_REST_WIDTH_FACTOR: f32 = 1.10;
 /// Fraction of the shared droplet stretch the tab bubble surface carries:
 /// the reference mid-swipe bubble elongates to ~1.15x its rest width
@@ -260,8 +262,16 @@ pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f
 
 /// The resting bubble's width for a cell pitch — the second half of the
 /// public resting contract ([`tab_lens_resting_left`] gives the position).
+///
+/// A cell-centered bubble on an end cell overhangs the cell strip by half its
+/// excess, and the pill only extends [`BLOB_MARGIN`] past that strip, so the
+/// overhang is what decides whether the end bubble lands flush inside the
+/// pill's rounded end or crosses it. [`TAB_LENS_REST_WIDTH_FACTOR`] sets the
+/// reference proportion; the margin caps it, so a bar built with wide cells
+/// keeps its ends legal instead of poking the bubble outside the pill.
 pub fn tab_lens_rest_width(tab_width: f32) -> f32 {
-    tab_width * TAB_LENS_REST_WIDTH_FACTOR
+    let overhang = (tab_width * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5).min(BLOB_MARGIN);
+    tab_width + 2.0 * overhang
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -425,7 +435,7 @@ fn accessory_surfaces_touch(edge_gap: f32) -> bool {
 fn tab_lens_base_size(tab_width: f32, activity: f32) -> (f32, f32) {
     let activity = activity.clamp(0.0, 1.0);
     let ease = activity * activity * (3.0 - 2.0 * activity);
-    let rest_width = tab_width * TAB_LENS_REST_WIDTH_FACTOR;
+    let rest_width = tab_lens_rest_width(tab_width);
     let projection = 1.0 + (FLIGHT_LENS_HEIGHT_PROJECTION - 1.0) * ease;
     (rest_width, BLOB_HEIGHT * projection)
 }
@@ -517,17 +527,62 @@ fn tab_flight_dynamics(geometry: TabFlightGeometry, node: TabFlightNode) -> Glas
     }
 }
 
+/// The scope a tab bar's destinations are declared in.
+///
+/// Each call adds one destination, in the order it is made, which is also the
+/// order the indices passed to `on_select` count in.
+pub struct LiquidTabBarScope {
+    tabs: ScopeContent<LiquidTab>,
+}
+
+impl LiquidTabBarScope {
+    /// A destination showing `icon` above `label`.
+    pub fn tab(&self, icon: &'static str, label: &'static str) {
+        self.push(LiquidTab::new(icon, label));
+    }
+
+    /// A destination whose icon is drawn as an application badge.
+    pub fn app_badge(&self, icon: &'static str, label: &'static str) {
+        self.push(LiquidTab::app_badge(icon, label));
+    }
+
+    /// A destination built out, for the optical corrections a particular
+    /// symbol needs — see [`LiquidTab`].
+    pub fn push(&self, tab: LiquidTab) {
+        self.tabs.push(tab);
+    }
+}
+
+fn collect_tabs(content: impl FnOnce(&LiquidTabBarScope)) -> Vec<LiquidTab> {
+    ScopeContent::collect(|tabs| LiquidTabBarScope { tabs }, content)
+}
+
 /// A unified floating glass tab bar with every destination inside one pill.
+///
+/// ```rust,ignore
+/// LiquidTabBar(Modifier::empty(), LiquidTabBarSpec::default(), selected, on_select, |scope| {
+///     scope.tab(icons::DOCUMENT, "Today");
+///     scope.tab(icons::SEARCH, "Search");
+/// });
+/// ```
 #[composable]
 #[allow(non_snake_case)]
 pub fn LiquidTabBar(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
-    tabs: Vec<LiquidTab>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
+    content: impl FnOnce(&LiquidTabBarScope),
 ) {
-    LiquidTabBarLayout(modifier, spec, tabs, selected, on_select, false, || {});
+    LiquidTabBarLayout(
+        modifier,
+        spec,
+        collect_tabs(content),
+        selected,
+        on_select,
+        false,
+        || {},
+    );
 }
 
 /// A floating glass tab bar with a detached accessory to its right.
@@ -536,12 +591,20 @@ pub fn LiquidTabBar(
 pub fn LiquidTabBarWithAccessory(
     modifier: Modifier,
     spec: LiquidTabBarSpec,
-    tabs: Vec<LiquidTab>,
     selected: usize,
     on_select: impl Fn(usize) + 'static,
+    content: impl FnOnce(&LiquidTabBarScope),
     accessory: impl FnMut() + 'static,
 ) {
-    LiquidTabBarLayout(modifier, spec, tabs, selected, on_select, true, accessory);
+    LiquidTabBarLayout(
+        modifier,
+        spec,
+        collect_tabs(content),
+        selected,
+        on_select,
+        true,
+        accessory,
+    );
 }
 
 #[composable]
@@ -794,7 +857,7 @@ fn LiquidTabBarLayout(
                     // lens to the bar's end and the two glue through a
                     // smooth-union neck.
                     let (lens_px, lens_activity, lens_tab_w, pose) = lens_x_outer.get();
-                    let lens_w = lens_tab_w * TAB_LENS_REST_WIDTH_FACTOR;
+                    let lens_w = tab_lens_rest_width(lens_tab_w);
                     let lens_h = BLOB_HEIGHT * FLIGHT_LENS_HEIGHT_PROJECTION;
                     // Node headroom for the deformation extremes (max axis
                     // stretch + leading bulge, max ortho swell) and rim glow.
@@ -907,7 +970,7 @@ mod tests {
         // overhang past its cell never exceeds the pill inset, so the
         // bubble edge lands flush inside the pill's rounded end instead
         // of crossing it (the reference gap).
-        let overhang = tab * (TAB_LENS_REST_WIDTH_FACTOR - 1.0) * 0.5;
+        let overhang = (tab_lens_rest_width(tab) - tab) * 0.5;
         assert!(overhang <= BLOB_MARGIN + 1.0e-4);
     }
 
@@ -1136,5 +1199,81 @@ mod tests {
         };
         assert_eq!(settle.damping_ratio, 1.0);
         assert_eq!(settle.stiffness, 900.0);
+    }
+
+    /// Destinations appear in declaration order, and each shorthand builds the
+    /// icon treatment it names.
+    #[test]
+    fn a_scope_declares_destinations_in_order() {
+        let tabs = collect_tabs(|scope| {
+            scope.tab("M0 0", "Discover");
+            scope.app_badge("M1 1", "WWDC");
+            scope.push(LiquidTab::new("M2 2", "Account").with_icon_scale(0.95));
+        });
+
+        assert_eq!(tabs.len(), 3);
+        assert_eq!(tabs[0].label, "Discover");
+        assert_eq!(tabs[0].icon_style, LiquidTabIconStyle::Plain);
+        assert_eq!(tabs[0].icon_scale, 1.0);
+        assert_eq!(tabs[1].icon_style, LiquidTabIconStyle::AppBadge);
+        assert_eq!(tabs[2].icon_scale, 0.95);
+    }
+
+    #[test]
+    fn a_bar_with_no_destinations_declares_none() {
+        assert!(collect_tabs(|_| {}).is_empty());
+    }
+
+    #[test]
+    fn a_resting_lens_overhangs_its_cell_within_the_legal_margin() {
+        // The pill is the cell strip plus BLOB_MARGIN a side, so an end
+        // bubble crosses it the moment its overhang outgrows that margin.
+        // A caller picks the cell width (`LiquidTabBarSpec::new`), so the
+        // rule has to hold across the range, not just at TAB_WIDTH.
+        for tab_width in [24.0_f32, 44.0, 78.0, 80.0, 120.0, 400.0] {
+            let width = tab_lens_rest_width(tab_width);
+            assert!(
+                width > tab_width,
+                "the bubble reads wider than its cell ({width} vs {tab_width})"
+            );
+            let overhang = (width - tab_width) * 0.5;
+            assert!(
+                overhang <= BLOB_MARGIN + 1.0e-4,
+                "an end cell's overhang ({overhang}) at a {tab_width}dp cell \
+                 has to stay inside the pill inset ({BLOB_MARGIN})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_reference_width_cell_keeps_the_measured_rest_proportion() {
+        // The cap must not disturb the widths the reference was measured
+        // at — it only takes over once a cell outgrows the pill inset.
+        for tab_width in [24.0_f32, 44.0, 78.0, 80.0] {
+            assert!(
+                (tab_lens_rest_width(tab_width) - tab_width * TAB_LENS_REST_WIDTH_FACTOR).abs()
+                    < 1.0e-4,
+                "a {tab_width}dp cell still rests at the measured 1.10 factor"
+            );
+        }
+        assert!(
+            tab_lens_rest_width(200.0) < 200.0 * TAB_LENS_REST_WIDTH_FACTOR,
+            "past the inset the margin governs, not the factor"
+        );
+    }
+
+    #[test]
+    fn a_resting_lens_stays_centered_on_the_cell_it_rests_in() {
+        let tab_width = 72.0;
+        let width = tab_lens_rest_width(tab_width);
+        for selected in 0..4 {
+            let left = tab_lens_resting_left(selected, tab_width, 4);
+            let cell_center = left + tab_width * 0.5;
+            let lens_center = left - (width - tab_width) * 0.5 + width * 0.5;
+            assert!(
+                (lens_center - cell_center).abs() < 1e-4,
+                "cell {selected}: lens center {lens_center} vs cell center {cell_center}"
+            );
+        }
     }
 }

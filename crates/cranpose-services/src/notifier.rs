@@ -297,6 +297,23 @@ mod tests {
     use super::*;
     use parking_lot::Mutex;
 
+    #[test]
+    fn an_ongoing_request_is_the_one_a_user_cannot_swipe_away() {
+        let plain = NotifyRequest::new("scan", "Recognising", "3 of 12 pages");
+        assert!(!plain.ongoing, "a plain notification is dismissable");
+        assert_eq!(plain.id, "scan");
+        assert_eq!(plain.title, "Recognising");
+        assert_eq!(plain.body, "3 of 12 pages");
+        assert_eq!(plain.deeplink, None);
+
+        // Progress that is still running says so, which is what stops the
+        // platform letting the user swipe away work that is still going.
+        let ongoing = plain.clone().ongoing(true);
+        assert!(ongoing.ongoing);
+        // And a finished one goes back to being dismissable.
+        assert!(!ongoing.ongoing(false).ongoing);
+    }
+
     #[derive(Default)]
     struct Recorder {
         posted: Mutex<Vec<String>>,

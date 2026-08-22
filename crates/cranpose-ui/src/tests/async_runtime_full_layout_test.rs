@@ -14,7 +14,7 @@ use crate::{
 };
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
-    MemoryApplier, MutableState, Node,
+    MemoryApplier, MutableState, Node, TaskSite,
 };
 use cranpose_macros::composable;
 
@@ -74,6 +74,7 @@ fn async_runtime_full_layout(
         let running_state = is_running;
         launched_effect_async_impl(
             location_key(file!(), line!(), column!()),
+            TaskSite::new(file!(), line!()),
             (),
             move |scope| {
                 let animation = animation_state;

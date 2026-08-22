@@ -4,7 +4,7 @@ use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_core::{useState, MutableState};
+use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_ui::widgets::{
     BoxWithConstraints, Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, Row,
     RowSpec, Text,
@@ -54,7 +54,7 @@ fn ScreenBody(show_badge: MutableState<bool>) {
 
 #[composable]
 fn SubcomposeLoopDisposalScreen() {
-    let show_badge = useState(|| true);
+    let show_badge = rememberMutableStateOf(|| true);
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::new(),

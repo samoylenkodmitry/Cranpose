@@ -149,14 +149,15 @@ order like the existing widgets. Every visual constant comes from the theme.
 | `GlassSurface(modifier, Glass, content)` | the primitive container |
 | `GlassButton(modifier, GlassButtonSpec, on_click, content)` | `.glass` / `.prominent` (accent-filled glass) / `.plain`; press spring + haptic |
 | `GlassIconButton(modifier, spec, on_click, icon)` | circular glass, 44dp target |
+| `GlassIconButtonGroup(modifier, spec, content)` | a row of circular actions whose pressed glass necks into its neighbor; declared with `scope.action(icon, description, on_click)` |
 | `LiquidToggle(modifier, checked, on_change)` | iOS 26 switch: 63×28 capsule track, 37×26 capsule thumb; press lifts the thumb into a 58×39 magnifying lens (thumb dissolves, track color refracts through with a chromatic rim, track lightens); drag interpolates the track color with the finger; slow lens settle on release; haptic on commit |
 | `LiquidSlider(modifier, spec, value, on_change)` | capsule track, glass thumb, optional haptic detents |
-| `LiquidSegmentedControl(modifier, labels, selected, on_select)` | sliding glass pill indicator with liquid stretch |
+| `LiquidSegmentedControl(modifier, selected, on_select, content)` | sliding glass pill indicator with liquid stretch; `scope.segment(label)` or `scope.segment_content(description, content)` |
 | `LiquidChip(modifier, spec, selected, on_click, label)` | filter pill (cranscan Library "All / Receipts") |
 | `LiquidCard(modifier, content)` / `LiquidListSection(header, content)` / `LiquidListRow(spec, on_click, content)` | grouped-inset list look; rows get press wash + separators |
-| `LiquidTabBar(modifier, tabs, selected, on_select, accessory)` | floating glass pill; **liquid selection blob** (leading/trailing edges on separate springs → droplet stretch); optional detached circular accessory (search) |
+| `LiquidTabBar(modifier, spec, selected, on_select, content)` / `LiquidTabBarWithAccessory(…, content, accessory)` | floating glass pill; destinations declared with `scope.tab(icon, label)`; **liquid selection blob** (leading/trailing edges on separate springs → droplet stretch); optional detached circular accessory (search) |
 | `LiquidNavBar(modifier, spec, scroll_offset)` | large-title → inline collapse; glass + progressive blur appears as content scrolls under (blur chained with a vertical fade mask) |
-| `LiquidMenu(modifier, expanded, spec, on_dismiss, items)` | popup menu that **morphs out of its anchor**: glass bubble scales from the anchor corner (transform-origin anchored springs), items fade in staggered; checkmark/icon/destructive/section rows |
+| `LiquidMenu(expanded, anchor, spec, absorbed, gesture, on_dismiss, content)` / `LiquidDropdownMenu(modifier, expanded, spec, on_dismiss, anchor_content, content)` | popup menu that **morphs out of its anchor**: rows declared with `scope.item(item, on_click)` / `scope.header(label)` / `scope.separator()`, each carrying its own action; glass bubble scales from the anchor corner (transform-origin anchored springs), items fade in staggered; checkmark/icon/destructive/section rows |
 | `LiquidSearchField(modifier, state, spec)` | pill search field with icon + clear button |
 | `liquid::icons` | built-in vector icon set (SF-Symbols-flavored, stroke SVGs rasterized via the existing SVG painter, tinted by the label color): chevrons, search, gear, ellipsis, plus, share, trash, doc, camera, folder, check, xmark, star, bookmark, eye, arrow up/down |
 

@@ -100,12 +100,6 @@ impl VectorPath {
         }
     }
 
-    /// Returns a copy using the given fill rule.
-    pub fn with_fill_rule(mut self, fill_rule: PathFillRule) -> Self {
-        self.fill_rule = fill_rule;
-        self
-    }
-
     /// Returns a uniformly scaled copy (icon path data drawn at a target
     /// size: `parse(d)?.scaled(size / view_box)`).
     pub fn scaled(&self, factor: f32) -> Self {

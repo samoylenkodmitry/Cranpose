@@ -128,12 +128,12 @@ pub(crate) enum PacketRoot {
     Surface(Box<RootSurfacePacket>),
 }
 
-/// Producer lowering of a non-direct root plus a snapshot of every value
-/// the present-side root composite tail used to read off `graph.root` —
-/// the present backend must never touch the retained graph.
+/// Producer lowering of a non-direct root plus a snapshot of every value the
+/// present-side root composite tail needs from `graph.root` — the present
+/// backend must never touch the retained graph.
 pub(crate) struct RootSurfacePacket {
-    /// The root's collection-time snapshot, from `lower_layer_node` (the
-    /// same lowering the render-side root path used to run).
+    /// The root's collection-time snapshot, from `lower_layer_node` — the
+    /// same lowering the render-side root path performs.
     pub(crate) lowered: ChildLayerComposite,
     /// The root's collected content; dropped unused on a raster-cache hit.
     pub(crate) source: LoweredChildSource,

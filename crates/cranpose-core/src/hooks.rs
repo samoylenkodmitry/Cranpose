@@ -16,11 +16,11 @@ pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
 ///
 /// A plain `remember` is keyed only by composition position: when a slot is
 /// reused with different inputs (a list row that changes identity, an icon
-/// whose path prop changes), the stale value survives. `remember_keyed`
+/// whose path prop changes), the stale value survives. `rememberKeyed`
 /// stores the key beside the value and re-runs `init` on mismatch — the JC
 /// `remember(key1) { ... }` contract.
 #[allow(non_snake_case)]
-pub fn remember_keyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
+pub fn rememberKeyed<K, T>(key: K, init: impl FnOnce(&K) -> T) -> T
 where
     K: PartialEq + 'static,
     T: Clone + 'static,
@@ -115,8 +115,8 @@ pub fn withFrameMillis(
 /// 1.  You are creating state properties inside a struct or class (not a composable function).
 /// 2.  You are implementing a custom state management solution.
 ///
-/// **If you are inside a `#[composable]` function, use [`useState`] instead.**
-/// `useState` wraps `mutableStateOf` in `remember`, ensuring the state persists
+/// **If you are inside a `#[composable]` function, use [`rememberMutableStateOf`] instead.**
+/// `rememberMutableStateOf` wraps `mutableStateOf` in `remember`, ensuring the state persists
 /// across recompositions. Using `mutableStateOf` directly in a composable will
 /// recreated the state on every frame, losing data.
 ///
@@ -138,7 +138,7 @@ pub fn withFrameMillis(
 ///
 /// This creates a runtime-owned persistent state. If you need the state lifetime
 /// tied to a Rust owner instead, store an [`OwnedMutableState`] or call
-/// [`MutableState::retain`] on a handle returned by [`useState`].
+/// [`MutableState::retain`] on a handle returned by [`rememberMutableStateOf`].
 #[allow(non_snake_case)]
 pub fn mutableStateOf<T: Clone + 'static>(initial: T) -> MutableState<T> {
     let runtime = composer_context::try_with_composer(|composer| composer.runtime_handle())
@@ -216,7 +216,7 @@ where
 /// fn Counter() {
 ///     // "count" persists across recompositions.
 ///     // If we used mutableStateOf directly, it would reset to 0 every frame.
-///     let count = useState(|| 0);
+///     let count = rememberMutableStateOf(|| 0);
 ///
 ///     Button(
 ///         Modifier::empty(),
@@ -227,7 +227,9 @@ where
 /// }
 /// ```
 #[allow(non_snake_case)]
-pub fn useState<T: Clone + PartialEq + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
+pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
+    init: impl FnOnce() -> T,
+) -> MutableState<T> {
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
@@ -237,7 +239,9 @@ pub fn useState<T: Clone + PartialEq + 'static>(init: impl FnOnce() -> T) -> Mut
 }
 
 #[allow(non_snake_case)]
-pub fn useStateRaw<T: Clone + 'static>(init: impl FnOnce() -> T) -> MutableState<T> {
+pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
+    init: impl FnOnce() -> T,
+) -> MutableState<T> {
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer

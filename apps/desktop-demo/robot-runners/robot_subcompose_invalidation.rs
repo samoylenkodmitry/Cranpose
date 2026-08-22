@@ -14,8 +14,9 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_core::useState;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose::LazyItems;
+use cranpose_core::rememberMutableStateOf;
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::*;
 use cranpose_ui::SemanticsWidgetRole;
@@ -27,8 +28,8 @@ fn test_app() {
     use cranpose_ui::LinearArrangement;
 
     // State to track color scheme
-    let color_scheme = useState(|| 0u32);
-    let list_state = remember_lazy_list_state();
+    let color_scheme = rememberMutableStateOf(|| 0u32);
+    let list_state = rememberLazyListState();
 
     Column(
         Modifier::empty()
@@ -93,39 +94,34 @@ fn test_app() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
                 |scope| {
-                    scope.items(
-                        5,
-                        Some(|i: usize| i as u64),
-                        None::<fn(usize) -> u64>,
-                        move |i| {
-                            // Colors that change based on scheme
-                            let bg = match current_scheme {
-                                0 => Color(0.1, 0.15, 0.3 + (i as f32 * 0.05), 1.0), // Blue
-                                1 => Color(0.1, 0.3 + (i as f32 * 0.05), 0.15, 1.0), // Green
-                                2 => Color(0.3 + (i as f32 * 0.05), 0.1, 0.15, 1.0), // Red
-                                _ => Color(0.2, 0.2, 0.2, 1.0),
-                            };
+                    scope.items(LazyItems::new(5).key(|i: usize| i as u64), move |i| {
+                        // Colors that change based on scheme
+                        let bg = match current_scheme {
+                            0 => Color(0.1, 0.15, 0.3 + (i as f32 * 0.05), 1.0), // Blue
+                            1 => Color(0.1, 0.3 + (i as f32 * 0.05), 0.15, 1.0), // Green
+                            2 => Color(0.3 + (i as f32 * 0.05), 0.1, 0.15, 1.0), // Red
+                            _ => Color(0.2, 0.2, 0.2, 1.0),
+                        };
 
-                            Row(
-                                Modifier::empty()
-                                    .fill_max_width()
-                                    .height(60.0)
-                                    .padding(10.0)
-                                    .background(bg)
-                                    .semantics(move |c| {
-                                        c.content_description = Some(format!("item{}", i));
-                                    }),
-                                RowSpec::new(),
-                                move || {
-                                    Text(
-                                        format!("Item {} - Scheme {}", i, current_scheme),
-                                        Modifier::empty(),
-                                        TextStyle::default(),
-                                    );
-                                },
-                            );
-                        },
-                    );
+                        Row(
+                            Modifier::empty()
+                                .fill_max_width()
+                                .height(60.0)
+                                .padding(10.0)
+                                .background(bg)
+                                .semantics(move |c| {
+                                    c.content_description = Some(format!("item{}", i));
+                                }),
+                            RowSpec::new(),
+                            move || {
+                                Text(
+                                    format!("Item {} - Scheme {}", i, current_scheme),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            },
+                        );
+                    });
                 },
             );
         },

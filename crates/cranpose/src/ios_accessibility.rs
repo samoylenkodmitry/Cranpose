@@ -142,7 +142,7 @@ impl IosAccessibilityBridge {
                 .native_elements
                 .get(element_id)
                 .expect("accessibility element inserted above");
-            update_native_element(native, element);
+            update_native_element(native, element, mtm);
         }
 
         if structure_changed {
@@ -227,7 +227,11 @@ impl IosAccessibilityBridge {
     }
 }
 
-fn update_native_element(native: &NativeAccessibilityElement, element: &AccessibilityElement) {
+fn update_native_element(
+    native: &NativeAccessibilityElement,
+    element: &AccessibilityElement,
+    mtm: MainThreadMarker,
+) {
     native.set_actionable(element.clickable || element.role == AccessibilityRole::TextField);
     native.setAccessibilityLabel(Some(&NSString::from_str(&element.label)));
     // VoiceOver reads the value after the label, which is where Compose's
@@ -264,6 +268,12 @@ fn update_native_element(native: &NativeAccessibilityElement, element: &Accessib
             AccessibilityRole::Tab => UIAccessibilityTraitButton,
             AccessibilityRole::Image => UIAccessibilityTraitImage,
             AccessibilityRole::Header => UIAccessibilityTraitHeader,
+            // VoiceOver treats a modal container as a header-like landmark it
+            // announces on entry; the modality itself is set below through
+            // `accessibilityViewIsModal` on the element itself, since
+            // Cranpose publishes a flat sibling array rather than nested
+            // views for `accessibilityViewIsModal` to scope by containment.
+            AccessibilityRole::Dialog => UIAccessibilityTraitHeader,
         }
     };
     // SAFETY: as above — immutable framework constants.
@@ -276,6 +286,11 @@ fn update_native_element(native: &NativeAccessibilityElement, element: &Accessib
         }
     }
     native.setAccessibilityTraits(traits);
+    // While a dialog element exists in the published array, VoiceOver must
+    // ignore its siblings in that same array — the rest of the screen behind
+    // the dialog — exactly as `aria-modal` does for the web backend's
+    // `AccessibilityRole::Dialog` case.
+    native.setAccessibilityViewIsModal(element.role == AccessibilityRole::Dialog, mtm);
 }
 
 fn same_structure(current: &[AccessibilityElement], next: &[AccessibilityElement]) -> bool {

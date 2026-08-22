@@ -8,7 +8,7 @@
 //! ```
 
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScopeExt, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
@@ -155,8 +155,8 @@ fn provider_items_test_app() {
             .collect(),
     );
 
-    let state1 = remember_lazy_list_state();
-    let state2 = remember_lazy_list_state();
+    let state1 = rememberLazyListState();
+    let state2 = rememberLazyListState();
 
     Column(
         Modifier::empty()

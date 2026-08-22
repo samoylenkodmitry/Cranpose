@@ -8,7 +8,7 @@
 //! Height pattern: index % 5 -> 0=48, 1=56, 2=64, 3=72, 4=80
 
 use cranpose::AppLauncher;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use cranpose_ui::widgets::{
     Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
@@ -130,8 +130,8 @@ fn main() {
             robot.exit().ok();
         })
         .run(|| {
-            let state = remember_lazy_list_state();
-            let item_count = cranpose_core::useState(|| 100usize);
+            let state = rememberLazyListState();
+            let item_count = cranpose_core::rememberMutableStateOf(|| 100usize);
 
             Column(
                 Modifier::default().fill_max_size(),
@@ -192,38 +192,32 @@ fn main() {
                                     state,
                                     LazyColumnSpec::default(),
                                     |scope| {
-                                        scope.items(
-                                            count,
-                                            None::<fn(usize) -> u64>,
-                                            None::<fn(usize) -> u64>,
-                                            move |index| {
-                                                // Height: 48 + (index % 5) * 8 -> 48, 56, 64, 72, 80
-                                                let height = 48.0 + (index % 5) as f32 * 8.0;
-                                                let bg = if index % 2 == 0 {
-                                                    Color::rgb(0.2, 0.3, 0.4)
-                                                } else {
-                                                    Color::rgb(0.3, 0.4, 0.5)
-                                                };
+                                        scope.items(count, move |index| {
+                                            // Height: 48 + (index % 5) * 8 -> 48, 56, 64, 72, 80
+                                            let height = 48.0 + (index % 5) as f32 * 8.0;
+                                            let bg = if index % 2 == 0 {
+                                                Color::rgb(0.2, 0.3, 0.4)
+                                            } else {
+                                                Color::rgb(0.3, 0.4, 0.5)
+                                            };
 
-                                                Box(
-                                                    Modifier::default()
-                                                        .size(Size {
-                                                            width: 400.0,
-                                                            height,
-                                                        })
-                                                        .background(bg),
-                                                    BoxSpec::new()
-                                                        .content_alignment(Alignment::CENTER),
-                                                    move || {
-                                                        Text(
-                                                            format!("Item {}", index),
-                                                            Modifier::default(),
-                                                            TextStyle::default(),
-                                                        );
-                                                    },
-                                                );
-                                            },
-                                        );
+                                            Box(
+                                                Modifier::default()
+                                                    .size(Size {
+                                                        width: 400.0,
+                                                        height,
+                                                    })
+                                                    .background(bg),
+                                                BoxSpec::new().content_alignment(Alignment::CENTER),
+                                                move || {
+                                                    Text(
+                                                        format!("Item {}", index),
+                                                        Modifier::default(),
+                                                        TextStyle::default(),
+                                                    );
+                                                },
+                                            );
+                                        });
                                     },
                                 );
                             },

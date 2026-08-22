@@ -23,11 +23,50 @@ struct LaunchedEffectCancellation {
     continuations: Rc<RefCell<Vec<u64>>>,
 }
 
+/// Where an effect was written, carried onto the task it spawns.
+///
+/// A leak report that can only say "one task is still queued" names nothing:
+/// every run prints the same number and no run says which effect it was. This
+/// is what turns that count into a place to look, and it stays a pair of plain
+/// fields so carrying it costs nothing until a task is actually spawned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TaskSite {
+    pub file: &'static str,
+    pub line: u32,
+}
+
+impl TaskSite {
+    /// The site a macro captured with `file!()` and `line!()`.
+    pub const fn new(file: &'static str, line: u32) -> TaskSite {
+        TaskSite { file, line }
+    }
+}
+
+impl Default for TaskSite {
+    fn default() -> TaskSite {
+        TaskSite::new("unknown", 0)
+    }
+}
+
+impl std::fmt::Display for TaskSite {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}:{}", self.file, self.line)
+    }
+}
+
+impl From<&'static std::panic::Location<'static>> for TaskSite {
+    /// The site a `#[track_caller]` function was called from.
+    fn from(location: &'static std::panic::Location<'static>) -> TaskSite {
+        TaskSite::new(location.file(), location.line())
+    }
+}
+
 #[derive(Default)]
 struct LaunchedEffectAsyncState {
     key: Option<Key>,
     cancel: Option<LaunchedEffectCancellation>,
     task: Option<TaskHandle>,
+    site: TaskSite,
 }
 
 impl LaunchedEffectState {
@@ -99,6 +138,10 @@ impl LaunchedEffectAsyncState {
         self.key = Some(key);
     }
 
+    fn set_site(&mut self, site: TaskSite) {
+        self.site = site;
+    }
+
     fn launch(
         &mut self,
         runtime: RuntimeHandle,
@@ -123,6 +166,7 @@ impl LaunchedEffectAsyncState {
         };
         let future = mk_future(scope.clone());
         let active_flag = Arc::clone(&scope.active);
+        crate::label_next_ui_task(self.site.to_string());
         match runtime.spawn_ui(async move {
             future.await;
             active_flag.store(false, Ordering::SeqCst);
@@ -220,23 +264,6 @@ impl LaunchedEffectScope {
                 task();
             }
         }));
-    }
-
-    /// Posts work from any thread to run on the UI thread.
-    ///
-    /// The closure must be `Send` because it may be sent across threads before
-    /// running on the runtime thread. Use this helper when posting from
-    /// background threads that need to interact with UI state.
-    pub fn post_ui_send(&self, task: impl FnOnce() + Send + 'static) {
-        if !self.is_active() {
-            return;
-        }
-        let active = Arc::clone(&self.active);
-        self.runtime.post_ui(move || {
-            if active.load(Ordering::SeqCst) {
-                task();
-            }
-        });
     }
 
     /// Runs background work and delivers results to the UI.
@@ -383,7 +410,9 @@ macro_rules! LaunchedEffect {
     };
 }
 
-pub fn __launched_effect_async_impl<K, F>(group_key: Key, keys: K, mk_future: F)
+/// `site` is where the effect was written. It travels onto the task the effect
+/// spawns, so a task the runtime is still holding says which effect started it.
+pub fn __launched_effect_async_impl<K, F>(group_key: Key, site: TaskSite, keys: K, mk_future: F)
 where
     K: Hash,
     F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
@@ -393,7 +422,10 @@ where
             let key_hash = hash_key(&keys);
             let state = composer.remember_effect::<LaunchedEffectAsyncState>();
             if state.with(|state| state.should_run(key_hash)) {
-                state.update(|state| state.set_key(key_hash));
+                state.update(|state| {
+                    state.set_key(key_hash);
+                    state.set_site(site);
+                });
                 let runtime = composer.runtime_handle();
                 let state_for_effect = state.clone();
                 let mut mk_future_opt = Some(mk_future);
@@ -414,6 +446,7 @@ macro_rules! LaunchedEffectAsync {
     ($keys:expr, $future:expr) => {
         $crate::__launched_effect_async_impl(
             $crate::location_key(file!(), line!(), column!()),
+            $crate::TaskSite::new(file!(), line!()),
             $keys,
             $future,
         )

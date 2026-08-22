@@ -13,36 +13,33 @@
 
 use super::*;
 use cranpose_core::NodeId;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope};
 use cranpose_ui_graphics::Size as ViewportSize;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn compose_lazy_swipe_rows() -> TestComposition {
     run_test_composition(|| {
-        let list_state = remember_lazy_list_state();
+        let list_state = rememberLazyListState();
         LazyColumn(
             Modifier::empty().fill_max_size(),
             list_state,
             LazyColumnSpec::default(),
             |scope| {
-                scope.items(
-                    5,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |index| {
-                        SwipeToDismiss(
-                            Modifier::empty().fill_max_width().height(48.0),
-                            SwipeToDismissSpec::default(),
-                            || {},
-                            move || {
-                                Text(
-                                    format!("Row {index}"),
-                                    Modifier::empty(),
-                                    TextStyle::default(),
-                                );
-                            },
-                        );
-                    },
-                );
+                scope.items(5, |index| {
+                    SwipeToDismiss(
+                        Modifier::empty().fill_max_width().height(48.0),
+                        SwipeToDismissSpec::default(),
+                        || {},
+                        move || {
+                            Text(
+                                format!("Row {index}"),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                        },
+                    );
+                });
             },
         );
     })
@@ -137,5 +134,93 @@ fn swipe_to_dismiss_exposes_semantics_inside_lazy_column_item() {
             .iter()
             .any(|description| description == "Row 0"),
         "SwipeToDismiss semantics must appear in the applier-traversal build, got {descriptions:?}"
+    );
+}
+
+/// A keyed lazy item hands its identity to whatever inside it holds per-item
+/// state, so a row states its id once — in the list's `key` — rather than
+/// again in every widget that remembers something about it.
+#[test]
+fn a_keyed_lazy_item_supplies_its_key_to_its_content() {
+    let seen: Rc<RefCell<Vec<Option<u64>>>> = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&seen);
+    let mut composition = run_test_composition(move || {
+        let recorder = Rc::clone(&recorder);
+        let list_state = rememberLazyListState();
+        LazyColumn(
+            Modifier::empty().fill_max_size(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                let recorder = Rc::clone(&recorder);
+                scope.items(
+                    LazyItems::new(3).key(move |index: usize| 700 + index as u64),
+                    move |index| {
+                        recorder
+                            .borrow_mut()
+                            .push(crate::lazy_item::lazy_item_key());
+                        Text(
+                            format!("Row {index}"),
+                            Modifier::empty(),
+                            TextStyle::default(),
+                        );
+                    },
+                );
+            },
+        );
+    });
+    let root = composition.root().expect("lazy column root");
+    measure(&mut composition, root);
+
+    let keys = seen.borrow().clone();
+    assert!(!keys.is_empty(), "no lazy item was composed");
+    assert!(
+        keys.iter().all(Option::is_some),
+        "a keyed item must report an identity, got {keys:?}"
+    );
+    let distinct: std::collections::HashSet<_> = keys.iter().copied().collect();
+    assert!(
+        distinct.len() > 1,
+        "each item must report its own identity, got {keys:?}"
+    );
+}
+
+/// An unkeyed list is keyed by position, and a position is not an identity —
+/// it is exactly the identity that leaks state onto the wrong row when the list
+/// shifts. Such a list reports nothing rather than something misleading.
+#[test]
+fn an_unkeyed_lazy_item_reports_no_identity() {
+    let seen: Rc<RefCell<Vec<Option<u64>>>> = Rc::new(RefCell::new(Vec::new()));
+    let recorder = Rc::clone(&seen);
+    let mut composition = run_test_composition(move || {
+        let recorder = Rc::clone(&recorder);
+        let list_state = rememberLazyListState();
+        LazyColumn(
+            Modifier::empty().fill_max_size(),
+            list_state,
+            LazyColumnSpec::default(),
+            move |scope| {
+                let recorder = Rc::clone(&recorder);
+                scope.items(3, move |index| {
+                    recorder
+                        .borrow_mut()
+                        .push(crate::lazy_item::lazy_item_key());
+                    Text(
+                        format!("Row {index}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("lazy column root");
+    measure(&mut composition, root);
+
+    let keys = seen.borrow().clone();
+    assert!(!keys.is_empty(), "no lazy item was composed");
+    assert!(
+        keys.iter().all(Option::is_none),
+        "an index is not an identity, got {keys:?}"
     );
 }

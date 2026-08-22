@@ -371,7 +371,7 @@ pub(crate) fn LazyListWithScrollbar<F>(
 mod tests {
     use super::*;
     use cranpose_core::{location_key, Applier, Composition, MemoryApplier, MutableState, NodeId};
-    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+    use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope};
     use cranpose_ui::{
         BoxWithConstraints, Column, ColumnSpec, HeadlessRenderer, LayoutEngine, LazyColumn,
         LazyColumnSpec, Modifier, RenderOp, Size, Text, TextStyle,
@@ -476,18 +476,13 @@ mod tests {
                         list_state,
                         LazyColumnSpec::default(),
                         |scope| {
-                            scope.items(
-                                40,
-                                None::<fn(usize) -> u64>,
-                                None::<fn(usize) -> u64>,
-                                |index| {
-                                    Text(
-                                        format!("Item {}", index),
-                                        Modifier::empty(),
-                                        TextStyle::default(),
-                                    );
-                                },
-                            );
+                            scope.items(40, |index| {
+                                Text(
+                                    format!("Item {}", index),
+                                    Modifier::empty(),
+                                    TextStyle::default(),
+                                );
+                            });
                         },
                     );
                     CAPTURED_SCROLLBAR_LIST_STATE.with(|slot| {
@@ -609,7 +604,7 @@ mod tests {
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                     Column(
                         Modifier::empty().fill_max_size(),
@@ -630,7 +625,7 @@ mod tests {
                                             list_state,
                                             LazyColumnSpec::default(),
                                             |scope| {
-                                                scope.item(Some(0), None, || {
+                                                scope.item_keyed(Some(0), None, || {
                                                     Text(
                                                         "Stories",
                                                         Modifier::empty(),
@@ -681,7 +676,7 @@ mod tests {
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                     Column(
                         Modifier::empty().fill_max_size(),
@@ -710,9 +705,8 @@ mod tests {
                                                 let stories = Rc::clone(&stories);
                                                 move |scope| {
                                                     scope.items(
-                                                        stories.len(),
-                                                        Some(|index| index as u64),
-                                                        None::<fn(usize) -> u64>,
+                                                        LazyItems::new(stories.len())
+                                                            .key(|index| index as u64),
                                                         {
                                                             let stories = Rc::clone(&stories);
                                                             move |index| {
@@ -724,7 +718,7 @@ mod tests {
                                                             }
                                                         },
                                                     );
-                                                    scope.item(Some(9999), None, || {
+                                                    scope.item_keyed(Some(9999), None, || {
                                                         Text(
                                                             "Footer",
                                                             Modifier::empty(),
@@ -775,7 +769,7 @@ mod tests {
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                let stories_list_state = remember_lazy_list_state();
+                let stories_list_state = rememberLazyListState();
                 BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                     Column(
                         Modifier::empty().fill_max_size(),
@@ -784,7 +778,7 @@ mod tests {
                             Text("Header", Modifier::empty(), TextStyle::default());
                             if show_thread.value() {
                                 cranpose_core::with_key(&1u64, move || {
-                                    let comments_list_state = remember_lazy_list_state();
+                                    let comments_list_state = rememberLazyListState();
                                     LazyListWithScrollbar(
                                         Modifier::empty().fill_max_size(),
                                         comments_list_state,
@@ -796,7 +790,7 @@ mod tests {
                                                 comments_list_state,
                                                 LazyColumnSpec::default(),
                                                 |scope| {
-                                                    scope.item(Some(0), None, || {
+                                                    scope.item_keyed(Some(0), None, || {
                                                         Text(
                                                             "Thread",
                                                             Modifier::empty(),
@@ -820,7 +814,7 @@ mod tests {
                                             stories_list_state,
                                             LazyColumnSpec::default(),
                                             |scope| {
-                                                scope.item(Some(0), None, || {
+                                                scope.item_keyed(Some(0), None, || {
                                                     Text(
                                                         "Stories",
                                                         Modifier::empty(),
@@ -875,7 +869,7 @@ mod tests {
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                     Column(
                         Modifier::empty().fill_max_size(),
@@ -947,7 +941,7 @@ mod tests {
 
         composition
             .render(location_key(file!(), line!(), column!()), || {
-                let list_state = remember_lazy_list_state();
+                let list_state = rememberLazyListState();
                 BoxWithConstraints(Modifier::empty().fill_max_size(), move |_scope| {
                     Column(
                         Modifier::empty().fill_max_size(),

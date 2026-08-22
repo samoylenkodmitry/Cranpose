@@ -395,41 +395,6 @@ impl TextStyle {
         hasher.finish()
     }
 
-    /// Hash covering everything that affects rasterized output: the
-    /// measurement inputs plus the visual-only properties
-    /// (color/brush/alpha, decorations, shadow, draw style).
-    pub fn raster_hash(&self) -> u64 {
-        let mut hasher = FxHasher::default();
-        self.measurement_hash().hash(&mut hasher);
-        let span = &self.span_style;
-        if let Some(color) = span.color {
-            color.0.to_bits().hash(&mut hasher);
-            color.1.to_bits().hash(&mut hasher);
-            color.2.to_bits().hash(&mut hasher);
-            color.3.to_bits().hash(&mut hasher);
-        }
-        if let Some(brush) = &span.brush {
-            format_brush_bits(brush, &mut hasher);
-        }
-        if let Some(alpha) = span.alpha {
-            alpha.to_bits().hash(&mut hasher);
-        }
-        span.text_decoration.hash(&mut hasher);
-        if let Some(shadow) = &span.shadow {
-            shadow.color.0.to_bits().hash(&mut hasher);
-            shadow.color.1.to_bits().hash(&mut hasher);
-            shadow.color.2.to_bits().hash(&mut hasher);
-            shadow.color.3.to_bits().hash(&mut hasher);
-            shadow.offset.x.to_bits().hash(&mut hasher);
-            shadow.offset.y.to_bits().hash(&mut hasher);
-            shadow.blur_radius.to_bits().hash(&mut hasher);
-        }
-        if let Some(draw_style) = &span.draw_style {
-            format!("{draw_style:?}").hash(&mut hasher);
-        }
-        hasher.finish()
-    }
-
     pub fn render_hash(&self) -> u64 {
         let mut hasher = FxHasher::default();
         hash_span_style(&self.span_style, &mut hasher);
@@ -549,13 +514,6 @@ fn hash_option_alpha<H: Hasher>(alpha: &Option<f32>, state: &mut H) {
         }
         None => 0u8.hash(state),
     }
-}
-
-fn format_brush_bits<H: Hasher>(brush: &cranpose_ui_graphics::Brush, hasher: &mut H) {
-    // Structural hash over the brush's numeric content; discriminant first.
-    std::mem::discriminant(brush).hash(hasher);
-    let debug = format!("{brush:?}");
-    debug.hash(hasher);
 }
 
 fn hash_text_unit<H: Hasher>(unit: TextUnit, state: &mut H) {

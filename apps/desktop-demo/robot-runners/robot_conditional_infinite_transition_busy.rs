@@ -8,7 +8,7 @@ use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::{
     changed_pixel_count_in_region, find_button_in_semantics, find_text_in_semantics,
 };
@@ -51,7 +51,7 @@ fn click_button(robot: &Robot, label: &str) {
 }
 
 fn test_app() {
-    let busy = useState(|| false);
+    let busy = rememberMutableStateOf(|| false);
 
     Column(
         Modifier::empty()

@@ -79,7 +79,9 @@ fn assert_color(
 fn count_bright_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| rgba[0] > 170 || rgba[1] > 170 || rgba[2] > 170)
         .count()
 }
@@ -87,7 +89,9 @@ fn count_bright_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
 fn count_green_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| rgba[1] > 150 && rgba[1] > rgba[0].saturating_add(24) && rgba[1] > rgba[2])
         .count()
 }
@@ -95,7 +99,9 @@ fn count_green_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
 fn count_yellow_text_pixels(screenshot: &cranpose::RobotScreenshot) -> usize {
     screenshot
         .pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|rgba| {
             rgba[0] > 150
                 && rgba[1] > 130

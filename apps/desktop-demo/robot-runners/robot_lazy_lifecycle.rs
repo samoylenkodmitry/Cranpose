@@ -9,8 +9,9 @@
 //! ```
 
 use cranpose::AppLauncher;
+use cranpose::LazyItems;
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::widgets::*;
@@ -57,14 +58,9 @@ fn lifecycle_lazy_list(state: LazyListState, stats: MutableState<LifecycleStats>
             .vertical_arrangement(LinearArrangement::SpacedBy(4.0))
             .content_padding(8.0, 8.0),
         |scope| {
-            scope.items(
-                20,
-                Some(|i: usize| i as u64),
-                None::<fn(usize) -> u64>,
-                move |index| {
-                    lifecycle_item(index, stats);
-                },
-            );
+            scope.items(LazyItems::new(20).key(|i: usize| i as u64), move |index| {
+                lifecycle_item(index, stats);
+            });
         },
     );
 }
@@ -74,7 +70,7 @@ fn lifecycle_test_app() {
     let stats: MutableState<LifecycleStats> =
         cranpose_core::remember(|| cranpose_core::mutableStateOf(LifecycleStats::default()))
             .with(|state| *state);
-    let state = remember_lazy_list_state();
+    let state = rememberLazyListState();
 
     Column(
         Modifier::empty()

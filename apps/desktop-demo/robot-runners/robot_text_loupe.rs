@@ -353,7 +353,10 @@ fn main() -> ExitCode {
             robot
                 .touch_up(wrap_boundary_x, dot_y)
                 .expect("dot release at soft-wrap boundary");
-            settle(&robot, 400);
+            // No later assertion reads the scene. Give the collapse a bounded
+            // frame window without asking idle detection to classify the
+            // field's continuous cursor blink.
+            std::thread::sleep(Duration::from_millis(400));
 
             println!("PASS: text loupe contract");
             let _ = robot.exit();

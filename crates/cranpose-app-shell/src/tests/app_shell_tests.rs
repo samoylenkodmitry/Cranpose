@@ -1,9 +1,9 @@
 use super::*;
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, compositionLocalOf, location_key,
-    useState, CompositionLocal, CompositionLocalProvider, MutableState,
+    rememberMutableStateOf, CompositionLocal, CompositionLocalProvider, MutableState, TaskSite,
 };
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -170,7 +170,7 @@ fn AppShellCaptureInitialDensity() {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellScrollIndicatorLazyList() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
@@ -189,18 +189,13 @@ fn AppShellScrollIndicatorLazyList() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 |scope| {
-                    scope.items(
-                        80,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("Row {}", index),
-                                Modifier::empty().height(48.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(80, |index| {
+                        Text(
+                            format!("Row {}", index),
+                            Modifier::empty().height(48.0),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
         },
@@ -234,7 +229,7 @@ fn AppShellChildStats(list_state: LazyListState) {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellSiblingIndicatorsLazyList() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
@@ -250,18 +245,13 @@ fn AppShellSiblingIndicatorsLazyList() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 |scope| {
-                    scope.items(
-                        80,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("Row {}", index),
-                                Modifier::empty().height(48.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(80, |index| {
+                        Text(
+                            format!("Row {}", index),
+                            Modifier::empty().height(48.0),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
         },
@@ -271,7 +261,7 @@ fn AppShellSiblingIndicatorsLazyList() {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellVariableHeightSiblingIndicatorsLazyList() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
@@ -287,18 +277,13 @@ fn AppShellVariableHeightSiblingIndicatorsLazyList() {
                 list_state,
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 |scope| {
-                    scope.items(
-                        100,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("Row {}", index),
-                                Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(100, |index| {
+                        Text(
+                            format!("Row {}", index),
+                            Modifier::empty().height(48.0 + (index % 5) as f32 * 8.0),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
         },
@@ -333,11 +318,11 @@ fn AppShellLifecycleListItem(index: usize, count: MutableState<usize>) {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellLifecycleIndicatorsLazyList() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     APP_SHELL_LAZY_LIST_STATE.with(|slot| {
         *slot.borrow_mut() = Some(list_state);
     });
-    let lifecycle_count = cranpose_core::useState(|| 0usize);
+    let lifecycle_count = cranpose_core::rememberMutableStateOf(|| 0usize);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -353,14 +338,9 @@ fn AppShellLifecycleIndicatorsLazyList() {
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
                 move |scope| {
                     let lifecycle_count = lifecycle_count_for_items;
-                    scope.items(
-                        100,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        move |index| {
-                            AppShellLifecycleListItem(index, lifecycle_count);
-                        },
-                    );
+                    scope.items(100, move |index| {
+                        AppShellLifecycleListItem(index, lifecycle_count);
+                    });
                 },
             );
         },
@@ -379,7 +359,7 @@ thread_local! {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellKeyedSiblingIndicatorsRoot() {
-    let active = cranpose_core::useState(|| 0i32);
+    let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active);
     });
@@ -403,7 +383,7 @@ fn AppShellKeyedSiblingIndicatorsRoot() {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellSwitchingKeyedLazyListRoot() {
-    let active = cranpose_core::useState(|| 0i32);
+    let active = cranpose_core::rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active);
     });
@@ -441,7 +421,7 @@ fn app_shell_local_count() -> CompositionLocal<i32> {
 
 #[composable]
 fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
-    let root_trigger = useState(|| false);
+    let root_trigger = rememberMutableStateOf(|| false);
     render_count.set(render_count.get() + 1);
     cranpose_core::with_key(&"root-render-probe", || {
         let _ = root_trigger.value();
@@ -465,19 +445,20 @@ fn callbackless_root_render_probe(render_count: Rc<Cell<usize>>) {
 #[composable]
 #[allow(non_snake_case)]
 fn AppShellAnimatedLazyItem() {
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty().fill_max_width().height(120.0),
         list_state,
         LazyColumnSpec::default(),
         |scope| {
-            scope.item(Some(0), None, || {
-                let pulse = useState(|| 0u32);
-                let run_token = useState(|| 0u64);
+            scope.item_keyed(Some(0), None, || {
+                let pulse = rememberMutableStateOf(|| 0u32);
+                let run_token = rememberMutableStateOf(|| 0u64);
                 let current_run_token = run_token.value();
                 let pulse_for_effect = pulse;
                 launched_effect_async_impl(
                     location_key(file!(), line!(), column!()),
+                    TaskSite::new(file!(), line!()),
                     current_run_token,
                     move |scope| {
                         let pulse = pulse_for_effect;
@@ -1745,7 +1726,7 @@ thread_local! {
 
 #[composable]
 fn app_shell_backdrop_radius_content() {
-    let radius = useState(|| 0.0f32);
+    let radius = rememberMutableStateOf(|| 0.0f32);
     APP_SHELL_BACKDROP_RADIUS_STATE.with(|slot| {
         *slot.borrow_mut() = Some(radius);
     });
@@ -1801,13 +1782,14 @@ fn graph_backdrop_blur_radii(layer: &cranpose_render_common::graph::LayerNode) -
 
 #[composable]
 fn tabbed_progress_content() {
-    let progress = useState(|| 0.6f32);
-    let active_tab = useState(|| 0i32);
+    let progress = rememberMutableStateOf(|| 0.6f32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
 
     let progress_effect = progress;
     let active_effect = active_tab;
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         (),
         move |scope| {
             let progress = progress_effect;
@@ -1878,10 +1860,11 @@ fn empty_content() {}
 
 #[composable]
 fn one_shot_frame_request_content() {
-    let phase = useState(|| 0i32);
+    let phase = rememberMutableStateOf(|| 0i32);
     let phase_state = phase;
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         (),
         move |scope| {
             let phase = phase_state;
@@ -1910,6 +1893,7 @@ fn one_shot_frame_request_content() {
 fn silent_frame_loop_content() {
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         (),
         move |scope| {
             Box::pin(async move {
@@ -1926,10 +1910,11 @@ fn silent_frame_loop_content() {
 
 #[composable]
 fn continuous_frame_request_tab() {
-    let tick = useState(|| 0u32);
+    let tick = rememberMutableStateOf(|| 0u32);
     let tick_state = tick;
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         (),
         move |scope| {
             let tick = tick_state;
@@ -1957,7 +1942,7 @@ fn continuous_frame_request_tab() {
 
 #[composable]
 fn app_shell_continuous_then_static_tab_host() {
-    let active = useState(|| 0i32);
+    let active = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active);
     });
@@ -1979,6 +1964,7 @@ fn app_shell_continuous_then_static_tab_host() {
 fn frame_time_recorder_content() {
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         (),
         move |scope| {
             Box::pin(async move {
@@ -2000,9 +1986,9 @@ fn frame_time_recorder_content() {
 
 #[composable]
 fn frame_stable_pointer_handler_content() {
-    let use_pending_handler = useState(|| false);
-    let rendered_clicks = useState(|| 0i32);
-    let pending_clicks = useState(|| 0i32);
+    let use_pending_handler = rememberMutableStateOf(|| false);
+    let rendered_clicks = rememberMutableStateOf(|| 0i32);
+    let pending_clicks = rememberMutableStateOf(|| 0i32);
     FRAME_STABLE_HANDLER_MODE.with(|slot| {
         *slot.borrow_mut() = Some(use_pending_handler);
     });
@@ -2602,7 +2588,7 @@ fn text_field_focus_drives_platform_soft_keyboard() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -2627,7 +2613,11 @@ fn key_event_after_field_removal_hides_soft_keyboard() {
     {
         let focus_flag = Rc::new(RefCell::new(false));
         shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+            cranpose_ui::text_field_focus::request_focus(
+                Rc::clone(&focus_flag),
+                handler.clone(),
+                0,
+            );
         });
         // focus_flag drops here: the focus manager's weak reference goes stale.
     }
@@ -2653,7 +2643,11 @@ fn frame_update_after_field_removal_hides_soft_keyboard() {
     {
         let focus_flag = Rc::new(RefCell::new(false));
         shell.debug_enter_app_context(|| {
-            cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+            cranpose_ui::text_field_focus::request_focus(
+                Rc::clone(&focus_flag),
+                handler.clone(),
+                0,
+            );
         });
         // focus_flag drops here: the focus manager's weak reference goes stale.
     }
@@ -2675,7 +2669,7 @@ fn ime_delete_surrounding_marks_dirty() {
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert!(shell.on_ime_delete_surrounding(2, 1));
     assert_eq!(handler.last_delete.get(), Some((2, 1)));
@@ -2705,7 +2699,7 @@ fn ime_session_shell_methods_dispatch_to_focused_field() {
     let focus_flag = Rc::new(RefCell::new(false));
     let handler = Rc::new(TextFieldDispatchProbe::default());
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
     assert_eq!(*keyboard.calls.borrow(), vec!["show"]);
 
@@ -2743,7 +2737,7 @@ fn text_mutation_platform_events_run_inside_event_and_applied_snapshot_scopes() 
     let handler = Rc::new(TextFieldDispatchProbe::default());
 
     shell.debug_enter_app_context(|| {
-        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone());
+        cranpose_ui::text_field_focus::request_focus(Rc::clone(&focus_flag), handler.clone(), 0);
     });
 
     assert!(shell.on_paste("hello"));
@@ -3824,7 +3818,7 @@ fn draw_repass_updates_render_data_without_layout() {
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
-        let width_state = useState(|| 24.0f32);
+        let width_state = rememberMutableStateOf(|| 24.0f32);
         *state_holder_for_app.borrow_mut() = Some(width_state);
         draw_width_app(width_state);
     });
@@ -3886,7 +3880,7 @@ fn draw_state_reads_schedule_draw_repass_without_composition_read() {
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
-        let width_state = useState(|| 24.0f32);
+        let width_state = rememberMutableStateOf(|| 24.0f32);
         *state_holder_for_app.borrow_mut() = Some(width_state);
         draw_observed_width_app(width_state);
     });
@@ -3948,7 +3942,7 @@ fn draw_only_repass_uses_scoped_renderer_update() {
         ),
         root_key,
         move || {
-            let width_state = useState(|| 24.0f32);
+            let width_state = rememberMutableStateOf(|| 24.0f32);
             *state_holder_for_app.borrow_mut() = Some(width_state);
             draw_observed_width_app(width_state);
         },
@@ -4011,7 +4005,7 @@ fn draw_only_scene_dirty_repass_uses_visual_scoped_renderer_update() {
         ),
         root_key,
         move || {
-            let width_state = useState(|| 24.0f32);
+            let width_state = rememberMutableStateOf(|| 24.0f32);
             *state_holder_for_app.borrow_mut() = Some(width_state);
             draw_observed_width_app(width_state);
         },
@@ -4160,8 +4154,8 @@ fn keyed_subtree_swap_with_pending_scoped_repass_evicts_stale_layers() {
         ),
         root_key,
         move || {
-            let tab = useState(|| 0i32);
-            let width_state = useState(|| 24.0f32);
+            let tab = rememberMutableStateOf(|| 0i32);
+            let width_state = rememberMutableStateOf(|| 24.0f32);
             *tab_holder_for_app.borrow_mut() = Some(tab);
             *width_holder_for_app.borrow_mut() = Some(width_state);
             keyed_page_switch_app(tab, width_state);
@@ -4338,7 +4332,7 @@ fn graphics_layer_state_repass_does_not_recompose() {
         ),
         root_key,
         move || {
-            let offset_state = useState(|| 10.0f32);
+            let offset_state = rememberMutableStateOf(|| 10.0f32);
             *state_holder_for_app.borrow_mut() = Some(offset_state);
             graphics_layer_observed_offset_app(offset_state);
         },
@@ -4405,7 +4399,7 @@ fn recomposed_graphics_layer_update_uses_scoped_renderer_update() {
         ),
         root_key,
         move || {
-            let offset_state = useState(|| 10.0f32);
+            let offset_state = rememberMutableStateOf(|| 10.0f32);
             *state_holder_for_app.borrow_mut() = Some(offset_state);
             graphics_layer_composed_offset_app(offset_state);
         },
@@ -4470,8 +4464,8 @@ fn recomposed_shader_effect_layers_use_scoped_renderer_update() {
         ),
         root_key,
         move || {
-            let time_state = useState(|| 0.0f32);
-            let intensity_state = useState(|| 1.0f32);
+            let time_state = rememberMutableStateOf(|| 0.0f32);
+            let intensity_state = rememberMutableStateOf(|| 1.0f32);
             *time_holder_for_app.borrow_mut() = Some(time_state);
             *intensity_holder_for_app.borrow_mut() = Some(intensity_state);
             shader_rect_like_effect_layers_app(time_state, intensity_state);
@@ -4544,8 +4538,8 @@ fn lazy_shader_effect_layers_use_draw_repass_without_recomposition() {
         ),
         root_key,
         move || {
-            let time_state = useState(|| 0.0f32);
-            let intensity_state = useState(|| 1.0f32);
+            let time_state = rememberMutableStateOf(|| 0.0f32);
+            let intensity_state = rememberMutableStateOf(|| 1.0f32);
             *time_holder_for_app.borrow_mut() = Some(time_state);
             *intensity_holder_for_app.borrow_mut() = Some(intensity_state);
             shader_rect_like_lazy_effect_layers_app(time_state, intensity_state);
@@ -4621,7 +4615,7 @@ fn graphics_layer_point_state_repass_does_not_recompose() {
         ),
         root_key,
         move || {
-            let position_state = useState(|| Point { x: 10.0, y: 20.0 });
+            let position_state = rememberMutableStateOf(|| Point { x: 10.0, y: 20.0 });
             *state_holder_for_app.borrow_mut() = Some(position_state);
             graphics_layer_observed_point_app(position_state);
         },
@@ -4678,7 +4672,7 @@ fn pointer_driven_graphics_layer_point_state_does_not_recompose() {
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, move || {
-        let position_state = useState(Point::default);
+        let position_state = rememberMutableStateOf(Point::default);
         *state_holder_for_app.borrow_mut() = Some(position_state);
         pointer_driven_graphics_layer_point_app(position_state);
     });
@@ -4726,7 +4720,7 @@ fn active_pointer_gesture_keeps_frame_schedule_until_release() {
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let mut shell = AppShell::new(HitGraphRenderer::default(), root_key, || {
-        let position_state = useState(Point::default);
+        let position_state = rememberMutableStateOf(Point::default);
         pointer_driven_graphics_layer_point_app(position_state);
     });
 
@@ -4830,7 +4824,7 @@ fn absolute_offset_text_rows_redraw_after_state_only_change() {
     let state_holder_for_app = Rc::clone(&state_holder);
 
     let mut shell = AppShell::new(RecordingRenderer::default(), root_key, move || {
-        let start = useState(|| 0i32);
+        let start = rememberMutableStateOf(|| 0i32);
         *state_holder_for_app.borrow_mut() = Some(start);
         AbsoluteOffsetStackedTextRows(start);
     });
@@ -4972,12 +4966,12 @@ fn first_update_after_construction_reports_no_visual_work() {
 
 #[test]
 fn an_open_frame_await_asks_for_ticks_but_not_for_pixels() {
-    // `needs_update` and `needs_redraw` used to be the same predicate, because
-    // both ended in `Composition::should_render`. An app holding a frame await
-    // open - every game loop, every polling effect - therefore reported
-    // "redraw needed" on every frame forever, and a platform present gate built
-    // from it presented a byte-identical frame 60 times a second on a screen
-    // that was standing perfectly still.
+    // `needs_update` and `needs_redraw` must stay separate predicates. Ending
+    // both in `Composition::should_render` makes an app that holds a frame
+    // await open - every game loop, every polling effect - report "redraw
+    // needed" on every frame forever, and a platform present gate built from
+    // that presents a byte-identical frame 60 times a second on a screen
+    // standing perfectly still.
     let _guard = test_guard();
     let root_key = location_key(file!(), line!(), column!());
     let rebuilds = Rc::new(Cell::new(0));
@@ -5951,8 +5945,8 @@ fn app_shell_counter_test_tab(counter: MutableState<i32>) {
 
 #[composable]
 fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
-    let pointer_position = useState(Point::default);
-    let pointer_down = useState(|| false);
+    let pointer_position = rememberMutableStateOf(Point::default);
+    let pointer_down = rememberMutableStateOf(|| false);
     let is_even = counter.value() % 2 == 0;
 
     Column(
@@ -6046,12 +6040,13 @@ fn app_shell_interactive_counter_test_tab(counter: MutableState<i32>) {
 
 #[composable]
 fn app_shell_effect_test_tab() {
-    let request_counter = useState(|| 0u64);
-    let status = useState(|| "Idle".to_string());
+    let request_counter = rememberMutableStateOf(|| 0u64);
+    let status = rememberMutableStateOf(|| "Idle".to_string());
     let request_key = request_counter.get();
 
     launched_effect_async_impl(
         location_key(file!(), line!(), column!()),
+        TaskSite::new(file!(), line!()),
         request_key,
         move |_scope| {
             let status = status;
@@ -6089,7 +6084,7 @@ fn app_shell_effect_test_tab() {
 #[composable]
 fn app_shell_composition_local_test_tab() {
     let local = app_shell_local_count();
-    let counter = useState(|| 7i32);
+    let counter = rememberMutableStateOf(|| 7i32);
     let provided = counter.get();
     Column(
         Modifier::empty().fill_max_size().vertical_scroll(
@@ -6116,8 +6111,8 @@ fn app_shell_composition_local_test_tab() {
 
 #[composable]
 fn app_shell_mixed_scrollable_tab_host() {
-    let active_tab = useState(|| 3i32);
-    let counter = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 3i32);
+    let counter = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active_tab);
     });
@@ -6154,8 +6149,8 @@ fn app_shell_mixed_scrollable_tab_host() {
 
 #[composable]
 fn app_shell_interactive_tab_host() {
-    let active_tab = useState(|| 0i32);
-    let counter = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
+    let counter = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active_tab);
     });
@@ -6193,8 +6188,8 @@ fn app_shell_interactive_tab_host() {
 
 #[composable]
 fn app_shell_interactive_clickable_tab_host() {
-    let active_tab = useState(|| 0i32);
-    let counter = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
+    let counter = rememberMutableStateOf(|| 0i32);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -6254,10 +6249,10 @@ fn app_shell_interactive_clickable_tab_host() {
 
 #[composable]
 fn app_shell_demo_like_counter_tab() {
-    let counter = useState(|| 0i32);
-    let wave_state = useState(|| 0.35f32);
-    let pointer_position = useState(Point::default);
-    let pointer_down = useState(|| false);
+    let counter = rememberMutableStateOf(|| 0i32);
+    let wave_state = rememberMutableStateOf(|| 0.35f32);
+    let pointer_position = rememberMutableStateOf(Point::default);
+    let pointer_down = rememberMutableStateOf(|| false);
     let pointer = pointer_position.get();
 
     APP_SHELL_COUNTER_STATE.with(|slot| {
@@ -6423,7 +6418,7 @@ fn app_shell_demo_like_counter_tab() {
 
 #[composable]
 fn app_shell_demo_like_clickable_tab_host() {
-    let active_tab = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -6474,12 +6469,13 @@ fn app_shell_demo_like_clickable_tab_host() {
 #[composable]
 fn app_shell_actual_like_counter_tab() {
     cranpose_core::debug_label_current_scope("actual_like_counter_tab");
-    let counter = useState(|| 0i32);
-    let wave_state = useState(|| 0.35f32);
-    let pointer_position = useState(Point::default);
-    let pointer_down = useState(|| false);
-    let async_message = useState(|| "Tap \"Fetch async value\" to run background work".to_string());
-    let fetch_request = useState(|| 0u64);
+    let counter = rememberMutableStateOf(|| 0i32);
+    let wave_state = rememberMutableStateOf(|| 0.35f32);
+    let pointer_position = rememberMutableStateOf(Point::default);
+    let pointer_down = rememberMutableStateOf(|| false);
+    let async_message =
+        rememberMutableStateOf(|| "Tap \"Fetch async value\" to run background work".to_string());
+    let fetch_request = rememberMutableStateOf(|| 0u64);
     let pointer = pointer_position.get();
     let is_even = counter.get() % 2 == 0;
 
@@ -6769,7 +6765,7 @@ fn app_shell_actual_like_counter_tab() {
 
 #[composable]
 fn app_shell_actual_like_clickable_tab_host() {
-    let active_tab = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
 
     Column(
         Modifier::empty().fill_max_size(),
@@ -6847,7 +6843,7 @@ fn app_shell_many_tabs_clickable_host() {
         "Markdown Viewer",
     ];
 
-    let active_tab = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
 
     #[composable]
     fn tab_button(index: i32, label: &'static str, active_tab: MutableState<i32>) {
@@ -7034,7 +7030,7 @@ fn app_shell_many_tabs_precise_tab_content(active_tab: MutableState<i32>, modifi
 
 #[composable]
 fn app_shell_many_tabs_precise_clickable_host() {
-    let active_tab = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
 
     Column(
         Modifier::empty().fill_max_size().padding(20.0),
@@ -7057,7 +7053,7 @@ fn app_shell_many_tabs_precise_clickable_host() {
 
 #[composable]
 fn app_shell_animated_draw_counter_tab() {
-    let phase_state = useState(|| 0.35f32);
+    let phase_state = rememberMutableStateOf(|| 0.35f32);
 
     Column(
         Modifier::empty()
@@ -7090,7 +7086,7 @@ fn app_shell_animated_draw_counter_tab() {
 }
 
 fn app_shell_animated_draw_tab_host() {
-    let active_tab = useState(|| 0i32);
+    let active_tab = rememberMutableStateOf(|| 0i32);
     APP_SHELL_ACTIVE_TAB_STATE.with(|slot| {
         *slot.borrow_mut() = Some(active_tab);
     });
@@ -7420,7 +7416,7 @@ const PRESSABLE_CANVAS_PRESSED_COLOR: Color = Color(0.8, 0.2, 0.1, 1.0);
 
 #[composable]
 fn app_shell_pressable_canvas_content() {
-    let is_pressed = useState(|| false);
+    let is_pressed = rememberMutableStateOf(|| false);
     let color = if is_pressed.get() {
         PRESSABLE_CANVAS_PRESSED_COLOR
     } else {
@@ -8922,5 +8918,129 @@ fn a_pending_semantics_request_wakes_the_shell_without_dirtying_a_pixel() {
     assert!(
         !shell.needs_redraw(),
         "...but it changes no pixel, so it must not schedule a frame"
+    );
+}
+
+// ===========================================================================
+// The surfaces a host, a devtool or a robot reaches for.
+//
+// None of these draw anything, which is exactly why nothing else exercises
+// them: a debug report that panics on an empty tree, or a copy handler that
+// answers with the wrong field's text, is only discovered by the tool that
+// needed it. These tests are that tool.
+// ===========================================================================
+
+#[test]
+fn a_debug_report_describes_the_screen_and_says_so_when_there_is_none() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+
+    shell.update();
+    let report = shell.debug_info_report();
+    assert!(
+        report.contains("CURRENT SCREEN STATE"),
+        "the report lost its header: {report}"
+    );
+    assert!(
+        report.contains("LAYOUT TREE"),
+        "the report described no layout: {report}"
+    );
+
+    // The logging form returns the same text it logs, so a caller can do both.
+    assert_eq!(shell.log_debug_info(), shell.debug_info_report());
+}
+
+#[test]
+fn semantics_are_off_until_a_bridge_asks_for_them() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    assert!(
+        !shell.semantics_active(),
+        "semantics tracking was on with no accessibility client attached"
+    );
+    shell.set_semantics_enabled(true);
+    assert!(shell.semantics_active());
+}
+
+#[test]
+fn the_slot_table_dump_describes_the_groups_the_composition_holds() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    shell.update();
+
+    let groups = shell.debug_slot_table_groups();
+    assert!(
+        !groups.is_empty(),
+        "a composed screen reported an empty slot table"
+    );
+    // Every group starts inside the table and covers a run that stays inside
+    // it: a group whose length ran past the end would walk off the table when
+    // a devtool followed it.
+    let entries = shell.debug_slot_entries().len();
+    for (index, _key, _scope, length) in &groups {
+        assert!(
+            index + length <= entries,
+            "group at {index} covers {length} slots, past the {entries} the table holds"
+        );
+    }
+}
+
+#[test]
+fn subcompose_debug_readers_answer_none_for_a_node_that_is_not_one() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    shell.update();
+
+    let live = shell.debug_live_subcompose_scope_ids();
+    // The default test content has no subcompose layout in it, so there is
+    // nothing to report — and asking must answer, not panic.
+    assert!(live.is_empty());
+
+    let root = shell
+        .layout_tree()
+        .expect("layout tree available")
+        .root()
+        .node_id;
+    assert!(shell.debug_subcompose_slot_table(root, 0).is_none());
+    assert!(shell.debug_subcompose_slot_groups(root, 0).is_none());
+}
+
+#[test]
+fn a_copy_with_no_focused_field_answers_none_and_syncs_nothing() {
+    let _guard = test_guard();
+    let mut shell = AppShell::new(
+        TestRenderer::default(),
+        location_key(file!(), line!(), column!()),
+        || {},
+    );
+    shell.update();
+
+    assert!(
+        shell.on_copy().is_none(),
+        "a copy with nothing focused produced text"
+    );
+    // The primary-selection sync is driven by the same handler, so with
+    // nothing focused it must be a no-op rather than clearing the selection.
+    shell.sync_selection_to_primary();
+
+    assert!(
+        shell.ime_caret_geometry().is_none(),
+        "a caret was reported with no focused text field"
     );
 }

@@ -52,7 +52,7 @@ fn test_conditional_text_reactivity() {
 
     // Initial composition - counter is 0 (even)
     let mut composition = run_test_composition(|| {
-        let counter = cranpose_core::useState(|| 0);
+        let counter = cranpose_core::rememberMutableStateOf(|| 0);
         TEST_COUNTER.with(|cell| {
             *cell.borrow_mut() = Some(counter);
         });

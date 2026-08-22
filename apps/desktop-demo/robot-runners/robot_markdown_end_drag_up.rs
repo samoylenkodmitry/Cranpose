@@ -10,7 +10,7 @@
 
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
-use cranpose_services::{local_http_client, HttpClient, HttpClientRef, HttpFuture};
+use cranpose_services::{local_http_client, HttpClientRef, StubHttpClient};
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
 };
@@ -36,17 +36,6 @@ const DEFAULT_REVERSE_ATTEMPTS: u32 = 3;
 struct FixtureData {
     body: String,
     bottom_probe: String,
-}
-
-struct MockMarkdownClient {
-    body: String,
-}
-
-impl HttpClient for MockMarkdownClient {
-    fn get_text<'a>(&'a self, _url: &'a str) -> HttpFuture<'a, String> {
-        let body = self.body.clone();
-        Box::pin(async move { Ok(body) })
-    }
 }
 
 fn center(bounds: (f32, f32, f32, f32)) -> (f32, f32) {
@@ -664,7 +653,7 @@ fn main() {
             let _ = robot.exit();
         })
         .run({
-            let mock_client: HttpClientRef = Arc::new(MockMarkdownClient { body: fixture.body });
+            let mock_client: HttpClientRef = Arc::new(StubHttpClient::with_body(fixture.body));
             move || {
                 let local = local_http_client();
                 let client = mock_client.clone();

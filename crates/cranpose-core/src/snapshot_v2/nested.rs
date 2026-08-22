@@ -204,10 +204,6 @@ impl NestedMutableSnapshot {
         self.state.has_pending_children()
     }
 
-    pub fn parent_mutable(&self) -> Option<Arc<MutableSnapshot>> {
-        self.parent.upgrade()
-    }
-
     pub fn dispose(&self) {
         if !self.state.disposed.get() && self.nested_count.get() == 0 {
             self.state.dispose();

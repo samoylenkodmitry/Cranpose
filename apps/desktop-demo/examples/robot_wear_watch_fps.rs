@@ -104,8 +104,9 @@ fn click_tab(robot: &Robot, label: &str) {
     robot
         .click(x + w * 0.5, y + h * 0.5)
         .unwrap_or_else(|err| panic!("click tab {label:?}: {err}"));
-    std::thread::sleep(Duration::from_millis(260));
-    let _ = robot.wait_for_idle();
+    robot
+        .pump_frames(3)
+        .unwrap_or_else(|err| panic!("settle tab {label:?}: {err}"));
 }
 
 fn main() -> ExitCode {
@@ -118,7 +119,7 @@ fn main() -> ExitCode {
         .with_fps_counter(true)
         .with_headless(std::env::var("CRANPOSE_HEADLESS").as_deref() != Ok("0"))
         .with_test_driver(move |robot| {
-            let _ = robot.wait_for_idle();
+            robot.pump_frames(3).expect("build initial tab");
 
             click_tab(&robot, REFERENCE_TAB);
             measure(&robot, "shader-rect-warmup", WARMUP_FOR);

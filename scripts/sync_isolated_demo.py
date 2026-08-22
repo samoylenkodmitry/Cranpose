@@ -14,9 +14,10 @@ Usage:
     scripts/sync_isolated_demo.py 0.1.73     # sync to an explicit version
     scripts/sync_isolated_demo.py v0.1.73    # a release tag works too
 
-Only rewrites the manifest; run `cargo update --manifest-path
-apps/isolated-demo/Cargo.toml -p cranpose -p cranpose-core` afterwards to move
-the demo's lockfile (that step needs the version to be resolvable).
+Rewrites the demo's Cargo manifest and the Gradle plugin version its Android
+build resolves; run `cargo update --manifest-path apps/isolated-demo/Cargo.toml
+-p cranpose -p cranpose-core` afterwards to move the demo's lockfile (that step
+needs the version to be resolvable).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "apps/isolated-demo/Cargo.toml"
+ANDROID_SETTINGS = ROOT / "apps/isolated-demo/android/settings.gradle.kts"
 
 # `cranpose-foo = { version = "x", ... }` (inline table) and `cranpose-foo = "x"`
 # (bare string), in [dependencies] and any [target.'cfg(..)'.dependencies].
@@ -40,6 +42,11 @@ INLINE_TABLE = re.compile(
 BARE_STRING = re.compile(
     r'(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")',
     re.MULTILINE,
+)
+# The Android side of the starter resolves the published Gradle plugin, which is
+# released together with the crates and therefore carries the same version.
+GRADLE_PLUGIN = re.compile(
+    r'(?P<head>id\("dev\.cranpose\.android"\)[ \t]+version[ \t]+")(?P<version>[^"]+)(?P<tail>")'
 )
 
 
@@ -55,22 +62,36 @@ def main() -> int:
         print(f"Not a semver version: {version!r}", file=sys.stderr)
         return 1
 
-    text = MANIFEST.read_text()
     changed: list[str] = []
 
-    def rewrite(match: re.Match[str]) -> str:
-        name = match.group(0).split("=", 1)[0].strip()
-        if match.group("version") != version:
-            changed.append(f"{name} {match.group('version')} -> {version}")
-        return f"{match.group('head')}{version}{match.group('tail')}"
+    def rewrite(label: str):
+        def substitute(match: re.Match[str]) -> str:
+            if match.group("version") != version:
+                changed.append(f"{label} {match.group('version')} -> {version}")
+            return f"{match.group('head')}{version}{match.group('tail')}"
 
-    updated = BARE_STRING.sub(rewrite, INLINE_TABLE.sub(rewrite, text))
+        return substitute
+
+    def name_of(match: re.Match[str]) -> str:
+        return match.group(0).split("=", 1)[0].strip()
+
+    def rewrite_dependency(match: re.Match[str]) -> str:
+        return rewrite(name_of(match))(match)
+
+    manifest = MANIFEST.read_text()
+    updated_manifest = BARE_STRING.sub(
+        rewrite_dependency, INLINE_TABLE.sub(rewrite_dependency, manifest)
+    )
+
+    settings = ANDROID_SETTINGS.read_text()
+    updated_settings = GRADLE_PLUGIN.sub(rewrite("dev.cranpose.android"), settings)
 
     if not changed:
         print(f"apps/isolated-demo already depends on cranpose {version}.")
         return 0
 
-    MANIFEST.write_text(updated)
+    MANIFEST.write_text(updated_manifest)
+    ANDROID_SETTINGS.write_text(updated_settings)
     for line in changed:
         print(f"apps/isolated-demo: {line}")
     return 0

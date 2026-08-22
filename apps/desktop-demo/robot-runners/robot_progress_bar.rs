@@ -235,20 +235,20 @@ fn main() {
             robot.exit().ok();
         })
         .run(|| {
-            let step_state = cranpose_core::useState(|| 0usize);
+            let step_state = cranpose_core::rememberMutableStateOf(|| 0usize);
             let initial_step = step_state.get();
             let percent = TEST_PCTS[initial_step];
             let progress = (percent as f32 / 100.0).clamp(0.0, 1.0);
-            let animation = cranpose_core::useState(|| AnimationState {
+            let animation = cranpose_core::rememberMutableStateOf(|| AnimationState {
                 progress,
                 direction: 1.0,
             });
-            let stats = cranpose_core::useState(|| FrameStats {
+            let stats = cranpose_core::rememberMutableStateOf(|| FrameStats {
                 frames: 120,
                 last_frame_ms: 16.0,
             });
-            let is_running = cranpose_core::useState(|| false);
-            let reset_signal = cranpose_core::useState(|| 0u64);
+            let is_running = cranpose_core::rememberMutableStateOf(|| false);
+            let reset_signal = cranpose_core::rememberMutableStateOf(|| 0u64);
 
             Column(
                 Modifier::empty().fill_max_size(),

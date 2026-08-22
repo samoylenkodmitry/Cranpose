@@ -1,25 +1,29 @@
-//! Android file and folder picker built on the Storage Access Framework.
+//! Android file, folder and document choosers built on the Storage Access
+//! Framework.
 //!
-//! `cranposePickFile` / `cranposePickFolder` on
+//! `cranposePickFile` / `cranposePickFiles` / `cranposePickFolder` /
+//! `cranposeCreateDocument` on
 //! [`CranposeActivity`](https://github.com/samoylenkodmitry/cranpose)
-//! launch `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE`, so the user can
-//! choose a file or a folder from any document provider the device exposes
-//! (local storage, cloud, or a mounted WebDAV share). The Java side reports the
-//! chosen `content://` document URIs back through
-//! [`Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked`];
-//! nothing is copied. A picked file is read on demand by opening a descriptor
-//! from the provider through [`open_content_uri`], so even a multi-gigabyte
-//! folder is selected instantly and each track is streamed only when played.
+//! launch `ACTION_OPEN_DOCUMENT` / `ACTION_OPEN_DOCUMENT_TREE` /
+//! `ACTION_CREATE_DOCUMENT`, so the user can choose from any document provider
+//! the device exposes (local storage, cloud, or a mounted WebDAV share). The
+//! Java side reports the chosen `content://` document URIs back through the
+//! `native*` callbacks below; nothing is copied. Content is read and written on
+//! demand through descriptors opened from the provider, so even a
+//! multi-gigabyte folder is chosen instantly and each file streams only when it
+//! is used.
 //!
-//! The Java callback runs on the Android UI thread while `android_main` runs on
-//! its own thread, so results travel through `Send` globals; the picked-entry
-//! handle is built on the `android_main` thread when the future is polled.
+//! Java callbacks run on the Android UI thread (or a worker it spawns) while
+//! `android_main` runs on its own thread, so results travel through `Send`
+//! globals and wake the awaiting future.
 #![allow(unsafe_code)]
 
 use cranpose_services::{
-    set_platform_file_picker, FilePicker, FilePickerError, FilePickerOptions, FolderStream,
-    FolderStreamRef, PickedEntry, PickedEntryRef, PickedKind, PickerFuture, ResumedPick,
-    SaveFileRequest,
+    set_platform_content_resolver, set_platform_file_picker, Content, ContentEntry, ContentError,
+    ContentFolder, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata, ContentReader,
+    ContentReaderRef, ContentResolver, ContentSink, ContentSinkRef, ContentStream,
+    ContentStreamRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture, RecoveredPick,
+    SaveDocumentRequest, DEFAULT_CHUNK_LEN,
 };
 use jni::objects::{JClass, JObject, JString, JValue};
 use jni::sys::{jboolean, jint, jlong};
@@ -27,7 +31,7 @@ use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
 use std::collections::HashMap;
 use std::fs::File;
 use std::future::Future;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::fd::FromRawFd;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -35,164 +39,243 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::task::{Context, Poll, Waker};
 
-type PickResult = Result<Option<PickedEntryRef>, FilePickerError>;
-
-/// A picked document: its `content://` URI and display name.
-struct PickedDocument {
-    uri: String,
-    name: String,
-}
-
-/// The raw, `Send` data delivered from the Java UI-thread callback.
-struct RawResult {
-    folder: bool,
-    documents: Vec<PickedDocument>,
-    cancelled: bool,
-    error: Option<String>,
-}
-
-#[derive(Default)]
-struct Pending {
-    result: Option<RawResult>,
-    waker: Option<Waker>,
-}
+/// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
+const FLAG_FOLDER: i32 = 1;
+const FLAG_WRITABLE: i32 = 4;
 
 static APP: OnceLock<android_activity::AndroidApp> = OnceLock::new();
 static NEXT_TOKEN: AtomicI64 = AtomicI64::new(1);
 
-fn pending() -> &'static Mutex<HashMap<i64, Pending>> {
-    static PENDING: OnceLock<Mutex<HashMap<i64, Pending>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+/// Installs the Android chooser as the platform file picker and the Storage
+/// Access Framework as the platform content resolver.
+pub(crate) fn register(app: android_activity::AndroidApp) {
+    let _ = APP.set(app);
+    set_platform_file_picker(Rc::new(AndroidFilePicker));
+    set_platform_content_resolver(Rc::new(AndroidContentResolver));
 }
 
-/// An in-flight ACTION_CREATE_DOCUMENT save awaiting its Java result.
-#[derive(Default)]
-struct PendingSave {
-    /// `(saved, error)` — `saved = false` with no error means cancelled.
-    result: Option<(bool, Option<String>)>,
+/// Resolves a `content://` URI — a shared item, a document intent, a dropped
+/// file — into readable content by asking the provider to describe it.
+struct AndroidContentResolver;
+
+impl ContentResolver for AndroidContentResolver {
+    fn resolve(&self, uri: &str) -> Option<ContentHandle> {
+        if !uri.starts_with("content://") && !uri.starts_with("file://") {
+            return None;
+        }
+        Some(content_of(document_info(uri).unwrap_or_else(|| {
+            ContentMetadata::named(
+                uri.rsplit('/')
+                    .find(|segment| !segment.is_empty())
+                    .unwrap_or(uri),
+            )
+            .with_identifier(uri)
+        })))
+    }
+}
+
+/// Asks the provider to describe one document, as `name\tmime\tsize\tmodified`.
+fn document_info(uri: &str) -> Option<ContentMetadata> {
+    let row = call_activity(|env, activity| {
+        let argument = env.new_string(uri).map_err(|error| error.to_string())?;
+        let argument_obj: &JObject = argument.as_ref();
+        let value = env
+            .call_method(
+                &activity,
+                jni_str!("cranposeDocumentInfo"),
+                jni_sig!("(Ljava/lang/String;)Ljava/lang/String;"),
+                &[JValue::Object(argument_obj)],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| error.to_string())?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        JString::cast_local(env, value)
+            .map_err(|error| error.to_string())?
+            .try_to_string(env)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    })
+    .ok()
+    .flatten()?;
+    parse_document(&format!("{uri}\t{row}"))
+}
+
+fn app() -> Result<&'static android_activity::AndroidApp, String> {
+    APP.get()
+        .ok_or_else(|| "Android file picker was not registered".to_string())
+}
+
+// ---- Document rows -------------------------------------------------------
+//
+// Every Java callback that carries documents uses the same newline-separated
+// `uri\tname\tmime\tsize\tmodified` row format, so one parser serves picking,
+// folder enumeration and resume.
+
+fn parse_documents(text: &str) -> Vec<ContentMetadata> {
+    text.lines().filter_map(parse_document).collect()
+}
+
+fn parse_document(row: &str) -> Option<ContentMetadata> {
+    let mut fields = row.split('\t');
+    let uri = fields.next()?;
+    if uri.is_empty() {
+        return None;
+    }
+    let name = fields.next().unwrap_or_default();
+    let mime = fields.next().unwrap_or_default();
+    let len = fields.next().unwrap_or_default();
+    let modified = fields.next().unwrap_or_default();
+    Some(ContentMetadata {
+        name: if name.is_empty() {
+            uri.rsplit('/').next().unwrap_or(uri).to_string()
+        } else {
+            name.to_string()
+        },
+        mime_type: (!mime.is_empty()).then(|| mime.to_string()),
+        len: len.parse().ok(),
+        modified_millis: modified.parse().ok(),
+        identifier: uri.to_string(),
+    })
+}
+
+/// Whether a document row describes a directory rather than a file.
+fn is_directory(metadata: &ContentMetadata) -> bool {
+    metadata.mime_type.as_deref() == Some("vnd.android.document/directory")
+}
+
+fn content_of(metadata: ContentMetadata) -> ContentHandle {
+    Rc::new(AndroidDocument { metadata })
+}
+
+// ---- Picker --------------------------------------------------------------
+
+struct AndroidFilePicker;
+
+impl FilePicker for AndroidFilePicker {
+    fn pick_file(
+        &self,
+        options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<ContentHandle>, FilePickerError>> {
+        let picked = present_documents(Selection::Single, options);
+        Box::pin(async move { Ok(picked.await?.into_iter().next().map(content_of)) })
+    }
+
+    fn pick_files(
+        &self,
+        options: FilePickerOptions,
+    ) -> PickerFuture<Result<Vec<ContentHandle>, FilePickerError>> {
+        let picked = present_documents(Selection::Multiple, options);
+        Box::pin(async move { Ok(picked.await?.into_iter().map(content_of).collect()) })
+    }
+
+    fn pick_folder(
+        &self,
+        _options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<ContentFolderRef>, FilePickerError>> {
+        let granted = present_tree(Grant::ReadOnly);
+        Box::pin(async move { Ok(granted.await?.map(folder_of)) })
+    }
+
+    fn save_document(
+        &self,
+        request: SaveDocumentRequest,
+    ) -> PickerFuture<Result<Option<ContentSinkRef>, FilePickerError>> {
+        let created = present_create_document(request);
+        Box::pin(async move {
+            Ok(created.await?.map(|uri| {
+                Rc::new(AndroidSink {
+                    uri,
+                    file: std::cell::RefCell::new(None),
+                }) as ContentSinkRef
+            }))
+        })
+    }
+
+    fn pick_writable_folder(
+        &self,
+        _options: FilePickerOptions,
+    ) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+        present_tree(Grant::Persistent)
+    }
+
+    fn take_recovered_pick(&self) -> Option<RecoveredPick> {
+        take_recovered()
+    }
+}
+
+/// Shared slot between a Java callback and the future awaiting it.
+struct Slot<T> {
+    result: Option<T>,
     waker: Option<Waker>,
 }
 
-fn pending_saves() -> &'static Mutex<HashMap<i64, PendingSave>> {
-    static PENDING: OnceLock<Mutex<HashMap<i64, PendingSave>>> = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+impl<T> Default for Slot<T> {
+    fn default() -> Self {
+        Self {
+            result: None,
+            waker: None,
+        }
+    }
 }
 
-/// Delivers an ACTION_CREATE_DOCUMENT result from the Java UI thread.
-pub(crate) fn resolve_pending_save(token: i64, saved: bool, error: Option<String>) {
-    let mut registry = pending_saves().lock().expect("save registry poisoned");
-    if let Some(slot) = registry.get_mut(&token) {
-        slot.result = Some((saved, error));
-        if let Some(waker) = slot.waker.take() {
+impl<T> Slot<T> {
+    fn resolve(&mut self, value: T) {
+        self.result = Some(value);
+        if let Some(waker) = self.waker.take() {
             waker.wake();
         }
     }
 }
 
-/// Installs the Android picker as the platform file picker.
-pub(crate) fn register(app: android_activity::AndroidApp) {
-    let _ = APP.set(app);
-    set_platform_file_picker(Rc::new(AndroidFilePicker));
+type Registry<T> = Mutex<HashMap<i64, Slot<T>>>;
+
+fn document_picks() -> &'static Registry<Result<Vec<ContentMetadata>, FilePickerError>> {
+    static SLOT: OnceLock<Registry<Result<Vec<ContentMetadata>, FilePickerError>>> =
+        OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-struct AndroidFilePicker;
+fn tree_picks() -> &'static Registry<Result<Option<String>, FilePickerError>> {
+    static SLOT: OnceLock<Registry<Result<Option<String>, FilePickerError>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
-impl FilePicker for AndroidFilePicker {
-    fn pick_file(&self, _options: FilePickerOptions) -> PickerFuture<PickResult> {
-        present(false)
-    }
+fn created_documents() -> &'static Registry<Result<Option<String>, FilePickerError>> {
+    static SLOT: OnceLock<Registry<Result<Option<String>, FilePickerError>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
-    fn pick_folder(&self, _options: FilePickerOptions) -> PickerFuture<PickResult> {
-        present(true)
-    }
-
-    fn pick_folder_streaming(
-        &self,
-        _options: FilePickerOptions,
-    ) -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
-        present_folder_stream()
-    }
-
-    fn take_resumed_picks(&self) -> Vec<ResumedPick> {
-        take_resumed_file_picks()
-    }
-
-    fn save_file(&self, request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
-        present_save(request)
+fn deliver<T>(registry: &'static Registry<T>, token: i64, value: T) {
+    let mut registry = registry.lock().expect("picker registry poisoned");
+    if let Some(slot) = registry.get_mut(&token) {
+        slot.resolve(value);
     }
 }
 
-fn present_save(request: SaveFileRequest) -> PickerFuture<Result<bool, FilePickerError>> {
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    pending_saves()
-        .lock()
-        .expect("save registry poisoned")
-        .insert(token, PendingSave::default());
-
-    let launch = (|| -> Result<(), String> {
-        let app = APP
-            .get()
-            .ok_or_else(|| "Android file picker was not registered".to_string())?;
-        crate::android_jni::with_android_activity_env(app, |env, activity| {
-            let name = env
-                .new_string(&request.file_name)
-                .map_err(|error| error.to_string())?;
-            let mime = env
-                .new_string(&request.mime_type)
-                .map_err(|error| error.to_string())?;
-            let bytes = env
-                .byte_array_from_slice(&request.bytes)
-                .map_err(|error| error.to_string())?;
-            let name_obj: &JObject = name.as_ref();
-            let mime_obj: &JObject = mime.as_ref();
-            let bytes_obj: &JObject = bytes.as_ref();
-            env.call_method(
-                &activity,
-                jni_str!("cranposeSaveFile"),
-                jni_sig!("(JLjava/lang/String;Ljava/lang/String;[B)V"),
-                &[
-                    JValue::Long(token),
-                    JValue::Object(name_obj),
-                    JValue::Object(mime_obj),
-                    JValue::Object(bytes_obj),
-                ],
-            )
-            .map(|_| ())
-            .map_err(|error| format!("failed to launch Android save: {error}"))
-        })
-    })();
-
-    if let Err(error) = launch {
-        pending_saves()
-            .lock()
-            .expect("save registry poisoned")
-            .remove(&token);
-        return Box::pin(async move { Err(FilePickerError::Failed(error)) });
-    }
-
-    Box::pin(SaveFuture { token })
-}
-
-/// Future resolved when the Java callback reports a save result for `token`.
-struct SaveFuture {
+/// Future resolved when the Java callback reports a result for `token`.
+struct SlotFuture<T: 'static> {
+    registry: &'static Registry<T>,
     token: i64,
+    missing: fn() -> T,
 }
 
-impl Future for SaveFuture {
-    type Output = Result<bool, FilePickerError>;
+impl<T: 'static> Future for SlotFuture<T> {
+    type Output = T;
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut registry = pending_saves().lock().expect("save registry poisoned");
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<T> {
+        let mut registry = self.registry.lock().expect("picker registry poisoned");
         let Some(slot) = registry.get_mut(&self.token) else {
-            return Poll::Ready(Ok(false));
+            return Poll::Ready((self.missing)());
         };
         match slot.result.take() {
-            Some((saved, error)) => {
+            Some(value) => {
                 registry.remove(&self.token);
-                match error {
-                    Some(error) => Poll::Ready(Err(FilePickerError::Failed(error))),
-                    None => Poll::Ready(Ok(saved)),
-                }
+                // Delivered live: drop the resume copy recorded in
+                // `onActivityResult` so it is never replayed.
+                clear_recovered();
+                Poll::Ready(value)
             }
             None => {
                 slot.waker = Some(context.waker().clone());
@@ -200,571 +283,514 @@ impl Future for SaveFuture {
             }
         }
     }
+}
+
+/// Registers a pending request and launches the Java entry point.
+fn begin<T: 'static>(
+    registry: &'static Registry<T>,
+    launch: impl FnOnce(i64) -> Result<(), String>,
+    failed: fn(String) -> T,
+    missing: fn() -> T,
+) -> PickerFuture<T> {
+    // Discard any orphaned selection from an earlier abandoned request; this
+    // fresh one becomes the only thing the resume inbox can hold.
+    clear_recovered();
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    registry
+        .lock()
+        .expect("picker registry poisoned")
+        .insert(token, Slot::default());
+    if let Err(error) = launch(token) {
+        registry
+            .lock()
+            .expect("picker registry poisoned")
+            .remove(&token);
+        return Box::pin(async move { failed(error) });
+    }
+    Box::pin(SlotFuture {
+        registry,
+        token,
+        missing,
+    })
+}
+
+/// How many documents an open chooser accepts.
+#[derive(Clone, Copy)]
+enum Selection {
+    Single,
+    Multiple,
+}
+
+/// Which tree grant a folder chooser takes.
+#[derive(Clone, Copy)]
+enum Grant {
+    /// Read-only, for browsing a folder's contents.
+    ReadOnly,
+    /// Persisted read/write, for a folder the app keeps writing to.
+    Persistent,
+}
+
+fn present_documents(
+    selection: Selection,
+    options: FilePickerOptions,
+) -> PickerFuture<Result<Vec<ContentMetadata>, FilePickerError>> {
+    let mime_types = options.mime_types().join("\n");
+    begin(
+        document_picks(),
+        move |token| {
+            call_activity(move |env, activity| {
+                let types = env
+                    .new_string(&mime_types)
+                    .map_err(|error| error.to_string())?;
+                let types_obj: &JObject = types.as_ref();
+                let arguments = [JValue::Long(token), JValue::Object(types_obj)];
+                let signature = jni_sig!("(JLjava/lang/String;)V");
+                match selection {
+                    Selection::Single => env.call_method(
+                        &activity,
+                        jni_str!("cranposePickFile"),
+                        signature,
+                        &arguments,
+                    ),
+                    Selection::Multiple => env.call_method(
+                        &activity,
+                        jni_str!("cranposePickFiles"),
+                        signature,
+                        &arguments,
+                    ),
+                }
+                .map(|_| ())
+                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+            })
+        },
+        |error| Err(FilePickerError::Failed(error)),
+        || Ok(Vec::new()),
+    )
+}
+
+fn present_tree(grant: Grant) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+    begin(
+        tree_picks(),
+        move |token| {
+            call_activity(move |env, activity| {
+                let arguments = [JValue::Long(token)];
+                let signature = jni_sig!("(J)V");
+                match grant {
+                    Grant::ReadOnly => env.call_method(
+                        &activity,
+                        jni_str!("cranposePickFolder"),
+                        signature,
+                        &arguments,
+                    ),
+                    Grant::Persistent => env.call_method(
+                        &activity,
+                        jni_str!("cranposePickWritableFolder"),
+                        signature,
+                        &arguments,
+                    ),
+                }
+                .map(|_| ())
+                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+            })
+        },
+        |error| Err(FilePickerError::Failed(error)),
+        || Ok(None),
+    )
+}
+
+fn present_create_document(
+    request: SaveDocumentRequest,
+) -> PickerFuture<Result<Option<String>, FilePickerError>> {
+    begin(
+        created_documents(),
+        move |token| {
+            call_activity(move |env, activity| {
+                let name = env
+                    .new_string(&request.file_name)
+                    .map_err(|error| error.to_string())?;
+                let mime = env
+                    .new_string(&request.mime_type)
+                    .map_err(|error| error.to_string())?;
+                let name_obj: &JObject = name.as_ref();
+                let mime_obj: &JObject = mime.as_ref();
+                env.call_method(
+                    &activity,
+                    jni_str!("cranposeCreateDocument"),
+                    jni_sig!("(JLjava/lang/String;Ljava/lang/String;)V"),
+                    &[
+                        JValue::Long(token),
+                        JValue::Object(name_obj),
+                        JValue::Object(mime_obj),
+                    ],
+                )
+                .map(|_| ())
+                .map_err(|error| format!("failed to launch the Android chooser: {error}"))
+            })
+        },
+        |error| Err(FilePickerError::Failed(error)),
+        || Ok(None),
+    )
+}
+
+/// Calls into the activity on whatever thread the caller is on, attaching to
+/// the JVM as needed.
+fn call_activity<T>(
+    body: impl FnOnce(&mut jni::Env<'_>, JObject<'_>) -> Result<T, String>,
+) -> Result<T, String> {
+    let app = app()?;
+    crate::android_jni::with_android_activity_env(app, body)
 }
 
 // ---- Resume inbox --------------------------------------------------------
 //
 // Some Android devices destroy and recreate the activity (and with it the
-// native app and its composition) when the SAF picker covers it. A pick in
+// native app and its composition) when a system chooser covers it. A request in
 // flight at that moment loses both its Java request token (a fresh activity
-// instance starts at token 0) and the composition that was awaiting the
-// result. The Java `onActivityResult` still runs on the recreated activity and
-// records the granted selection here; the app drains it on its next start via
-// [`FilePicker::take_resumed_picks`]. A normal (live) pick clears the inbox on
-// resolution, so a selection is never replayed.
+// instance starts at token 0) and the composition that was awaiting the result.
+// The Java `onActivityResult` still runs on the recreated activity and records
+// the granted selection here; the framework's launchers redeliver it. A live
+// resolution clears the inbox, so a selection is never replayed.
 
-/// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
-const FLAG_FOLDER: i32 = 1;
-const FLAG_STREAMING: i32 = 2;
-const FLAG_WRITABLE: i32 = 4;
-
-/// A granted selection recorded for resume after an activity recreation.
-struct ResumableEntry {
+/// A granted selection recorded for redelivery after an activity recreation.
+struct Recoverable {
     flags: i32,
-    uri: String,
-    name: String,
+    entries: String,
 }
 
-fn resumable() -> &'static Mutex<Vec<ResumableEntry>> {
-    static RESUMABLE: OnceLock<Mutex<Vec<ResumableEntry>>> = OnceLock::new();
-    RESUMABLE.get_or_init(|| Mutex::new(Vec::new()))
+fn recoverable() -> &'static Mutex<Vec<Recoverable>> {
+    static SLOT: OnceLock<Mutex<Vec<Recoverable>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// Discards any recorded selection. Called when a fresh pick is launched and
-/// when a live pick resolves, so the inbox only ever holds an *orphaned* result
-/// (one whose requesting composition was destroyed before it could consume it).
-/// `pub(crate)` so the writable-folder picker, which shares this inbox, can clear
-/// it on its own fresh pick / live resolution.
-pub(crate) fn clear_resumable() {
-    resumable().lock().expect("resume inbox poisoned").clear();
+fn clear_recovered() {
+    recoverable().lock().expect("resume inbox poisoned").clear();
 }
 
-/// Drains a writable-folder grant orphaned by an activity recreation, returning
-/// its tree URI. The write side of [`take_resumed_file_picks`]: it removes only
-/// the `FLAG_WRITABLE` entries (leaving any file/folder grants for the file
-/// picker to reclaim) and yields the most recent recovered handle.
-pub(crate) fn take_resumed_writable_uri() -> Option<String> {
-    let mut inbox = resumable().lock().expect("resume inbox poisoned");
-    let mut recovered = None;
-    let mut kept = Vec::new();
-    for entry in inbox.drain(..) {
-        if entry.flags & FLAG_WRITABLE != 0 {
-            recovered = Some(entry.uri);
-        } else {
-            kept.push(entry);
-        }
+fn take_recovered() -> Option<RecoveredPick> {
+    let entry = recoverable().lock().expect("resume inbox poisoned").pop()?;
+    if entry.flags & FLAG_WRITABLE != 0 {
+        return Some(RecoveredPick::WritableFolder(entry.entries));
     }
-    *inbox = kept;
-    recovered
-}
-
-/// Drains the file/folder selections orphaned by an activity recreation,
-/// turning each into a resumable handle. Writable-folder grants are left in the
-/// inbox for the writable-folder picker to reclaim.
-fn take_resumed_file_picks() -> Vec<ResumedPick> {
-    let orphaned = {
-        let mut inbox = resumable().lock().expect("resume inbox poisoned");
-        let mut taken = Vec::new();
-        let mut kept = Vec::new();
-        for entry in inbox.drain(..) {
-            if entry.flags & FLAG_WRITABLE != 0 {
-                kept.push(entry);
-            } else {
-                taken.push(entry);
-            }
-        }
-        *inbox = kept;
-        taken
-    };
-    orphaned.into_iter().filter_map(resume_entry).collect()
-}
-
-fn resume_entry(entry: ResumableEntry) -> Option<ResumedPick> {
-    if entry.flags & (FLAG_FOLDER | FLAG_STREAMING) != 0 {
-        resume_folder_stream(entry.uri).map(ResumedPick::Folder)
-    } else {
-        Some(ResumedPick::File(Rc::new(UriEntry {
-            uri: entry.uri,
-            name: entry.name,
-        })))
+    if entry.flags & FLAG_FOLDER != 0 {
+        return Some(RecoveredPick::Folder(folder_of(entry.entries)));
+    }
+    let documents = parse_documents(&entry.entries);
+    match documents.len() {
+        0 => None,
+        1 => Some(RecoveredPick::File(content_of(
+            documents.into_iter().next()?,
+        ))),
+        _ => Some(RecoveredPick::Files(
+            documents.into_iter().map(content_of).collect(),
+        )),
     }
 }
 
-/// Re-walks an already-granted tree URI as a stream (no picker UI), reusing the
-/// streaming registry so the returned handle behaves like a freshly-picked one.
-fn resume_folder_stream(uri: String) -> Option<FolderStreamRef> {
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    folder_streaming()
-        .lock()
-        .expect("folder picker registry poisoned")
-        .insert(
-            token,
-            FolderStreaming {
-                picked: true,
-                ..FolderStreaming::default()
-            },
-        );
-    if let Err(error) = call_stream_granted_folder(uri, token) {
-        folder_streaming()
-            .lock()
-            .expect("folder picker registry poisoned")
-            .remove(&token);
-        log::warn!("cranpose: failed to resume folder stream: {error}");
-        return None;
-    }
-    Some(Rc::new(AndroidFolderStream { token }) as FolderStreamRef)
+// ---- Content -------------------------------------------------------------
+
+/// A document addressed by a `content://` URI. It is opened on demand through
+/// the provider's descriptor and never copied to the cache.
+struct AndroidDocument {
+    metadata: ContentMetadata,
 }
 
-fn call_stream_granted_folder(uri: String, token: i64) -> Result<(), String> {
-    let app = APP
-        .get()
-        .ok_or_else(|| "Android file picker was not registered".to_string())?;
-    crate::android_jni::with_android_activity_env(app, |env, activity| {
-        let uri_arg = env.new_string(&uri).map_err(|error| error.to_string())?;
-        let uri_obj: &JObject = uri_arg.as_ref();
-        env.call_method(
-            &activity,
-            jni_str!("cranposeStreamGrantedFolder"),
-            jni_sig!("(JLjava/lang/String;)V"),
-            &[JValue::Long(token), JValue::Object(uri_obj)],
-        )
-        .map(|_| ())
-        .map_err(|error| format!("failed to start granted folder walk: {error}"))
-    })
-}
-
-/// Java callback: records a granted selection in the resume inbox (see above).
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
-    'local,
->(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    flags: jint,
-    uri: JString<'local>,
-    name: JString<'local>,
-) {
-    let Some(uri) = read_optional_jstring(&mut env, uri) else {
-        return;
-    };
-    let name = read_optional_jstring(&mut env, name).unwrap_or_default();
-    resumable()
-        .lock()
-        .expect("resume inbox poisoned")
-        .push(ResumableEntry { flags, uri, name });
-}
-
-/// Which Android picker entry point to launch for a request.
-#[derive(Clone, Copy)]
-enum PickKind {
-    /// `cranposePickFile` — a single document.
-    File,
-    /// `cranposePickFolder` — a tree, enumerated fully before delivery.
-    Folder,
-    /// `cranposePickFolderStreaming` — a tree whose files stream in as the
-    /// provider discovers them.
-    FolderStreaming,
-}
-
-fn present(folder: bool) -> PickerFuture<PickResult> {
-    // Discard any orphaned selection from an earlier abandoned pick; this fresh
-    // request becomes the only thing the resume inbox can hold.
-    clear_resumable();
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    pending()
-        .lock()
-        .expect("file picker registry poisoned")
-        .insert(token, Pending::default());
-
-    let kind = if folder {
-        PickKind::Folder
-    } else {
-        PickKind::File
-    };
-    if let Err(error) = call_activity(kind, token) {
-        pending()
-            .lock()
-            .expect("file picker registry poisoned")
-            .remove(&token);
-        return Box::pin(async move { Err(FilePickerError::Failed(error)) });
+impl Content for AndroidDocument {
+    fn metadata(&self) -> ContentMetadata {
+        self.metadata.clone()
     }
 
-    Box::pin(PickFuture { token })
-}
-
-fn call_activity(kind: PickKind, token: i64) -> Result<(), String> {
-    let app = APP
-        .get()
-        .ok_or_else(|| "Android file picker was not registered".to_string())?;
-    crate::android_jni::with_android_activity_env(app, |env, activity| {
-        let method = match kind {
-            PickKind::File => jni_str!("cranposePickFile"),
-            PickKind::Folder => jni_str!("cranposePickFolder"),
-            PickKind::FolderStreaming => jni_str!("cranposePickFolderStreaming"),
-        };
-        env.call_method(&activity, method, jni_sig!("(J)V"), &[JValue::Long(token)])
-            .map(|_| ())
-            .map_err(|error| format!("failed to launch Android picker: {error}"))
-    })
-}
-
-/// Future resolved when the Java callback reports a result for `token`.
-struct PickFuture {
-    token: i64,
-}
-
-impl Future for PickFuture {
-    type Output = PickResult;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<PickResult> {
-        let mut registry = pending().lock().expect("file picker registry poisoned");
-        let Some(slot) = registry.get_mut(&self.token) else {
-            return Poll::Ready(Ok(None));
-        };
-        match slot.result.take() {
-            Some(raw) => {
-                registry.remove(&self.token);
-                // This pick was delivered live; drop the resume copy recorded in
-                // `onActivityResult` so it is not replayed on the next start.
-                clear_resumable();
-                Poll::Ready(build_result(raw))
-            }
-            None => {
-                slot.waker = Some(context.waker().clone());
-                Poll::Pending
-            }
-        }
-    }
-}
-
-fn build_result(raw: RawResult) -> PickResult {
-    if raw.cancelled {
-        return Ok(None);
-    }
-    if let Some(error) = raw.error {
-        return Err(FilePickerError::Failed(error));
-    }
-    if raw.folder {
-        let children: Vec<PickedEntryRef> = raw
-            .documents
-            .into_iter()
-            .map(|document| Rc::new(UriEntry::from(document)) as PickedEntryRef)
-            .collect();
-        Ok(Some(Rc::new(FolderEntry { children })))
-    } else {
-        match raw.documents.into_iter().next() {
-            Some(document) => Ok(Some(Rc::new(UriEntry::from(document)))),
-            None => Ok(None),
-        }
-    }
-}
-
-/// A picked file addressed by a `content://` URI. It is opened on demand
-/// through the provider's descriptor and never copied to the cache.
-struct UriEntry {
-    uri: String,
-    name: String,
-}
-
-impl From<PickedDocument> for UriEntry {
-    fn from(document: PickedDocument) -> Self {
-        UriEntry {
-            uri: document.uri,
-            name: document.name,
-        }
-    }
-}
-
-impl PickedEntry for UriEntry {
-    fn name(&self) -> String {
-        self.name.clone()
-    }
-
-    fn kind(&self) -> PickedKind {
-        PickedKind::File
-    }
-
-    fn display_path(&self) -> String {
-        self.uri.clone()
-    }
-
-    fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
-        let uri = self.uri.clone();
+    fn open(&self) -> ContentFuture<'_, Result<ContentReaderRef, ContentError>> {
+        let uri = self.metadata.identifier.clone();
         Box::pin(async move {
-            let mut file = open_content_uri(&uri)
-                .map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-            let mut bytes = Vec::new();
-            file.read_to_end(&mut bytes)
-                .map_err(|error| FilePickerError::ReadFailed(error.to_string()))?;
-            Ok(bytes)
+            let file =
+                open_content_uri(&uri).map_err(|error| ContentError::Io(error.to_string()))?;
+            Ok(Rc::new(DescriptorReader {
+                file: std::cell::RefCell::new(Some(file)),
+            }) as ContentReaderRef)
         })
     }
+}
 
-    fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
-        Box::pin(async {
-            Err(FilePickerError::WrongKind {
-                actual: "file",
-                expected: "folder",
+struct DescriptorReader {
+    file: std::cell::RefCell<Option<File>>,
+}
+
+impl ContentReader for DescriptorReader {
+    fn read_chunk(&self) -> ContentFuture<'_, Result<Option<Vec<u8>>, ContentError>> {
+        Box::pin(async move {
+            let mut slot = self.file.borrow_mut();
+            let Some(file) = slot.as_mut() else {
+                return Ok(None);
+            };
+            let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
+            let mut filled = 0;
+            while filled < buffer.len() {
+                match file.read(&mut buffer[filled..]) {
+                    Ok(0) => break,
+                    Ok(read) => filled += read,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(ContentError::Io(error.to_string())),
+                }
+            }
+            if filled == 0 {
+                *slot = None;
+                return Ok(None);
+            }
+            buffer.truncate(filled);
+            Ok(Some(buffer))
+        })
+    }
+}
+
+/// A document being written through the provider's descriptor.
+struct AndroidSink {
+    uri: String,
+    file: std::cell::RefCell<Option<File>>,
+}
+
+impl AndroidSink {
+    fn writer(&self) -> Result<std::cell::RefMut<'_, Option<File>>, ContentError> {
+        let mut slot = self.file.borrow_mut();
+        if slot.is_none() {
+            let fd = call_activity(|env, activity| {
+                let uri = env.new_string(&self.uri).map_err(|e| e.to_string())?;
+                let uri_obj: &JObject = uri.as_ref();
+                env.call_method(
+                    &activity,
+                    jni_str!("cranposeOpenUriWrite"),
+                    jni_sig!("(Ljava/lang/String;)I"),
+                    &[JValue::Object(uri_obj)],
+                )
+                .and_then(|value| value.i())
+                .map_err(|error| error.to_string())
             })
+            .map_err(ContentError::Io)?;
+            if fd < 0 {
+                return Err(ContentError::PermissionDenied(self.uri.clone()));
+            }
+            // SAFETY: `cranposeOpenUriWrite` detaches the descriptor from its
+            // `ParcelFileDescriptor`, transferring ownership to this process;
+            // the `File` closes it on drop.
+            *slot = Some(unsafe { File::from_raw_fd(fd) });
+        }
+        Ok(slot)
+    }
+}
+
+impl ContentSink for AndroidSink {
+    fn write_chunk(&self, bytes: Vec<u8>) -> ContentFuture<'_, Result<(), ContentError>> {
+        Box::pin(async move {
+            let mut slot = self.writer()?;
+            let file = slot
+                .as_mut()
+                .ok_or_else(|| ContentError::Io("sink is already finished".into()))?;
+            file.write_all(&bytes)
+                .map_err(|error| ContentError::Io(error.to_string()))
+        })
+    }
+
+    fn finish(&self) -> ContentFuture<'_, Result<(), ContentError>> {
+        Box::pin(async move {
+            // Opening lazily means an empty document still needs a descriptor
+            // so the chosen file exists and is truncated.
+            let mut slot = self.writer()?;
+            let Some(mut file) = slot.take() else {
+                return Ok(());
+            };
+            file.flush()
+                .map_err(|error| ContentError::Io(error.to_string()))?;
+            file.sync_all()
+                .map_err(|error| ContentError::Io(error.to_string()))
         })
     }
 }
 
-/// A picked folder: its audio descendants enumerated as [`UriEntry`] children
-/// without copying anything.
-struct FolderEntry {
-    children: Vec<PickedEntryRef>,
+// ---- Folders -------------------------------------------------------------
+
+fn folder_of(tree_uri: String) -> ContentFolderRef {
+    Rc::new(AndroidFolder { tree_uri })
 }
 
-impl PickedEntry for FolderEntry {
-    fn name(&self) -> String {
-        "folder".to_string()
+/// A granted document tree. Immediate children are queried synchronously;
+/// the whole tree is streamed by the Java walker.
+struct AndroidFolder {
+    tree_uri: String,
+}
+
+impl AndroidFolder {
+    fn children(&self, document_id: &str) -> Result<Vec<ContentMetadata>, ContentError> {
+        let rows = call_activity(|env, activity| {
+            let tree = env.new_string(&self.tree_uri).map_err(|e| e.to_string())?;
+            let document = env.new_string(document_id).map_err(|e| e.to_string())?;
+            let tree_obj: &JObject = tree.as_ref();
+            let document_obj: &JObject = document.as_ref();
+            let value = env
+                .call_method(
+                    &activity,
+                    jni_str!("cranposeFolderChildren"),
+                    jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+                    &[JValue::Object(tree_obj), JValue::Object(document_obj)],
+                )
+                .and_then(|value| value.l())
+                .map_err(|error| error.to_string())?;
+            if value.is_null() {
+                return Ok(None);
+            }
+            JString::cast_local(env, value)
+                .map_err(|error| error.to_string())?
+                .try_to_string(env)
+                .map(Some)
+                .map_err(|error| error.to_string())
+        })
+        .map_err(ContentError::Io)?;
+        let rows = rows.ok_or_else(|| ContentError::Io("folder is not readable".into()))?;
+        Ok(parse_documents(&rows))
+    }
+}
+
+impl ContentFolder for AndroidFolder {
+    fn metadata(&self) -> ContentMetadata {
+        ContentMetadata::named(
+            self.tree_uri
+                .rsplit(['/', ':'])
+                .find(|segment| !segment.is_empty())
+                .unwrap_or(&self.tree_uri)
+                .to_string(),
+        )
+        .with_identifier(self.tree_uri.clone())
     }
 
-    fn kind(&self) -> PickedKind {
-        PickedKind::Folder
-    }
-
-    fn display_path(&self) -> String {
-        String::new()
-    }
-
-    fn read_bytes(&self) -> PickerFuture<Result<Vec<u8>, FilePickerError>> {
-        Box::pin(async {
-            Err(FilePickerError::WrongKind {
-                actual: "folder",
-                expected: "file",
-            })
+    fn entries(&self) -> ContentFuture<'_, Result<Vec<ContentEntry>, ContentError>> {
+        Box::pin(async move {
+            Ok(self
+                .children("")?
+                .into_iter()
+                .map(|metadata| {
+                    if is_directory(&metadata) {
+                        ContentEntry::Folder(Rc::new(AndroidFolder {
+                            tree_uri: metadata.identifier,
+                        }))
+                    } else {
+                        ContentEntry::File(content_of(metadata))
+                    }
+                })
+                .collect())
         })
     }
 
-    fn list(&self) -> PickerFuture<Result<Vec<PickedEntryRef>, FilePickerError>> {
-        let children = self.children.clone();
-        Box::pin(async move { Ok(children) })
+    fn stream_files(&self) -> Option<ContentStreamRef> {
+        let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+        folder_walks()
+            .lock()
+            .expect("folder walk registry poisoned")
+            .insert(token, FolderWalk::default());
+        let tree_uri = self.tree_uri.clone();
+        let launched = call_activity(move |env, activity| {
+            let uri = env.new_string(&tree_uri).map_err(|e| e.to_string())?;
+            let uri_obj: &JObject = uri.as_ref();
+            env.call_method(
+                &activity,
+                jni_str!("cranposeStreamFolder"),
+                jni_sig!("(JLjava/lang/String;)V"),
+                &[JValue::Long(token), JValue::Object(uri_obj)],
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        });
+        if let Err(error) = launched {
+            let mut registry = folder_walks()
+                .lock()
+                .expect("folder walk registry poisoned");
+            if let Some(walk) = registry.get_mut(&token) {
+                walk.finished = true;
+                walk.error = Some(error);
+            }
+        }
+        Some(Rc::new(AndroidFolderStream { token }))
     }
 }
 
-// ---- Streaming folder discovery ------------------------------------------
-//
-// `enumerateTree` on the Java side walks the picked tree on a worker thread and
-// reports audio files in batches as it finds them. That matters for a slow
-// provider (a mounted WebDAV share): instead of blocking until the whole tree
-// is walked, the folder selection resolves immediately and files arrive
-// incrementally, so the app can show progress and play the first track at once.
-
-/// Per-token state for a streaming folder pick, written by the Java callbacks
-/// and drained by the [`AndroidFolderStream`] on the UI thread.
+/// Per-token state for a streaming folder walk, written by the Java callbacks
+/// and drained by the awaiting collector.
 #[derive(Default)]
-struct FolderStreaming {
-    documents: Vec<PickedDocument>,
-    picked: bool,
-    cancelled: bool,
-    pick_error: Option<String>,
+struct FolderWalk {
+    documents: std::collections::VecDeque<ContentMetadata>,
     finished: bool,
-    stream_error: Option<String>,
+    error: Option<String>,
+    produced: usize,
     waker: Option<Waker>,
 }
 
-fn folder_streaming() -> &'static Mutex<HashMap<i64, FolderStreaming>> {
-    static FOLDER_STREAMING: OnceLock<Mutex<HashMap<i64, FolderStreaming>>> = OnceLock::new();
-    FOLDER_STREAMING.get_or_init(|| Mutex::new(HashMap::new()))
+fn folder_walks() -> &'static Mutex<HashMap<i64, FolderWalk>> {
+    static SLOT: OnceLock<Mutex<HashMap<i64, FolderWalk>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn present_folder_stream() -> PickerFuture<Result<Option<FolderStreamRef>, FilePickerError>> {
-    clear_resumable();
-    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
-    folder_streaming()
-        .lock()
-        .expect("folder picker registry poisoned")
-        .insert(token, FolderStreaming::default());
-
-    if let Err(error) = call_activity(PickKind::FolderStreaming, token) {
-        folder_streaming()
-            .lock()
-            .expect("folder picker registry poisoned")
-            .remove(&token);
-        return Box::pin(async move { Err(FilePickerError::Failed(error)) });
-    }
-
-    Box::pin(FolderPickFuture { token })
-}
-
-/// Resolves once the user has selected (or cancelled) the folder; the returned
-/// [`AndroidFolderStream`] then yields files as enumeration continues.
-struct FolderPickFuture {
-    token: i64,
-}
-
-impl Future for FolderPickFuture {
-    type Output = Result<Option<FolderStreamRef>, FilePickerError>;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut registry = folder_streaming()
-            .lock()
-            .expect("folder picker registry poisoned");
-        let Some(slot) = registry.get_mut(&self.token) else {
-            return Poll::Ready(Ok(None));
-        };
-        if slot.cancelled {
-            registry.remove(&self.token);
-            clear_resumable();
-            return Poll::Ready(Ok(None));
-        }
-        if let Some(error) = slot.pick_error.take() {
-            registry.remove(&self.token);
-            clear_resumable();
-            return Poll::Ready(Err(FilePickerError::Failed(error)));
-        }
-        if slot.picked {
-            // Delivered live; drop the resume copy recorded in `onActivityResult`.
-            clear_resumable();
-            return Poll::Ready(Ok(Some(
-                Rc::new(AndroidFolderStream { token: self.token }) as FolderStreamRef
-            )));
-        }
-        slot.waker = Some(context.waker().clone());
-        Poll::Pending
-    }
-}
-
-/// Streams files discovered under a picked folder. Dropping it discards the
-/// registry slot (the Java enumeration thread checks the slot and stops).
+/// Streams files discovered under a granted tree. Dropping it discards the
+/// registry slot, and the Java walker stops when its next batch is refused.
 struct AndroidFolderStream {
     token: i64,
 }
 
-impl FolderStream for AndroidFolderStream {
-    fn take_ready(&self) -> Vec<PickedEntryRef> {
-        let mut registry = folder_streaming()
-            .lock()
-            .expect("folder picker registry poisoned");
-        let Some(slot) = registry.get_mut(&self.token) else {
-            return Vec::new();
-        };
-        std::mem::take(&mut slot.documents)
-            .into_iter()
-            .map(|document| Rc::new(UriEntry::from(document)) as PickedEntryRef)
-            .collect()
+impl ContentStream for AndroidFolderStream {
+    fn next(&self) -> ContentFuture<'_, Result<Option<ContentHandle>, ContentError>> {
+        Box::pin(FolderNext { token: self.token })
     }
 
-    fn is_finished(&self) -> bool {
-        let registry = folder_streaming()
+    fn produced(&self) -> Option<usize> {
+        folder_walks()
             .lock()
-            .expect("folder picker registry poisoned");
-        registry
+            .expect("folder walk registry poisoned")
             .get(&self.token)
-            .map(|slot| slot.finished && slot.documents.is_empty())
-            .unwrap_or(true)
-    }
-
-    fn take_error(&self) -> Option<FilePickerError> {
-        let mut registry = folder_streaming()
-            .lock()
-            .expect("folder picker registry poisoned");
-        registry
-            .get_mut(&self.token)
-            .and_then(|slot| slot.stream_error.take())
-            .map(FilePickerError::Failed)
+            .map(|walk| walk.produced)
     }
 }
 
 impl Drop for AndroidFolderStream {
     fn drop(&mut self) {
-        folder_streaming()
+        folder_walks()
             .lock()
-            .expect("folder picker registry poisoned")
+            .expect("folder walk registry poisoned")
             .remove(&self.token);
     }
 }
 
-/// Java callback: the user picked a folder (or cancelled/failed). Resolves the
-/// [`FolderPickFuture`] so streaming can begin.
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    cancelled: jboolean,
-    error: JString<'local>,
-) {
-    let error = read_optional_jstring(&mut env, error);
-    let mut registry = folder_streaming()
-        .lock()
-        .expect("folder picker registry poisoned");
-    if let Some(slot) = registry.get_mut(&token) {
-        if cancelled {
-            slot.cancelled = true;
-        } else if let Some(error) = error {
-            slot.pick_error = Some(error);
-        } else {
-            slot.picked = true;
+struct FolderNext {
+    token: i64,
+}
+
+impl Future for FolderNext {
+    type Output = Result<Option<ContentHandle>, ContentError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut registry = folder_walks()
+            .lock()
+            .expect("folder walk registry poisoned");
+        let Some(walk) = registry.get_mut(&self.token) else {
+            return Poll::Ready(Ok(None));
+        };
+        if let Some(metadata) = walk.documents.pop_front() {
+            walk.produced += 1;
+            return Poll::Ready(Ok(Some(content_of(metadata))));
         }
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
+        if let Some(error) = walk.error.take() {
+            return Poll::Ready(Err(ContentError::Io(error)));
         }
+        if walk.finished {
+            return Poll::Ready(Ok(None));
+        }
+        walk.waker = Some(context.waker().clone());
+        Poll::Pending
     }
 }
 
-/// Java callback: a batch of newly-discovered files (`uri\tname` rows). Returns
-/// `false` (0) once the consumer has dropped the stream, so the Java
-/// enumeration thread can stop walking a huge tree it no longer needs.
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    entries: JString<'local>,
-) -> jboolean {
-    let documents = read_optional_jstring(&mut env, entries)
-        .map(parse_documents)
-        .unwrap_or_default();
-    let mut registry = folder_streaming()
-        .lock()
-        .expect("folder picker registry poisoned");
-    match registry.get_mut(&token) {
-        Some(slot) => {
-            slot.documents.extend(documents);
-            true
-        }
-        None => false,
-    }
-}
-
-/// Java callback: enumeration finished (with an optional error).
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    error: JString<'local>,
-) {
-    let error = read_optional_jstring(&mut env, error);
-    let mut registry = folder_streaming()
-        .lock()
-        .expect("folder picker registry poisoned");
-    if let Some(slot) = registry.get_mut(&token) {
-        slot.finished = true;
-        slot.stream_error = error;
-    }
-}
-
-/// Opens a picked `content://` document for reading, returning a [`File`] backed
-/// by the provider's descriptor. Nothing is copied; the descriptor is detached
+/// Opens a `content://` document for reading, returning a [`File`] backed by
+/// the provider's descriptor. Nothing is copied; the descriptor is detached
 /// from its `ParcelFileDescriptor` so the returned `File` owns and closes it.
-/// Callable from any thread (it attaches to the JVM as needed), so the audio
+/// Callable from any thread (it attaches to the JVM as needed), so a media
 /// engine can stream a track straight from the provider.
 pub fn open_content_uri(uri: &str) -> io::Result<File> {
-    let app = APP.get().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotConnected,
-            "Android file picker is not registered",
-        )
-    })?;
-    let fd = crate::android_jni::with_android_activity_env(app, |env, activity| {
+    let fd = call_activity(|env, activity| {
         let argument = env.new_string(uri).map_err(|error| error.to_string())?;
         let argument: &JObject = argument.as_ref();
         env.call_method(
@@ -776,7 +802,7 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
         .and_then(|value| value.i())
         .map_err(|error| error.to_string())
     })
-    .map_err(|error| io::Error::other(error))?;
+    .map_err(io::Error::other)?;
     if fd < 0 {
         return Err(io::Error::other(format!(
             "ContentResolver returned no descriptor for {uri}"
@@ -788,61 +814,7 @@ pub fn open_content_uri(uri: &str) -> io::Result<File> {
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-fn deliver(token: i64, result: RawResult) {
-    let mut registry = pending().lock().expect("file picker registry poisoned");
-    if let Some(slot) = registry.get_mut(&token) {
-        slot.result = Some(result);
-        if let Some(waker) = slot.waker.take() {
-            waker.wake();
-        }
-    }
-}
-
-/// Java callback delivering a picker result. Runs on a worker thread spawned by
-/// the activity. `entries` is newline-separated `uri\tname` rows (one for a
-/// file, every audio descendant for a folder).
-#[doc(hidden)]
-#[no_mangle]
-pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
-    mut env: EnvUnowned<'local>,
-    _class: JClass<'local>,
-    token: jlong,
-    folder: jboolean,
-    entries: JString<'local>,
-    cancelled: jboolean,
-    error: JString<'local>,
-) {
-    let documents = read_optional_jstring(&mut env, entries)
-        .map(parse_documents)
-        .unwrap_or_default();
-    let error = read_optional_jstring(&mut env, error);
-    deliver(
-        token,
-        RawResult {
-            folder,
-            documents,
-            cancelled,
-            error,
-        },
-    );
-}
-
-fn parse_documents(text: String) -> Vec<PickedDocument> {
-    text.lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(2, '\t');
-            let uri = parts.next()?;
-            if uri.is_empty() {
-                return None;
-            }
-            let name = parts.next().unwrap_or("");
-            Some(PickedDocument {
-                uri: uri.to_string(),
-                name: name.to_string(),
-            })
-        })
-        .collect()
-}
+// ---- Java callbacks ------------------------------------------------------
 
 fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option<String> {
     if value.is_null() {
@@ -854,5 +826,209 @@ fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option
     {
         Outcome::Ok(text) if !text.is_empty() => Some(text),
         _ => None,
+    }
+}
+
+/// Java callback: records a granted selection in the resume inbox (see above).
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    flags: jint,
+    entries: JString<'local>,
+) {
+    let Some(entries) = read_optional_jstring(&mut env, entries) else {
+        return;
+    };
+    recoverable()
+        .lock()
+        .expect("resume inbox poisoned")
+        .push(Recoverable { flags, entries });
+}
+
+/// Java callback delivering a document chooser result.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    entries: JString<'local>,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    let entries = read_optional_jstring(&mut env, entries);
+    let error = read_optional_jstring(&mut env, error);
+    let value = if cancelled {
+        Ok(Vec::new())
+    } else if let Some(error) = error {
+        Err(FilePickerError::Failed(error))
+    } else {
+        Ok(parse_documents(entries.as_deref().unwrap_or_default()))
+    };
+    deliver(document_picks(), token, value);
+}
+
+/// Java callback: a folder (or persistent writable folder) was granted.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    uri: JString<'local>,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    deliver(
+        tree_picks(),
+        token,
+        tree_result(&mut env, uri, cancelled, error),
+    );
+}
+
+/// Java callback: a persistent writable folder was granted.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    uri: JString<'local>,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    deliver(
+        tree_picks(),
+        token,
+        tree_result(&mut env, uri, cancelled, error),
+    );
+}
+
+/// Java callback: a save destination was created.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
+    'local,
+>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    uri: JString<'local>,
+    cancelled: jboolean,
+    error: JString<'local>,
+) {
+    deliver(
+        created_documents(),
+        token,
+        tree_result(&mut env, uri, cancelled, error),
+    );
+}
+
+fn tree_result(
+    env: &mut EnvUnowned<'_>,
+    uri: JString<'_>,
+    cancelled: jboolean,
+    error: JString<'_>,
+) -> Result<Option<String>, FilePickerError> {
+    let uri = read_optional_jstring(env, uri);
+    let error = read_optional_jstring(env, error);
+    if cancelled {
+        return Ok(None);
+    }
+    if let Some(error) = error {
+        return Err(FilePickerError::Failed(error));
+    }
+    Ok(uri)
+}
+
+/// Java callback: a batch of newly-discovered files. Returns `false` once the
+/// collector has dropped the stream, so the Java walker can stop.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    entries: JString<'local>,
+) -> jboolean {
+    let documents = read_optional_jstring(&mut env, entries)
+        .map(|rows| parse_documents(&rows))
+        .unwrap_or_default();
+    let mut registry = folder_walks()
+        .lock()
+        .expect("folder walk registry poisoned");
+    match registry.get_mut(&token) {
+        Some(walk) => {
+            walk.documents.extend(documents);
+            if let Some(waker) = walk.waker.take() {
+                waker.wake();
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Java callback: the walk finished, with an optional error.
+#[doc(hidden)]
+#[no_mangle]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    token: jlong,
+    error: JString<'local>,
+) {
+    let error = read_optional_jstring(&mut env, error);
+    let mut registry = folder_walks()
+        .lock()
+        .expect("folder walk registry poisoned");
+    if let Some(walk) = registry.get_mut(&token) {
+        walk.finished = true;
+        walk.error = error;
+        if let Some(waker) = walk.waker.take() {
+            waker.wake();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_rows_carry_provider_metadata() {
+        let rows = "content://docs/1\treport.pdf\tapplication/pdf\t2048\t1700000000000\n\
+                    content://docs/2\t\t\t\t";
+        let documents = parse_documents(rows);
+        assert_eq!(documents.len(), 2);
+        assert_eq!(documents[0].name, "report.pdf");
+        assert_eq!(documents[0].mime_type.as_deref(), Some("application/pdf"));
+        assert_eq!(documents[0].len, Some(2048));
+        assert_eq!(documents[0].modified_millis, Some(1_700_000_000_000));
+        // A provider that reports nothing still yields a usable display name.
+        assert_eq!(documents[1].name, "2");
+        assert_eq!(documents[1].len, None);
+    }
+
+    #[test]
+    fn directory_rows_are_told_apart_from_files() {
+        let directory =
+            parse_document("content://docs/tree\tMusic\tvnd.android.document/directory\t\t")
+                .expect("a row parses");
+        assert!(is_directory(&directory));
+        let file =
+            parse_document("content://docs/3\ta.mp3\taudio/mpeg\t10\t").expect("a row parses");
+        assert!(!is_directory(&file));
+    }
+
+    #[test]
+    fn blank_rows_are_skipped() {
+        assert!(parse_documents("\n\t\n").is_empty());
     }
 }

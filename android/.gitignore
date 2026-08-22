@@ -1,0 +1,10 @@
+# Gradle's own working directories and everything it generates.
+.gradle
+/build
+*/build
+/local.properties
+/captures
+.externalNativeBuild
+.cxx
+*.iml
+.DS_Store

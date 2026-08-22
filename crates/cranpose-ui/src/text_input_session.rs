@@ -264,7 +264,7 @@ mod tests {
 
     fn focus_a_field() -> Rc<std::cell::RefCell<bool>> {
         let focus = Rc::new(std::cell::RefCell::new(false));
-        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler));
+        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler), 0);
         focus
     }
 
@@ -313,7 +313,7 @@ mod tests {
         );
 
         // Tapping the still-focused field re-requests the keyboard.
-        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler));
+        crate::text_field_focus::request_focus(Rc::clone(&focus), Rc::new(NoopFocusHandler), 0);
         assert_eq!(
             *handler.calls.borrow(),
             vec!["show", "hide", "show"],

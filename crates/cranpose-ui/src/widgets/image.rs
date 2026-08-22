@@ -6,6 +6,7 @@
 use crate::composable;
 use crate::layout::core::{Alignment, Measurable};
 use crate::modifier::{Modifier, Rect, Size};
+use crate::nine_patch::{nine_patch_quads, tile_quads, NinePatchInsets, PatchFill, PatchQuad};
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap, ImageSampling};
@@ -86,13 +87,146 @@ pub struct Painter {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum PainterKind {
     Bitmap(ImageBitmap),
+    BitmapRegion {
+        bitmap: ImageBitmap,
+        source: Quad,
+        sampling: ImageSampling,
+    },
+    /// A source repeated at its own size across whatever space it is given,
+    /// rather than scaled to fit it.
+    BitmapTiled {
+        bitmap: ImageBitmap,
+        source: Quad,
+        sampling: ImageSampling,
+    },
+    /// A source whose corners keep their size while its edges and middle grow.
+    NinePatch {
+        bitmap: ImageBitmap,
+        source: Quad,
+        insets: Quad,
+        center: PatchFill,
+        edges: PatchFill,
+        sampling: ImageSampling,
+    },
     Svg(SvgPainter),
+}
+
+/// Four `f32`s carried as bits.
+///
+/// A painter is compared and hashed so a composable can skip when it has not
+/// changed, and floats are neither `Eq` nor `Hash`. Keeping the bits makes the
+/// comparison exact — two painters built from the same numbers are the same
+/// painter — without asking the caller to think about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Quad {
+    a: u32,
+    b: u32,
+    c: u32,
+    d: u32,
+}
+
+impl Quad {
+    fn of(a: f32, b: f32, c: f32, d: f32) -> Self {
+        Self {
+            a: a.to_bits(),
+            b: b.to_bits(),
+            c: c.to_bits(),
+            d: d.to_bits(),
+        }
+    }
+
+    fn values(self) -> (f32, f32, f32, f32) {
+        (
+            f32::from_bits(self.a),
+            f32::from_bits(self.b),
+            f32::from_bits(self.c),
+            f32::from_bits(self.d),
+        )
+    }
+
+    fn from_rect(source: Rect) -> Self {
+        Self::of(source.x, source.y, source.width, source.height)
+    }
+
+    fn rect(self) -> Rect {
+        let (x, y, width, height) = self.values();
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn from_insets(insets: NinePatchInsets) -> Self {
+        Self::of(insets.left, insets.top, insets.right, insets.bottom)
+    }
+
+    fn insets(self) -> NinePatchInsets {
+        let (left, top, right, bottom) = self.values();
+        NinePatchInsets::new(left, top, right, bottom)
+    }
 }
 
 impl Painter {
     pub fn from_bitmap(bitmap: ImageBitmap) -> Self {
         Self {
             kind: PainterKind::Bitmap(bitmap),
+        }
+    }
+
+    /// Creates a painter for one source region of a bitmap atlas.
+    pub fn from_bitmap_region(bitmap: ImageBitmap, source: Rect, sampling: ImageSampling) -> Self {
+        Self {
+            kind: PainterKind::BitmapRegion {
+                bitmap,
+                source: Quad::from_rect(source),
+                sampling,
+            },
+        }
+    }
+
+    /// Creates a painter that repeats `source` at its own size across whatever
+    /// space it is given, instead of scaling it to fit.
+    ///
+    /// A texture, a hatch or a skin background covers an area of any size
+    /// without going soft. `source` is a region of `bitmap`, so an application
+    /// tiles one sprite out of an atlas and never the whole sheet.
+    pub fn from_bitmap_tiled(bitmap: ImageBitmap, source: Rect, sampling: ImageSampling) -> Self {
+        Self {
+            kind: PainterKind::BitmapTiled {
+                bitmap,
+                source: Quad::from_rect(source),
+                sampling,
+            },
+        }
+    }
+
+    /// Creates a painter whose corners keep their own size while its edges and
+    /// middle grow — one drawing of a button, panel or trough used at every
+    /// size.
+    ///
+    /// `center` and `edges` decide whether the growing parts are stretched or
+    /// tiled. Insets that leave no middle, or a destination with no room for
+    /// the corners, fall back to a plain scale rather than drawing corners over
+    /// each other.
+    pub fn from_nine_patch(
+        bitmap: ImageBitmap,
+        source: Rect,
+        insets: NinePatchInsets,
+        center: PatchFill,
+        edges: PatchFill,
+        sampling: ImageSampling,
+    ) -> Self {
+        Self {
+            kind: PainterKind::NinePatch {
+                bitmap,
+                source: Quad::from_rect(source),
+                insets: Quad::from_insets(insets),
+                center,
+                edges,
+                sampling,
+            },
         }
     }
 
@@ -105,6 +239,12 @@ impl Painter {
     pub fn intrinsic_size(&self) -> Size {
         match &self.kind {
             PainterKind::Bitmap(bitmap) => bitmap.intrinsic_size(),
+            PainterKind::BitmapRegion { source, .. }
+            | PainterKind::BitmapTiled { source, .. }
+            | PainterKind::NinePatch { source, .. } => {
+                let source = source.rect();
+                Size::new(source.width.max(0.0), source.height.max(0.0))
+            }
             PainterKind::Svg(svg) => svg.intrinsic_size(),
         }
     }
@@ -112,6 +252,9 @@ impl Painter {
     pub fn as_bitmap(&self) -> Option<&ImageBitmap> {
         match &self.kind {
             PainterKind::Bitmap(bitmap) => Some(bitmap),
+            PainterKind::BitmapRegion { bitmap, .. }
+            | PainterKind::BitmapTiled { bitmap, .. }
+            | PainterKind::NinePatch { bitmap, .. } => Some(bitmap),
             PainterKind::Svg(_) => None,
         }
     }
@@ -136,6 +279,28 @@ impl From<SvgPainter> for Painter {
 
 pub fn BitmapPainter(bitmap: ImageBitmap) -> Painter {
     Painter::from_bitmap(bitmap)
+}
+
+/// Creates a painter that draws one region from a bitmap atlas.
+pub fn BitmapRegionPainter(bitmap: ImageBitmap, source: Rect, sampling: ImageSampling) -> Painter {
+    Painter::from_bitmap_region(bitmap, source, sampling)
+}
+
+/// Creates a painter that repeats one region of a bitmap across its bounds.
+pub fn TiledPainter(bitmap: ImageBitmap, source: Rect, sampling: ImageSampling) -> Painter {
+    Painter::from_bitmap_tiled(bitmap, source, sampling)
+}
+
+/// Creates a painter whose corners stay put while its edges and middle grow.
+pub fn NinePatchPainter(
+    bitmap: ImageBitmap,
+    source: Rect,
+    insets: NinePatchInsets,
+    center: PatchFill,
+    edges: PatchFill,
+    sampling: ImageSampling,
+) -> Painter {
+    Painter::from_nine_patch(bitmap, source, insets, center, edges, sampling)
 }
 
 /// Errors returned while parsing or rasterizing an SVG painter.
@@ -338,7 +503,7 @@ impl SvgBytesKey {
     }
 }
 
-pub fn remember_svg(bytes: &'static [u8]) -> Result<SvgPainter, SvgPainterError> {
+pub fn rememberSvg(bytes: &'static [u8]) -> Result<SvgPainter, SvgPainterError> {
     let key = SvgBytesKey::new(bytes);
     cranpose_core::withCurrentComposer(|composer| {
         composer.with_key(&key, |composer| {
@@ -585,6 +750,139 @@ fn draw_bitmap_painter(
     );
 }
 
+fn draw_bitmap_region_painter(
+    scope: &mut dyn DrawScope,
+    bitmap: ImageBitmap,
+    source: Rect,
+    alignment: Alignment,
+    content_scale: ContentScale,
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+    sampling: ImageSampling,
+) {
+    let source_size = Size::new(source.width.max(0.0), source.height.max(0.0));
+    let Some((dst_rect, clipped_dst_rect)) =
+        image_destination_clip(source_size, scope.size(), alignment, content_scale)
+    else {
+        return;
+    };
+    let Some(clipped_source) = map_destination_clip_to_source(source, dst_rect, clipped_dst_rect)
+    else {
+        return;
+    };
+    scope.draw_image_src_sampled(
+        bitmap,
+        clipped_source,
+        clipped_dst_rect,
+        alpha,
+        color_filter,
+        sampling,
+    );
+}
+
+/// Draws a list of source-to-destination quads, clipped to the container.
+///
+/// Every fill that is not a plain scale — tiling, nine-patch — reduces to this,
+/// so the clipping rule and the sampling choice are stated once.
+fn draw_patch_quads(
+    scope: &mut dyn DrawScope,
+    bitmap: &ImageBitmap,
+    quads: &[PatchQuad],
+    container: Rect,
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+    sampling: ImageSampling,
+) {
+    for quad in quads {
+        let Some(clipped_destination) = intersect(quad.destination, container) else {
+            continue;
+        };
+        let Some(clipped_source) =
+            map_destination_clip_to_source(quad.source, quad.destination, clipped_destination)
+        else {
+            continue;
+        };
+        scope.draw_image_src_sampled(
+            bitmap.clone(),
+            clipped_source,
+            clipped_destination,
+            alpha,
+            color_filter,
+            sampling,
+        );
+    }
+}
+
+fn intersect(rect: Rect, bounds: Rect) -> Option<Rect> {
+    let left = rect.x.max(bounds.x);
+    let top = rect.y.max(bounds.y);
+    let right = (rect.x + rect.width).min(bounds.x + bounds.width);
+    let bottom = (rect.y + rect.height).min(bounds.y + bounds.height);
+    if right <= left || bottom <= top {
+        return None;
+    }
+    Some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
+/// Draws a tiled painter across the whole container.
+///
+/// Content scale and alignment do not apply: a tiled fill covers its bounds by
+/// definition, and scaling the source would defeat the reason for tiling it.
+fn draw_bitmap_tiled_painter(
+    scope: &mut dyn DrawScope,
+    bitmap: ImageBitmap,
+    source: Rect,
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+    sampling: ImageSampling,
+) {
+    let container = Rect::from_size(scope.size());
+    let quads = tile_quads(source, container);
+    draw_patch_quads(
+        scope,
+        &bitmap,
+        &quads,
+        container,
+        alpha,
+        color_filter,
+        sampling,
+    );
+}
+
+/// Draws a nine-patch painter across the whole container.
+///
+/// Like tiling, this fills its bounds by construction, so content scale and
+/// alignment have nothing left to decide.
+#[allow(clippy::too_many_arguments)]
+fn draw_nine_patch_painter(
+    scope: &mut dyn DrawScope,
+    bitmap: ImageBitmap,
+    source: Rect,
+    insets: NinePatchInsets,
+    center: PatchFill,
+    edges: PatchFill,
+    alpha: f32,
+    color_filter: Option<ColorFilter>,
+    sampling: ImageSampling,
+) {
+    let container = Rect::from_size(scope.size());
+    let quads = nine_patch_quads(source, container, insets, center, edges);
+    draw_patch_quads(
+        scope,
+        &bitmap,
+        &quads,
+        container,
+        alpha,
+        color_filter,
+        sampling,
+    );
+}
+
 fn draw_svg_painter(
     scope: &mut dyn DrawScope,
     svg: SvgPainter,
@@ -698,6 +996,50 @@ where
                         draw_alpha,
                         color_filter,
                     ),
+                    PainterKind::BitmapRegion {
+                        bitmap,
+                        source,
+                        sampling,
+                    } => draw_bitmap_region_painter(
+                        scope,
+                        bitmap.clone(),
+                        source.rect(),
+                        alignment,
+                        content_scale,
+                        draw_alpha,
+                        color_filter,
+                        *sampling,
+                    ),
+                    PainterKind::BitmapTiled {
+                        bitmap,
+                        source,
+                        sampling,
+                    } => draw_bitmap_tiled_painter(
+                        scope,
+                        bitmap.clone(),
+                        source.rect(),
+                        draw_alpha,
+                        color_filter,
+                        *sampling,
+                    ),
+                    PainterKind::NinePatch {
+                        bitmap,
+                        source,
+                        insets,
+                        center,
+                        edges,
+                        sampling,
+                    } => draw_nine_patch_painter(
+                        scope,
+                        bitmap.clone(),
+                        source.rect(),
+                        insets.insets(),
+                        *center,
+                        *edges,
+                        draw_alpha,
+                        color_filter,
+                        *sampling,
+                    ),
                     PainterKind::Svg(svg) => draw_svg_painter(
                         scope,
                         svg.clone(),
@@ -776,6 +1118,218 @@ mod tests {
         let painter = BitmapPainter(bitmap.clone());
         assert_eq!(painter.intrinsic_size(), Size::new(4.0, 2.0));
         assert_eq!(painter.bitmap(), Some(&bitmap));
+    }
+
+    #[test]
+    fn bitmap_region_painter_uses_region_as_intrinsic_size() {
+        let bitmap = sample_bitmap();
+        let source = Rect {
+            x: 1.0,
+            y: 0.0,
+            width: 2.0,
+            height: 1.0,
+        };
+        let painter = BitmapRegionPainter(bitmap.clone(), source, ImageSampling::Nearest);
+        assert_eq!(painter.intrinsic_size(), Size::new(2.0, 1.0));
+        assert_eq!(painter.bitmap(), Some(&bitmap));
+        assert_eq!(
+            painter,
+            Painter::from_bitmap_region(bitmap, source, ImageSampling::Nearest)
+        );
+    }
+
+    fn atlas_bitmap() -> ImageBitmap {
+        ImageBitmap::from_rgba8(64, 64, vec![255; 64 * 64 * 4]).expect("bitmap")
+    }
+
+    fn source_rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn drawn_images(
+        size: Size,
+        draw: impl FnOnce(&mut cranpose_ui_graphics::DrawScopeDefault),
+    ) -> Vec<(Rect, Rect)> {
+        let mut scope = cranpose_ui_graphics::DrawScopeDefault::new(size);
+        draw(&mut scope);
+        scope
+            .into_primitives()
+            .into_iter()
+            .filter_map(|primitive| match primitive {
+                cranpose_ui_graphics::DrawPrimitive::Image { src_rect, rect, .. } => {
+                    Some((src_rect?, rect))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tiled_painter_keeps_the_region_as_its_intrinsic_size() {
+        let bitmap = atlas_bitmap();
+        let source = source_rect(8.0, 8.0, 16.0, 4.0);
+        let painter = TiledPainter(bitmap.clone(), source, ImageSampling::Nearest);
+        assert_eq!(painter.intrinsic_size(), Size::new(16.0, 4.0));
+        assert_eq!(painter.bitmap(), Some(&bitmap));
+        assert_eq!(
+            painter,
+            Painter::from_bitmap_tiled(bitmap, source, ImageSampling::Nearest)
+        );
+    }
+
+    #[test]
+    fn a_tiled_painter_repeats_its_region_at_its_own_size() {
+        let bitmap = atlas_bitmap();
+        let source = source_rect(8.0, 8.0, 16.0, 4.0);
+        let drawn = drawn_images(Size::new(32.0, 8.0), |scope| {
+            draw_bitmap_tiled_painter(
+                scope,
+                bitmap.clone(),
+                source,
+                1.0,
+                None,
+                ImageSampling::Nearest,
+            );
+        });
+
+        assert_eq!(drawn.len(), 4, "two columns by two rows");
+        assert!(
+            drawn
+                .iter()
+                .all(|(src, dst)| src.width == dst.width && src.height == dst.height),
+            "a tile is drawn at 1:1, never scaled"
+        );
+        assert!(
+            drawn.iter().all(|(src, _)| src.x >= 8.0
+                && src.y >= 8.0
+                && src.x + src.width <= 24.0
+                && src.y + src.height <= 12.0),
+            "a tile never reads outside the region it was given"
+        );
+        assert_eq!(drawn[0].1, source_rect(0.0, 0.0, 16.0, 4.0));
+        assert_eq!(drawn[3].1, source_rect(16.0, 4.0, 16.0, 4.0));
+    }
+
+    #[test]
+    fn a_tiled_painter_clips_the_last_row_and_column() {
+        let bitmap = atlas_bitmap();
+        let source = source_rect(0.0, 0.0, 10.0, 10.0);
+        let drawn = drawn_images(Size::new(25.0, 10.0), |scope| {
+            draw_bitmap_tiled_painter(
+                scope,
+                bitmap.clone(),
+                source,
+                1.0,
+                None,
+                ImageSampling::Nearest,
+            );
+        });
+        assert_eq!(drawn.len(), 3);
+        let (src, dst) = drawn[2];
+        assert_eq!(dst, source_rect(20.0, 0.0, 5.0, 10.0));
+        assert_eq!(src, source_rect(0.0, 0.0, 5.0, 10.0));
+    }
+
+    #[test]
+    fn a_nine_patch_painter_keeps_the_region_as_its_intrinsic_size() {
+        let bitmap = atlas_bitmap();
+        let source = source_rect(0.0, 0.0, 30.0, 30.0);
+        let painter = NinePatchPainter(
+            bitmap.clone(),
+            source,
+            NinePatchInsets::uniform(10.0),
+            PatchFill::Stretch,
+            PatchFill::Stretch,
+            ImageSampling::Nearest,
+        );
+        assert_eq!(painter.intrinsic_size(), Size::new(30.0, 30.0));
+        assert_eq!(painter.bitmap(), Some(&bitmap));
+        assert_eq!(
+            painter,
+            Painter::from_nine_patch(
+                bitmap,
+                source,
+                NinePatchInsets::uniform(10.0),
+                PatchFill::Stretch,
+                PatchFill::Stretch,
+                ImageSampling::Nearest,
+            ),
+            "two painters built from the same numbers are the same painter"
+        );
+    }
+
+    #[test]
+    fn a_nine_patch_painter_draws_its_corners_at_their_own_size() {
+        let bitmap = atlas_bitmap();
+        let drawn = drawn_images(Size::new(100.0, 60.0), |scope| {
+            draw_nine_patch_painter(
+                scope,
+                bitmap.clone(),
+                source_rect(0.0, 0.0, 30.0, 30.0),
+                NinePatchInsets::uniform(10.0),
+                PatchFill::Stretch,
+                PatchFill::Stretch,
+                1.0,
+                None,
+                ImageSampling::Nearest,
+            );
+        });
+
+        assert_eq!(drawn.len(), 9);
+        assert_eq!(
+            drawn[0],
+            (
+                source_rect(0.0, 0.0, 10.0, 10.0),
+                source_rect(0.0, 0.0, 10.0, 10.0),
+            )
+        );
+        assert_eq!(
+            drawn[8],
+            (
+                source_rect(20.0, 20.0, 10.0, 10.0),
+                source_rect(90.0, 50.0, 10.0, 10.0),
+            )
+        );
+        assert_eq!(
+            drawn[4],
+            (
+                source_rect(10.0, 10.0, 10.0, 10.0),
+                source_rect(10.0, 10.0, 80.0, 40.0),
+            ),
+            "the middle grows on both axes"
+        );
+    }
+
+    #[test]
+    fn a_nine_patch_painter_reads_only_its_region_of_an_atlas() {
+        let bitmap = atlas_bitmap();
+        let drawn = drawn_images(Size::new(80.0, 40.0), |scope| {
+            draw_nine_patch_painter(
+                scope,
+                bitmap.clone(),
+                source_rect(32.0, 16.0, 24.0, 24.0),
+                NinePatchInsets::uniform(8.0),
+                PatchFill::Tile,
+                PatchFill::Tile,
+                1.0,
+                None,
+                ImageSampling::Nearest,
+            );
+        });
+
+        assert!(!drawn.is_empty());
+        assert!(
+            drawn.iter().all(|(src, _)| src.x >= 32.0
+                && src.y >= 16.0
+                && src.x + src.width <= 56.0
+                && src.y + src.height <= 40.0),
+            "no patch may read a neighbouring sprite out of the atlas"
+        );
     }
 
     #[test]

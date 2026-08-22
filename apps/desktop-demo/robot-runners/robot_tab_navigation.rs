@@ -99,7 +99,7 @@ fn main() {
 
                 // Verify content
                 // Note: Some texts might differ, we'll try to keep it general or fix if fails
-                // For Async Runtime, "Tap "Fetch async value"" is in a useState initial value
+                // For Async Runtime, "Tap "Fetch async value"" is in a rememberMutableStateOf initial value
                 // For Modifiers Showcase, need to verify what text is there. "Showcase Selection" might effectively just be "Simple Card" or similar initial state.
 
                 // Let's refine checks based on observation:

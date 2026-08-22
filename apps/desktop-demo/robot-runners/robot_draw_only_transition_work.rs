@@ -1,5 +1,5 @@
 use cranpose::AppLauncher;
-use cranpose_core::useState;
+use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::widgets::{
     CircularProgressIndicator, CIRCULAR_INDICATOR_STROKE_WIDTH, PROGRESS_INDICATOR_COLOR,
@@ -60,7 +60,7 @@ fn main() {
 #[allow(non_snake_case)]
 fn probe_app() {
     ROOT_COMPOSITIONS.fetch_add(1, Ordering::Relaxed);
-    let active = useState(|| false);
+    let active = rememberMutableStateOf(|| false);
     Column(Modifier::empty(), ColumnSpec::default(), move || {
         Button(
             Modifier::empty(),

@@ -129,7 +129,7 @@ fn PressAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl Fn
 fn RevealAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl FnMut() + 'static) {
     let interaction_source = rememberMutableInteractionSource();
     let last_interaction = interaction_source.collectLastInteractionAsState();
-    let reveal_trigger = cranpose_core::useState(|| RevealTrigger {
+    let reveal_trigger = cranpose_core::rememberMutableStateOf(|| RevealTrigger {
         generation: 0,
         origin: Point::default(),
     });
@@ -193,8 +193,8 @@ fn RevealAnimatedButton(text: &'static str, modifier: Modifier, on_click: impl F
 
 #[composable]
 pub(crate) fn InteractiveAnimTab() {
-    let clicks = cranpose_core::useState(|| 0u32);
-    let reveal_clicks = cranpose_core::useState(|| 0u32);
+    let clicks = cranpose_core::rememberMutableStateOf(|| 0u32);
+    let reveal_clicks = cranpose_core::rememberMutableStateOf(|| 0u32);
     let click_count = clicks.get();
     let reveal_click_count = reveal_clicks.get();
 

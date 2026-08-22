@@ -277,7 +277,7 @@ impl SimilarityTransform {
 /// One replayed shape batch: GPU slots captured from an earlier frame's
 /// converted shapes, drawn this frame under `transform`. The heavy per-shape
 /// pipeline (emit, walk, convert, upload) never sees these shapes again —
-/// the scene carries this one op where thousands of shape ops used to be.
+/// this one op stands in for what would otherwise be thousands of shape ops.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct RetainedDraw {
     /// Renderer-side replay slot holding the retained buffers and bind group.

@@ -51,6 +51,37 @@ impl Modifier {
             .with_inspector_metadata(padding_metadata(padding));
         self.then(modifier)
     }
+
+    /// Add padding in reading order: `start` is the left edge in a
+    /// left-to-right layout and the right edge in a right-to-left one.
+    ///
+    /// The direction comes from [`crate::layout_direction`], so a screen that
+    /// reverses direction reverses this padding with it.
+    ///
+    /// Example: `Modifier::empty().padding_relative(16.0, 8.0, 4.0, 8.0)`
+    pub fn padding_relative(self, start: f32, top: f32, end: f32, bottom: f32) -> Self {
+        self.padding_relative_in(
+            crate::layout_direction::layout_direction(),
+            start,
+            top,
+            end,
+            bottom,
+        )
+    }
+
+    /// Add reading-order padding resolved against an explicit direction, for
+    /// callers that already know it — a layout that measured one, a test.
+    pub fn padding_relative_in(
+        self,
+        direction: crate::layout_direction::LayoutDirection,
+        start: f32,
+        top: f32,
+        end: f32,
+        bottom: f32,
+    ) -> Self {
+        let (left, right) = direction.resolve(start, end);
+        self.padding_each(left, top, right, bottom)
+    }
 }
 
 fn padding_metadata(padding: EdgeInsets) -> InspectorMetadata {

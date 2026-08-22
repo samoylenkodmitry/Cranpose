@@ -130,7 +130,7 @@ fn max_layer_translation_y(layer: &LayerNode) -> f32 {
 
 #[composable]
 fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
-    let press_target = cranpose_core::useState(|| 0.0_f32);
+    let press_target = cranpose_core::rememberMutableStateOf(|| 0.0_f32);
     // The click raises the lift target and nothing lowers it again. An earlier
     // revision released the lift from a `launch_background` worker that slept
     // 120ms of WALL time, and that made the probe cancel itself whenever the
@@ -161,7 +161,7 @@ fn returned_press_lift(press_tick: MutableState<u64>) -> f32 {
 
 #[composable]
 fn animate_float_returned_button_graphics_layer_probe() {
-    let press_tick = cranpose_core::useState(|| 0_u64);
+    let press_tick = cranpose_core::rememberMutableStateOf(|| 0_u64);
     let lift = returned_press_lift(press_tick);
 
     Button(

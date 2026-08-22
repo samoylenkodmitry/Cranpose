@@ -1,4 +1,5 @@
 use cranpose::widgets::{Box, BoxSpec, Row, RowSpec};
+use cranpose::LazyItems;
 use cranpose::{AppLauncher, Color, Modifier, Size};
 use cranpose_testing::sample_screenshot_pixel_logical;
 use cranpose_ui::round_scaling_list::CentreAnchor;
@@ -10,7 +11,7 @@ const WIDTH: u32 = 774;
 const HEIGHT: u32 = 454;
 const BG: Color = Color(4.0 / 255.0, 7.0 / 255.0, 11.0 / 255.0, 1.0);
 const SOURCE: Color = Color(47.0 / 255.0, 168.0 / 255.0, 245.0 / 255.0, 0.82);
-const OPAQUE: Color = Color(185.0 / 255.0, 242.0 / 255.0, 255.0 / 255.0, 1.0);
+const OPAQUE: Color = Color(185.0 / 255.0, 242.0 / 255.0, 1.0, 1.0);
 
 fn pixel(screenshot: &cranpose::RobotScreenshot, x: f32, y: f32) -> [u8; 3] {
     let rgba = sample_screenshot_pixel_logical(screenshot, x, y).expect("pixel in window");
@@ -86,7 +87,7 @@ fn wear_list() {
         state,
         WearScalingLazyColumnSpec::default().content_padding(18.0, 34.0),
         |scope| {
-            scope.items(9, |_| {
+            scope.items(LazyItems::new(9).key(|index: usize| index as u64), |_| {
                 Box(
                     Modifier::empty()
                         .fill_max_width()

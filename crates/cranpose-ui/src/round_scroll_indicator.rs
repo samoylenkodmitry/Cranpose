@@ -17,6 +17,7 @@
 //! that never shows it and can be tested without a GPU.
 
 use crate::round_scaling_list::ScalingParams;
+use crate::scrollbar::{thumb_geometry, ThumbBounds};
 use std::f32::consts::FRAC_PI_2;
 
 /// `ScrollIndicatorDefaults.indicatorHeight` — how far the track reaches up and
@@ -166,18 +167,15 @@ pub struct IndicatorGeometry {
 /// indicator uses for one. Reach for this one when a caller genuinely scrolls
 /// pixels, and for that one when it is a Wear list.
 pub fn indicator_geometry(content: f32, viewport: f32, scrolled: f32) -> Option<IndicatorGeometry> {
-    if !(content.is_finite() && viewport.is_finite() && scrolled.is_finite()) {
-        return None;
-    }
-    if viewport <= 0.0 || content <= viewport {
-        return None;
-    }
-    let thumb = (viewport / content).clamp(INDICATOR_MIN_THUMB, INDICATOR_MAX_THUMB);
-    let travel = content - viewport;
-    let progress = (scrolled / travel).clamp(0.0, 1.0);
-    Some(IndicatorGeometry {
-        thumb,
-        offset: progress * (1.0 - thumb),
+    thumb_geometry(
+        content,
+        viewport,
+        scrolled,
+        ThumbBounds::new(INDICATOR_MIN_THUMB, INDICATOR_MAX_THUMB),
+    )
+    .map(|geometry| IndicatorGeometry {
+        thumb: geometry.length,
+        offset: geometry.offset,
     })
 }
 

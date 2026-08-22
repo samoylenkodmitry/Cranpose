@@ -252,7 +252,6 @@ fn CodeField(
                     .horizontal_arrangement(LinearArrangement::spaced_by(16.0))
                     .vertical_alignment(VerticalAlignment::Top),
                 {
-                    let state = state.clone();
                     let icon = icon.clone();
                     move || {
                         let icon_for_image = icon.clone();
@@ -281,7 +280,6 @@ fn CodeField(
                             ColumnSpec::default()
                                 .vertical_arrangement(LinearArrangement::spaced_by(6.0)),
                             {
-                                let state = state.clone();
                                 move || {
                                     Row(
                                         Modifier::empty().fill_max_width(),
@@ -303,10 +301,9 @@ fn CodeField(
                                             .padding(12.0),
                                         BoxSpec::default(),
                                         {
-                                            let state = state.clone();
                                             move || {
                                                 BasicTextFieldWithOptions(
-                                                    state.clone(),
+                                                    state,
                                                     Modifier::empty().fill_max_width(),
                                                     BasicTextFieldOptions {
                                                         text_style: code_style(),
@@ -411,9 +408,9 @@ fn WriteupCard() {
 #[composable]
 fn CodeCard() {
     let kotlin_state =
-        cranpose_core::remember(|| TextFieldState::new(KOTLIN_CODE)).with(|state| state.clone());
+        cranpose_core::remember(|| TextFieldState::new(KOTLIN_CODE)).with(|state| *state);
     let rust_state =
-        cranpose_core::remember(|| TextFieldState::new(RUST_CODE)).with(|state| state.clone());
+        cranpose_core::remember(|| TextFieldState::new(RUST_CODE)).with(|state| *state);
 
     ComposeBox(
         glass_panel_modifier(Modifier::empty().fill_max_width(), 18.0).padding(18.0),
@@ -423,22 +420,16 @@ fn CodeCard() {
                 Modifier::empty().fill_max_width(),
                 ColumnSpec::default().vertical_arrangement(LinearArrangement::spaced_by(14.0)),
                 {
-                    let kotlin_state = kotlin_state.clone();
-                    let rust_state = rust_state.clone();
+                    let rust_state = rust_state;
                     move || {
                         Text("Code Blocks", Modifier::empty(), title_style(28.0));
                         CodeField(
                             "Kotlin Code",
                             "Runtime 146 ms",
                             CodeLanguage::Kotlin,
-                            kotlin_state.clone(),
+                            kotlin_state,
                         );
-                        CodeField(
-                            TARGET_TEXT,
-                            "Runtime 0 ms",
-                            CodeLanguage::Rust,
-                            rust_state.clone(),
-                        );
+                        CodeField(TARGET_TEXT, "Runtime 0 ms", CodeLanguage::Rust, rust_state);
                     }
                 },
             );
@@ -450,7 +441,7 @@ fn CodeCard() {
 #[composable]
 fn LeetcodeDailyCodeScrollApp() {
     let scroll_state =
-        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| state.clone());
+        cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
 
     Column(
         Modifier::empty()
@@ -487,12 +478,11 @@ fn LeetcodeDailyCodeScrollApp() {
                 .clip_to_bounds(),
                 BoxSpec::default(),
                 {
-                    let scroll_state = scroll_state.clone();
                     move || {
                         Column(
                             Modifier::empty()
                                 .fill_max_size()
-                                .vertical_scroll(scroll_state.clone(), false)
+                                .vertical_scroll(scroll_state, false)
                                 .padding(22.0),
                             ColumnSpec::default()
                                 .vertical_arrangement(LinearArrangement::spaced_by(22.0)),

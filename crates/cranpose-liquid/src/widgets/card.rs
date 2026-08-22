@@ -15,6 +15,29 @@ use crate::motion::LiquidMotion;
 
 const CARD_RADIUS: f32 = 20.0;
 
+/// Theme-aware surface container using the current Liquid color roles.
+#[composable]
+#[allow(non_snake_case)]
+pub fn Surface(modifier: Modifier, content: impl FnMut() + 'static) {
+    let color = liquid_colors().surface;
+    Box(
+        Modifier::empty()
+            .draw_behind(move |scope| {
+                scope.draw_round_rect(Brush::solid(color), CornerRadii::uniform(12.0));
+            })
+            .then(modifier),
+        BoxSpec::default(),
+        content,
+    );
+}
+
+/// Theme-aware elevated card container.
+#[composable]
+#[allow(non_snake_case)]
+pub fn Card(modifier: Modifier, content: impl FnMut() + 'static) {
+    LiquidCard(modifier, content);
+}
+
 /// An elevated surface with the grouped-inset card look.
 #[composable]
 #[allow(non_snake_case)]
@@ -148,4 +171,25 @@ pub fn LiquidListRow(
         .padding_symmetric(16.0, 12.0);
 
     Box(base.then(modifier), BoxSpec::default(), content);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_row_draws_no_separator_until_one_is_asked_for() {
+        assert!(
+            !LiquidListRowSpec::default().separator,
+            "the last row of a section must not draw a trailing hairline"
+        );
+        assert!(LiquidListRowSpec::default().with_separator(true).separator);
+        assert!(
+            !LiquidListRowSpec::default()
+                .with_separator(true)
+                .with_separator(false)
+                .separator,
+            "the latest answer is the one that holds"
+        );
+    }
 }

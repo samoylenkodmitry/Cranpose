@@ -363,8 +363,8 @@ impl WindowState {
 #[composable]
 pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
-        position: cranpose_core::useState(|| None::<Point>),
-        size: cranpose_core::useState(move || Size::new(width, height)),
+        position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
+        size: cranpose_core::rememberMutableStateOf(move || Size::new(width, height)),
     }
 }
 

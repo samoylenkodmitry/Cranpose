@@ -282,6 +282,48 @@ fn bitmap_content_id(width: u32, height: u32, pixels: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    /// Every filter has to be expressible as one 4x5 matrix, because that is
+    /// the only form composing two of them can work in. A tint that came out
+    /// as something other than "take the alpha, paint it in this colour" would
+    /// tint composed content differently from tinting it directly.
+    #[test]
+    fn every_colour_filter_states_itself_as_a_matrix() {
+        let identity = ColorFilter::Matrix([
+            1.0, 0.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0, 0.0,
+        ]);
+        assert_eq!(
+            ColorFilter::matrix(identity.as_matrix()).as_matrix(),
+            identity.as_matrix(),
+            "a matrix filter is its own matrix"
+        );
+
+        // A tint reads the source alpha only: every colour column is zero and
+        // the alpha column carries the tint.
+        let tint = Color(0.25, 0.5, 0.75, 1.0);
+        let matrix = ColorFilter::tint(tint).as_matrix();
+        for row in 0..4 {
+            for column in 0..3 {
+                assert_eq!(matrix[row * 5 + column], 0.0, "row {row} column {column}");
+            }
+            assert_eq!(matrix[row * 5 + 4], 0.0, "row {row} offset");
+        }
+        assert_eq!(matrix[3], tint.r());
+        assert_eq!(matrix[8], tint.g());
+        assert_eq!(matrix[13], tint.b());
+        assert_eq!(matrix[18], tint.a());
+
+        // A modulation scales each channel by its own factor instead, which is
+        // the diagonal.
+        let modulate = ColorFilter::modulate(Color(0.5, 0.25, 0.125, 1.0)).as_matrix();
+        assert_eq!(modulate[0], 0.5);
+        assert_eq!(modulate[6], 0.25);
+        assert_eq!(modulate[12], 0.125);
+        assert_eq!(modulate[18], 1.0);
+    }
+
     #[test]
     fn image_bitmap_ids_do_not_use_process_global_or_allocation_identity() {
         let source = include_str!("image.rs");

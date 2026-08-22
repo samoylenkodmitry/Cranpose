@@ -326,6 +326,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_decay_spec_built_from_a_calculator_flings_like_that_calculator() {
+        // Two ways to say the same thing: a density, or the calculator that
+        // density would have produced. A control that already has a calculator
+        // — one tuned for a different friction, say — must be able to hand it
+        // over rather than have a second one built behind its back.
+        let from_density = SplineBasedDecaySpec::new(2.0);
+        let from_calculator =
+            SplineBasedDecaySpec::with_calculator(FlingCalculator::with_density(2.0));
+
+        for velocity in [-4_000.0f32, -250.0, 250.0, 4_000.0] {
+            for millis in [0i64, 50, 250, 1_000] {
+                let nanos = millis * 1_000_000;
+                assert_eq!(
+                    from_density.get_value_from_nanos(nanos, 0.0, velocity),
+                    from_calculator.get_value_from_nanos(nanos, 0.0, velocity),
+                    "velocity {velocity} at {millis}ms"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_spline_endpoints() {
         let start = AndroidFlingSpline::fling_position(0.0);
         assert!((start.distance_coefficient - 0.0).abs() < 0.01);

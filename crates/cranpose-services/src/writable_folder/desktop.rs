@@ -6,21 +6,20 @@
 //! backing filesystem rejects rename. A permission/EROFS failure maps to
 //! [`FolderError::ReadOnly`] so the caller can degrade to receive-only.
 
-use super::{FolderError, WritableFolderStore, WritableFolderStoreRef};
-use crate::file_picker::{FilePickerError, PickerFuture};
+use super::{
+    FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
+    WritableFolderStoreRef,
+};
+use crate::content::DEFAULT_CHUNK_LEN;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::UNIX_EPOCH;
 
 /// Fixed-name probe used by [`is_writable`](WritableFolderStore::is_writable);
 /// created and immediately deleted, so it never accumulates.
 const PROBE_NAME: &str = ".cranpose-write-probe";
-
-pub(super) fn pick() -> PickerFuture<Result<Option<String>, FilePickerError>> {
-    Box::pin(async move {
-        let handle = rfd::AsyncFileDialog::new().pick_folder().await;
-        Ok(handle.map(|handle| handle.path().to_string_lossy().into_owned()))
-    })
-}
 
 pub(super) fn open(handle: &str) -> WritableFolderStoreRef {
     Arc::new(DesktopWritableFolder {
@@ -54,25 +53,36 @@ impl WritableFolderStore for DesktopWritableFolder {
         }
     }
 
-    fn list(&self) -> Result<Vec<String>, FolderError> {
+    fn list(&self) -> Result<Vec<FolderEntry>, FolderError> {
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(map_err(error)),
         };
-        let mut names = Vec::new();
+        let mut listing = Vec::new();
         for entry in entries.flatten() {
-            if entry
+            if !entry
                 .file_type()
                 .map(|kind| kind.is_file())
                 .unwrap_or(false)
             {
-                if let Some(name) = entry.file_name().to_str() {
-                    names.push(name.to_string());
-                }
+                continue;
             }
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            let stat = entry.metadata().map_err(map_err)?;
+            listing.push(FolderEntry {
+                name,
+                len: stat.len(),
+                modified_millis: stat
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|since| since.as_millis() as u64),
+            });
         }
-        Ok(names)
+        Ok(listing)
     }
 
     fn remove(&self, name: &str) -> Result<(), FolderError> {
@@ -81,6 +91,29 @@ impl WritableFolderStore for DesktopWritableFolder {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(map_err(error)),
         }
+    }
+
+    fn open_read(&self, name: &str) -> Result<Box<dyn FolderReader>, FolderError> {
+        let path = self.dir.join(name);
+        match File::open(&path) {
+            Ok(file) => Ok(Box::new(FileFolderReader { file: Some(file) })),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(FolderError::NotFound(name.to_string()))
+            }
+            Err(error) => Err(map_err(error)),
+        }
+    }
+
+    fn open_write(&self, name: &str) -> Result<Box<dyn FolderWriter>, FolderError> {
+        ensure_dir(&self.dir)?;
+        let target = self.dir.join(name);
+        let staging = self.dir.join(format!("{name}.tmp"));
+        let file = File::create(&staging).map_err(map_err)?;
+        Ok(Box::new(FileFolderWriter {
+            file: Some(file),
+            staging,
+            target,
+        }))
     }
 
     fn is_writable(&self) -> bool {
@@ -95,6 +128,68 @@ impl WritableFolderStore for DesktopWritableFolder {
 
     fn handle(&self) -> String {
         self.dir.to_string_lossy().into_owned()
+    }
+}
+
+struct FileFolderReader {
+    file: Option<File>,
+}
+
+impl FolderReader for FileFolderReader {
+    fn read_chunk(&mut self) -> Result<Option<Vec<u8>>, FolderError> {
+        let Some(file) = self.file.as_mut() else {
+            return Ok(None);
+        };
+        let mut buffer = vec![0u8; DEFAULT_CHUNK_LEN];
+        let mut filled = 0;
+        while filled < buffer.len() {
+            match file.read(&mut buffer[filled..]) {
+                Ok(0) => break,
+                Ok(read) => filled += read,
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(map_err(error)),
+            }
+        }
+        if filled == 0 {
+            self.file = None;
+            return Ok(None);
+        }
+        buffer.truncate(filled);
+        Ok(Some(buffer))
+    }
+}
+
+struct FileFolderWriter {
+    file: Option<File>,
+    staging: PathBuf,
+    target: PathBuf,
+}
+
+impl FolderWriter for FileFolderWriter {
+    fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), FolderError> {
+        let file = self
+            .file
+            .as_mut()
+            .ok_or_else(|| FolderError::Io("folder writer is already finished".into()))?;
+        file.write_all(bytes).map_err(map_err)
+    }
+
+    fn finish(mut self: Box<Self>) -> Result<(), FolderError> {
+        let Some(mut file) = self.file.take() else {
+            return Ok(());
+        };
+        file.flush().map_err(map_err)?;
+        file.sync_all().map_err(map_err)?;
+        drop(file);
+        std::fs::rename(&self.staging, &self.target).map_err(map_err)
+    }
+}
+
+impl Drop for FileFolderWriter {
+    fn drop(&mut self) {
+        if self.file.is_some() {
+            let _ = std::fs::remove_file(&self.staging);
+        }
     }
 }
 
@@ -145,15 +240,27 @@ mod tests {
         store.write("a.bin", b"hello").expect("write");
         store.write("b.bin", b"world").expect("write");
 
-        let mut names = store.list().expect("list");
+        let mut names: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
         names.sort();
         assert_eq!(names, vec!["a.bin".to_string(), "b.bin".to_string()]);
+        assert_eq!(store.entry("a.bin").expect("entry").len, 5);
 
         assert_eq!(store.read("a.bin").expect("read"), b"hello");
         assert_eq!(store.handle(), dir.to_string_lossy());
 
         store.remove("a.bin").expect("remove");
-        assert_eq!(store.list().expect("list"), vec!["b.bin".to_string()]);
+        let remaining: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        assert_eq!(remaining, vec!["b.bin".to_string()]);
 
         // No probe/temp files left behind.
         let leftover: Vec<_> = std::fs::read_dir(&dir)
@@ -168,10 +275,42 @@ mod tests {
     }
 
     #[test]
+    fn streams_chunks_in_and_out() {
+        let dir = unique_dir("stream");
+        let store = open(dir.to_string_lossy().as_ref());
+        let payload = vec![9u8; DEFAULT_CHUNK_LEN + 7];
+
+        let mut writer = store.open_write("big.bin").expect("open_write");
+        writer.write_chunk(&payload).expect("write_chunk");
+        writer.finish().expect("finish");
+
+        let mut reader = store.open_read("big.bin").expect("open_read");
+        let mut sizes = Vec::new();
+        let mut round_trip = Vec::new();
+        while let Some(chunk) = reader.read_chunk().expect("read_chunk") {
+            sizes.push(chunk.len());
+            round_trip.extend_from_slice(&chunk);
+        }
+        assert_eq!(sizes, vec![DEFAULT_CHUNK_LEN, 7]);
+        assert_eq!(round_trip, payload);
+
+        // An abandoned writer leaves nothing behind.
+        drop(store.open_write("abandoned.bin").expect("open_write"));
+        assert!(!dir.join("abandoned.bin").exists());
+        assert!(!dir.join("abandoned.bin.tmp").exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn read_missing_is_not_found() {
         let dir = unique_dir("missing");
         let store = open(dir.to_string_lossy().as_ref());
         assert!(matches!(store.read("nope"), Err(FolderError::NotFound(_))));
+        assert!(matches!(
+            store.open_read("nope").err(),
+            Some(FolderError::NotFound(_))
+        ));
         assert!(store.list().expect("list").is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }

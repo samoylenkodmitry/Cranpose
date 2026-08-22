@@ -1702,3 +1702,136 @@ fn visit_ancestors_matching_includes_self() {
     });
     assert_eq!(order, vec!["draw", "layout"]);
 }
+
+#[test]
+fn walking_a_chain_backward_visits_every_node_in_reverse_order() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+
+    chain.update_from_slice(
+        &["a", "b", "c"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| {
+                modifier_element(LoggingElement {
+                    id,
+                    value: index as i32,
+                    log: log.clone(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        &mut context,
+    );
+
+    // A backward walk is what an invalidation uses to find the nearest
+    // enclosing node, so it has to see every node and see them tail-first.
+    let mut seen = 0usize;
+    chain.for_each_backward(|_node| seen += 1);
+    assert_eq!(seen, chain.len());
+
+    let mut forward = 0usize;
+    chain.for_each_forward_matching(NodeCapabilities::empty(), |_node| forward += 1);
+    assert_eq!(
+        forward, seen,
+        "the two directions disagree about how many nodes the chain has"
+    );
+}
+
+#[test]
+fn a_chain_updated_from_a_reference_iterator_matches_one_updated_from_a_slice() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let elements = ["a", "b"]
+        .into_iter()
+        .map(|id| {
+            modifier_element(LoggingElement {
+                id,
+                value: 1,
+                log: log.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut from_slice = ModifierNodeChain::new();
+    let mut slice_context = TestContext::default();
+    from_slice.update_from_slice(&elements, &mut slice_context);
+
+    let mut from_refs = ModifierNodeChain::new();
+    let mut ref_context = TestContext::default();
+    // The reference form exists so a caller with elements it does not own can
+    // update without cloning them; it must build the same chain.
+    from_refs.update_from_ref_iter(elements.iter(), &mut ref_context);
+
+    assert_eq!(from_refs.len(), from_slice.len());
+    assert_eq!(from_refs.len(), 2);
+}
+
+#[test]
+fn descendants_and_ancestors_walk_the_same_chain_from_opposite_ends() {
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut chain = ModifierNodeChain::new();
+    let mut context = TestContext::default();
+    chain.update_from_slice(
+        &["a", "b", "c"]
+            .into_iter()
+            .map(|id| {
+                modifier_element(LoggingElement {
+                    id,
+                    value: 0,
+                    log: log.clone(),
+                })
+            })
+            .collect::<Vec<_>>(),
+        &mut context,
+    );
+
+    // `head()` is a sentinel rather than a node, so a walk down from it reaches
+    // the whole chain and `include_self` adds nothing: a sentinel is never
+    // handed to the visitor.
+    let mut below = 0usize;
+    chain.head().visit_descendants(false, |_node| below += 1);
+    assert_eq!(
+        below,
+        chain.len(),
+        "walking down from the head missed part of the chain"
+    );
+
+    let mut with_sentinel = 0usize;
+    chain
+        .head()
+        .visit_descendants(true, |_node| with_sentinel += 1);
+    assert_eq!(
+        with_sentinel, below,
+        "the head sentinel was handed to the visitor as if it were a node"
+    );
+
+    // From a real node, `include_self` does add one: itself.
+    let mut from_first = 0usize;
+    chain
+        .head_to_tail()
+        .next()
+        .expect("a chain with three nodes")
+        .visit_descendants(true, |_node| from_first += 1);
+    let mut after_first = 0usize;
+    chain
+        .head_to_tail()
+        .next()
+        .expect("a chain with three nodes")
+        .visit_descendants(false, |_node| after_first += 1);
+    assert_eq!(
+        from_first,
+        after_first + 1,
+        "including self must add exactly the node it was asked from"
+    );
+
+    // A walk up from the tail sentinel reaches every node the same way.
+    let mut ancestors = 0usize;
+    chain
+        .tail()
+        .visit_ancestors_matching(false, NodeCapabilities::empty(), |_node| ancestors += 1);
+    assert_eq!(
+        ancestors,
+        chain.len(),
+        "walking up from the tail missed part of the chain"
+    );
+}

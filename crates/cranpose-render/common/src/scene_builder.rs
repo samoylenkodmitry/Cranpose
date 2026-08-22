@@ -1667,7 +1667,7 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope, LazyListState};
+    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
     use cranpose_ui::text::{
         AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion,
     };
@@ -2202,7 +2202,7 @@ mod tests {
         let child_id_holder_for_comp = child_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let label = cranpose_core::useState(|| "before".to_string());
+            let label = cranpose_core::rememberMutableStateOf(|| "before".to_string());
             *state_holder_for_comp.borrow_mut() = Some(label);
             let child_id_holder_for_content = child_id_holder_for_comp.clone();
             cranpose_ui::Box(
@@ -2343,7 +2343,7 @@ mod tests {
         let child_id_holder_for_comp = child_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let label = cranpose_core::useState(|| "before".to_string());
+            let label = cranpose_core::rememberMutableStateOf(|| "before".to_string());
             *label_holder_for_comp.borrow_mut() = Some(label);
             let child_id_holder_for_content = child_id_holder_for_comp.clone();
             Column(
@@ -2434,7 +2434,7 @@ mod tests {
         let column_id_holder_for_comp = column_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let rows = cranpose_core::useState(|| 2usize);
+            let rows = cranpose_core::rememberMutableStateOf(|| 2usize);
             *rows_holder_for_comp.borrow_mut() = Some(rows);
             let column_id_holder_for_content = column_id_holder_for_comp.clone();
             cranpose_ui::Box(
@@ -2791,7 +2791,8 @@ mod tests {
         let child_id_holder_for_comp = child_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let label = cranpose_core::useState(|| "scrolled child before".to_string());
+            let label =
+                cranpose_core::rememberMutableStateOf(|| "scrolled child before".to_string());
             let scroll_state =
                 cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             *label_holder_for_comp.borrow_mut() = Some(label);
@@ -2903,7 +2904,7 @@ mod tests {
         let overlay_id_holder_for_comp = overlay_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let alpha = cranpose_core::useState(|| 1.0f32);
+            let alpha = cranpose_core::rememberMutableStateOf(|| 1.0f32);
             let scroll_state =
                 cranpose_core::remember(|| ScrollState::new(0.0)).with(|state| *state);
             *alpha_holder_for_comp.borrow_mut() = Some(alpha);
@@ -3047,7 +3048,7 @@ mod tests {
         let node_id_holder_for_comp = node_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let offset = cranpose_core::useState(|| 0.0f32);
+            let offset = cranpose_core::rememberMutableStateOf(|| 0.0f32);
             *offset_holder_for_comp.borrow_mut() = Some(offset);
             let node_id = cranpose_ui::Box(
                 Modifier::empty()
@@ -3124,7 +3125,7 @@ mod tests {
         let node_id_holder_for_comp = node_id_holder.clone();
 
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let offset = cranpose_core::useState(|| 0.0f32);
+            let offset = cranpose_core::rememberMutableStateOf(|| 0.0f32);
             *offset_holder_for_comp.borrow_mut() = Some(offset);
             let node_id = cranpose_ui::Box(
                 Modifier::empty()
@@ -3921,13 +3922,13 @@ mod tests {
     #[test]
     fn lazy_column_item_text_keeps_unspecified_motion_at_origin() {
         let mut composition = cranpose_ui::run_test_composition(|| {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             LazyColumn(
                 Modifier::empty(),
                 list_state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.item(Some(0), None, || {
+                    scope.item_keyed(Some(0), None, || {
                         Text("LazyMotion", Modifier::empty(), TextStyle::default());
                     });
                 },
@@ -3961,25 +3962,20 @@ mod tests {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             *state_holder_for_comp.borrow_mut() = Some(list_state);
             LazyColumn(
                 Modifier::empty().height(120.0),
                 list_state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        8,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("LazyMotion {index}"),
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(8, |index| {
+                        Text(
+                            format!("LazyMotion {index}"),
+                            Modifier::empty().padding(4.0),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
         });
@@ -4060,24 +4056,19 @@ mod tests {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             *state_holder_for_comp.borrow_mut() = Some(list_state);
             let mut spec =
                 LazyColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0));
             spec.beyond_bounds_item_count = 0;
             LazyColumn(Modifier::empty().height(96.0), list_state, spec, |scope| {
-                scope.items(
-                    12,
-                    None::<fn(usize) -> u64>,
-                    None::<fn(usize) -> u64>,
-                    |index| {
-                        Text(
-                            format!("WarmRow {index}"),
-                            Modifier::empty().height(32.0),
-                            TextStyle::default(),
-                        );
-                    },
-                );
+                scope.items(12, |index| {
+                    Text(
+                        format!("WarmRow {index}"),
+                        Modifier::empty().height(32.0),
+                        TextStyle::default(),
+                    );
+                });
             });
         });
 
@@ -4131,25 +4122,20 @@ mod tests {
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
         let mut composition = cranpose_ui::run_test_composition(move || {
-            let list_state = remember_lazy_list_state();
+            let list_state = rememberLazyListState();
             *state_holder_for_comp.borrow_mut() = Some(list_state);
             LazyColumn(
                 Modifier::empty().height(120.0),
                 list_state,
                 LazyColumnSpec::default(),
                 |scope| {
-                    scope.items(
-                        8,
-                        None::<fn(usize) -> u64>,
-                        None::<fn(usize) -> u64>,
-                        |index| {
-                            Text(
-                                format!("LazySnap {index}"),
-                                Modifier::empty().padding(4.0),
-                                TextStyle::default(),
-                            );
-                        },
-                    );
+                    scope.items(8, |index| {
+                        Text(
+                            format!("LazySnap {index}"),
+                            Modifier::empty().padding(4.0),
+                            TextStyle::default(),
+                        );
+                    });
                 },
             );
         });

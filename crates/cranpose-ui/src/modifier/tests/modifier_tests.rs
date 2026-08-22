@@ -128,7 +128,7 @@ fn lazy_scroll_modifier_keeps_motion_context_inactive_at_rest() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut list_state = None;
     let _composition = crate::run_test_composition(|| {
-        list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+        list_state = Some(cranpose_foundation::lazy::rememberLazyListState());
     });
     let modifier = Modifier::empty().lazy_vertical_scroll(
         list_state.expect("lazy list state should be created"),
@@ -176,7 +176,7 @@ fn lazy_scroll_modifier_keeps_translated_content_context_active_at_rest() {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut list_state = None;
     let _composition = crate::run_test_composition(|| {
-        list_state = Some(cranpose_foundation::lazy::remember_lazy_list_state());
+        list_state = Some(cranpose_foundation::lazy::rememberLazyListState());
     });
     let modifier = Modifier::empty().lazy_vertical_scroll(
         list_state.expect("lazy list state should be created"),
@@ -1878,4 +1878,133 @@ impl ModifierNodeElement for TestDelegatingElement {
     fn capabilities(&self) -> NodeCapabilities {
         NodeCapabilities::LAYOUT
     }
+}
+
+#[test]
+fn symmetric_padding_pairs_its_two_values_to_the_four_edges() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let modifier = Modifier::empty().padding_symmetric(16.0, 8.0);
+    let mut handle = ModifierChainHandle::new();
+    let _ = handle.update(&modifier);
+    assert_eq!(
+        handle.resolved_modifiers().padding(),
+        EdgeInsets {
+            left: 16.0,
+            top: 8.0,
+            right: 16.0,
+            bottom: 8.0,
+        }
+    );
+}
+
+#[test]
+fn reading_order_padding_swaps_its_ends_in_a_right_to_left_layout() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let resolved = |direction| {
+        let modifier = Modifier::empty().padding_relative_in(direction, 16.0, 2.0, 4.0, 3.0);
+        let mut handle = ModifierChainHandle::new();
+        let _ = handle.update(&modifier);
+        handle.resolved_modifiers().padding()
+    };
+
+    let ltr = resolved(crate::layout_direction::LayoutDirection::Ltr);
+    assert_eq!(
+        ltr.left, 16.0,
+        "start is the left edge reading left-to-right"
+    );
+    assert_eq!(ltr.right, 4.0);
+
+    let rtl = resolved(crate::layout_direction::LayoutDirection::Rtl);
+    assert_eq!(rtl.left, 4.0, "and the right edge reading right-to-left");
+    assert_eq!(rtl.right, 16.0);
+
+    assert_eq!(
+        (ltr.top, ltr.bottom),
+        (2.0, 3.0),
+        "the vertical edges never swap"
+    );
+    assert_eq!((rtl.top, rtl.bottom), (2.0, 3.0));
+}
+
+#[test]
+fn padding_relative_follows_the_direction_its_composition_provides() {
+    use crate::layout_direction::{LayoutDirection, ProvideLayoutDirection};
+    use cranpose_core::{location_key, Composition, MemoryApplier};
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    let mut composition = Composition::new(MemoryApplier::new());
+    let ltr = Rc::new(Cell::new(EdgeInsets::default()));
+    let rtl = Rc::new(Cell::new(EdgeInsets::default()));
+
+    let resolved = |modifier: &Modifier| {
+        let mut handle = ModifierChainHandle::new();
+        let _ = handle.update(modifier);
+        handle.resolved_modifiers().padding()
+    };
+
+    let key = location_key(file!(), line!(), column!());
+    {
+        let (ltr, rtl) = (Rc::clone(&ltr), Rc::clone(&rtl));
+        let mut render = move || {
+            // No provision: a composition reads left-to-right.
+            ltr.set(resolved(
+                &Modifier::empty().padding_relative(16.0, 2.0, 4.0, 3.0),
+            ));
+            ProvideLayoutDirection(LayoutDirection::Rtl, || {
+                rtl.set(resolved(
+                    &Modifier::empty().padding_relative(16.0, 2.0, 4.0, 3.0),
+                ));
+            });
+        };
+        composition.render(key, &mut render).expect("render");
+    }
+
+    assert_eq!(
+        ltr.get().left,
+        16.0,
+        "start is the left edge reading left-to-right"
+    );
+    assert_eq!(ltr.get().right, 4.0);
+    assert_eq!(
+        rtl.get().left,
+        4.0,
+        "and the right edge once the screen reverses"
+    );
+    assert_eq!(rtl.get().right, 16.0);
+    assert_eq!(
+        (rtl.get().top, rtl.get().bottom),
+        (2.0, 3.0),
+        "reversing a screen never moves its vertical padding"
+    );
+}
+
+#[test]
+fn fill_max_height_fraction_constrains_height_alone() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let props = Modifier::empty()
+        .fill_max_height_fraction(0.25)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(props.height(), DimensionConstraint::Fraction(0.25));
+    assert_ne!(
+        props.width(),
+        DimensionConstraint::Fraction(0.25),
+        "filling height must not also claim width"
+    );
+}
+
+#[test]
+fn a_fill_fraction_outside_the_unit_range_is_pulled_back_into_it() {
+    let _app_context = crate::render_state::app_context_test_scope();
+    let over = Modifier::empty()
+        .fill_max_height_fraction(4.0)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(over.height(), DimensionConstraint::Fraction(1.0));
+
+    let under = Modifier::empty()
+        .fill_max_height_fraction(-1.0)
+        .resolved_modifiers()
+        .layout_properties();
+    assert_eq!(under.height(), DimensionConstraint::Fraction(0.0));
 }

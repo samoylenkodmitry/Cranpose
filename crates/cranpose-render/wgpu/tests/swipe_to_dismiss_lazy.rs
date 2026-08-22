@@ -1,7 +1,7 @@
 mod support;
 
 use cranpose_core::location_key;
-use cranpose_foundation::lazy::{remember_lazy_list_state, LazyListScope};
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_ui::text::{SpanStyle, TextUnit};
 use cranpose_ui::{
     composable, Color, LayoutBox, LazyColumn, LazyColumnSpec, Modifier, SwipeToDismiss,
@@ -42,7 +42,7 @@ fn SwipeRows() {
         font_size: TextUnit::Sp(16.0),
         ..Default::default()
     });
-    let list_state = remember_lazy_list_state();
+    let list_state = rememberLazyListState();
     LazyColumn(
         Modifier::empty()
             .size_points(FRAME_WIDTH as f32, FRAME_HEIGHT as f32)
@@ -51,26 +51,21 @@ fn SwipeRows() {
         LazyColumnSpec::default(),
         move |scope| {
             let style = style.clone();
-            scope.items(
-                5,
-                None::<fn(usize) -> u64>,
-                None::<fn(usize) -> u64>,
-                move |index| {
-                    let style = style.clone();
-                    SwipeToDismiss(
-                        Modifier::empty().fill_max_width().height(56.0),
-                        SwipeToDismissSpec::default(),
-                        || {},
-                        move || {
-                            Text(
-                                format!("Row {index}"),
-                                Modifier::empty().padding(16.0),
-                                style.clone(),
-                            );
-                        },
-                    );
-                },
-            );
+            scope.items(5, move |index| {
+                let style = style.clone();
+                SwipeToDismiss(
+                    Modifier::empty().fill_max_width().height(56.0),
+                    SwipeToDismissSpec::default(),
+                    || {},
+                    move || {
+                        Text(
+                            format!("Row {index}"),
+                            Modifier::empty().padding(16.0),
+                            style.clone(),
+                        );
+                    },
+                );
+            });
         },
     );
 }

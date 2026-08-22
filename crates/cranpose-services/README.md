@@ -160,8 +160,11 @@ API-level guards, all present in `CranposeActivity`:
 Wear OS 3 is API 30, so a watch build takes the amplitude and waveform paths;
 the older branches exist for phones with a lower `minSdk`.
 
-The activity also needs `<uses-permission android:name="android.permission.VIBRATE" />`
-in its manifest — without it `Vibrator` silently does nothing.
+The vibrator needs `android.permission.VIBRATE`, which the
+`cranpose-android-haptics` module contributes: an application adds
+`services.add("haptics")` to the Gradle plugin's configuration rather than
+writing the permission into its manifest. Without it `Vibrator` silently does
+nothing.
 
 ## Audio
 
@@ -185,3 +188,87 @@ on Android).
 
 **Audio needs no activity-side glue.** The Android backend is AAudio through
 the NDK, so unlike haptics there is nothing to add to `CranposeActivity`.
+
+## Media
+
+`AudioPlayer` mixes short decoded cues. `MediaPlayer` plays one long encoded
+item — a track, a podcast, a recording — through whatever the platform already
+uses for media, and everything about it is published rather than polled:
+
+* `rememberPlaybackState()` is what it is doing: `Loading`, `Playing`,
+  `Paused`, `Ended`, `Failed`. `rememberPlaybackProgress()` is where it is —
+  position, duration, buffered — and `playback_progress()` reads the same thing
+  outside composition, for a seek bar being dragged or a waveform being drawn.
+* `open_media(MediaItem)`, `play_media()`, `pause_media()`, `toggle_media()`,
+  `stop_media()`, `seek_media(Duration)` and `seek_media_fraction(f32)` are the
+  transport. A seek is clamped to the item here rather than in each backend.
+* `set_media_volume` is the volume the *application* asks for. What reaches the
+  device is that combined with the audio-focus gain, so an app may change its
+  volume while ducked without undoing the duck.
+* `publish_audio_focus(AudioFocus)` is what a backend calls when the device
+  changes its mind, and the framework applies the policy every app otherwise
+  gets wrong: duck and un-duck, pause on a transient loss and resume **only if
+  it was the one that paused**, stop for good on a permanent one.
+* `rememberMediaCommands()` carries the buttons pressed outside the app's own
+  UI — a lock screen, a notification, a headset, a car. The transport commands
+  have already been carried out by the time they arrive; what an app acts on is
+  `Next` and `Previous`, which need the playlist it owns. `set_media_metadata`
+  is what those surfaces show.
+* `set_media_analysis_enabled(true)` turns on `rememberMediaSamples()` /
+  `latest_media_samples()` for a visualiser. Off by default, latest-wins and
+  bounded like camera frames, and only where `media_capabilities().analysis`
+  says the platform will give the samples up.
+* `media_equalizer_bands()` reports the bands the platform actually has, centre
+  frequency and range, and `set_media_equalizer(EqualizerSettings)` applies a
+  curve clamped to them. Backends that build their own filters report the
+  contract's octave set (`OCTAVE_BAND_CENTERS_HZ`), so a curve saved on a
+  desktop means the same thing in a browser; a platform effect reports what its
+  implementation has, which is usually fewer bands on different centres. The
+  curve is remembered whether or not a device can apply it, so a stored user
+  setting survives one that cannot and reaches one that can.
+
+Playback holds a background-work lease while it runs, so it carries on with the
+app off screen; a host being destroyed stops it.
+
+| Platform | Backend | Streams | Session | Analysis | Equalizer |
+| --- | --- | --- | --- | --- | --- |
+| Desktop | `cranpose-media` (`rodio`/`symphonia`) | local files | — | yes | 10 octave bands |
+| Android | `MediaPlayer`, `AudioManager`, `MediaSession` | local and network | yes | with `RECORD_AUDIO` | the device's own `audiofx.Equalizer` bands |
+| iOS | `AVAudioPlayer`, `AVAudioSession`, MediaPlayer | local files | yes | — | — |
+| Web | `<audio>`, Media Session API, Web Audio | local and network | where the browser has it | yes | 10 octave bands |
+
+Desktop is the only target that needs a crate and a feature:
+`cranpose-media`, enabled through Cranpose's `media-desktop` feature and
+installed by the desktop shell. Android, iOS and the web register their
+platform backend with the rest of their services. Android applications add
+`services.add("media")` to the Gradle plugin's configuration so the manifest
+carries the playback service.
+
+## Device and process information
+
+`device_info()` answers two different kinds of question. *What does this device
+have* — `total_memory_bytes()` — sizes a decision made once, like whether a
+model fits at all. *What is this process using, and what may it still have* is
+asked while work is running, because the answer moves and because the platform
+kills a process that gets it wrong:
+
+* `resident_memory_bytes()` is what this process is holding. It is the number
+  Android kills by, so it is the one a decode loop watches.
+* `available_memory_bytes()` is what this process may still allocate — not free
+  system memory. A device with gigabytes free will still stop this process at
+  its own ceiling, and it is the second number that decides whether the next
+  allocation is the one that ends the application.
+* `process_cpu_time()` is how much of a core the work took, rather than how long
+  it took. A background lane that must not heat the device rations this.
+* `release_free_memory()` asks the allocator to give back pages a finished
+  buffer no longer needs. Freeing a buffer does not shrink the process by
+  itself, and on a platform that kills by resident size that is the difference
+  between finishing and being killed. It reports whether the platform has such
+  a call at all.
+
+Every reading is optional. A platform that will not say reports `None` rather
+than a zero an application would treat as "no memory left". The parts that can
+be read from safe Rust — `/proc/meminfo`, `/proc/self/statm` — are the services
+default; the rest need `libc` and live in the `cranpose` crate, installed over
+the platform's own device info at startup so no application writes `getrusage`,
+`mallopt` or `os_proc_available_memory` for itself.
