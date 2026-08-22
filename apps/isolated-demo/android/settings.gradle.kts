@@ -15,7 +15,7 @@ pluginManagement {
     }
     plugins {
         id("com.android.application") version "9.2.1"
-        id("dev.cranpose.android") version "0.1.96"
+        id("dev.cranpose.android") version "0.1.97"
     }
 }
 
