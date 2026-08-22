@@ -48,7 +48,7 @@
 mod backend;
 mod engine;
 mod mixer;
-mod ring;
+pub mod ring;
 
 pub use engine::AudioEngine;
 pub use mixer::{MAX_CLIPS, MAX_VOICES};

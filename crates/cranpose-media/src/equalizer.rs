@@ -6,10 +6,9 @@
 //! into a shared cell and picked up by the next sample, so applying a curve
 //! never blocks the audio thread or interrupts what is playing.
 
+use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 use cranpose_services::{EqualizerBand, OCTAVE_BAND_CENTERS_HZ};
 use parking_lot::Mutex;
-use rodio::source::SeekError;
-use rodio::{ChannelCount, Sample, SampleRate, Source};
 use std::f32::consts::PI;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -195,7 +194,7 @@ impl EqualizerTap {
     }
 
     /// Puts the equalizer in front of `inner`.
-    pub(crate) fn wrap<S: Source>(self: &Arc<Self>, inner: S) -> EqualizerSource<S> {
+    pub(crate) fn wrap<S: SampleSource>(self: &Arc<Self>, inner: S) -> EqualizerSource<S> {
         let channels = inner.channels().get() as usize;
         self.prepare(inner.sample_rate().get());
         EqualizerSource {
@@ -235,7 +234,7 @@ impl<S> EqualizerSource<S> {
     }
 }
 
-impl<S: Source> Iterator for EqualizerSource<S> {
+impl<S: SampleSource> Iterator for EqualizerSource<S> {
     type Item = Sample;
 
     #[inline]
@@ -282,12 +281,7 @@ impl<S: Source> Iterator for EqualizerSource<S> {
     }
 }
 
-impl<S: Source> Source for EqualizerSource<S> {
-    #[inline]
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-
+impl<S: SampleSource> SampleSource for EqualizerSource<S> {
     #[inline]
     fn channels(&self) -> ChannelCount {
         self.inner.channels()
@@ -315,7 +309,7 @@ impl<S: Source> Source for EqualizerSource<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rodio::buffer::SamplesBuffer;
+    use crate::source::SamplesBuffer;
 
     /// A sine at `hz`, one channel, one second.
     fn tone(hz: f32, sample_rate: u32) -> SamplesBuffer {
@@ -323,11 +317,7 @@ mod tests {
         let samples: Vec<f32> = (0..frames)
             .map(|frame| (2.0 * PI * hz * frame as f32 / sample_rate as f32).sin())
             .collect();
-        SamplesBuffer::new(
-            ChannelCount::new(1).expect("channels"),
-            SampleRate::new(sample_rate).expect("rate"),
-            samples,
-        )
+        SamplesBuffer::new(1, sample_rate, samples)
     }
 
     /// Peak amplitude of the second half, so the filters have settled.

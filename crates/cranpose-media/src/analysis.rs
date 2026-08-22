@@ -6,10 +6,9 @@
 //! slot the progress thread drains, and a block that arrives while the slot is
 //! held is counted and dropped rather than made to wait.
 
+use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 use cranpose_services::{publish_media_samples, record_dropped_media_samples, MediaSamples};
 use parking_lot::Mutex;
-use rodio::source::SeekError;
-use rodio::{ChannelCount, Sample, SampleRate, Source};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -105,7 +104,7 @@ impl AnalysisTap {
 
     /// Wraps `inner` so its samples pass through this tap on their way to the
     /// device.
-    pub(crate) fn wrap<S: Source>(self: &Arc<Self>, inner: S) -> AnalysisSource<S> {
+    pub(crate) fn wrap<S: SampleSource>(self: &Arc<Self>, inner: S) -> AnalysisSource<S> {
         let sample_rate = inner.sample_rate();
         let channels = inner.channels();
         self.prepare(sample_rate.get(), channels.get());
@@ -126,7 +125,7 @@ pub(crate) struct AnalysisSource<S> {
     capacity: usize,
 }
 
-impl<S: Source> Iterator for AnalysisSource<S> {
+impl<S: SampleSource> Iterator for AnalysisSource<S> {
     type Item = Sample;
 
     #[inline]
@@ -152,12 +151,7 @@ impl<S: Source> Iterator for AnalysisSource<S> {
     }
 }
 
-impl<S: Source> Source for AnalysisSource<S> {
-    #[inline]
-    fn current_span_len(&self) -> Option<usize> {
-        self.inner.current_span_len()
-    }
-
+impl<S: SampleSource> SampleSource for AnalysisSource<S> {
     #[inline]
     fn channels(&self) -> ChannelCount {
         self.inner.channels()
@@ -182,14 +176,10 @@ impl<S: Source> Source for AnalysisSource<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rodio::buffer::SamplesBuffer;
+    use crate::source::SamplesBuffer;
 
     fn tone(frames: usize, channels: u16) -> SamplesBuffer {
-        SamplesBuffer::new(
-            ChannelCount::new(channels).expect("channels"),
-            SampleRate::new(48_000).expect("rate"),
-            vec![0.25f32; frames * channels as usize],
-        )
+        SamplesBuffer::new(channels, 48_000, vec![0.25f32; frames * channels as usize])
     }
 
     #[test]

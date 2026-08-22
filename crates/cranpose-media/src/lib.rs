@@ -8,7 +8,8 @@
 //! commands — and ships nothing that makes sound. On Android, iOS and the web
 //! the platform already has a media stack and the `cranpose` crate registers a
 //! backend for it. On desktop there is no such stack, so this crate is it:
-//! `rodio` for the output device and `symphonia` for the decoders.
+//! `symphonia` for the decoders and `cpal` for the output device, fed through
+//! the same wait-free ring the audio engine uses.
 //!
 //! ```rust,ignore
 //! // Once, at startup, before the first composition.
@@ -44,9 +45,15 @@
 #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
 mod analysis;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+mod decode;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
 mod desktop;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
 mod equalizer;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+mod sink;
+#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+mod source;
 
 #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
 pub use desktop::DesktopMediaPlayer;

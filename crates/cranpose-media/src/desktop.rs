@@ -1,22 +1,23 @@
-//! The desktop media player: `rodio` for the device, `symphonia` for the
-//! decoders.
+//! The desktop media player's transport.
 //!
 //! One item at a time, one output device, opened when an item is and released
-//! when playback stops. A progress thread runs only while something is open:
-//! it publishes the position, drains the analysis tap, and notices the end of
-//! the item — which is the one thing `rodio` reports by having nothing left to
-//! play rather than by telling anyone.
+//! when playback stops. [`Sink`] owns the device and the decode thread; this
+//! owns the state an application asks about. A progress thread runs only while
+//! something is open: it publishes the position, drains the analysis tap, and
+//! notices the end of the item, which the sink reports by having pushed
+//! everything the source had and having had all of it taken.
 
 use crate::analysis::AnalysisTap;
+use crate::decode::Decoder;
 use crate::equalizer::EqualizerTap;
 use crate::path_from_uri;
+use crate::sink::Sink;
+use crate::source::SampleSource;
 use cranpose_services::{
     publish_playback_progress, publish_playback_state, EqualizerBand, EqualizerSettings,
     MediaCapabilities, MediaError, MediaItem, MediaPlayer, PlaybackProgress, PlaybackState,
 };
 use parking_lot::Mutex;
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
-use std::fs::File;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,9 +33,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 
 /// The open item and the device playing it.
 struct Active {
-    /// Held for its lifetime: dropping it closes the output stream.
-    _device: MixerDeviceSink,
-    player: Player,
+    /// Dropping it closes the output stream and joins the decode thread.
+    sink: Sink,
     duration: Option<Duration>,
 }
 
@@ -89,29 +89,17 @@ impl Shared {
     fn open(self: &Arc<Self>, item: &MediaItem) -> Result<Option<Duration>, MediaError> {
         let path = path_from_uri(&item.uri)
             .ok_or_else(|| MediaError::UnsupportedSource(item.uri.clone()))?;
-        let file = File::open(&path)
-            .map_err(|error| MediaError::Failed(format!("{}: {error}", path.display())))?;
-        let decoder =
-            Decoder::try_from(file).map_err(|_| MediaError::UnsupportedSource(item.uri.clone()))?;
+        let decoder = Decoder::open(&path)?;
         let duration = decoder.total_duration().or(item.metadata.duration);
         // The equalizer runs first and the tap reads its output, so a
         // visualiser draws the signal that reaches the device rather than the
         // one that reached the equalizer.
-        let source = self.analysis.wrap(self.equalizer.wrap(decoder));
+        let source: Box<dyn SampleSource> =
+            Box::new(self.analysis.wrap(self.equalizer.wrap(decoder)));
 
-        let device = DeviceSinkBuilder::open_default_sink()
-            .map_err(|error| MediaError::Failed(error.to_string()))?;
-        let player = Player::connect_new(device.mixer());
-        player.pause();
-        player.set_volume(*self.volume.lock());
-        player.set_speed(*self.speed.lock());
-        player.append(source);
+        let sink = Sink::open(source, *self.volume.lock(), *self.speed.lock())?;
 
-        *self.active.lock() = Some(Active {
-            _device: device,
-            player,
-            duration,
-        });
+        *self.active.lock() = Some(Active { sink, duration });
         self.start_progress_thread();
         Ok(duration)
     }
@@ -169,9 +157,9 @@ impl Shared {
         let active = self.active.lock();
         let active = active.as_ref()?;
         Some(Observation {
-            position: active.player.get_pos(),
+            position: active.sink.position(),
             duration: active.duration,
-            ended: active.player.empty(),
+            ended: active.sink.ended(),
         })
     }
 
@@ -207,7 +195,7 @@ impl Shared {
 
     fn play_active(&self) {
         if let Some(active) = self.active.lock().as_ref() {
-            active.player.play();
+            active.sink.play();
         }
     }
 }
@@ -269,7 +257,7 @@ impl MediaPlayer for DesktopMediaPlayer {
 
     fn pause(&self) {
         if let Some(active) = self.shared.active.lock().as_ref() {
-            active.player.pause();
+            active.sink.pause();
         }
         publish_playback_state(PlaybackState::Paused);
     }
@@ -285,10 +273,7 @@ impl MediaPlayer for DesktopMediaPlayer {
             let Some(active) = active.as_ref() else {
                 return Err(MediaError::NothingLoaded);
             };
-            active
-                .player
-                .try_seek(position)
-                .map_err(|error| MediaError::Failed(error.to_string()))?;
+            active.sink.seek(position)?;
             active.duration
         };
         publish_playback_progress(progress_at(position, duration));
@@ -299,7 +284,7 @@ impl MediaPlayer for DesktopMediaPlayer {
         let volume = volume.clamp(0.0, 1.0);
         *self.shared.volume.lock() = volume;
         if let Some(active) = self.shared.active.lock().as_ref() {
-            active.player.set_volume(volume);
+            active.sink.set_volume(volume);
         }
     }
 
@@ -307,7 +292,7 @@ impl MediaPlayer for DesktopMediaPlayer {
         let speed = speed.clamp(0.25, 4.0);
         *self.shared.speed.lock() = speed;
         if let Some(active) = self.shared.active.lock().as_ref() {
-            active.player.set_speed(speed);
+            active.sink.set_speed(speed);
         }
         true
     }
@@ -329,10 +314,7 @@ impl MediaPlayer for DesktopMediaPlayer {
     fn probe_duration(&self, item: &MediaItem) -> Option<Duration> {
         // The decoder reads the container's header; no output device is opened,
         // so probing a playlist costs nothing but the file reads.
-        let path = path_from_uri(&item.uri)?;
-        Decoder::try_from(File::open(&path).ok()?)
-            .ok()?
-            .total_duration()
+        Decoder::probe_duration(&path_from_uri(&item.uri)?).or(item.metadata.duration)
     }
 
     fn set_analysis_enabled(&self, enabled: bool) -> bool {

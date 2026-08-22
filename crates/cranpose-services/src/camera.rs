@@ -125,8 +125,10 @@ impl CameraFrame {
 /// Widens tightly packed RGB8 to RGBA8, opaque throughout.
 fn rgb8_to_rgba8(bytes: &[u8]) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(bytes.len() / 3 * 4);
-    for pixel in bytes.chunks_exact(3) {
-        rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+    // Fixed-size chunks rather than a runtime length: the three reads below
+    // then carry no bounds check, which is what lets this vectorise.
+    for [red, green, blue] in bytes.as_chunks::<3>().0 {
+        rgba.extend_from_slice(&[*red, *green, *blue, 255]);
     }
     rgba
 }
