@@ -168,10 +168,14 @@ jobs:
         run: cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
 
   wasm-build:
-    name: wasm build (linux)
+    name: wasm build
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # binaryen + wasm-pack are provisioned on the Linux runner.
-    runs-on: [self-hosted, Linux, cranpose-heavy]
+    # A wasm32 build and lint do not depend on the host, and the step below
+    # provisions what they need, so any cranpose-heavy runner can serve them.
+    # Pinning to Linux put every wasm result behind the one Linux machine, which
+    # also carries the X11 robot suite and the binary-size budget -- the work
+    # that genuinely cannot move.
+    runs-on: [self-hosted, cranpose-heavy]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -183,7 +187,9 @@ jobs:
           sccache --start-server || true
           rustup target add --toolchain stable wasm32-unknown-unknown
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
-          wasm-opt --version
+          # wasm-pack fetches its own binaryen when the host has none, so a
+          # missing system wasm-opt is reported rather than treated as fatal.
+          wasm-opt --version || echo "no system binaryen; wasm-pack supplies its own"
 
       - name: Run wasm clippy
         # A build alone (below) does not lint: `Arc<dyn Trait>` values that are
