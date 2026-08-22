@@ -1,4 +1,8 @@
 #!/bin/bash
+# Without this a failed step still reaches the success footer, which matters
+# now that the release canary uses this script to prove a published release
+# builds for the browser.
+set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -45,6 +49,7 @@ if [ $BUILD_RESULT -ne 0 ]; then
     echo "This might be due to wasm-opt issues. Retrying without wasm-opt..."
     echo ""
 
+    set +e
     "$WASM_PACK" build \
         --target web \
         --out-dir pkg \
@@ -52,6 +57,7 @@ if [ $BUILD_RESULT -ne 0 ]; then
         --no-default-features \
         --no-opt
     BUILD_RESULT=$?
+    set -e
 
     if [ $BUILD_RESULT -ne 0 ]; then
         echo "Build failed even without wasm-opt"

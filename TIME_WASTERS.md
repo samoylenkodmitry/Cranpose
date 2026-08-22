@@ -879,3 +879,46 @@ unpublished crate that caused the resolution failure in the first place.
   one failure that asserts on pixels with no external input at all — a
   screenshot with the same SHA-256 and an empty `ImageChops.difference` bbox.
   Byte-identical output from two revisions is the end of the question.
+
+## A green wasm CI that ships an unbuildable crate (2026-08-22)
+
+`v0.1.96` was published with four `error[E0308]` in `crates/cranpose/src/web.rs`:
+`pointer_position(x: f64, y: f64)` called with the `i32` that `event.offset_x()`
+returns. Every consumer's web build failed. This repository's own
+`wasm build (linux)` job was green on the same source, and so was a local
+`cargo check --target wasm32-unknown-unknown`.
+
+The cause is `--cfg web_sys_unstable_apis`, which was set in `.cargo/config.toml`
+and `apps/desktop-demo/.cargo/config.toml`. It is not an additive opt-in: in
+`web-sys`, `MouseEvent::offset_x`/`offset_y` are declared twice, `-> i32` under
+`#[cfg(not(web_sys_unstable_apis))]` and `-> f64` under `#[cfg(web_sys_unstable_apis)]`.
+So the framework compiled against one signature here and applications compiled
+against the other. Clippy made it worse rather than catching it: running under
+the same flag, it saw `offset_x() as f64` as an `unnecessary_cast` and the cast
+was removed, which is precisely what broke every consumer.
+
+What to check when a build is green here and red for an application:
+
+- Diff the rustflags, not the source. `cargo` config in this repository applies
+  to builds started here and to nothing a consumer runs. Reproduce with
+  `RUSTFLAGS= cargo check --target wasm32-unknown-unknown` from a directory that
+  carries no `.cargo/config.toml`, or from a copy of `apps/isolated-demo` with a
+  `[patch.crates-io]` pointing at the local crates.
+- Do not trust a clippy suggestion about a cast or a conversion in `cfg`-divergent
+  code until the same clippy runs without the repository's flags.
+- `apps/isolated-demo` is the only tree shaped like a consumer. Before this, the
+  release canary built it for desktop and Android but never for the web, so the
+  one thing that could have caught this was not run.
+
+`no_cargo_config_enables_unstable_web_sys_bindings` in
+`apps/desktop-demo/tests/source_hygiene_aliases.rs` now fails if the flag comes
+back, and the publish canary builds the isolated demo for the web.
+
+## crates.io and the GitHub API answer 403 without a User-Agent (2026-08-21)
+
+Both refuse a request that sends no `User-Agent`, and the failure reads as
+"crate absent" or "release missing" rather than as a rejected request. A release
+monitor reported `cranpose = ABSENT` for crates that were published and served
+correctly. Send a `User-Agent` from every script that queries either API, and
+when a registry lookup says something is missing, re-check with `curl -A` before
+believing it.
