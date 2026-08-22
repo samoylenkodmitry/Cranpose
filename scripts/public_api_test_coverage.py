@@ -10,12 +10,18 @@ inside a test module counts, and a function tested only through a caller does
 not. It is deliberately coarse: it is cheap to run, it never goes stale, and it
 points at the functions nobody has thought about, which is what the gap is.
 
-The test corpus is every `#[cfg(test)]` tail and `tests/` file under `crates/`,
-plus the headless robot suite under `apps/desktop-demo`. The robot examples and
-runners are test code that happens not to live in `crates/`: they are what
-`./run_robot_test.sh` executes, and they are the only exercise a good part of
-the robot driver API ever gets. Leaving them out reported that API as untested
-when it is the most heavily executed code in the repository.
+The test corpus is every `#[cfg(test)] mod` body and `tests/` file under
+`crates/`, plus the headless robot suite under `apps/desktop-demo`. The robot
+examples and runners are test code that happens not to live in `crates/`: they
+are what `./run_robot_test.sh` executes, and they are the only exercise a good
+part of the robot driver API ever gets. Leaving them out reported that API as
+untested when it is the most heavily executed code in the repository.
+
+The corpus is the braces of each test module, not the tail of the file from the
+first `#[cfg(test)]` onwards. That attribute also introduces test-only imports,
+and 138 files in this workspace carry one near the top: taking the tail counted
+their entire production body as test code, so every function in them read as
+covered by virtue of defining itself.
 
     python3 scripts/public_api_test_coverage.py            # the summary
     python3 scripts/public_api_test_coverage.py --list      # every name
@@ -37,6 +43,96 @@ ROBOT_SUITE = (
     ROOT / "apps" / "desktop-demo" / "src" / "tests",
 )
 PUBLIC_FN = re.compile(r"^\s*pub (?:const |async )?fn ([A-Za-z_][A-Za-z0-9_]*)", re.M)
+TEST_MOD = re.compile(
+    r"#\[cfg\(test\)\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{"
+)
+
+
+def split_test_modules(text: str) -> tuple[str, str]:
+    """Separates a file into its production half and its `#[cfg(test)] mod` halves.
+
+    Braces are matched so a test module in the middle of a file does not swallow
+    what follows it, and string and comment contents are stepped over so a brace
+    inside either does not move the boundary."""
+    production: list[str] = []
+    tests: list[str] = []
+    cursor = 0
+    for match in TEST_MOD.finditer(text):
+        if match.start() < cursor:
+            continue
+        end = _matching_brace(text, match.end() - 1)
+        if end is None:
+            continue
+        production.append(text[cursor : match.start()])
+        tests.append(text[match.start() : end + 1])
+        cursor = end + 1
+    production.append(text[cursor:])
+    return "".join(production), "\n".join(tests)
+
+
+def _matching_brace(text: str, opening: int) -> int | None:
+    """Index of the `}` closing the `{` at `opening`, or None if unbalanced."""
+    depth = 0
+    index = opening
+    length = len(text)
+    while index < length:
+        character = text[index]
+        if character == "/" and index + 1 < length:
+            following = text[index + 1]
+            if following == "/":
+                index = text.find("\n", index)
+                if index < 0:
+                    return None
+                continue
+            if following == "*":
+                closing = text.find("*/", index + 2)
+                if closing < 0:
+                    return None
+                index = closing + 2
+                continue
+        elif character == '"':
+            index = _skip_string(text, index)
+            continue
+        elif character == "'":
+            # A lifetime, not a character literal, when no closing quote follows
+            # within a few characters; skipping either way is safe.
+            closing = _skip_char(text, index)
+            if closing is not None:
+                index = closing
+                continue
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    return None
+
+
+def _skip_string(text: str, quote: int) -> int:
+    index = quote + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == '"':
+            return index + 1
+        index += 1
+    return index
+
+
+def _skip_char(text: str, quote: int) -> int | None:
+    index = quote + 1
+    limit = min(len(text), quote + 5)
+    while index < limit:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] == "'":
+            return index + 1
+        index += 1
+    return None
 
 
 def source_files() -> list[Path]:
@@ -62,9 +158,9 @@ def test_corpus(files: list[Path]) -> str:
     parts: list[str] = []
     for path in files:
         text = path.read_text(errors="ignore")
-        marker = text.find("#[cfg(test)]")
-        if marker >= 0:
-            parts.append(text[marker:])
+        _, tests = split_test_modules(text)
+        if tests:
+            parts.append(tests)
         if "tests" in path.parts:
             parts.append(text)
     for path in robot_suite_files():
@@ -97,8 +193,7 @@ def main() -> int:
         if arguments.crate and crate != arguments.crate:
             continue
         text = path.read_text(errors="ignore")
-        marker = text.find("#[cfg(test)]")
-        body = text[:marker] if marker >= 0 else text
+        body, _ = split_test_modules(text)
         for name in set(PUBLIC_FN.findall(body)):
             total += 1
             if not named_in(corpus, name):
