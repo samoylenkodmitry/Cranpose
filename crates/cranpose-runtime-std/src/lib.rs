@@ -138,6 +138,21 @@ impl RuntimeScheduler for StdScheduler {
     }
 }
 
+/// Shared handle to a [`StdScheduler`].
+///
+/// Mirrors [`cranpose_core::SchedulerRef`]: native code wakes the runtime
+/// from other threads, so the handle needs to be an atomically
+/// reference-counted `Arc`. On wasm `StdScheduler` keeps its frame waker in a
+/// `RefCell` because the host is single-threaded, so the type is not
+/// `Send + Sync` there and an `Rc` handle is used instead of paying for
+/// synchronisation the target has no use for.
+#[cfg(not(target_arch = "wasm32"))]
+pub type StdSchedulerRef = Arc<StdScheduler>;
+
+/// See the native definition of [`StdSchedulerRef`] for why this is `Rc` on wasm.
+#[cfg(target_arch = "wasm32")]
+pub type StdSchedulerRef = std::rc::Rc<StdScheduler>;
+
 /// Clock implementation backed by a cross-platform monotonic timer.
 #[derive(Debug, Default, Clone)]
 pub struct StdClock;
@@ -164,7 +179,7 @@ impl StdClock {
 /// Convenience container bundling the standard scheduler and clock.
 #[derive(Clone)]
 pub struct StdRuntime {
-    scheduler: Arc<StdScheduler>,
+    scheduler: StdSchedulerRef,
     clock: Arc<StdClock>,
     runtime: Runtime,
 }
@@ -172,7 +187,7 @@ pub struct StdRuntime {
 impl StdRuntime {
     /// Creates a new standard runtime instance.
     pub fn new() -> Self {
-        let scheduler = Arc::new(StdScheduler::default());
+        let scheduler = StdSchedulerRef::new(StdScheduler::default());
         let runtime = Runtime::new(scheduler.clone());
         Self {
             scheduler,
@@ -198,8 +213,8 @@ impl StdRuntime {
     }
 
     /// Returns the scheduler implementation.
-    pub fn scheduler(&self) -> Arc<StdScheduler> {
-        Arc::clone(&self.scheduler)
+    pub fn scheduler(&self) -> StdSchedulerRef {
+        StdSchedulerRef::clone(&self.scheduler)
     }
 
     /// Returns the clock implementation.

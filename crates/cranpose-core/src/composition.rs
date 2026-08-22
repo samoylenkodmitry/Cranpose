@@ -1,12 +1,11 @@
 use crate::{
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
-    snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue, Composer,
-    CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError, NodeId,
-    RecomposeScope, RetentionPolicy, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot, SlotTable,
-    SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
+    scheduler_ref, snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue,
+    Composer, CompositionPassDebugStats, ConcreteApplierHost, DefaultScheduler, Key, NodeError,
+    NodeId, RecomposeScope, RetentionPolicy, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot,
+    SlotTable, SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
 };
 use std::rc::Rc;
-use std::sync::Arc;
 use web_time::Instant;
 
 pub struct Composition<A: Applier + 'static> {
@@ -47,7 +46,7 @@ fn recompose_scope_telemetry_threshold_ms() -> Option<f64> {
 
 impl<A: Applier + 'static> Composition<A> {
     pub fn new(applier: A) -> Self {
-        Self::with_runtime(applier, Runtime::new(Arc::new(DefaultScheduler)))
+        Self::with_runtime(applier, Runtime::new(scheduler_ref(DefaultScheduler)))
     }
 
     pub fn with_runtime(applier: A, runtime: Runtime) -> Self {

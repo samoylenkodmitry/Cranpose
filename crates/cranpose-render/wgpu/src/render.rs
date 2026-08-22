@@ -11675,7 +11675,6 @@ impl GpuRenderer {
                 staged_uploads.is_empty(),
                 "wasm draw uploads use retained per-batch resource slots"
             );
-            return;
         }
 
         #[cfg(not(target_arch = "wasm32"))]
