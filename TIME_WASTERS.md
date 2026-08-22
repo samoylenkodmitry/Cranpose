@@ -846,3 +846,12 @@ unpublished crate that caused the resolution failure in the first place.
   host-capability skips gate on X11 plus `xdotool`, which these two do not
   need, so they run and fail rather than skipping. Check the display before
   reading a presentation failure as a renderer regression.
+  On macOS the display's own log settles it in one command - `pmset -g log |
+  grep -i "Display is turned"` prints when the panel went off and came back, and
+  a failure timestamped between an "off" and the next "on" is the machine, not
+  the code. `pmset -g assertions` and a `CGSessionCopyCurrentDictionary` read of
+  `CGSSessionScreenIsLocked` answer the same question for the present moment. A
+  suspected presentation regression is then decided by running the same example
+  from a worktree at the base revision and from the branch back to back on the
+  one machine; two revisions on two machines, or on one machine hours apart,
+  compare the display state as much as the code.

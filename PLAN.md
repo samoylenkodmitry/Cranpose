@@ -269,10 +269,25 @@ report it at all.
       The two that failed here are `robot_shader_rect` and
       `robot_shader_backdrop_drag`. Both call `.with_headless(false)` because
       they verify real GPU presentation, and this host's display was not
-      compositing, so the window never presented a frame. Both pass on the
-      second host from the same commit. The suite's capability skips gate on
-      X11 plus `xdotool`, which these two do not need, so they run wherever the
-      suite runs and fail where nothing can be presented.
+      compositing, so the window never presented a frame. The suite's
+      capability skips gate on X11 plus `xdotool`, which these two do not need,
+      so they run wherever the suite runs and fail where nothing can be
+      presented.
+
+      That reading is the host's own record, not an inference. `pmset -g log`
+      on this machine reports the panel turned off at 02:59 and back on at
+      05:05, and the two failures are timestamped 04:38 — inside that window,
+      with the machine cycling through DarkWake. The same host had passed all
+      121, both of these included, the previous evening with the panel on.
+
+      Running the same two examples from a worktree at the base revision and
+      from this branch back to back on the one machine, with the panel on,
+      separates the display from the code: base and branch both pass both
+      examples here, and the base revision also passes on the second host.
+      Nothing in the presentation path regressed. What did change is that this
+      branch bounds the robot present wait; at the base revision the same
+      sleeping display parks the driver until the harness's own 180s deadline
+      and reports nothing about why.
 - [x] Review all four repositories for target-specific framework work, duplicate
       implementations, unused APIs, unfinished states, and untracked artifacts.
 
