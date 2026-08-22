@@ -466,7 +466,12 @@ jobs:
           git diff --stat -- apps/isolated-demo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add apps/isolated-demo/Cargo.toml apps/isolated-demo/Cargo.lock
+          # sync_isolated_demo.py rewrites the Android settings script as well as
+          # the manifest. Staging only the manifest left the Gradle plugin naming
+          # the previous release, which fails check_cranpose_versions.py on the
+          # default branch and points the canary's Android build at the plugin
+          # before the one being released.
+          git add apps/isolated-demo
           git commit -m "chore: point isolated demo at ${TAG_NAME}"
           # Pushes made with GITHUB_TOKEN do not retrigger workflows, so this
           # cannot recurse into another Publish run.
