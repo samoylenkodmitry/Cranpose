@@ -110,7 +110,7 @@ fn returned_composable_state_change_recomposes_parent_consumer() {
 }
 
 #[test]
-fn recranpose_does_not_use_stale_indices_when_prior_scope_changes_length() {
+fn recompose_does_not_use_stale_indices_when_prior_scope_changes_length() {
     thread_local! {
         static STABLE_RECOMPOSE_A: Cell<usize> = const { Cell::new(0) };
         static STABLE_RECOMPOSE_B: Cell<usize> = const { Cell::new(0) };
@@ -180,7 +180,7 @@ fn recranpose_does_not_use_stale_indices_when_prior_scope_changes_length() {
 }
 
 #[test]
-fn recranpose_handles_removed_scopes_gracefully() {
+fn recompose_handles_removed_scopes_gracefully() {
     thread_local! {
         static REMOVED_SCOPE_LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
     }
@@ -194,7 +194,7 @@ fn recranpose_handles_removed_scopes_gracefully() {
             let state_clone = *state_a;
             composer.with_group(21, |composer| {
                 let state_capture = state_clone;
-                composer.set_recranpose_callback({
+                composer.set_recompose_callback({
                     move |composer| {
                         let _ = state_capture.value();
                         composer.register_side_effect(|| {

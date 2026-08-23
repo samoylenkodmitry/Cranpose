@@ -79,7 +79,7 @@ Historical source-level observations:
 - `trim_to_cursor` marks unreachable slots as gaps and intentionally keeps group length as physical extent rather than active subtree size.
 - `SlotStorage::begin_group` returned a gap-restoration boolean; `Composer::with_group` checked that flag and forced recomposition.
 - `SlotStorage` exposed cursor-repair methods such as `step_back` and `advance_after_node_read`.
-- `begin_recranpose_at_scope` starts from a `ScopeId`; the current slot table finds a group by scanning slots for a matching scope.
+- `begin_recompose_at_scope` starts from a `ScopeId`; the current slot table finds a group by scanning slots for a matching scope.
 - `SubcomposeState` already shows a cleaner lifecycle pattern: it owns active slots, reusable pools, slot compositions, precomposed nodes, and a reuse policy outside the main slot table.
 
 ---
@@ -725,7 +725,7 @@ impl Default for RecomposeOptions {
 
 ```rust
 pub fn with_group_seed<R>(&self, key: GroupKeySeed, f: impl FnOnce(&Composer) -> R) -> R {
-    let parent_scope = self.current_recranpose_scope();
+    let parent_scope = self.current_recompose_scope();
     let options = self.pending_scope_options().take().unwrap_or_default();
     let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
     let host = self.active_slots_host();

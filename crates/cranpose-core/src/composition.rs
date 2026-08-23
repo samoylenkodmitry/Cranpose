@@ -24,7 +24,7 @@ pub struct Composition<A: Applier + 'static> {
 ///
 /// Each root render clears `root_render_requested` but may re-raise it if a
 /// recompose pass inside `render()` promotes a scope callback to the root
-/// (see `Composer::recranpose_group` in recompose.rs — callbacks that cannot
+/// (see `Composer::recompose_group` in recompose.rs — callbacks that cannot
 /// run invalidate their `callback_promotion_target`, and if no ancestor can
 /// absorb the callback, `request_root_render()` is called). Each promotion
 /// walks up one parent scope, so natural convergence is bounded by the
@@ -470,7 +470,7 @@ impl<A: Applier + 'static> Composition<A> {
                                     for scope in scopes {
                                         if let Some(threshold_ms) = scope_telemetry_threshold_ms {
                                             let start = Instant::now();
-                                            composer.recranpose_group(scope);
+                                            composer.recompose_group(scope);
                                             let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
                                             if elapsed_ms >= threshold_ms {
                                                 eprintln!(
@@ -481,7 +481,7 @@ impl<A: Applier + 'static> Composition<A> {
                                                 );
                                             }
                                         } else {
-                                            composer.recranpose_group(scope);
+                                            composer.recompose_group(scope);
                                         }
                                     }
                                 },

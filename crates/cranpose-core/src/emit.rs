@@ -62,7 +62,7 @@ impl Composer {
         if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation) {
             if type_matches && gen_matches {
                 let scope_debug = self
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .map(|scope| (scope.id(), debug_scope_label(scope.id())))
                     .unwrap_or((0, None));
                 log::trace!(
@@ -132,7 +132,7 @@ impl Composer {
             (id, gen)
         };
         let scope_debug = self
-            .current_recranpose_scope()
+            .current_recompose_scope()
             .map(|scope| (scope.id(), debug_scope_label(scope.id())))
             .unwrap_or((0, None));
         log::trace!(
@@ -318,7 +318,7 @@ impl Composer {
         }
 
         // During recomposition, preserve the original parent when possible.
-        if let Some(parent_hint) = self.core.recranpose_parent_hint.get() {
+        if let Some(parent_hint) = self.core.recompose_parent_hint.get() {
             if parent_hint == id {
                 debug_assert_ne!(
                     parent_hint, id,

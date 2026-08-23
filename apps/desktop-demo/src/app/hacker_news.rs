@@ -980,7 +980,7 @@ thread_local! {
 #[composable]
 fn DebugScopeTag(name: &'static str) {
     cranpose_core::with_current_composer(|composer| {
-        if let Some(scope) = composer.current_recranpose_scope() {
+        if let Some(scope) = composer.current_recompose_scope() {
             DEBUG_SCOPE_TAGS.with(|tags| {
                 tags.borrow_mut().insert(scope.id(), name);
             });
