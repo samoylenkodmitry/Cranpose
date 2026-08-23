@@ -36,7 +36,14 @@ jobs:
         env:
           RUNNER_NAME: ${{ runner.name }}
         run: |
-          if [[ "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+          if [[ "$RUNNER_NAME" == samarch-1-cranpose* ]]; then
+            # Every runner registered on this host shares its name prefix
+            # (samarch-1-cranpose, samarch-1-cranpose-2, ...) — match the
+            # prefix, not one runner's exact name, so a second runner on
+            # the same physical box still gets the host's real knobs
+            # instead of silently falling back to defaults that lie about
+            # this machine.
+            #
             # This host idles near 91-93C ambient; the suite's thermal
             # governor needs both knobs raised or the resume wait arms
             # against an unreachable temperature.
@@ -59,7 +66,14 @@ jobs:
         # below: a GPU swapchain under Xvfb never lands pixels in the X
         # server's buffer, so they can only read their screenshots on
         # software present.
+        #
+        # This and robot-capture-software both drive the same GPU and X
+        # server. Two Linux runners can now pick either job up, so a
+        # host-level lock serialises the two robot jobs against each other
+        # without serialising anything else in the fleet — see
+        # scripts/ci/with_robot_host_lock.sh.
         run: >
+          scripts/ci/with_robot_host_lock.sh
           xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh
           --sequential
           --skip robot_underline_screenshot
@@ -89,7 +103,9 @@ jobs:
         env:
           RUNNER_NAME: ${{ runner.name }}
         run: |
-          if [[ "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+          if [[ "$RUNNER_NAME" == samarch-1-cranpose* ]]; then
+            # See robot-e2e-gpu above: match the host's runner-name prefix,
+            # not one runner's exact name.
             echo "CRANPOSE_HOST_MAX_TEMP_C=97" >> "$GITHUB_ENV"
             echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
             echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
@@ -102,10 +118,13 @@ jobs:
           sccache --start-server || true
 
       - name: Run the external capture trio on software present
+        # See robot-e2e-gpu above: this suite and that one share a
+        # host-level lock so they never run at once on the same box.
         env:
           WGPU_BACKEND: gl
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: >
+          scripts/ci/with_robot_host_lock.sh
           xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh
           --sequential
           --example robot_underline_screenshot
@@ -174,7 +193,10 @@ jobs:
           RUNNER_NAME: ${{ runner.name }}
           RUNNER_OS: ${{ runner.os }}
         run: |
-          if [[ "$RUNNER_OS" == "Linux" && "$RUNNER_NAME" == "samarch-1-cranpose" ]]; then
+          # Match the host's runner-name prefix, not one runner's exact
+          # name: every runner registered on samarch-1 shares it
+          # (samarch-1-cranpose, samarch-1-cranpose-2, ...).
+          if [[ "$RUNNER_OS" == "Linux" && "$RUNNER_NAME" == samarch-1-cranpose* ]]; then
             sdk_root="${ANDROID_SDK_ROOT:-/home/s/develop/sdk}"
             cache_root=/home/s/ci-cache/cranpose
           elif [[ "$RUNNER_OS" == "macOS" && -d /Volumes/files/sdk ]]; then
