@@ -239,6 +239,13 @@ pub struct LayoutNode {
     modifier_capabilities: NodeCapabilities,
     modifier_child_capabilities: NodeCapabilities,
     pub measure_policy: Rc<dyn MeasurePolicy>,
+    /// The device pixel grid this node was composed against.
+    ///
+    /// Measurement runs after composition and so cannot read a composition
+    /// local; the grid is captured here while the composition that owns this
+    /// node is still running, which is what lets a subtree be measured on a
+    /// grid of its own rather than on whatever the shell holds.
+    density: crate::density::Density,
     /// The actual children of this node (folded view - includes virtual nodes as-is)
     pub children: Vec<NodeId>,
     cache: LayoutNodeCacheHandles,
@@ -330,6 +337,7 @@ impl LayoutNode {
             modifier_capabilities: NodeCapabilities::default(),
             modifier_child_capabilities: NodeCapabilities::default(),
             measure_policy,
+            density: crate::density::Density::default(),
             children: Vec::new(),
             cache: LayoutNodeCacheHandles::default(),
             needs_measure: Cell::new(true), // New nodes need initial measure
@@ -474,6 +482,20 @@ impl LayoutNode {
                     }
                 }
             }
+        }
+    }
+
+    /// The grid this node was composed against.
+    pub fn density(&self) -> crate::density::Density {
+        self.density
+    }
+
+    /// Records the grid the composition provided, re-measuring if it moved.
+    pub fn set_density(&mut self, density: crate::density::Density) {
+        if self.density != density {
+            self.density = density;
+            self.cache.clear();
+            self.mark_needs_measure();
         }
     }
 
@@ -819,6 +841,7 @@ impl Clone for LayoutNode {
             modifier_capabilities: self.modifier_capabilities,
             modifier_child_capabilities: self.modifier_child_capabilities,
             measure_policy: self.measure_policy.clone(),
+            density: self.density,
             children: self.children.clone(),
             cache: self.cache.clone(),
             needs_measure: Cell::new(self.needs_measure.get()),
