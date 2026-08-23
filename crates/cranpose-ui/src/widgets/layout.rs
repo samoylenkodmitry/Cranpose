@@ -111,10 +111,15 @@ pub fn SubcomposeLayout(
     // composition while preserving the call-site local providers.
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
+    // Read while the composition is still running, same as `Layout`: measurement
+    // happens after it and cannot reach a composition local. Reading here also
+    // subscribes, so a subtree given a different grid recomposes and re-captures.
+    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(id, |node: &mut SubcomposeLayoutNode| {
         node.set_modifier(modifier.clone());
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context.clone());
+        node.set_density(composed_density);
         if policy_captures_changed {
             node.request_measure_recompose();
         }

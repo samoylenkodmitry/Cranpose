@@ -1116,6 +1116,10 @@ fn LazyColumnImpl(
     // scope, keeping overlays wired and secondary callbacks lifetime-bound.
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
+    // Read while the composition is still running, same as `Layout`: measurement
+    // happens after it and cannot reach a composition local. Reading here also
+    // subscribes, so a subtree given a different grid recomposes and re-captures.
+    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
         if refresh_content || config_changed || modifier_changed {
@@ -1123,6 +1127,7 @@ fn LazyColumnImpl(
         }
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
+        node.set_density(composed_density);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
             node.request_measure_recompose();
@@ -1235,6 +1240,10 @@ fn LazyRowImpl(
     });
     let captured_context =
         cranpose_core::with_current_composer(|composer| composer.capture_composition_context());
+    // Read while the composition is still running, same as `Layout`: measurement
+    // happens after it and cannot reach a composition local. Reading here also
+    // subscribes, so a subtree given a different grid recomposes and re-captures.
+    let composed_density = crate::density::density();
     if let Err(err) = cranpose_core::with_node_mut(node_id, |node: &mut SubcomposeLayoutNode| {
         let modifier_changed = !node.modifier().structural_eq(&scroll_modifier);
         if refresh_content || config_changed || modifier_changed {
@@ -1242,6 +1251,7 @@ fn LazyRowImpl(
         }
         node.set_measure_policy(Rc::clone(&policy));
         node.set_captured_context(captured_context);
+        node.set_density(composed_density);
         if refresh_content || config_changed || modifier_changed {
             measured_item_cache.borrow_mut().clear();
             node.request_measure_recompose();
