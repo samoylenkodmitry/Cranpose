@@ -1,9 +1,18 @@
-// The Cranpose Gradle plugin and the Cranpose Android library are built from
-// this repository, so the demo consumes them straight from source: the
-// composite build supplies the plugin and substitutes the `dev.cranpose`
-// artifacts for the projects that produce them.
+// The Cranpose Gradle plugin has no Maven coordinate: it lives inside the
+// `cranpose` crate's own source and runs as a composite build, included from
+// wherever cargo already resolved that crate. This block is the same in every
+// Cranpose Android application -- see the root README for the canonical form.
 pluginManagement {
-    includeBuild("../../../android")
+    val cranposePackage = (groovy.json.JsonSlurper().parseText(
+        providers.exec { commandLine("cargo", "metadata", "--format-version=1") }
+            .standardOutput.asText.get()
+    ) as Map<*, *>)["packages"].let { it as List<*> }
+        .map { it as Map<*, *> }
+        .firstOrNull { it["name"] == "cranpose" }
+        ?: error("cargo metadata reports no `cranpose` package; add it as a dependency first")
+    val cranposeDir = java.io.File(cranposePackage["manifest_path"] as String).parentFile
+    includeBuild(cranposeDir.resolve("android/cranpose-gradle-plugin"))
+
     repositories {
         google()
         mavenCentral()
@@ -17,8 +26,6 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-
-includeBuild("../../../android")
 
 rootProject.name = "ComposeRS Demo"
 include(":app")

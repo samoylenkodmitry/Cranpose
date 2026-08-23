@@ -718,12 +718,11 @@ its timing as production-performance evidence.
   only *this* repository's `Cargo.toml` declares, so any application applying
   `dev.cranpose.android` failed a local release build with `profile
   'release-fast' is not defined` before reaching its own code. The job now
-  builds the demo, desktop and Android, after the bump. Two things to know when
-  working on it: the Android distribution is not on a remote repository, so the
-  plugin reaches the demo through `mavenLocal()` — republish with
-  `./android/gradlew -p android publishToMavenLocal` after any plugin edit or
-  the demo silently builds against the previous plugin. And the demo compiles
-  against the *published* version, so between a framework change and its
+  builds the demo, desktop and Android, after the bump. One thing to know when
+  working on it: the demo compiles against the *published* `cranpose` version
+  (the Gradle plugin has no version of its own — it rides inside the crate and
+  is included straight from wherever cargo resolved it, so there is nothing
+  separate to publish or republish), so between a framework change and its
   release the demo will not build against the pinned one; that is the version
   skew a release resolves, not a defect.
 
@@ -740,25 +739,27 @@ its timing as production-performance evidence.
 
 ## Android builds fail with "SDK location not found" while the SDK is installed
 
-`./android/gradlew` dies with `SDK location not found`, and
-`cargo check --target aarch64-linux-android` dies inside `aws-lc-sys`'s build
-script with `failed to find tool "aarch64-linux-android-clang"`. Neither error
-means the toolchain is missing. On this machine both are installed:
+`./gradlew` (from `apps/android-demo/android` or `apps/isolated-demo/android`)
+dies with `SDK location not found`, and `cargo check --target
+aarch64-linux-android` dies inside `aws-lc-sys`'s build script with `failed to
+find tool "aarch64-linux-android-clang"`. Neither error means the toolchain is
+missing. On this machine both are installed:
 
     ~/Library/Android/sdk
     ~/Library/Android/sdk/ndk/{27.0.12077973,28.2.13676358}
 
 What is missing is the environment. `ANDROID_HOME`, `ANDROID_SDK_ROOT` and
-`ANDROID_NDK_HOME` are unset in a fresh shell, and `android/local.properties`
-is untracked so a fresh checkout has no `sdk.dir` either. Set them, or write
-`sdk.dir=$HOME/Library/Android/sdk` into `android/local.properties`, before
-concluding anything about an Android build failure:
+`ANDROID_NDK_HOME` are unset in a fresh shell, and each app's
+`android/local.properties` is untracked so a fresh checkout has no `sdk.dir`
+either. Set them, or write `sdk.dir=$HOME/Library/Android/sdk` into that app's
+`android/local.properties`, before concluding anything about an Android build
+failure:
 
 ```bash
 export ANDROID_HOME="$HOME/Library/Android/sdk"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
-echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+echo "sdk.dir=$ANDROID_HOME" > apps/android-demo/android/local.properties
 ```
 
 Check `ls ~/Library/Android/sdk` before believing the error. Taking "SDK

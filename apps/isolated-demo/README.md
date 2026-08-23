@@ -35,17 +35,17 @@ runs the native build, chooses the ABIs and Cargo profiles, packages the `.so`,
 and adds the framework's activity and manifest contributions. The application's
 own build file states only its namespace, its Cargo package and its label.
 
+The plugin has no Maven coordinate. `android/settings.gradle.kts` locates the
+`cranpose` crate source Cargo already resolved — the crates.io registry cache,
+here — and includes the plugin straight from it, so there is nothing to
+publish or pre-seed first; see [the crate's
+README](../../crates/cranpose/README.md#android-gradle-plugin) for what that
+`settings.gradle.kts` block does and how to copy it into a new application.
+
 Install the native build bridge once:
 
 ```bash
 cargo install cargo-ndk
-```
-
-The Cranpose Android artifacts are not on a remote repository yet, so publish
-them from this checkout once:
-
-```bash
-cd ../../android && ./gradlew publishToMavenLocal
 ```
 
 Then build from the Android project directory:

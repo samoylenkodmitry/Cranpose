@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import re
 import sys
 import tomllib
 
@@ -104,21 +103,6 @@ def main() -> int:
                     "apps/isolated-demo dependency "
                     f"{name} is {version}, expected {workspace_version}"
                 )
-
-    settings = (ROOT / "apps/isolated-demo/android/settings.gradle.kts").read_text()
-    plugin = re.search(
-        r'id\("dev\.cranpose\.android"\)\s+version\s+"([^"]+)"', settings
-    )
-    if plugin is None:
-        failures.append(
-            "apps/isolated-demo/android/settings.gradle.kts does not pin the "
-            "dev.cranpose.android plugin version"
-        )
-    elif plugin.group(1) != workspace_version:
-        failures.append(
-            "apps/isolated-demo Gradle plugin dev.cranpose.android is "
-            f"{plugin.group(1)}, expected {workspace_version}"
-        )
 
     if failures:
         for failure in failures:

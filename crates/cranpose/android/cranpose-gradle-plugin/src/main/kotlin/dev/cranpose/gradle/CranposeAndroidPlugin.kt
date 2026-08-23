@@ -2,6 +2,7 @@ package dev.cranpose.gradle
 
 import com.android.build.api.dsl.ApplicationExtension
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
+import com.android.build.api.variant.ApplicationVariant
 import org.gradle.api.GradleException
 import org.gradle.api.Plugin
 import org.gradle.api.Project
@@ -15,9 +16,15 @@ import java.io.File
  *
  * The plugin owns what every Cranpose application's build would otherwise
  * repeat: building the Rust `cdylib` with `cargo-ndk`, choosing ABIs and Cargo
- * profiles, packaging the resulting `.so` files, depending on the Cranpose
- * library and the optional service modules an application asked for, and
- * supplying the manifest metadata the library's activity declaration reads.
+ * profiles, packaging the resulting `.so` files, contributing the framework's
+ * Java, manifest entries and ProGuard rules directly (plus, for the optional
+ * service modules an application asked for, their own Java, manifest entries
+ * and third-party dependencies), and supplying the manifest metadata the
+ * activity declaration reads.
+ *
+ * Nothing here is resolved from a Maven repository: every contribution reads
+ * straight out of this crate's `android/` directory, which this build sits
+ * inside (see `androidRoot()` and the plugin's own `build.gradle.kts`).
  *
  * An application's build file then reads:
  *
@@ -76,36 +83,50 @@ class CranposeAndroidPlugin : Plugin<Project> {
         cranpose.environment.convention(emptyMap())
         cranpose.label.convention(project.rootProject.name)
         cranpose.theme.convention("@android:style/Theme.NoTitleBar.Fullscreen")
-        cranpose.cranposeVersion.convention(pluginVersion())
         cranpose.libraryName.convention(
             cranpose.cargoPackage.map { name -> name.replace('-', '_') }
         )
     }
 
     /**
-     * The plugin's own version, written beside its classes by its build. The
-     * Java, the manifest contributions and the plugin are released together, so
-     * an application that does not pin a version gets the set that was tested
-     * together.
+     * This crate's `android/` directory: the parent of the directory the
+     * plugin's own build lives in, captured at that build's configuration time
+     * (see `cranposeAndroidRootResource` in the plugin's `build.gradle.kts`) and
+     * read here as a classpath resource.
+     *
+     * This is always correct because the plugin is never fetched as a prebuilt
+     * artifact: a consuming application's `settings.gradle.kts` locates this
+     * crate's source with `cargo metadata` and `includeBuild`s the plugin from
+     * it, so the plugin is recompiled from that same tree on every build.
      */
-    private fun pluginVersion(): String =
-        CranposeAndroidPlugin::class.java.getResourceAsStream(VERSION_RESOURCE)
-            ?.use { stream -> stream.readBytes().toString(Charsets.UTF_8).trim() }
-            ?.takeIf { version -> version.isNotEmpty() }
-            ?: throw GradleException(
-                "the Cranpose Gradle plugin carries no $VERSION_RESOURCE; " +
-                    "set cranpose { cranposeVersion } to name the artifacts to resolve"
-            )
+    private fun androidRoot(): File =
+        File(
+            CranposeAndroidPlugin::class.java.getResourceAsStream(ANDROID_ROOT_RESOURCE)
+                ?.use { stream -> stream.readBytes().toString(Charsets.UTF_8).trim() }
+                ?.takeIf { path -> path.isNotEmpty() }
+                ?: throw GradleException(
+                    "the Cranpose Gradle plugin carries no $ANDROID_ROOT_RESOURCE"
+                )
+        )
 
     private fun configureApplication(project: Project, cranpose: CranposeExtension) {
+        val androidComponents =
+            project.extensions.getByType(ApplicationAndroidComponentsExtension::class.java)
+
         // `finalizeDsl` runs after the application's own `android { }` and
         // `cranpose { }` blocks and before the Android plugin locks its DSL,
         // which is the only window in which both are true.
-        project.extensions
-            .getByType(ApplicationAndroidComponentsExtension::class.java)
-            .finalizeDsl { android ->
-                configureAndroid(cranpose, nativeOutput(project, cranpose), android)
-            }
+        androidComponents.finalizeDsl { android ->
+            configureAndroid(cranpose, nativeOutput(project, cranpose), android)
+        }
+
+        // Contributes the framework's Java, manifest entries and ProGuard
+        // rules directly to each variant, the way a library module's AAR would
+        // -- except read straight from this crate's source instead of resolved
+        // from a repository.
+        androidComponents.onVariants { variant ->
+            contributeCranposeSources(project, cranpose, variant)
+        }
 
         project.afterEvaluate {
             val cargoPackage = requireCargoPackage(cranpose)
@@ -119,6 +140,40 @@ class CranposeAndroidPlugin : Plugin<Project> {
                 nativeOutput(project, cranpose),
             )
         }
+    }
+
+    /**
+     * Adds the base framework's Java source directory, manifest and ProGuard
+     * rules to this variant, and the same for every service the application
+     * asked for through `cranpose { services }`.
+     *
+     * Static (pre-existing, hand-written) content is added by absolute path
+     * rather than copied into the build directory: these are the framework's
+     * real source files, and an application inspecting or stepping into them
+     * should land on the file this crate ships, not a build-generated copy.
+     */
+    private fun contributeCranposeSources(
+        project: Project,
+        cranpose: CranposeExtension,
+        variant: ApplicationVariant,
+    ) {
+        val root = androidRoot()
+        contributeManifest(variant, root, "base")
+        variant.sources.java?.addStaticSourceDirectory(File(root, "java").absolutePath)
+        variant.proguardFiles.add(
+            project.layout.projectDirectory.file(File(root, "proguard-rules.pro").absolutePath)
+        )
+
+        for (service in requireKnownServices(cranpose)) {
+            contributeManifest(variant, root, service)
+            SERVICE_JAVA_SOURCE[service]?.let { dir ->
+                variant.sources.java?.addStaticSourceDirectory(File(root, dir).absolutePath)
+            }
+        }
+    }
+
+    private fun contributeManifest(variant: ApplicationVariant, root: File, name: String) {
+        variant.sources.manifests.addStaticManifestFile(File(root, "manifests/$name.xml").absolutePath)
     }
 
     private fun requireCargoPackage(cranpose: CranposeExtension): String =
@@ -202,21 +257,26 @@ class CranposeAndroidPlugin : Plugin<Project> {
         android.buildTypes.getByName("release").ndk.abiFilters.addAll(releaseAbis)
     }
 
+    /** `CranposeActivity` extends `androidx.appcompat.app.AppCompatActivity`. */
     private fun addDependencies(project: Project, cranpose: CranposeExtension) {
-        val version = cranpose.cranposeVersion.get()
-        project.dependencies.add("implementation", "dev.cranpose:cranpose-android:$version")
-        for (service in cranpose.services.get()) {
-            if (service !in KNOWN_SERVICES) {
-                throw GradleException(
-                    "cranpose { services } does not know `$service`; " +
-                        "valid names are ${KNOWN_SERVICES.joinToString(", ")}"
-                )
+        project.dependencies.add("implementation", "androidx.appcompat:appcompat:1.7.1")
+        for (service in requireKnownServices(cranpose)) {
+            for (coordinate in SERVICE_DEPENDENCIES[service].orEmpty()) {
+                project.dependencies.add("implementation", coordinate)
             }
-            project.dependencies.add(
-                "implementation",
-                "dev.cranpose:cranpose-android-$service:$version"
+        }
+    }
+
+    private fun requireKnownServices(cranpose: CranposeExtension): Set<String> {
+        val services = cranpose.services.get()
+        val unknown = services - KNOWN_SERVICES
+        if (unknown.isNotEmpty()) {
+            throw GradleException(
+                "cranpose { services } does not know ${unknown.joinToString(", ")}; " +
+                    "valid names are ${KNOWN_SERVICES.joinToString(", ")}"
             )
         }
+        return services
     }
 
     private fun registerNativeBuilds(
@@ -434,7 +494,22 @@ class CranposeAndroidPlugin : Plugin<Project> {
             "update",
         )
 
+        /**
+         * Extra Java source directories a service contributes, relative to
+         * `androidRoot()`. Most services are manifest-only; `billing` also
+         * carries `CranposeBilling`, which needs the Play Billing library and
+         * so lives outside the base `java/` every application compiles.
+         */
+        val SERVICE_JAVA_SOURCE = mapOf(
+            "billing" to "java-billing",
+        )
+
+        /** Third-party dependencies a service needs beyond the framework's own. */
+        val SERVICE_DEPENDENCIES = mapOf(
+            "billing" to listOf("com.android.billingclient:billing:9.1.0"),
+        )
+
         /** Written by this plugin's build, relative to this class's package. */
-        const val VERSION_RESOURCE = "version.txt"
+        const val ANDROID_ROOT_RESOURCE = "android-root.txt"
     }
 }
