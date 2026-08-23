@@ -30,61 +30,23 @@ is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
 `cranpose-liquid` and `cranpose-ui` each run widgets through a real composition,
 which is what catches a component reading a local nobody provided. Not every
-exported widget is in those suites — **`LazyRow` has no composition test
-anywhere**; others are covered only by the robot suite or by tests beside their
-own module.
+exported widget is in those suites; others are covered only by the robot suite
+or by tests beside their own module.
 
-### `PointerEvent` carries no keyboard modifier state
+### The subcompose scope reads its grid from the ambient composer
 
-`cranpose-foundation/src/nodes/input/types.rs` gives `PointerEvent` buttons,
-position, scroll, zoom, source and timestamps — but no modifiers. The framework
-already builds `cranpose_app_shell::Modifiers{shift,ctrl,alt,meta}` from winit
-and attaches it to **wheel** events and to focused-widget `KeyEvent`s, never to
-pointer events.
+`MeasurePolicy::measure` receives a `&dyn MeasureScope`, and the plain
+`LayoutNode` path builds one from the grid the node was composed with.
+The subcompose path never followed. `SubcomposeMeasureScopeImpl::density()` and
+`font_scale()` call `composer_context::with_composer`, reaching for whichever
+composer the thread happens to be inside rather than the `self.composer` the
+struct already owns and uses for everything else in that file.
 
-The consequence is not theoretical: an application wanting shift-click or
-ctrl-click multi-select has to read the keyboard itself. CranAmp does, through
-raw `x11rb`, which means the interaction **silently does nothing on macOS and
-Windows** — `x11rb::connect` fails there and the code falls through to "no
-modifiers held". The plumbing and the type both exist; they are just not joined.
-
-### Effect keys are compared by hash, not by equality
-
-`LaunchedEffect!` / `LaunchedEffectAsync!` / `DisposableEffect!` hash their keys
-to a `u64` and compare that. Jetpack Compose's `LaunchedEffect(key1, block)` is
-`remember(key1) { ... }` — exact structural equality. A hash collision therefore
-makes Cranpose treat two distinct keys as unchanged and skip a relaunch or
-dispose that Compose would always perform.
-
-Fixing it means requiring `K: PartialEq + 'static` and storing the key itself,
-which costs keys that are `Hash` but not `Eq`. That trade is the open question;
-the divergence is not in doubt.
-
-### A provided density does not reach measurement
-
-`local_density()` scopes a grid to a subtree and composables read it, but the
-layout pass does not: `LayoutNode` captures no density, so measurement reads
-whatever the host installed on the shell. A `ProvideDensity` around a subtree
-therefore changes what its composables compute and not what its children are
-measured against.
-
-Compose captures density onto the layout node at composition time, which is what
-makes `MeasureScope` able to carry one into `MeasurePolicy.measure`. Here
-`MeasurePolicy::measure` receives no scope at all, and `MeasureScope` — which
-has exactly one implementor, the subcompose scope — still declares `density()`
-and `font_scale()` with `1.0` defaults that would silently lie for the next one.
-
-Closing it means deciding where the value is captured before threading anything:
-give `LayoutNode` the grid it was composed with, source the scope from that, and
-drop the defaults.
-
-### The Android panic hook overwrites the application's
-
-`crates/cranpose/src/android.rs` installs a panic hook unconditionally, and it
-runs after the application's own launcher has already installed one — so an
-application that wants a backtrace, a thread name or its own log tag never gets
-it. The framework's hook logs file, line, column and message only. It needs to
-either chain to a previously-installed hook or offer an extension point.
+It is correct today by construction alone: the one site that builds such a scope
+sits inside `Composer::install`, which enters the context first. `with_composer`
+ends in `.expect("with_composer: no active composer")`, so a second construction
+site anywhere outside that scope turns a measurement into a panic — where the
+same code reading the shell grid could not fail at all.
 
 ## Limits that are correct, and surprising
 
@@ -110,16 +72,19 @@ These are deliberate. They are here so nobody rediscovers them as bugs.
 
 Found by installing releases onto real devices, not by reading the pipeline.
 
-- **The iOS release IPA cannot go on a device.** `cranscan-*-ios.ipa` is ad-hoc
-  signed (`flags=0x2(adhoc)`, `TeamIdentifier=not set`) with no embedded
-  provisioning profile, so iOS refuses it. Installing requires re-signing
-  locally against a development profile carrying the target device's UDID. A
-  release should also publish a development-signed build, or the artifact should
-  say plainly that it is App Store/TestFlight only.
-- **CranOrbit publishes only an `.aab`.** An Android App Bundle cannot be
-  installed with `adb`. The universal APK exists only inside the CI *artifact*
-  `orbit-breaker-bundle-<n>`, which now expires after 14 days. A release should
-  attach the APK beside the bundle.
+- **The iOS release IPA still needs re-signing, and now says so.**
+  `cranscan-*-ios-unsigned.ipa` is ad-hoc signed with no embedded provisioning
+  profile, so a device refuses it; installing means re-signing against a
+  development profile carrying that device's UDID. The repository's only iOS
+  secrets are an App Store *distribution* certificate and profile, so no CI job
+  can produce a device-installable build — which is why the artifact is named
+  and documented for what it is rather than carrying a signing step that could
+  only fail.
+- **The published CranOrbit release still carries only an `.aab`**, which
+  `adb` cannot install. The release workflow now attaches the universal APK
+  beside the bundle, but the attaching step is gated to tag pushes and no tag
+  has been pushed since, so `v1.3.1` is unchanged. The next `v*` tag produces a
+  release carrying both.
 
 ## Duplication left in the applications
 
@@ -132,7 +97,8 @@ copies went unnoticed.
 Three copies remain in CranScan (`app/src/services.rs`, `crates/core/src/qr.rs`)
 and CranAmp (`src/sync/mod.rs`), plus CranAmp's two private `hex_value` helpers.
 They can only be removed once those applications move to a release carrying the
-shared pair.
+shared pair. CranAmp's move off raw `x11rb` to the modifiers `PointerEvent` now
+carries waits on the same release, and is written and pinned to it.
 
 ## Robot suite corner cases
 
