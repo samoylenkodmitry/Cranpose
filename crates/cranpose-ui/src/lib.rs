@@ -152,7 +152,7 @@ pub use primitives::{
 pub use cranpose_foundation::lazy::{
     LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
 };
-pub use density::{density, local_density, Density};
+pub use density::{density, local_density, Density, DensityMeasureScope};
 pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};

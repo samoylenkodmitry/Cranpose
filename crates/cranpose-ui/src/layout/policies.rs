@@ -1,7 +1,9 @@
 use crate::layout::core::{
     Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, VerticalAlignment,
 };
-use cranpose_ui_layout::{Axis, Constraints, MeasurePolicy, MeasureResult, ParentData, Placement};
+use cranpose_ui_layout::{
+    Axis, Constraints, MeasurePolicy, MeasureResult, MeasureScope, ParentData, Placement,
+};
 use smallvec::SmallVec;
 
 /// MeasurePolicy for Box layout - overlays children according to alignment.
@@ -23,16 +25,18 @@ impl BoxMeasurePolicy {
 impl MeasurePolicy for BoxMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -320,16 +324,18 @@ impl FlexMeasurePolicy {
 impl MeasurePolicy for FlexMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -684,16 +690,18 @@ impl FlowRowMeasurePolicy {
 impl MeasurePolicy for FlowRowMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -806,16 +814,18 @@ impl LeafMeasurePolicy {
 impl MeasurePolicy for LeafMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(&[], constraints, &mut placements);
+        let size = self.measure_into(scope, &[], constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -868,16 +878,18 @@ impl Default for EmptyMeasurePolicy {
 impl MeasurePolicy for EmptyMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(&[], constraints, &mut placements);
+        let size = self.measure_into(scope, &[], constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,

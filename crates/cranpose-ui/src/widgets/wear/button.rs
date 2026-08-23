@@ -27,7 +27,9 @@ use crate::widgets::{Layout, Text};
 use crate::SemanticsWidgetRole;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
-use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{
+    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
 
 /// `ButtonDefaults` plus `FilledButtonTokens`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,16 +135,18 @@ struct WearButtonMeasurePolicy {
 impl MeasurePolicy for WearButtonMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,

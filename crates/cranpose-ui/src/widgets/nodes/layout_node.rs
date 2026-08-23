@@ -1242,7 +1242,7 @@ fn resolve_modifier_local_from_parent_chain(
 mod tests {
     use super::*;
     use cranpose_ui_graphics::Size as GeometrySize;
-    use cranpose_ui_layout::{Measurable, MeasureResult};
+    use cranpose_ui_layout::{Measurable, MeasureResult, MeasureScope};
     use std::rc::Rc;
 
     #[derive(Default)]
@@ -1251,6 +1251,7 @@ mod tests {
     impl MeasurePolicy for TestMeasurePolicy {
         fn measure(
             &self,
+            _scope: &dyn MeasureScope,
             _measurables: &[Box<dyn Measurable>],
             _constraints: Constraints,
         ) -> MeasureResult {

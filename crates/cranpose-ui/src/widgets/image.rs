@@ -10,7 +10,7 @@ use crate::nine_patch::{nine_patch_quads, tile_quads, NinePatchInsets, PatchFill
 use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap, ImageSampling};
-use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult, MeasureScope, Placement};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "svg")]
@@ -528,16 +528,18 @@ struct ImageMeasurePolicy {
 impl MeasurePolicy for ImageMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(&[], constraints, &mut placements);
+        let size = self.measure_into(scope, &[], constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -1603,7 +1605,8 @@ mod tests {
         let policy = ImageMeasurePolicy {
             intrinsic_size: intrinsic,
         };
-        policy.measure(&[], constraints).size
+        let scope = crate::density::DensityMeasureScope::new(crate::density::Density::default());
+        policy.measure(&scope, &[], constraints).size
     }
 
     #[test]

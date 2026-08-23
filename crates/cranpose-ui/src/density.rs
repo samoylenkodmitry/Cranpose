@@ -160,6 +160,37 @@ impl Default for Density {
     }
 }
 
+/// The production [`cranpose_ui_layout::MeasureScope`]: a grid captured at
+/// composition time, carried through measurement.
+///
+/// `MeasurePolicy::measure` runs with this as its scope, the way Compose's
+/// `MeasurePolicy.measure` runs with `MeasureScope` as its receiver. The grid
+/// is the [`LayoutNode`](crate::widgets::nodes::LayoutNode)'s own
+/// [`Density`] -- read at composition time by the `Layout` composable from
+/// [`density`], not the host default -- so a subtree given a different grid
+/// through [`ProvideDensity`] is measured on that grid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DensityMeasureScope {
+    density: Density,
+}
+
+impl DensityMeasureScope {
+    /// Wraps a captured [`Density`] as a measurement scope.
+    pub fn new(density: Density) -> Self {
+        Self { density }
+    }
+}
+
+impl cranpose_ui_layout::MeasureScope for DensityMeasureScope {
+    fn density(&self) -> f32 {
+        self.density.density()
+    }
+
+    fn font_scale(&self) -> f32 {
+        self.density.font_scale()
+    }
+}
+
 /// The [`CompositionLocal`] carrying the device pixel grid.
 ///
 /// Compose's `LocalDensity`. Its default is whatever grid the host installed on

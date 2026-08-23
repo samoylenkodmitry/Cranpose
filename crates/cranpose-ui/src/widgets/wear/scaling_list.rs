@@ -114,7 +114,9 @@ use cranpose_core::{remember, rememberMutableStateOf, MutableState, NodeId, Slot
 use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
 use cranpose_foundation::{VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
-use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{
+    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
 use std::cell::{Cell, RefCell};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
@@ -1127,16 +1129,18 @@ struct WearItemMeasurePolicy;
 impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -1401,7 +1405,9 @@ fn measure_wear_scaling_list(
     } = outputs;
     let spec = inputs.spec;
     let top_aligned = spec.auto_centering.is_none();
-    let scale = Density::from_host().density();
+    // The grid comes from the scope this measure pass is running with, not the
+    // host default -- a subtree given a different grid is measured on it.
+    let scale = scope.density();
     let density = Density::new(scale, 1.0);
     let width = if constraints.max_width.is_finite() {
         constraints.max_width
