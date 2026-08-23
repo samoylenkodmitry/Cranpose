@@ -43,9 +43,12 @@ use hit_path_tracker::{HitPathTracker, PointerId};
 use std::collections::HashSet;
 
 // Re-export key event types for use by cranpose
-pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-// Re-export the pointer device source so platform backends can stamp it.
-pub use cranpose_foundation::PointerSource;
+pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
+// Re-export the pointer device source and the keyboard-modifiers type so
+// platform backends can stamp them. `Modifiers` lives in cranpose-foundation
+// (not cranpose-ui, which merely re-exports it) because `PointerEvent` needs
+// it too; re-exported from here directly rather than via cranpose-ui.
+pub use cranpose_foundation::{Modifiers, PointerSource};
 // Re-export the rotary (Wear OS crown / rotating bezel) event so platform
 // backends can build one and apps can type their window-level handler.
 pub use cranpose_foundation::{
@@ -216,6 +219,17 @@ where
     /// (`set_cursor` then `pointer_pressed`), so a single per-shell cell mirrors
     /// the existing cursor/buttons state without churning every method signature.
     pointer_source: PointerSource,
+    /// Keyboard modifiers held during the most recent sample, set by the
+    /// platform and stamped onto every `PointerEvent` the shell constructs.
+    /// Mirrors `pointer_source` above: a single per-shell cell instead of
+    /// threading the value through every pointer method signature.
+    ///
+    /// `None` until a platform calls [`set_modifiers`](Self::set_modifiers) at
+    /// least once, which is honest for Android/iOS touch input: neither
+    /// platform's JNI/UIKit bridge currently reports keyboard modifier state
+    /// for a touch sample, so their pointer events keep reporting "unknown"
+    /// rather than a silently wrong "nothing held".
+    modifiers: Option<Modifiers>,
     /// Tracks which nodes were hit on PointerDown (by stable NodeId).
     ///
     /// This follows Jetpack Compose's HitPathTracker pattern:
@@ -573,6 +587,7 @@ where
             is_dirty: true,
             buttons_pressed: PointerButtons::NONE,
             pointer_source: PointerSource::Unknown,
+            modifiers: None,
             hit_path_tracker: HitPathTracker::new(),
             hovered_nodes: Vec::new(),
             on_rotary_scroll: None,

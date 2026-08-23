@@ -18,7 +18,7 @@
 //! wheel is turned *down*, so the browser host negates on the way in. Getting
 //! this wrong does not fail loudly — it scrolls backwards.
 
-use cranpose_ui::Modifiers;
+use cranpose_foundation::Modifiers;
 use cranpose_ui_graphics::Point;
 
 /// Logical pixels one wheel notch scrolls, and the notch the ctrl+wheel zoom

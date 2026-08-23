@@ -4,7 +4,7 @@ use cranpose_core::{
     rememberMutableStateOf, CompositionLocal, CompositionLocalProvider, MutableState, TaskSite,
 };
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
-use cranpose_foundation::{PointerEvent, PointerEventKind, PointerSource};
+use cranpose_foundation::{Modifiers, PointerEvent, PointerEventKind, PointerSource};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
@@ -8138,6 +8138,11 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+thread_local! {
+    static POINTER_MODIFIERS_PROBE: RefCell<Option<Rc<Cell<Option<Modifiers>>>>> =
+        const { RefCell::new(None) };
+}
+
 type PointerTimeSample = (PointerEventKind, Option<i64>, Option<u64>);
 
 thread_local! {
@@ -8165,6 +8170,39 @@ fn app_shell_pointer_source_probe() {
                                 let event = await_scope.await_pointer_event().await;
                                 if event.kind == PointerEventKind::Down {
                                     captured.set(event.source);
+                                    event.consume();
+                                }
+                            }
+                        })
+                        .await;
+                }
+            }),
+        BoxSpec::default(),
+        || {},
+    );
+}
+
+/// A probe that records the `Modifiers` of every pointer-down it receives via
+/// `Modifier::pointer_input` -- the surface an app reads to implement
+/// shift/ctrl-click multi-select without touching a platform API.
+fn app_shell_pointer_modifiers_probe() {
+    let captured = Rc::new(Cell::new(None::<Modifiers>));
+    POINTER_MODIFIERS_PROBE.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&captured)));
+    Box(
+        Modifier::empty()
+            .size(Size {
+                width: 200.0,
+                height: 200.0,
+            })
+            .pointer_input((), move |scope: PointerInputScope| {
+                let captured = Rc::clone(&captured);
+                async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Down {
+                                    captured.set(event.modifiers);
                                     event.consume();
                                 }
                             }
@@ -8290,6 +8328,84 @@ fn shell_stamps_pointer_source_on_dispatched_events() {
         captured.get(),
         PointerSource::Mouse,
         "shell must stamp the mouse source onto the dispatched pointer event"
+    );
+}
+
+#[test]
+fn shift_click_reaches_the_pointer_input_handler_through_the_shell() {
+    // Pins the bug: PointerEvent carried no keyboard-modifier state, so an app
+    // implementing shift/ctrl-click multi-select had to read the keyboard
+    // itself through a platform API. This proves the whole path instead: the
+    // platform tells the shell what is held via `set_modifiers` (the same
+    // per-shell cell the wheel path's `WheelScroll::with_modifiers` already
+    // threads through), and a plain `Modifier::pointer_input` handler -- the
+    // surface every app already reads pointer events from -- sees it on the
+    // dispatched event with no platform-specific code of its own.
+    let _guard = test_guard();
+    POINTER_MODIFIERS_PROBE.with(|slot| slot.borrow_mut().take());
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_pointer_modifiers_probe,
+    );
+    shell.set_buffer_size(200, 200);
+    shell.set_viewport(200.0, 200.0);
+    shell.update();
+
+    let captured = POINTER_MODIFIERS_PROBE
+        .with(|slot| slot.borrow().as_ref().map(Rc::clone))
+        .expect("probe should install its capture cell");
+
+    // Before any platform ever reports modifiers, a press must arrive with
+    // `None` -- honestly "unreported", never a silently wrong "none held".
+    assert_eq!(shell.modifiers(), None);
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed(), "down should hit the probe");
+    assert_eq!(
+        captured.get(),
+        None,
+        "a press before set_modifiers must reach the handler as unreported, not as Modifiers::NONE"
+    );
+    shell.pointer_released();
+
+    // A shift-held press must reach the handler with shift set.
+    shell.set_modifiers(Modifiers {
+        shift: true,
+        ..Modifiers::NONE
+    });
+    assert_eq!(
+        shell.modifiers(),
+        Some(Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        })
+    );
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed());
+    let modifiers = captured
+        .get()
+        .expect("a press after set_modifiers must report Some(Modifiers)");
+    assert!(
+        modifiers.shift,
+        "shift held at the platform must reach the pointer_input handler on the dispatched event"
+    );
+    assert!(!modifiers.ctrl);
+    shell.pointer_released();
+
+    // Releasing shift and holding ctrl instead must update what the handler sees.
+    shell.set_modifiers(Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    });
+    assert!(shell.set_cursor(50.0, 50.0));
+    assert!(shell.pointer_pressed());
+    let modifiers = captured.get().expect("ctrl press must report Some");
+    assert!(modifiers.ctrl);
+    assert!(
+        !modifiers.shift,
+        "stale shift must not survive a modifier change"
     );
 }
 
