@@ -922,3 +922,33 @@ monitor reported `cranpose = ABSENT` for crates that were published and served
 correctly. Send a `User-Agent` from every script that queries either API, and
 when a registry lookup says something is missing, re-check with `curl -A` before
 believing it.
+
+## A robot suite failure that is the host, not the branch (2026-08-23)
+
+`robot_memory_leak` failed on one pull request with `wait_for_idle: timed out
+after 1 iterations` and passed on three others the same morning. Two hours went
+into hunting a cause in the branch's own diff that was never there.
+
+Three things tell a host flake from a regression, and none of them need access
+to the machine or a re-run.
+
+- **Read the iteration count in the message before forming any theory.** `timed
+  out after 1 iterations` means a single event-loop turn consumed the whole
+  budget: the process was not scheduled. An application that genuinely never
+  converges races through thousands of iterations in the same wall-clock time.
+  The two are opposite readings of the same message.
+- **Derive a load index from the run's own log.** Sum the gaps between
+  `Running robot_<name>...` timestamps, excluding the test under suspicion, and
+  compare runs. Three passing runs came to 843s, 843s and 844s across the same
+  150 tests; the failing run came to 970s, 15% slower on identical work. The
+  suite is reproducible to within a second, so an outlier is unmistakable. Short
+  tests dominated by fixed startup stay flat while long ones stretch, which is
+  what host contention looks like and what a hot code path does not.
+- **Confirm with one dispatch instead of a day of inference.**
+  `gh workflow run heavy-selfhosted.yml --ref <branch>` re-runs the identical
+  commit. Do this first, not last.
+
+The host is shared: samarch-1 serves a runner per repository, so another
+project's build competes with the robot suite, and it carries services of its
+own. During the failure it had 20GB paged out with 55GB of RAM free, and the
+suite's one memory-bound test degraded twice as much as the suite average.
