@@ -34,7 +34,7 @@ fn std_runtime_requests_frame_and_recomposes_on_state_change() {
             cranpose_core::with_current_composer(|composer| {
                 let recompositions_cb = recompositions.clone();
                 let state_slot_cb = state_slot.clone();
-                composer.set_recranpose_callback(move |_composer| {
+                composer.set_recompose_callback(move |_composer| {
                     cranpose_counter_body(&recompositions_cb, &state_slot_cb);
                 });
             });

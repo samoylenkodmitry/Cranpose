@@ -303,7 +303,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
-    let recranpose_block = original_block.clone();
+    let recompose_block = original_block.clone();
     let key_expr = quote! { #core_path::location_key(file!(), line!(), column!()) };
 
     // Rebinds will be generated later in the helper_body context where we have access to slots
@@ -622,17 +622,17 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        let recranpose_fn_ident = Ident::new(
-            &format!("__cranpose_recranpose_{}", func.sig.ident),
+        let recompose_fn_ident = Ident::new(
+            &format!("__cranpose_recompose_{}", func.sig.ident),
             Span::call_site(),
         );
 
-        let recranpose_setter = quote! {
+        let recompose_setter = quote! {
             {
-                __composer.set_recranpose_callback(move |
+                __composer.set_recompose_callback(move |
                     __composer: &#core_path::Composer|
                 {
-                    #recranpose_fn_ident #ty_generics_turbofish (
+                    #recompose_fn_ident #ty_generics_turbofish (
                         __composer
                     );
                 });
@@ -643,11 +643,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                 let __current_scope = __composer
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .expect("missing recompose scope");
                 let mut __changed = __current_scope.should_recompose();
                 #(#param_setup)*
-                #recranpose_setter
+                #recompose_setter
                 if !__changed && __current_scope.has_composed_once() {
                     __composer.skip_current_group();
                     return;
@@ -659,11 +659,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                 let __current_scope = __composer
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .expect("missing recompose scope");
                 let mut __changed = __current_scope.should_recompose();
                 #(#param_setup)*
-                #recranpose_setter
+                #recompose_setter
                 let __result_slot_index = __composer
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 let __has_previous = __composer
@@ -697,12 +697,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        let recranpose_fn_body = if returns_unit {
+        let recompose_fn_body = if returns_unit {
             quote! {
                 #(#param_setup_recompose)*
                 #(#rebinds_for_recompose)*
-                #recranpose_block
-                #recranpose_setter
+                #recompose_block
+                #recompose_setter
             }
         } else {
             quote! {
@@ -711,7 +711,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 #(#rebinds_for_recompose)*
                 let __value: #return_ty = {
-                    #recranpose_block
+                    #recompose_block
                 };
                 __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
                     __result_slot_index,
@@ -719,18 +719,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         slot.store(__value.clone());
                     },
                 );
-                #recranpose_setter
+                #recompose_setter
                 #invalidate_return_consumer
                 __value
             }
         };
 
-        let recranpose_fn = quote! {
+        let recompose_fn = quote! {
             #[allow(non_snake_case)]
-            fn #recranpose_fn_ident #impl_generics (
+            fn #recompose_fn_ident #impl_generics (
                 __composer: &#core_path::Composer
             ) -> #return_ty #where_clause {
-                #recranpose_fn_body
+                #recompose_fn_body
             }
         };
 
@@ -772,7 +772,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         });
         *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! {
-            #recranpose_fn
+            #recompose_fn
             #helper_fn
             #func
         })

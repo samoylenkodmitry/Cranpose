@@ -903,7 +903,7 @@ let invalid_scopes = observer.notify_changed_objects(&changed_objects);
 
 // 3. Recompose each scope
 for scope in invalid_scopes {
-    composer.recranpose_group(scope);
+    composer.recompose_group(scope);
 }
 ```
 

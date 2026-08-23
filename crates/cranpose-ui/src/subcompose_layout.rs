@@ -648,7 +648,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
 fn compose_subcompose_slot_content(holder: cranpose_core::CallbackHolder) {
     cranpose_core::with_current_composer(|composer| {
         let holder_for_recompose = holder.clone();
-        composer.set_recranpose_callback(move |_composer| {
+        composer.set_recompose_callback(move |_composer| {
             compose_subcompose_slot_content(holder_for_recompose.clone());
         });
     });

@@ -5,7 +5,7 @@ use crate::{
 use std::rc::Rc;
 
 impl Composer {
-    pub(crate) fn recranpose_group(&self, scope: &RecomposeScope) {
+    pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {
         struct RecomposeGuard {
             composer: Composer,
             scope: RecomposeScope,
@@ -56,17 +56,14 @@ impl Composer {
             debug_scope_invalidation_sources(scope.id()),
         );
         if started.is_some() {
-            let previous_hint = self
-                .core
-                .recranpose_parent_hint
-                .replace(scope.parent_hint());
+            let previous_hint = self.core.recompose_parent_hint.replace(scope.parent_hint());
             struct HintGuard {
                 core: Rc<ComposerCore>,
                 previous: Option<NodeId>,
             }
             impl Drop for HintGuard {
                 fn drop(&mut self) {
-                    self.core.recranpose_parent_hint.set(self.previous);
+                    self.core.recompose_parent_hint.set(self.previous);
                 }
             }
             let _hint_guard = HintGuard {

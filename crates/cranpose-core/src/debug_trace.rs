@@ -30,7 +30,7 @@ pub fn debug_label_current_scope(name: &'static str) {
     }
     #[cfg(debug_assertions)]
     with_current_composer(|composer| {
-        if let Some(scope) = composer.current_recranpose_scope() {
+        if let Some(scope) = composer.current_recompose_scope() {
             DEBUG_SCOPE_LABELS.with(|labels| {
                 labels.borrow_mut().insert(scope.id(), name);
             });

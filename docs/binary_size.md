@@ -52,7 +52,7 @@ closure that only ever gets erased anyway":
    monomorphic cores (`with_group_in_active_pass_dyn` over
    `&mut dyn FnMut(&Composer)`, `value_slot_with_kind_dyn` over a
    `PayloadInit` type-id + boxed factory) behind thin generic shims.
-2. `Composer::set_recranpose_callback` duplicated its observer wiring per
+2. `Composer::set_recompose_callback` duplicated its observer wiring per
    call site (393 copies, 703 KiB). Fixed by boxing at the entry point into
    an `#[inline(never)]` monomorphic core.
 3. The `#[composable]` macro made every generated helper/recompose fn
