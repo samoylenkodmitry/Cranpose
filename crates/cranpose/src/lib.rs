@@ -212,7 +212,7 @@ pub fn KeepScreenOn(enabled: bool) {
 /// on the UI runtime. Work is cancelled with the owning composition.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(non_snake_case)]
-pub fn BundledAssetInstallEffect<K: std::hash::Hash>(
+pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
     spec: cranpose_services::BundledAssetInstallSpec,
     on_result: impl FnOnce(
@@ -236,7 +236,7 @@ pub fn BundledAssetInstallEffect<K: std::hash::Hash>(
 /// [`cranpose_services::local_lifecycle_state`] instead; this is for work that
 /// must react to a *transition*.
 #[allow(non_snake_case)]
-pub fn LifecycleEffect<K: std::hash::Hash + 'static>(
+pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
     observer: impl FnMut(cranpose_services::LifecycleEvent) + 'static,
 ) {
@@ -314,7 +314,7 @@ pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUp
 /// the loop starts and stops with it. There is no wake handle to hold and no
 /// scheduler to poke: stopping is a state change like any other.
 #[allow(non_snake_case)]
-pub fn FrameEffect<K: std::hash::Hash>(
+pub fn FrameEffect<K: PartialEq + 'static>(
     keys: K,
     running: bool,
     on_frame: impl FnMut(u64) + 'static,
