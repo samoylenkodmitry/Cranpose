@@ -24,7 +24,12 @@ fn strip_xml_comments(source: &str) -> String {
 
 /// The one place the Cranpose native build is configured.
 const CRANPOSE_GRADLE_PLUGIN: &str =
-    "android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
+    "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
+
+/// Where the plugin reads a service's manifest fragment from, by service name.
+fn cranpose_manifest(service: &str) -> String {
+    format!("crates/cranpose/android/manifests/{service}.xml")
+}
 
 /// Every Android application built from this repository.
 const ANDROID_APPLICATION_BUILD_FILES: [&str; 2] = [
@@ -2694,7 +2699,7 @@ fn the_audio_focus_policy_lives_in_the_framework() {
 /// background-work lease starts — is not that type.
 #[test]
 fn android_media_declares_the_foreground_service_it_needs() {
-    let manifest = workspace_source("android/cranpose-android-media/src/main/AndroidManifest.xml");
+    let manifest = workspace_source(&cranpose_manifest("media"));
     assert!(
         manifest.contains("android:foregroundServiceType=\"mediaPlayback\""),
         "playback that outlives the surface needs a mediaPlayback service"
@@ -2703,9 +2708,7 @@ fn android_media_declares_the_foreground_service_it_needs() {
         manifest.contains("android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"),
         "the mediaPlayback service needs its own permission"
     );
-    let plugin = workspace_source(
-        "android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt",
-    );
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     assert!(
         plugin.contains("\"media\","),
         "an application asks for the media service by name, so the plugin must know it"
@@ -2737,19 +2740,19 @@ fn applications_ask_for_platform_permissions_by_service() {
 }
 
 /// `CranposeBilling` is the one framework class that needs the Play Billing
-/// library. It is packaged by the service module that carries the permission,
-/// so an application that sells something adds a service name — not a source
+/// library. The plugin contributes both directly to the `billing` service, so
+/// an application that sells something adds a service name — not a source
 /// directory pointing into the framework's tree and a third-party dependency.
 #[test]
 fn the_framework_packages_its_own_billing_java() {
-    let module = workspace_source("android/cranpose-android-billing/build.gradle.kts");
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     assert!(
-        module.contains("crates/cranpose/android/java-billing"),
-        "the billing module must package the framework's billing class"
+        plugin.contains("\"billing\" to \"java-billing\""),
+        "the plugin must add the framework's billing sources for the billing service"
     );
     assert!(
-        module.contains("com.android.billingclient:billing"),
-        "the billing module must bring the library that class compiles against"
+        plugin.contains("com.android.billingclient:billing"),
+        "the plugin must add the library that class compiles against"
     );
     for relative in ANDROID_APPLICATION_BUILD_FILES {
         let source = workspace_source(relative);
@@ -2767,7 +2770,7 @@ fn the_framework_packages_its_own_billing_java() {
 /// collide over one authority.
 #[test]
 fn the_framework_declares_the_provider_its_own_sharing_needs() {
-    let library = workspace_source("android/cranpose-android/src/main/AndroidManifest.xml");
+    let library = workspace_source(&cranpose_manifest("base"));
     assert!(
         library.contains("dev.cranpose.android.CranposeShareProvider"),
         "the library manifest must declare the provider that serves shared files"
@@ -2791,12 +2794,12 @@ fn the_framework_declares_the_provider_its_own_sharing_needs() {
 /// updates itself does not ask to install packages.
 #[test]
 fn installing_an_update_asks_for_its_permission_through_a_service() {
-    let module = workspace_source("android/cranpose-android-update/src/main/AndroidManifest.xml");
+    let module = workspace_source(&cranpose_manifest("update"));
     assert!(
         module.contains("android.permission.REQUEST_INSTALL_PACKAGES"),
         "the update module must contribute the permission PackageInstaller requires"
     );
-    let library = workspace_source("android/cranpose-android/src/main/AndroidManifest.xml");
+    let library = workspace_source(&cranpose_manifest("base"));
     assert!(
         !library.contains("REQUEST_INSTALL_PACKAGES"),
         "every Cranpose application would ask to install packages; keep it in the update module"
@@ -2816,9 +2819,7 @@ fn installing_an_update_asks_for_its_permission_through_a_service() {
 /// architecture the native build never produced a library for.
 #[test]
 fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
-    let plugin = workspace_source(
-        "android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt",
-    );
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     assert!(
         plugin.contains("split.include(*releaseAbis.toTypedArray())"),
         "the plugin must write the release architectures into an enabled ABI split"
@@ -2832,14 +2833,12 @@ fn the_plugin_drives_abi_splits_from_the_architectures_it_builds() {
     }
 }
 
-/// Every service module the plugin knows how to add must exist and be built, or
-/// an application naming it gets a resolution failure instead of a permission.
+/// Every service the plugin knows how to add must have a manifest fragment for
+/// the plugin to contribute, or an application naming it gets a missing-file
+/// failure instead of a permission.
 #[test]
-fn every_service_the_plugin_offers_has_a_module() {
-    let plugin = workspace_source(
-        "android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt",
-    );
-    let settings = workspace_source("android/settings.gradle.kts");
+fn every_service_the_plugin_offers_has_a_manifest() {
+    let plugin = workspace_source(CRANPOSE_GRADLE_PLUGIN);
     let known = plugin
         .split("val KNOWN_SERVICES = setOf(")
         .nth(1)
@@ -2855,14 +2854,9 @@ fn every_service_the_plugin_offers_has_a_module() {
         "the plugin should know several services, found {services:?}"
     );
     for service in services {
-        let module = format!("cranpose-android-{service}");
         assert!(
-            settings.contains(&format!("include(\":{module}\")")),
-            "the plugin offers `{service}` but {module} is not part of the Android build"
-        );
-        assert!(
-            workspace_path(&format!("android/{module}/src/main/AndroidManifest.xml")).is_file(),
-            "{module} must contribute a manifest"
+            workspace_path(&cranpose_manifest(service)).is_file(),
+            "the plugin offers `{service}` but has no manifest fragment for it"
         );
     }
 }
