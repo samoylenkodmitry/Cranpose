@@ -190,3 +190,148 @@ fn the_wear_widgets_compose_against_a_scaling_list_state() {
     applier.clear_runtime_handle();
     measured.expect("the wear screen measures");
 }
+
+// The rest of the Wear widget surface that neither `widget_composition.rs`
+// nor the test above already reaches for real: `WearButton`, `ListHeader`,
+// `ScreenScaffold`, `SwitchButton` (the checked/label wrapper over the
+// already-tested `SwitchButtonNode`), and `WearScalingLazyColumn`. That last
+// one also subcomposes `WearScalingItem` and `WearScalingLazyColumnNode` on
+// its own measure pass, so neither gets a standalone entry here.
+
+#[test]
+fn a_wear_button_composes_its_label() {
+    use cranpose_ui::widgets::wear::button::{WearButton, WearButtonSpec};
+    use cranpose_ui::Modifier;
+
+    run_test_composition(|| {
+        WearButton(
+            Modifier::empty(),
+            WearButtonSpec::default(),
+            "Ring".to_string(),
+            None,
+            || {},
+        );
+    });
+}
+
+#[test]
+fn a_list_header_composes_its_label() {
+    use cranpose_ui::widgets::wear::list_header::{ListHeader, ListHeaderSpec};
+    use cranpose_ui::Modifier;
+
+    run_test_composition(|| {
+        ListHeader(Modifier::empty(), ListHeaderSpec::default(), "Settings");
+    });
+}
+
+#[test]
+fn a_screen_scaffold_composes_its_content() {
+    use cranpose_ui::widgets::wear::scaffold::{ScreenScaffold, ScreenScaffoldSpec};
+    use cranpose_ui::Modifier;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let drawn = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&drawn);
+    run_test_composition(move || {
+        let counter = Rc::clone(&counter);
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        ScreenScaffold(
+            Modifier::empty(),
+            state,
+            ScreenScaffoldSpec::default(),
+            move || counter.set(counter.get() + 1),
+        );
+    });
+    assert_eq!(
+        drawn.get(),
+        1,
+        "the screen scaffold did not compose its content"
+    );
+}
+
+#[test]
+fn a_switch_button_composes_without_a_secondary_label() {
+    use cranpose_ui::measure_layout;
+    use cranpose_ui::widgets::wear::switch_button::{SwitchButton, SwitchButtonSpec};
+    use cranpose_ui::Modifier;
+
+    let mut composition = run_test_composition(|| {
+        SwitchButton(
+            Modifier::empty(),
+            SwitchButtonSpec::default(),
+            false,
+            "Ring".to_string(),
+            None,
+            |_next| {},
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let measured = measure_layout(
+        &mut applier,
+        root,
+        cranpose_ui_graphics::Size::new(400.0, 400.0),
+    );
+    applier.clear_runtime_handle();
+    assert!(
+        measured
+            .expect("the switch row measures")
+            .root_size()
+            .height
+            > 0.0,
+        "a switch row with no secondary label must still measure a real height"
+    );
+}
+
+#[test]
+fn a_wear_scaling_lazy_column_subcomposes_its_rows_during_measurement() {
+    use cranpose_ui::measure_layout;
+    use cranpose_ui::widgets::text::Text;
+    use cranpose_ui::widgets::wear::scaling_list::{
+        WearScalingLazyColumn, WearScalingLazyColumnSpec,
+    };
+    use cranpose_ui::{Modifier, TextStyle};
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let composed_rows = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&composed_rows);
+    let mut composition = run_test_composition(move || {
+        let counter = Rc::clone(&counter);
+        let state = rememberWearScalingListState(CentreAnchor::default());
+        WearScalingLazyColumn(
+            Modifier::empty(),
+            state,
+            WearScalingLazyColumnSpec::default(),
+            move |scope| {
+                let counter = Rc::clone(&counter);
+                scope.items(12, move |index| {
+                    counter.set(counter.get() + 1);
+                    Text(
+                        format!("Row {index}"),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                });
+            },
+        );
+    });
+    let root = composition.root().expect("a composed root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(
+        &mut applier,
+        root,
+        cranpose_ui_graphics::Size::new(400.0, 400.0),
+    )
+    .expect("the wear scaling list measures");
+    applier.clear_runtime_handle();
+    assert!(
+        composed_rows.get() > 0,
+        "a wear scaling lazy column must subcompose at least its first visible rows"
+    );
+}
