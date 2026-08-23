@@ -1,8 +1,8 @@
-use crate::{hash_key, with_current_composer, Key, RuntimeHandle, TaskHandle};
+use crate::effect_key::EffectKey;
+use crate::{with_current_composer, Key, RuntimeHandle, TaskHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use std::cell::{Cell, RefCell};
 use std::future::Future;
-use std::hash::Hash;
 use std::pin::Pin;
 #[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 #[derive(Default)]
 struct LaunchedEffectState {
-    key: Option<Key>,
+    key: Option<EffectKey>,
     cancel: Option<LaunchedEffectCancellation>,
 }
 
@@ -63,21 +63,21 @@ impl From<&'static std::panic::Location<'static>> for TaskSite {
 
 #[derive(Default)]
 struct LaunchedEffectAsyncState {
-    key: Option<Key>,
+    key: Option<EffectKey>,
     cancel: Option<LaunchedEffectCancellation>,
     task: Option<TaskHandle>,
     site: TaskSite,
 }
 
 impl LaunchedEffectState {
-    fn should_run(&self, key: Key) -> bool {
-        match self.key {
-            Some(current) => current != key,
+    fn should_run(&self, key: &EffectKey) -> bool {
+        match &self.key {
+            Some(current) => key.differs_from(current),
             None => true,
         }
     }
 
-    fn set_key(&mut self, key: Key) {
+    fn set_key(&mut self, key: EffectKey) {
         self.key = Some(key);
     }
 
@@ -127,14 +127,14 @@ impl LaunchedEffectCancellation {
 }
 
 impl LaunchedEffectAsyncState {
-    fn should_run(&self, key: Key) -> bool {
-        match self.key {
-            Some(current) => current != key,
+    fn should_run(&self, key: &EffectKey) -> bool {
+        match &self.key {
+            Some(current) => key.differs_from(current),
             None => true,
         }
     }
 
-    fn set_key(&mut self, key: Key) {
+    fn set_key(&mut self, key: EffectKey) {
         self.key = Some(key);
     }
 
@@ -375,17 +375,17 @@ impl CancelToken {
 
 pub fn __launched_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
 where
-    K: Hash,
+    K: PartialEq + 'static,
     F: FnOnce(LaunchedEffectScope) + 'static,
 {
     // Create a group using the caller's location to ensure each LaunchedEffect
     // gets its own slot table entry, even in conditional branches
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key_hash = hash_key(&keys);
+            let key = EffectKey::new(keys);
             let state = composer.remember_effect::<LaunchedEffectState>();
-            if state.with(|state| state.should_run(key_hash)) {
-                state.update(|state| state.set_key(key_hash));
+            if state.with(|state| state.should_run(&key)) {
+                state.update(|state| state.set_key(key));
                 let runtime = composer.runtime_handle();
                 let state_for_effect = state.clone();
                 let mut effect_opt = Some(effect);
@@ -414,16 +414,16 @@ macro_rules! LaunchedEffect {
 /// spawns, so a task the runtime is still holding says which effect started it.
 pub fn __launched_effect_async_impl<K, F>(group_key: Key, site: TaskSite, keys: K, mk_future: F)
 where
-    K: Hash,
+    K: PartialEq + 'static,
     F: FnOnce(LaunchedEffectScope) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
 {
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key_hash = hash_key(&keys);
+            let key = EffectKey::new(keys);
             let state = composer.remember_effect::<LaunchedEffectAsyncState>();
-            if state.with(|state| state.should_run(key_hash)) {
+            if state.with(|state| state.should_run(&key)) {
                 state.update(|state| {
-                    state.set_key(key_hash);
+                    state.set_key(key);
                     state.set_site(site);
                 });
                 let runtime = composer.runtime_handle();

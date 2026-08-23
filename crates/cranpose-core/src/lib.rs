@@ -10,6 +10,7 @@ mod composition;
 mod composition_locals;
 pub mod concurrency;
 mod debug_trace;
+mod effect_key;
 mod emit;
 pub mod env_flags;
 #[cfg(any(feature = "internal", test))]
@@ -975,19 +976,19 @@ pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
 
 #[derive(Default)]
 struct DisposableEffectState {
-    key: Option<Key>,
+    key: Option<effect_key::EffectKey>,
     cleanup: Option<Box<dyn FnOnce()>>,
 }
 
 impl DisposableEffectState {
-    fn should_run(&self, key: Key) -> bool {
-        match self.key {
-            Some(current) => current != key,
+    fn should_run(&self, key: &effect_key::EffectKey) -> bool {
+        match &self.key {
+            Some(current) => key.differs_from(current),
             None => true,
         }
     }
 
-    fn set_key(&mut self, key: Key) {
+    fn set_key(&mut self, key: effect_key::EffectKey) {
         self.key = Some(key);
     }
 
@@ -1041,19 +1042,19 @@ pub fn SideEffect(effect: impl FnOnce() + 'static) {
 
 pub fn __disposable_effect_impl<K, F>(group_key: Key, keys: K, effect: F)
 where
-    K: Hash,
+    K: PartialEq + 'static,
     F: FnOnce(DisposableEffectScope) -> DisposableEffectResult + 'static,
 {
     // Create a group using the caller's location to ensure each DisposableEffect
     // gets its own slot table entry, even in conditional branches
     with_current_composer(|composer| {
         composer.with_group(group_key, |composer| {
-            let key_hash = hash_key(&keys);
+            let key = effect_key::EffectKey::new(keys);
             let state = composer.remember_effect::<DisposableEffectState>();
-            if state.with(|state| state.should_run(key_hash)) {
+            if state.with(|state| state.should_run(&key)) {
                 state.update(|state| {
                     state.run_cleanup();
-                    state.set_key(key_hash);
+                    state.set_key(key);
                 });
                 let state_for_effect = state.clone();
                 let mut effect_opt = Some(effect);

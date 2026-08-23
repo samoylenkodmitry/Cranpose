@@ -1703,3 +1703,149 @@ fn disposing_scope_cancels_pending_frame_callback() {
     runtime_handle.drain_frame_callbacks(512);
     assert!(events.borrow().is_empty());
 }
+
+// ---- Effect keys are compared by value, not by hash digest ---------------
+//
+// `LaunchedEffect`/`LaunchedEffectAsync`/`DisposableEffect` mirror Jetpack
+// Compose's `remember(key1) { ... }` contract: whether to re-run is decided
+// by `equals()` on the key, i.e. exact structural equality. The tests below
+// pin a regression where the framework instead hashed the key to a `u64`
+// and compared digests, so two *distinct* keys that happened to hash
+// identically were wrongly treated as unchanged.
+
+/// A key whose `Hash` impl writes identical bytes for every value, so it
+/// produces the same digest under *any* correct `Hasher` regardless of
+/// `tag` — a genuine, deterministic collision rather than one found by
+/// chance, and stable across both hasher backends the crate can be built
+/// with (`ahash` by default, `DefaultHasher` under the `std-hash` feature).
+/// `PartialEq` still distinguishes values by `tag`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HashCollidingKey {
+    tag: u32,
+}
+
+impl std::hash::Hash for HashCollidingKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        0u32.hash(state);
+    }
+}
+
+#[test]
+fn hash_colliding_key_produces_identical_digests_for_unequal_values() {
+    let a = HashCollidingKey { tag: 1 };
+    let b = HashCollidingKey { tag: 2 };
+    assert_ne!(a, b, "the two keys must be genuinely distinct by PartialEq");
+    assert_eq!(
+        crate::hash_key(&a),
+        crate::hash_key(&b),
+        "the two keys must produce an identical digest under the crate's \
+         active hasher to reproduce the exact defect: comparing hashed \
+         digests instead of comparing the keys themselves"
+    );
+}
+
+#[test]
+fn disposable_effect_reruns_on_hash_colliding_but_unequal_keys() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let tag = MutableState::with_runtime(1u32, runtime);
+    let starts = Rc::new(Cell::new(0usize));
+    let cleanups = Rc::new(Cell::new(0usize));
+    let group_key = location_key(file!(), line!(), column!());
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let starts = Rc::clone(&starts);
+        let cleanups = Rc::clone(&cleanups);
+        composition
+            .render(group_key, move || {
+                let starts = Rc::clone(&starts);
+                let cleanups = Rc::clone(&cleanups);
+                let key = HashCollidingKey { tag: tag.get() };
+                DisposableEffect!(key, move |_| {
+                    starts.set(starts.get() + 1);
+                    let cleanups = Rc::clone(&cleanups);
+                    DisposableEffectResult::new(move || {
+                        cleanups.set(cleanups.get() + 1);
+                    })
+                });
+            })
+            .expect("render succeeds");
+    };
+
+    render(&mut composition);
+    assert_eq!(starts.get(), 1);
+    assert_eq!(cleanups.get(), 0);
+
+    // Re-rendering with the same value must not relaunch, hashed digest or not.
+    render(&mut composition);
+    assert_eq!(starts.get(), 1);
+    assert_eq!(cleanups.get(), 0);
+
+    // A distinct key whose digest collides with the previous one (proven by
+    // `hash_colliding_key_produces_identical_digests_for_unequal_values`).
+    // The digest comparison this test pins the regression of would have
+    // missed this change entirely; comparing by value must not.
+    tag.set(2);
+    render(&mut composition);
+    assert_eq!(
+        starts.get(),
+        2,
+        "a key that differs by value must relaunch the effect even when its \
+         hash digest collides with the previous key's digest"
+    );
+    assert_eq!(
+        cleanups.get(),
+        1,
+        "the previous effect's cleanup must run when the key changes"
+    );
+}
+
+#[test]
+fn launched_effect_reruns_on_hash_colliding_but_unequal_keys() {
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let tag = MutableState::with_runtime(1u32, runtime);
+    let runs = Arc::new(AtomicUsize::new(0));
+    let captured_scopes: Rc<RefCell<Vec<LaunchedEffectScope>>> = Rc::new(RefCell::new(Vec::new()));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let runs = Arc::clone(&runs);
+        let scopes = Rc::clone(&captured_scopes);
+        composition
+            .render(0, move || {
+                let runs = Arc::clone(&runs);
+                let scopes = Rc::clone(&scopes);
+                let key = HashCollidingKey { tag: tag.get() };
+                LaunchedEffect!(key, move |scope| {
+                    runs.fetch_add(1, Ordering::SeqCst);
+                    scopes.borrow_mut().push(scope);
+                });
+            })
+            .expect("render succeeds");
+    };
+
+    render(&mut composition);
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+
+    render(&mut composition);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        1,
+        "unchanged value must not relaunch"
+    );
+
+    tag.set(2);
+    render(&mut composition);
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        2,
+        "a key that differs by value must relaunch the effect even when its \
+         hash digest collides with the previous key's digest"
+    );
+    let scopes = captured_scopes.borrow();
+    assert!(
+        !scopes[0].is_active(),
+        "the previous scope must be cancelled once the key changes"
+    );
+    assert!(scopes[1].is_active());
+}

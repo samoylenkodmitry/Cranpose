@@ -418,10 +418,7 @@ pub fn register_durable_save(save: impl Fn() + Send + Sync + 'static) -> Durable
 /// and under a background-work lease, so a slow write does not stall the
 /// lifecycle callback the platform is waiting on.
 #[allow(non_snake_case)]
-pub fn DurableSaveEffect<K: std::hash::Hash + 'static>(
-    keys: K,
-    save: impl Fn() + Send + Sync + 'static,
-) {
+pub fn DurableSaveEffect<K: PartialEq + 'static>(keys: K, save: impl Fn() + Send + Sync + 'static) {
     cranpose_core::__disposable_effect_impl(
         cranpose_core::location_key(file!(), line!(), column!()),
         keys,

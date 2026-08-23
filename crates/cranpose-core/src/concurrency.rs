@@ -446,7 +446,7 @@ impl<T: 'static> Future for EventStreamNext<T> {
 pub fn CollectEvents<T, K>(stream: EventStream<T>, key: K, on_event: impl FnMut(T) + 'static)
 where
     T: 'static,
-    K: std::hash::Hash + 'static,
+    K: PartialEq + 'static,
 {
     crate::__launched_effect_async_impl(
         crate::location_key(file!(), line!(), column!()),
@@ -472,7 +472,7 @@ where
 pub fn collectAsState<T, K>(stream: EventStream<T>, key: K, initial: T) -> State<T>
 where
     T: Clone + 'static,
-    K: std::hash::Hash + 'static,
+    K: PartialEq + 'static,
 {
     let state = remember(|| mutableStateOf(initial)).with(|state| *state);
     let sink = state;
@@ -580,7 +580,7 @@ impl<T: Send + 'static> Drop for Bridge<T> {
 pub fn rememberEventStream<T, K, R, S>(key: K, subscribe: S) -> EventStream<T>
 where
     T: Send + 'static,
-    K: std::hash::Hash + 'static,
+    K: PartialEq + 'static,
     R: 'static,
     S: FnOnce(EventSender<T>) -> R + 'static,
 {
@@ -868,7 +868,7 @@ impl<T> Future for BlockingWork<T> {
 pub fn produceState<T, K, F>(initial: T, key: K, producer: F) -> State<T>
 where
     T: Clone + 'static,
-    K: std::hash::Hash + 'static,
+    K: PartialEq + 'static,
     F: FnOnce(ProduceScope<T>) -> Pin<Box<dyn Future<Output = ()>>> + 'static,
 {
     let state = remember(|| mutableStateOf(initial)).with(|state| *state);
