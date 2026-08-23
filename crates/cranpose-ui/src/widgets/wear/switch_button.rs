@@ -18,8 +18,8 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
+use crate::density::Density;
 use crate::modifier::{Brush, Color, CornerRadii, Modifier, Point, Rect};
-use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
 use cranpose_core::NodeId;
@@ -334,7 +334,7 @@ pub fn SwitchButtonNode<F>(
 where
     F: FnMut() + 'static,
 {
-    let density = WearDensity::current();
+    let density = crate::density::density();
     let colors = SwitchColors::of(spec.colors, checked);
     let radius = density.dp(spec.corner_radius);
     let container = colors.container;
@@ -409,7 +409,7 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
         placements: &mut Vec<Placement>,
     ) -> Size {
         placements.clear();
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let horizontal = density.dp(self.spec.padding_horizontal) * 2.0;
         let vertical = density.dp(self.spec.padding_vertical) * 2.0;
         let width = if constraints.max_width.is_finite() {
@@ -480,7 +480,7 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
@@ -495,7 +495,7 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
     }
 
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let label_count = if self.has_secondary { 2 } else { 1 };
         let column: f32 = measurables
             .iter()

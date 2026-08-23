@@ -12,6 +12,7 @@ pub mod bring_into_view;
 pub mod clipboard_session;
 mod cursor_animation;
 mod debug;
+pub mod density;
 pub mod draggable;
 mod draw;
 pub mod fling_animation;
@@ -144,6 +145,7 @@ pub use primitives::{
 pub use cranpose_foundation::lazy::{
     LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
 };
+pub use density::{density, local_density, Density};
 pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};

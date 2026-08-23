@@ -20,8 +20,8 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
+use crate::density::Density;
 use crate::modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguration};
-use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
 use crate::SemanticsWidgetRole;
@@ -82,7 +82,7 @@ pub fn WearButton<F>(
 where
     F: FnMut() + 'static,
 {
-    let density = WearDensity::current();
+    let density = crate::density::density();
     let container = spec.colors.primary;
     let radius = density.dp(spec.corner_radius);
     let description = match &secondary_label {
@@ -148,7 +148,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
         placements: &mut Vec<Placement>,
     ) -> Size {
         placements.clear();
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let horizontal = density.dp(self.spec.padding_horizontal) * 2.0;
         let vertical = density.dp(self.spec.padding_vertical) * 2.0;
         let width = if constraints.max_width.is_finite() {
@@ -197,7 +197,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
@@ -206,7 +206,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
     }
 
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
@@ -215,7 +215,7 @@ impl MeasurePolicy for WearButtonMeasurePolicy {
     }
 
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let spacing =
             density.dp(self.spec.label_spacing) * measurables.len().saturating_sub(1) as f32;
         let column = measurables

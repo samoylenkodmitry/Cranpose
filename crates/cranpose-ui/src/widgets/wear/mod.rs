@@ -9,7 +9,7 @@
 //! These are built against Cranpose's own text and colour model, not against
 //! any app's. There is no theme system here and no ambient lookup: every widget
 //! takes its colours in its spec (see [`theme::WearColors`]) and its geometry
-//! from [`density::WearDensity`].
+//! from [`crate::density::Density`].
 //!
 //! The pieces, in dependency order:
 //!
@@ -25,7 +25,6 @@
 
 pub mod button;
 pub mod color_appearance;
-pub mod density;
 pub mod list_header;
 pub mod scaffold;
 pub mod scaling_list;
@@ -35,7 +34,6 @@ pub mod theme;
 
 pub use button::*;
 pub use color_appearance::*;
-pub use density::*;
 pub use list_header::*;
 pub use scaffold::*;
 pub use scaling_list::*;

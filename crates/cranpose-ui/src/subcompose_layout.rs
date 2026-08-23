@@ -445,12 +445,15 @@ impl<'a> SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'a> {
 }
 
 impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
+    // A subcompose measure runs inside the composition that asked for it, so
+    // the grid it measures against is the one that composition was given --
+    // not whatever the host installed on the shell.
     fn density(&self) -> f32 {
-        crate::current_density()
+        crate::density::density().density()
     }
 
     fn font_scale(&self) -> f32 {
-        crate::current_font_scale()
+        crate::density::density().font_scale()
     }
 }
 
