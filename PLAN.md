@@ -60,24 +60,6 @@ Fixing it means requiring `K: PartialEq + 'static` and storing the key itself,
 which costs keys that are `Hash` but not `Eq`. That trade is the open question;
 the divergence is not in doubt.
 
-### A provided density does not reach measurement
-
-`local_density()` scopes a grid to a subtree and composables read it, but the
-layout pass does not: `LayoutNode` captures no density, so measurement reads
-whatever the host installed on the shell. A `ProvideDensity` around a subtree
-therefore changes what its composables compute and not what its children are
-measured against.
-
-Compose captures density onto the layout node at composition time, which is what
-makes `MeasureScope` able to carry one into `MeasurePolicy.measure`. Here
-`MeasurePolicy::measure` receives no scope at all, and `MeasureScope` — which
-has exactly one implementor, the subcompose scope — still declares `density()`
-and `font_scale()` with `1.0` defaults that would silently lie for the next one.
-
-Closing it means deciding where the value is captured before threading anything:
-give `LayoutNode` the grid it was composed with, source the scope from that, and
-drop the defaults.
-
 ### The Android panic hook overwrites the application's
 
 `crates/cranpose/src/android.rs` installs a panic hook unconditionally, and it

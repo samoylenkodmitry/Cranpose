@@ -309,6 +309,78 @@ fn a_subtree_given_a_different_density_is_measured_on_that_grid() -> Result<(), 
     Ok(())
 }
 
+/// The subcompose path's equivalent of
+/// `a_subtree_given_a_different_density_is_measured_on_that_grid`: a
+/// `SubcomposeLayout`'s measure policy must see the grid its composition was
+/// given, not whatever the host installed on the shell nor whatever composer
+/// the measuring thread happens to be inside.
+#[test]
+fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid(
+) -> Result<(), NodeError> {
+    let host_seen = Rc::new(Cell::new(-1.0_f32));
+    let inner_seen = Rc::new(Cell::new(-1.0_f32));
+
+    let mut composition = crate::run_test_composition({
+        let host_seen = Rc::clone(&host_seen);
+        let inner_seen = Rc::clone(&inner_seen);
+        move || {
+            crate::widgets::Layout(
+                Modifier::empty(),
+                BoxMeasurePolicy::new(Alignment::TOP_START, false),
+                {
+                    let host_seen = Rc::clone(&host_seen);
+                    let inner_seen = Rc::clone(&inner_seen);
+                    move || {
+                        crate::widgets::SubcomposeLayout(Modifier::empty(), {
+                            let host_seen = Rc::clone(&host_seen);
+                            move |scope, constraints| {
+                                host_seen.set(scope.density());
+                                let (width, height) = constraints.constrain(10.0, 10.0);
+                                scope.layout(width, height, Vec::new())
+                            }
+                        });
+                        crate::density::ProvideDensity(crate::density::Density::new(3.0, 1.0), {
+                            let inner_seen = Rc::clone(&inner_seen);
+                            move || {
+                                crate::widgets::SubcomposeLayout(Modifier::empty(), {
+                                    let inner_seen = Rc::clone(&inner_seen);
+                                    move |scope, constraints| {
+                                        inner_seen.set(scope.density());
+                                        let (width, height) = constraints.constrain(10.0, 10.0);
+                                        scope.layout(width, height, Vec::new())
+                                    }
+                                });
+                            }
+                        });
+                    }
+                },
+            );
+        }
+    });
+
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0)).expect("layout measurement");
+    applier.clear_runtime_handle();
+    drop(applier);
+
+    assert_eq!(
+        host_seen.get(),
+        1.0,
+        "a subcomposed subtree not given a density measures on the host's grid"
+    );
+    assert_eq!(
+        inner_seen.get(),
+        3.0,
+        "a subcomposed subtree given a different density via ProvideDensity must be \
+         measured on that grid, not the host's"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn clamp_dimension_respects_infinite_max() {
     let _app_context = crate::render_state::app_context_test_scope();

@@ -104,6 +104,69 @@ fn measure_once(
     result
 }
 
+/// `SubcomposeMeasureScopeImpl::density()`/`font_scale()` used to read
+/// `composer_context::with_composer`, which panics with "no active composer"
+/// unless the thread-local composer stack was entered by `Composer::install`.
+/// The single production construction site happens to sit inside that install
+/// call, which is why the bug never surfaced there -- but nothing about the
+/// type made a second, non-installed construction site safe.
+///
+/// This constructs the scope directly, deliberately outside of
+/// `Composer::install`/`subcompose_slot_with_context`, and reads `density()`
+/// and `font_scale()` from it. Pre-fix this panics; post-fix it is a plain
+/// field read of the `Density` the scope was built with, so it cannot depend
+/// on -- or require -- an ambient composer.
+#[test]
+fn density_and_font_scale_do_not_require_an_active_composer() {
+    assert!(
+        cranpose_core::composer_context::current_composer().is_none(),
+        "test must start with no active composer"
+    );
+
+    let _app_context = crate::render_state::app_context_test_scope();
+    let (handle, _composition) = runtime_handle();
+    let mut slots = SlotTable::default();
+    let mut applier = cranpose_core::MemoryApplier::new();
+
+    let policy: Rc<MeasurePolicy> =
+        Rc::new(|scope, _constraints| scope.layout(0.0, 0.0, Vec::new()));
+    let node = SubcomposeLayoutNode::new(crate::modifier::Modifier::empty(), Rc::clone(&policy));
+    let parent_handle = node.handle();
+    let root_id = applier.create(Box::new(node));
+
+    let (composer, slots_host, applier_host) =
+        setup_composer(&mut slots, &mut applier, handle, Some(root_id));
+
+    let mut state = SubcomposeState::default();
+    let error = RefCell::new(None);
+    let density = crate::density::Density::new(2.5, 1.75);
+
+    let scope = SubcomposeMeasureScopeImpl::new(SubcomposeMeasureScopeInit {
+        composer,
+        density,
+        state: &mut state,
+        constraints: Constraints::tight(0.0, 0.0),
+        measurer: Box::new(|_child_id, _constraints| Size::default()),
+        cached_measure_batch_registrar: Box::new(|_node_ids, _constraints, out| out.clear()),
+        retained_measure_lookup: Box::new(|_| None),
+        retained_measure_registrar: Box::new(|_| {}),
+        error: &error,
+        parent_handle,
+        root_id,
+        placement_scratch: Vec::new(),
+    });
+
+    assert!(
+        cranpose_core::composer_context::current_composer().is_none(),
+        "constructing the scope must not enter the ambient composer"
+    );
+    assert_eq!(cranpose_ui_layout::MeasureScope::density(&scope), 2.5);
+    assert_eq!(cranpose_ui_layout::MeasureScope::font_scale(&scope), 1.75);
+
+    drop(scope);
+    teardown_composer(&mut slots, &mut applier, slots_host, applier_host);
+}
+
 #[test]
 fn cached_measurement_node_ids_are_registered_in_one_batch() {
     let _app_context = crate::render_state::app_context_test_scope();

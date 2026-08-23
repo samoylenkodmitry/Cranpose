@@ -140,6 +140,7 @@ pub trait SubcomposeMeasureScope: SubcomposeLayoutScope {
 /// Concrete implementation of [`SubcomposeMeasureScope`].
 pub struct SubcomposeMeasureScopeImpl<'a> {
     composer: Composer,
+    density_scope: crate::density::DensityMeasureScope,
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
@@ -159,6 +160,7 @@ pub struct SubcomposeMeasureScopeImpl<'a> {
 
 struct SubcomposeMeasureScopeInit<'a> {
     composer: Composer,
+    density: crate::density::Density,
     state: &'a mut SubcomposeState,
     constraints: Constraints,
     measurer: Box<dyn FnMut(NodeId, Constraints) -> Size + 'a>,
@@ -175,6 +177,7 @@ impl<'a> SubcomposeMeasureScopeImpl<'a> {
     fn new(init: SubcomposeMeasureScopeInit<'a>) -> Self {
         Self {
             composer: init.composer,
+            density_scope: crate::density::DensityMeasureScope::new(init.density),
             state: init.state,
             constraints: init.constraints,
             measurer: init.measurer,
@@ -445,15 +448,17 @@ impl<'a> SubcomposeLayoutScope for SubcomposeMeasureScopeImpl<'a> {
 }
 
 impl cranpose_ui_layout::MeasureScope for SubcomposeMeasureScopeImpl<'_> {
-    // A subcompose measure runs inside the composition that asked for it, so
-    // the grid it measures against is the one that composition was given --
-    // not whatever the host installed on the shell.
+    // The grid is captured onto the node by `SubcomposeLayout` when the
+    // composition that asked for the subcomposition ran -- the same moment
+    // `Layout` captures a density onto `LayoutNode` for the plain path -- and
+    // carried into the scope from there. A plain field read cannot panic and
+    // cannot disagree with whichever composer the thread happens to be inside.
     fn density(&self) -> f32 {
-        crate::density::density().density()
+        self.density_scope.density()
     }
 
     fn font_scale(&self) -> f32 {
-        crate::density::density().font_scale()
+        self.density_scope.font_scale()
     }
 }
 
@@ -798,6 +803,20 @@ impl SubcomposeLayoutNode {
     /// Records the source composition context for measure-time subcomposition.
     pub fn set_captured_context(&mut self, context: cranpose_core::CapturedCompositionContext) {
         self.inner.borrow_mut().captured_context = Some(context);
+    }
+
+    /// Records the grid the composition provided, re-measuring if it moved.
+    ///
+    /// Mirrors [`LayoutNode::set_density`](crate::widgets::nodes::LayoutNode::set_density):
+    /// `SubcomposeLayout` captures this at the same composition site that
+    /// captures the subcomposition context, so the two cannot disagree.
+    pub fn set_density(&mut self, density: crate::density::Density) {
+        let mut inner = self.inner.borrow_mut();
+        if inner.density != density {
+            inner.density = density;
+            drop(inner);
+            self.mark_needs_measure();
+        }
     }
 
     pub fn set_modifier(&mut self, modifier: Modifier) {
@@ -1324,19 +1343,21 @@ impl SubcomposeLayoutNodeHandle {
             retained_measure_registrar,
             error,
         } = callbacks;
-        let (policy, mut state, slots_host, placement_scratch, captured_context) = {
+        let (policy, mut state, slots_host, placement_scratch, captured_context, density) = {
             let mut inner = self.inner.borrow_mut();
             let policy = Rc::clone(&inner.measure_policy);
             let state = std::mem::take(&mut inner.state);
             let slots_host = Rc::clone(&inner.slots);
             let placement_scratch = std::mem::take(&mut inner.placement_scratch);
             let captured_context = inner.captured_context.clone();
+            let density = inner.density;
             (
                 policy,
                 state,
                 slots_host,
                 placement_scratch,
                 captured_context,
+                density,
             )
         };
         state.begin_pass();
@@ -1369,6 +1390,7 @@ impl SubcomposeLayoutNodeHandle {
             |inner_composer| {
                 let mut scope = SubcomposeMeasureScopeImpl::new(SubcomposeMeasureScopeInit {
                     composer: inner_composer.clone(),
+                    density,
                     state: &mut state,
                     constraints: constraints_copy,
                     measurer,
@@ -1447,6 +1469,10 @@ struct SubcomposeLayoutNodeInner {
     measured_children_scratch: Rc<RefCell<HashMap<NodeId, Rc<MeasuredNode>>>>,
     /// Locals and source ownership captured where this node was composed.
     captured_context: Option<cranpose_core::CapturedCompositionContext>,
+    /// The grid captured where this node was composed. Carried into the
+    /// measure-time [`SubcomposeMeasureScopeImpl`] instead of being re-derived
+    /// from ambient composer state during measurement.
+    density: crate::density::Density,
 }
 
 impl SubcomposeLayoutNodeInner {
@@ -1466,6 +1492,7 @@ impl SubcomposeLayoutNodeInner {
             placement_scratch: Vec::new(),
             measured_children_scratch: Rc::new(RefCell::new(HashMap::default())),
             captured_context: None,
+            density: crate::density::Density::default(),
         }
     }
 
