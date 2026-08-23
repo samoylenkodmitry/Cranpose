@@ -26,40 +26,6 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### `PointerEvent` carries no keyboard modifier state
-
-`cranpose-foundation/src/nodes/input/types.rs` gives `PointerEvent` buttons,
-position, scroll, zoom, source and timestamps — but no modifiers. The framework
-already builds `cranpose_app_shell::Modifiers{shift,ctrl,alt,meta}` from winit
-and attaches it to **wheel** events and to focused-widget `KeyEvent`s, never to
-pointer events.
-
-The consequence is not theoretical: an application wanting shift-click or
-ctrl-click multi-select has to read the keyboard itself. CranAmp does, through
-raw `x11rb`, which means the interaction **silently does nothing on macOS and
-Windows** — `x11rb::connect` fails there and the code falls through to "no
-modifiers held". The plumbing and the type both exist; they are just not joined.
-
-### Effect keys are compared by hash, not by equality
-
-`LaunchedEffect!` / `LaunchedEffectAsync!` / `DisposableEffect!` hash their keys
-to a `u64` and compare that. Jetpack Compose's `LaunchedEffect(key1, block)` is
-`remember(key1) { ... }` — exact structural equality. A hash collision therefore
-makes Cranpose treat two distinct keys as unchanged and skip a relaunch or
-dispose that Compose would always perform.
-
-Fixing it means requiring `K: PartialEq + 'static` and storing the key itself,
-which costs keys that are `Hash` but not `Eq`. That trade is the open question;
-the divergence is not in doubt.
-
-### The Android panic hook overwrites the application's
-
-`crates/cranpose/src/android.rs` installs a panic hook unconditionally, and it
-runs after the application's own launcher has already installed one — so an
-application that wants a backtrace, a thread name or its own log tag never gets
-it. The framework's hook logs file, line, column and message only. It needs to
-either chain to a previously-installed hook or offer an extension point.
-
 ## Limits that are correct, and surprising
 
 These are deliberate. They are here so nobody rediscovers them as bugs.
@@ -84,16 +50,20 @@ These are deliberate. They are here so nobody rediscovers them as bugs.
 
 Found by installing releases onto real devices, not by reading the pipeline.
 
-- **The iOS release IPA cannot go on a device.** `cranscan-*-ios.ipa` is ad-hoc
-  signed (`flags=0x2(adhoc)`, `TeamIdentifier=not set`) with no embedded
-  provisioning profile, so iOS refuses it. Installing requires re-signing
-  locally against a development profile carrying the target device's UDID. A
-  release should also publish a development-signed build, or the artifact should
-  say plainly that it is App Store/TestFlight only.
-- **CranOrbit publishes only an `.aab`.** An Android App Bundle cannot be
-  installed with `adb`. The universal APK exists only inside the CI *artifact*
-  `orbit-breaker-bundle-<n>`, which now expires after 14 days. A release should
-  attach the APK beside the bundle.
+- **The iOS release IPA still needs re-signing, and now says so.**
+  `cranscan-*-ios-unsigned.ipa` is ad-hoc signed with no embedded provisioning
+  profile, so a device refuses it; installing means re-signing against a
+  development profile carrying that device's UDID. The repository's only iOS
+  secrets are an App Store *distribution* certificate and profile, so no CI job
+  can produce a device-installable build. The artifact is named and documented
+  for what it is rather than carrying a signing step that could only fail.
+- **The published CranOrbit release carries only an `.aab`**, which `adb`
+  cannot install. The release workflow attaches the universal APK beside the
+  bundle, but no tag has been pushed since that landed, so `v1.3.1` is
+  unchanged. Two separate faults kept a tag from producing one: the build ran
+  on a hosted runner that exhausted its disk restoring a cargo cache holding a
+  three-target `target/` directory, and it resolves a Gradle plugin that was
+  published to `mavenLocal()` and nowhere else.
 
 ## Duplication left in the applications
 
@@ -106,7 +76,9 @@ copies went unnoticed.
 Three copies remain in CranScan (`app/src/services.rs`, `crates/core/src/qr.rs`)
 and CranAmp (`src/sync/mod.rs`), plus CranAmp's two private `hex_value` helpers.
 They can only be removed once those applications move to a release carrying the
-shared pair.
+shared pair; the changes are written and pinned to it. CranAmp's two private
+`hex_value` helpers are not part of this: they back an unrelated tab-safe hex
+codec, not percent-decoding.
 
 ## Robot suite corner cases
 
