@@ -14,10 +14,12 @@ Usage:
     scripts/sync_isolated_demo.py 0.1.73     # sync to an explicit version
     scripts/sync_isolated_demo.py v0.1.73    # a release tag works too
 
-Rewrites the demo's Cargo manifest and the Gradle plugin version its Android
-build resolves; run `cargo update --manifest-path apps/isolated-demo/Cargo.toml
--p cranpose -p cranpose-core` afterwards to move the demo's lockfile (that step
-needs the version to be resolvable).
+Rewrites the demo's Cargo manifest; run `cargo update --manifest-path
+apps/isolated-demo/Cargo.toml -p cranpose -p cranpose-core` afterwards to move
+the demo's lockfile (that step needs the version to be resolvable). The
+Android side needs no bump: `dev.cranpose.android` has no Maven coordinate or
+version to pin, and its settings.gradle.kts locates the plugin through
+whichever `cranpose` version cargo just resolved.
 """
 
 from __future__ import annotations
@@ -29,7 +31,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "apps/isolated-demo/Cargo.toml"
-ANDROID_SETTINGS = ROOT / "apps/isolated-demo/android/settings.gradle.kts"
 
 # `cranpose-foo = { version = "x", ... }` (inline table) and `cranpose-foo = "x"`
 # (bare string), in [dependencies] and any [target.'cfg(..)'.dependencies].
@@ -42,11 +43,6 @@ INLINE_TABLE = re.compile(
 BARE_STRING = re.compile(
     r'(?P<head>^[ \t]*cranpose[\w-]*[ \t]*=[ \t]*")(?P<version>[^"]+)(?P<tail>")',
     re.MULTILINE,
-)
-# The Android side of the starter resolves the published Gradle plugin, which is
-# released together with the crates and therefore carries the same version.
-GRADLE_PLUGIN = re.compile(
-    r'(?P<head>id\("dev\.cranpose\.android"\)[ \t]+version[ \t]+")(?P<version>[^"]+)(?P<tail>")'
 )
 
 
@@ -83,15 +79,11 @@ def main() -> int:
         rewrite_dependency, INLINE_TABLE.sub(rewrite_dependency, manifest)
     )
 
-    settings = ANDROID_SETTINGS.read_text()
-    updated_settings = GRADLE_PLUGIN.sub(rewrite("dev.cranpose.android"), settings)
-
     if not changed:
         print(f"apps/isolated-demo already depends on cranpose {version}.")
         return 0
 
     MANIFEST.write_text(updated_manifest)
-    ANDROID_SETTINGS.write_text(updated_settings)
     for line in changed:
         print(f"apps/isolated-demo: {line}")
     return 0

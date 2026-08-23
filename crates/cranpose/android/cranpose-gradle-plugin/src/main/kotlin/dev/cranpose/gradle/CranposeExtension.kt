@@ -112,10 +112,4 @@ abstract class CranposeExtension @Inject constructor(objects: ObjectFactory) {
 
     /** The activity theme resource. */
     val theme: Property<String> = objects.property(String::class.java)
-
-    /**
-     * The Cranpose artifact version. Defaults to the plugin's own version, so
-     * the Java, the manifest contributions and the plugin never disagree.
-     */
-    val cranposeVersion: Property<String> = objects.property(String::class.java)
 }

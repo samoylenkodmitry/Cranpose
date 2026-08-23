@@ -466,11 +466,6 @@ jobs:
           git diff --stat -- apps/isolated-demo
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # sync_isolated_demo.py rewrites the Android settings script as well as
-          # the manifest. Staging only the manifest left the Gradle plugin naming
-          # the previous release, which fails check_cranpose_versions.py on the
-          # default branch and points the canary's Android build at the plugin
-          # before the one being released.
           git add apps/isolated-demo
           git commit -m "chore: point isolated demo at ${TAG_NAME}"
           # Pushes made with GITHUB_TOKEN do not retrigger workflows, so this
@@ -503,14 +498,15 @@ jobs:
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           apps/isolated-demo/build-web.sh
 
-      # The Android distribution is not on a remote repository yet, so the
-      # plugin and its libraries reach the demo through mavenLocal, exactly as
-      # they reach a developer following apps/isolated-demo/README.md.
-      # ANDROID_HOME comes from the runner's own environment; setting it here
-      # would override a working one with an empty string.
+      # The Gradle plugin has no Maven coordinate: apps/isolated-demo/android's
+      # settings.gradle.kts locates the `cranpose` crate cargo just resolved
+      # from crates.io (see the "Point the isolated demo at the release" step
+      # above) and includes the plugin straight from that source. Nothing to
+      # publish or pre-seed here first. ANDROID_HOME comes from the runner's
+      # own environment; setting it here would override a working one with an
+      # empty string.
       - name: Build the isolated demo's Android release
         run: |
           set -euo pipefail
-          ./android/gradlew -p android publishToMavenLocal
           ./apps/isolated-demo/android/gradlew \
             -p apps/isolated-demo/android :app:assembleRelease

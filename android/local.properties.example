@@ -1,2 +1,0 @@
-# Point this at the Android SDK when it is not on ANDROID_HOME.
-# sdk.dir=/Users/you/Library/Android/sdk
