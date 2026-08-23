@@ -181,16 +181,18 @@ impl Placeable {
 }
 
 /// Scope for measurement operations.
+///
+/// This is Compose's `MeasureScope` -- the receiver `MeasurePolicy.measure` runs
+/// on, which is what lets a measure pass see the density of the subtree it is
+/// measuring rather than some process-wide default. There is no sensible
+/// fallback value for either method: a policy that reads density must be given
+/// the real grid, so both are required rather than defaulted.
 pub trait MeasureScope {
     /// Returns the current density for converting Dp to pixels.
-    fn density(&self) -> f32 {
-        1.0
-    }
+    fn density(&self) -> f32;
 
     /// Returns the current font scale for converting Sp to pixels.
-    fn font_scale(&self) -> f32 {
-        1.0
-    }
+    fn font_scale(&self) -> f32;
 }
 
 /// Policy responsible for measuring and placing children.
@@ -198,6 +200,7 @@ pub trait MeasurePolicy {
     /// Runs the measurement pass with the provided children and constraints.
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult;
@@ -209,11 +212,12 @@ pub trait MeasurePolicy {
     /// vector on every measure pass.
     fn measure_into(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> Size {
-        let result = self.measure(measurables, constraints);
+        let result = self.measure(scope, measurables, constraints);
         placements.clear();
         placements.extend(result.placements);
         result.size

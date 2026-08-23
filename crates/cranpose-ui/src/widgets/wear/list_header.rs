@@ -24,14 +24,16 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
+use crate::density::Density;
 use crate::modifier::Modifier;
 use crate::text::paragraph::TextAlign;
-use crate::widgets::wear::density::WearDensity;
 use crate::widgets::wear::theme::{WearColors, WearTextStyle};
 use crate::widgets::{Layout, Text};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
-use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{
+    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
 
 /// `ListHeaderDefaults` plus `ListHeaderTokens.Height`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -89,7 +91,7 @@ where
         modifier,
         ListHeaderMeasurePolicy {
             spec,
-            density: WearDensity::current().density(),
+            density: crate::density::density().density(),
         },
         move || {
             Text(label.clone(), Modifier::empty(), style.clone());
@@ -104,11 +106,11 @@ struct ListHeaderMeasurePolicy {
 }
 
 impl ListHeaderMeasurePolicy {
-    fn horizontal(&self, density: WearDensity) -> f32 {
+    fn horizontal(&self, density: Density) -> f32 {
         density.dp(self.spec.padding_start) + density.dp(self.spec.padding_end)
     }
 
-    fn vertical(&self, density: WearDensity) -> f32 {
+    fn vertical(&self, density: Density) -> f32 {
         density.dp(self.spec.padding_top) + density.dp(self.spec.padding_bottom)
     }
 }
@@ -116,22 +118,24 @@ impl ListHeaderMeasurePolicy {
 impl MeasurePolicy for ListHeaderMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
     ) -> Size {
         placements.clear();
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let horizontal = self.horizontal(density);
         let available = (constraints.max_width - horizontal).max(0.0);
         let child_constraints = Constraints {
@@ -175,7 +179,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
     }
 
     fn min_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         measurables
             .iter()
             .map(|m| m.min_intrinsic_width(height))
@@ -184,7 +188,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
     }
 
     fn max_intrinsic_width(&self, measurables: &[Box<dyn Measurable>], height: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         measurables
             .iter()
             .map(|m| m.max_intrinsic_width(height))
@@ -193,7 +197,7 @@ impl MeasurePolicy for ListHeaderMeasurePolicy {
     }
 
     fn min_intrinsic_height(&self, measurables: &[Box<dyn Measurable>], width: f32) -> f32 {
-        let density = WearDensity::new(self.density, 1.0);
+        let density = Density::new(self.density, 1.0);
         let content = measurables
             .iter()
             .map(|m| m.min_intrinsic_height(width))

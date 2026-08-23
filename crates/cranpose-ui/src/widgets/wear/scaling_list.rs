@@ -50,7 +50,7 @@
 //! read like they need every height in the list.
 //!
 //! Neither does, because of one arithmetic fact. Every slot height is
-//! `WearDensity::ceil`ed and the gap is `WearDensity::dp`ed, so **a slot top is
+//! `Density::ceil`ed and the gap is `Density::dp`ed, so **a slot top is
 //! always a whole number of device pixels**; and `round_to_px` is
 //! `floor(v * d + 0.5) / d`, which commutes with subtracting a whole pixel:
 //!
@@ -92,6 +92,7 @@
 #![allow(non_snake_case)]
 
 use crate::composable;
+use crate::density::Density;
 use crate::fling_animation::FlingAnimation;
 use crate::modifier::{
     GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin,
@@ -107,14 +108,15 @@ use crate::subcompose_layout::{
     MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
-use crate::widgets::wear::density::WearDensity;
 use crate::widgets::Layout;
 use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{remember, rememberMutableStateOf, MutableState, NodeId, SlotId};
 use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
 use cranpose_foundation::{VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
-use cranpose_ui_layout::{Constraints, Measurable, MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{
+    Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
 use std::cell::{Cell, RefCell};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
@@ -317,7 +319,7 @@ impl IndicatorState {
         spec: &WearScalingLazyColumnSpec,
         known: &ItemHeights,
         viewport: f32,
-        density: WearDensity,
+        density: Density,
     ) {
         let count = known.len();
         if count == 0 {
@@ -1127,16 +1129,18 @@ struct WearItemMeasurePolicy;
 impl MeasurePolicy for WearItemMeasurePolicy {
     fn measure(
         &self,
+        scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
         let mut placements = Vec::new();
-        let size = self.measure_into(measurables, constraints, &mut placements);
+        let size = self.measure_into(scope, measurables, constraints, &mut placements);
         MeasureResult::new(size, placements)
     }
 
     fn measure_into(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
         placements: &mut Vec<Placement>,
@@ -1401,8 +1405,10 @@ fn measure_wear_scaling_list(
     } = outputs;
     let spec = inputs.spec;
     let top_aligned = spec.auto_centering.is_none();
-    let scale = WearDensity::current().density();
-    let density = WearDensity::new(scale, 1.0);
+    // The grid comes from the scope this measure pass is running with, not the
+    // host default -- a subtree given a different grid is measured on it.
+    let scale = scope.density();
+    let density = Density::new(scale, 1.0);
     let width = if constraints.max_width.is_finite() {
         constraints.max_width
     } else {
@@ -1682,7 +1688,7 @@ fn compose_and_measure_item(
     inputs: &WearScalingListInputs,
     transforms: &Rc<RefCell<Vec<WearItemTransform>>>,
     heights: &Rc<RefCell<ItemHeights>>,
-    density: &WearDensity,
+    density: &Density,
     child_constraints: Constraints,
 ) -> MeasuredItem {
     let transform = transforms

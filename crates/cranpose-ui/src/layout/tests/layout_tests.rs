@@ -1,9 +1,9 @@
 use super::*;
-use crate::layout::policies::LeafMeasurePolicy;
+use crate::layout::policies::{BoxMeasurePolicy, LeafMeasurePolicy};
 use crate::modifier::{Color, Modifier, Size};
 use crate::subcompose_layout::SubcomposeLayoutScope;
 use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
-use cranpose_ui_layout::{MeasurePolicy, MeasureResult, Placement};
+use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
@@ -26,6 +26,7 @@ struct VerticalStackPolicy;
 impl MeasurePolicy for VerticalStackPolicy {
     fn measure(
         &self,
+        _scope: &dyn MeasureScope,
         measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
@@ -79,6 +80,7 @@ struct MaxSizePolicy;
 impl MeasurePolicy for MaxSizePolicy {
     fn measure(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
@@ -120,6 +122,7 @@ struct RecordingPolicy {
 impl MeasurePolicy for RecordingPolicy {
     fn measure(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
@@ -159,6 +162,7 @@ struct MutableLeafPolicy {
 impl MeasurePolicy for MutableLeafPolicy {
     fn measure(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         constraints: Constraints,
     ) -> MeasureResult {
@@ -192,6 +196,117 @@ impl MeasurePolicy for MutableLeafPolicy {
     fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
         self.size.get().height
     }
+}
+
+/// Records the density its [`MeasureScope`] was measured with, so a test can
+/// tell which grid a subtree actually ran its measure pass on.
+#[derive(Clone)]
+struct RecordingDensityPolicy {
+    recorded: Rc<Cell<f32>>,
+}
+
+impl PartialEq for RecordingDensityPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.recorded, &other.recorded)
+    }
+}
+
+impl MeasurePolicy for RecordingDensityPolicy {
+    fn measure(
+        &self,
+        scope: &dyn MeasureScope,
+        _measurables: &[Box<dyn Measurable>],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self.recorded.set(scope.density());
+        let (width, height) = constraints.constrain(10.0, 10.0);
+        MeasureResult::new(Size { width, height }, Vec::new())
+    }
+
+    fn min_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_width(&self, _measurables: &[Box<dyn Measurable>], _height: f32) -> f32 {
+        0.0
+    }
+
+    fn min_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+
+    fn max_intrinsic_height(&self, _measurables: &[Box<dyn Measurable>], _width: f32) -> f32 {
+        0.0
+    }
+}
+
+/// The whole point of threading a [`MeasureScope`] through `MeasurePolicy`:
+/// a subtree given a different grid through [`ProvideDensity`] must be
+/// measured on that grid, not on the host's. Before the scope existed there
+/// was no way for a measure pass to see anything but the process-wide
+/// density, so this behaviour could not exist -- and could not regress.
+#[test]
+fn a_subtree_given_a_different_density_is_measured_on_that_grid() -> Result<(), NodeError> {
+    let host_seen = Rc::new(Cell::new(-1.0_f32));
+    let inner_seen = Rc::new(Cell::new(-1.0_f32));
+
+    let mut composition = crate::run_test_composition({
+        let host_seen = Rc::clone(&host_seen);
+        let inner_seen = Rc::clone(&inner_seen);
+        move || {
+            crate::widgets::Layout(
+                Modifier::empty(),
+                BoxMeasurePolicy::new(Alignment::TOP_START, false),
+                {
+                    let host_seen = Rc::clone(&host_seen);
+                    let inner_seen = Rc::clone(&inner_seen);
+                    move || {
+                        crate::widgets::Layout(
+                            Modifier::empty(),
+                            RecordingDensityPolicy {
+                                recorded: Rc::clone(&host_seen),
+                            },
+                            || {},
+                        );
+                        crate::density::ProvideDensity(crate::density::Density::new(3.0, 1.0), {
+                            let inner_seen = Rc::clone(&inner_seen);
+                            move || {
+                                crate::widgets::Layout(
+                                    Modifier::empty(),
+                                    RecordingDensityPolicy {
+                                        recorded: Rc::clone(&inner_seen),
+                                    },
+                                    || {},
+                                );
+                            }
+                        });
+                    }
+                },
+            );
+        }
+    });
+
+    let root = composition.root().expect("composition root");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    measure_layout(&mut applier, root, Size::new(100.0, 100.0)).expect("layout measurement");
+    applier.clear_runtime_handle();
+    drop(applier);
+
+    assert_eq!(
+        host_seen.get(),
+        1.0,
+        "a subtree not given a density measures on the host's grid"
+    );
+    assert_eq!(
+        inner_seen.get(),
+        3.0,
+        "a subtree given a different density via ProvideDensity must be measured \
+         on that grid, not the host's"
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -2411,6 +2526,7 @@ struct PanickingMeasurePolicy;
 impl MeasurePolicy for PanickingMeasurePolicy {
     fn measure(
         &self,
+        _scope: &dyn MeasureScope,
         _measurables: &[Box<dyn Measurable>],
         _constraints: Constraints,
     ) -> MeasureResult {

@@ -6,11 +6,11 @@
 //! the point: a spacer that is half a pixel out, or a modifier that quietly
 //! drops what it was handed, is invisible in a screenshot and obvious here.
 
+use cranpose_ui::density::Density;
 use cranpose_ui::round_scaling_list::{
     leading_auto_centring_spacer, trailing_auto_centring_spacer,
 };
 use cranpose_ui::widgets::wear::color_appearance::hct_solve;
-use cranpose_ui::widgets::wear::density::WearDensity;
 use cranpose_ui::{font_scale::FontScaleCurve, run_test_composition, Modifier};
 
 #[test]
@@ -51,18 +51,18 @@ fn an_odd_viewport_floors_its_centre_line_the_same_way_for_both_spacers() {
 fn a_wear_grid_rejects_a_density_that_cannot_be_drawn_at() {
     for bad in [0.0, -2.0, f32::NAN, f32::INFINITY] {
         assert_eq!(
-            WearDensity::new(bad, 1.0).density(),
+            Density::new(bad, 1.0).density(),
             1.0,
             "a density of {bad} was accepted"
         );
     }
-    assert_eq!(WearDensity::new(2.0, 1.0).density(), 2.0);
+    assert_eq!(Density::new(2.0, 1.0).density(), 2.0);
 }
 
 #[test]
 fn a_wear_grid_takes_a_font_scale_curve_rather_than_a_bare_multiplier() {
-    let linear = WearDensity::with_curve(2.0, FontScaleCurve::linear(1.5));
-    let plain = WearDensity::new(2.0, 1.5);
+    let linear = Density::with_curve(2.0, FontScaleCurve::linear(1.5));
+    let plain = Density::new(2.0, 1.5);
     assert_eq!(
         linear.density(),
         plain.density(),

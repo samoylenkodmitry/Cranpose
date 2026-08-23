@@ -1,6 +1,12 @@
 use super::*;
 use crate::layout::core::Placeable;
 
+/// A [`MeasureScope`] at the unit grid, for policy tests that measure
+/// directly rather than through the composed [`Layout`](crate::widgets::Layout).
+fn test_scope() -> crate::density::DensityMeasureScope {
+    crate::density::DensityMeasureScope::new(crate::density::Density::default())
+}
+
 struct MockMeasurable {
     width: f32,
     height: f32,
@@ -59,6 +65,7 @@ fn box_measure_policy_takes_max_size() {
     ];
 
     let result = policy.measure(
+        &test_scope(),
         &measurables,
         Constraints {
             min_width: 0.0,
@@ -83,7 +90,11 @@ fn box_child_alignment_overrides_content_alignment() {
         }),
     )];
 
-    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+    let result = policy.measure(
+        &test_scope(),
+        &measurables,
+        Constraints::tight(100.0, 100.0),
+    );
 
     assert_eq!(result.placements[0].x, 80.0);
     assert_eq!(result.placements[0].y, 90.0);
@@ -99,7 +110,11 @@ fn row_child_alignment_overrides_vertical_alignment() {
         }),
     )];
 
-    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+    let result = policy.measure(
+        &test_scope(),
+        &measurables,
+        Constraints::tight(100.0, 100.0),
+    );
 
     assert_eq!(result.placements[0].y, 90.0);
 }
@@ -114,7 +129,11 @@ fn column_child_alignment_overrides_horizontal_alignment() {
         }),
     )];
 
-    let result = policy.measure(&measurables, Constraints::tight(100.0, 100.0));
+    let result = policy.measure(
+        &test_scope(),
+        &measurables,
+        Constraints::tight(100.0, 100.0),
+    );
 
     assert_eq!(result.placements[0].x, 80.0);
 }
@@ -128,6 +147,7 @@ fn column_measure_policy_sums_heights() {
     ];
 
     let result = policy.measure(
+        &test_scope(),
         &measurables,
         Constraints {
             min_width: 0.0,
@@ -156,6 +176,7 @@ fn column_spaced_by_preserves_spacing_when_content_overflows() {
     ];
 
     let result = policy.measure(
+        &test_scope(),
         &measurables,
         Constraints {
             min_width: 0.0,
@@ -186,6 +207,7 @@ fn row_measure_policy_sums_widths() {
     ];
 
     let result = policy.measure(
+        &test_scope(),
         &measurables,
         Constraints {
             min_width: 0.0,
@@ -219,7 +241,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     let original_capacity = placements.capacity();
 
     let policy = FlexMeasurePolicy::column(LinearArrangement::Start, HorizontalAlignment::Start);
-    let size = policy.measure_into(&measurables, constraints, &mut placements);
+    let size = policy.measure_into(&test_scope(), &measurables, constraints, &mut placements);
 
     assert_eq!(size.width, 60.0);
     assert_eq!(size.height, 50.0);
@@ -229,7 +251,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(placements.capacity(), original_capacity);
 
     let box_policy = BoxMeasurePolicy::new(Alignment::CENTER, false);
-    let size = box_policy.measure_into(&measurables, constraints, &mut placements);
+    let size = box_policy.measure_into(&test_scope(), &measurables, constraints, &mut placements);
 
     assert_eq!(size.width, 60.0);
     assert_eq!(size.height, 30.0);
@@ -240,7 +262,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
         width: 25.0,
         height: 10.0,
     });
-    let size = leaf_policy.measure_into(&[], constraints, &mut placements);
+    let size = leaf_policy.measure_into(&test_scope(), &[], constraints, &mut placements);
 
     assert_eq!(size.width, 25.0);
     assert_eq!(size.height, 10.0);
@@ -248,7 +270,7 @@ fn built_in_policies_measure_into_reuses_caller_placements() {
     assert_eq!(placements.capacity(), original_capacity);
 
     let empty_policy = EmptyMeasurePolicy::new();
-    let size = empty_policy.measure_into(&[], constraints, &mut placements);
+    let size = empty_policy.measure_into(&test_scope(), &[], constraints, &mut placements);
 
     assert_eq!(size.width, 0.0);
     assert_eq!(size.height, 0.0);
@@ -280,7 +302,7 @@ fn flow_row_wraps_children_of_varying_widths() {
         Box::new(MockMeasurable::new(10.0, 20.0, 5)),
     ];
 
-    let result = policy.measure(&measurables, loose(100.0, 500.0));
+    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
     // Line 1: 50 + 20 = 70 (45 would exceed 100).
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
@@ -317,7 +339,7 @@ fn flow_row_respects_main_and_cross_axis_spacing() {
         Box::new(MockMeasurable::new(30.0, 20.0, 3)),
     ];
 
-    let result = policy.measure(&measurables, loose(100.0, 500.0));
+    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
     // Line 1: [0..30] and [40..70]; the third child would need 70+10+30 = 110.
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
@@ -344,7 +366,7 @@ fn flow_row_children_share_line_top_when_heights_differ() {
         Box::new(MockMeasurable::new(40.0, 20.0, 3)),
     ];
 
-    let result = policy.measure(&measurables, loose(100.0, 500.0));
+    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
     // Children on the same line are top-aligned.
     assert_eq!(result.placements[0].y, 0.0);
@@ -363,7 +385,7 @@ fn flow_row_gives_oversized_child_its_own_line() {
         Box::new(MockMeasurable::new(30.0, 10.0, 3)),
     ];
 
-    let result = policy.measure(&measurables, loose(100.0, 500.0));
+    let result = policy.measure(&test_scope(), &measurables, loose(100.0, 500.0));
 
     assert_eq!((result.placements[0].x, result.placements[0].y), (0.0, 0.0));
     // Wider than the whole line: gets its own line and overflows.
@@ -390,7 +412,7 @@ fn flow_row_with_unbounded_width_stays_on_one_line() {
         Box::new(MockMeasurable::new(70.0, 20.0, 3)),
     ];
 
-    let result = policy.measure(&measurables, loose(f32::INFINITY, 500.0));
+    let result = policy.measure(&test_scope(), &measurables, loose(f32::INFINITY, 500.0));
 
     assert!(result.placements.iter().all(|p| p.y == 0.0));
     assert_eq!(result.size.width, 50.0 + 4.0 + 60.0 + 4.0 + 70.0);
@@ -401,6 +423,7 @@ fn flow_row_with_unbounded_width_stays_on_one_line() {
 fn flow_row_empty_respects_min_constraints() {
     let policy = FlowRowMeasurePolicy::new(8.0, 8.0);
     let result = policy.measure(
+        &test_scope(),
         &[],
         Constraints {
             min_width: 25.0,

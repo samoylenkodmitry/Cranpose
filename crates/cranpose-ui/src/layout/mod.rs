@@ -1710,12 +1710,14 @@ impl LayoutBuilderState {
         // Collect layout node information from the modifier chain
         layout_node_data.clear();
         let mut offset = Point::default();
+        let mut density = crate::density::Density::default();
 
         {
             let state = state_rc.borrow();
             let mut applier = state.applier.borrow_typed();
 
             let _ = applier.with_node::<LayoutNode, _>(node_id, |layout_node| {
+                density = layout_node.density();
                 let chain_handle = layout_node.modifier_chain();
 
                 if !chain_handle.has_layout_nodes() {
@@ -1751,10 +1753,13 @@ impl LayoutBuilderState {
             });
         }
 
+        let scope = crate::density::DensityMeasureScope::new(density);
+
         // Fast path: if there are no layout modifiers, measure directly without the
         // retained coordinator chain frame.
         if layout_node_data.is_empty() {
             let final_size = measure_policy.measure_into(
+                &scope,
                 runtime_state.child_measurables(),
                 constraints,
                 placements,
@@ -1770,6 +1775,7 @@ impl LayoutBuilderState {
         runtime_state.reconcile_coordinator_chain(layout_node_data.as_slice());
         let frame = CoordinatorFrame::new(
             measure_policy,
+            &scope,
             runtime_state.child_measurables(),
             placements,
         );
@@ -2296,6 +2302,7 @@ struct ChildRecord {
 
 struct CoordinatorFrame<'a> {
     measure_policy: &'a Rc<dyn MeasurePolicy>,
+    scope: &'a dyn cranpose_ui_layout::MeasureScope,
     measurables: &'a [Box<dyn Measurable>],
     placements: RefCell<&'a mut Vec<Placement>>,
     context: RefCell<LayoutNodeContext>,
@@ -2304,11 +2311,13 @@ struct CoordinatorFrame<'a> {
 impl<'a> CoordinatorFrame<'a> {
     fn new(
         measure_policy: &'a Rc<dyn MeasurePolicy>,
+        scope: &'a dyn cranpose_ui_layout::MeasureScope,
         measurables: &'a [Box<dyn Measurable>],
         placements: &'a mut Vec<Placement>,
     ) -> Self {
         Self {
             measure_policy,
+            scope,
             measurables,
             placements: RefCell::new(placements),
             context: RefCell::new(LayoutNodeContext::new()),
@@ -2430,10 +2439,12 @@ impl CoordinatorChain {
     ) -> Placeable {
         let Some(node) = self.nodes.get(index) else {
             let mut placements = frame.placements.borrow_mut();
-            let size =
-                frame
-                    .measure_policy
-                    .measure_into(frame.measurables, constraints, &mut placements);
+            let size = frame.measure_policy.measure_into(
+                frame.scope,
+                frame.measurables,
+                constraints,
+                &mut placements,
+            );
             return Placeable::value(size.width, size.height, NodeId::default());
         };
 
