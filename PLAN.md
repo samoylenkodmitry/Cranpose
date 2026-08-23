@@ -26,14 +26,6 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### Widget composition coverage is not universal
-
-`cranpose-liquid` and `cranpose-ui` each run widgets through a real composition,
-which is what catches a component reading a local nobody provided. Not every
-exported widget is in those suites — **`LazyRow` has no composition test
-anywhere**; others are covered only by the robot suite or by tests beside their
-own module.
-
 ### `PointerEvent` carries no keyboard modifier state
 
 `cranpose-foundation/src/nodes/input/types.rs` gives `PointerEvent` buttons,

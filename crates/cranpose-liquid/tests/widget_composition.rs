@@ -11,8 +11,10 @@
 //! composition, renders the content once, and hands back the root; a widget that
 //! cannot be composed never reaches the assertion.
 
+use cranpose_foundation::text::TextFieldState;
 use cranpose_liquid::prelude::*;
 use cranpose_ui::run_test_composition;
+use cranpose_ui::widgets::popup::PopupHost;
 use cranpose_ui::Modifier;
 use cranpose_ui_graphics::Color;
 use std::cell::Cell;
@@ -40,6 +42,36 @@ fn themed(content: impl FnMut() + 'static) {
         composition.root().is_some(),
         "the composition produced no root node"
     );
+}
+
+/// Composes `content` inside a Liquid theme and a popup host, and asserts the
+/// tree measures. `LiquidMenu` and `LiquidDropdownMenu` place their expanded
+/// surface through `cranpose_ui`'s `Popup`, which registers into the nearest
+/// host rather than composing inline — without one the registration is inert
+/// and the menu's own body never runs.
+fn composed_in_theme_and_popup_host(content: impl Fn() + 'static) {
+    let content = Rc::new(content);
+    let mut composition = run_test_composition(move || {
+        let content = Rc::clone(&content);
+        let mut host = move || {
+            let content = Rc::clone(&content);
+            PopupHost(move || content());
+        };
+        LiquidTheme(LiquidThemeSpec::default(), &mut host);
+    });
+    let root = composition
+        .root()
+        .expect("the composition produced no root node");
+    let handle = composition.runtime_handle();
+    let mut applier = composition.applier_mut();
+    applier.set_runtime_handle(handle);
+    let measured = cranpose_ui::measure_layout(
+        &mut applier,
+        root,
+        cranpose_ui_graphics::Size::new(400.0, 800.0),
+    );
+    applier.clear_runtime_handle();
+    measured.expect("the tree measures");
 }
 
 #[test]
@@ -360,5 +392,139 @@ fn a_button_spec_carries_the_glass_it_is_given() {
         format!("{spec:?}"),
         format!("{plain:?}"),
         "with_glass did not record the material"
+    );
+}
+
+// The rest of the Liquid widget surface `widget_composition.rs` did not yet
+// reach: the full `GlassButton` (only its `GlassButtonLabel` sub-piece was
+// composed above), the plain `Card`/`Surface` containers, the two menu
+// entry points, the search field family, and the accessory-less `LiquidTabBar`.
+
+#[test]
+fn a_glass_button_composes_its_content() {
+    let drawn = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&drawn);
+    themed(move || {
+        let counter = Rc::clone(&counter);
+        GlassButton(
+            Modifier::empty(),
+            GlassButtonSpec::glass(),
+            || {},
+            move || counter.set(counter.get() + 1),
+        );
+    });
+    assert_eq!(
+        drawn.get(),
+        1,
+        "the glass button did not compose its content"
+    );
+}
+
+#[test]
+fn a_plain_card_composes_its_content() {
+    let drawn = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&drawn);
+    themed(move || {
+        Card(Modifier::empty(), {
+            let flag = Rc::clone(&flag);
+            move || flag.set(true)
+        });
+    });
+    assert!(drawn.get(), "the card did not compose its content");
+}
+
+#[test]
+fn a_surface_composes_its_content() {
+    let drawn = Rc::new(Cell::new(false));
+    let flag = Rc::clone(&drawn);
+    themed(move || {
+        Surface(Modifier::empty(), {
+            let flag = Rc::clone(&flag);
+            move || flag.set(true)
+        });
+    });
+    assert!(drawn.get(), "the surface did not compose its content");
+}
+
+#[test]
+fn a_liquid_search_field_composes_inline_without_glass() {
+    themed(|| {
+        let state = TextFieldState::new("");
+        LiquidSearchField(
+            Modifier::empty(),
+            state,
+            LiquidSearchFieldSpec {
+                placeholder: "Search".to_string(),
+                on_glass: false,
+            },
+        );
+    });
+}
+
+#[test]
+fn a_search_field_composes_on_glass_through_search_bar() {
+    themed(|| {
+        let state = TextFieldState::new("");
+        SearchField(Modifier::empty(), state, "Search");
+    });
+}
+
+#[test]
+fn a_tab_bar_without_an_accessory_composes_its_tabs() {
+    themed(|| {
+        LiquidTabBar(
+            Modifier::empty(),
+            LiquidTabBarSpec::default(),
+            0,
+            |_| {},
+            |scope| {
+                scope.tab(cranpose_liquid::icons::SEARCH, "Search");
+                scope.tab(cranpose_liquid::icons::SEARCH, "Browse");
+            },
+        );
+    });
+}
+
+#[test]
+fn a_liquid_menu_composes_its_header_and_item_rows_while_expanded() {
+    composed_in_theme_and_popup_host(|| {
+        let gesture = rememberLiquidMenuGesture();
+        LiquidMenu(
+            true,
+            cranpose_ui_graphics::Rect::from_size(cranpose_ui_graphics::Size::new(44.0, 44.0)),
+            LiquidMenuSpec::default(),
+            Vec::new(),
+            gesture,
+            || {},
+            |scope| {
+                scope.header("Show");
+                scope.item(LiquidMenuItem::new("List"), || {});
+                scope.item(LiquidMenuItem::new("Grid"), || {});
+            },
+        );
+    });
+}
+
+#[test]
+fn a_liquid_dropdown_menu_composes_its_anchor_content() {
+    let anchor_drawn = Rc::new(Cell::new(0usize));
+    let counter = Rc::clone(&anchor_drawn);
+    composed_in_theme_and_popup_host(move || {
+        let counter = Rc::clone(&counter);
+        LiquidDropdownMenu(
+            Modifier::empty(),
+            true,
+            LiquidDropdownMenuSpec::default(),
+            || {},
+            move || counter.set(counter.get() + 1),
+            |scope| {
+                scope.item(LiquidMenuItem::new("Delete"), || {});
+            },
+        );
+    });
+    assert_eq!(
+        anchor_drawn.get(),
+        1,
+        "the dropdown menu did not compose its anchor content"
     );
 }
