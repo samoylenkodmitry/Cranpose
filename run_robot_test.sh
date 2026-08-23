@@ -20,6 +20,12 @@
 #                   Number of staged artifact shards (default: 16)
 #   CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0
 #                   Remove per-example result artifacts even when the suite fails
+#   CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS=N
+#                   Attempts allowed per example when a run is killed by the
+#                   timeout guard (exit 124/137), default 2. A failure the
+#                   example itself reports (nonzero exit, panic, FAIL/FATAL in
+#                   its output) is never retried — it gets exactly one attempt,
+#                   because retrying it would hide a genuine failure as flake.
 #   --help          Show this help message
 
 LOG_FILE="${CRANPOSE_ROBOT_LOG_FILE:-robot_test.log}"
@@ -43,7 +49,7 @@ else
     PARALLEL_JOBS=1
 fi
 ROBOT_TEST_TIMEOUT_CAP_SECS="${CRANPOSE_ROBOT_TEST_TIMEOUT_CAP_SECS:-900}"
-ROBOT_TEST_ATTEMPTS="${CRANPOSE_ROBOT_TEST_ATTEMPTS:-2}"
+ROBOT_TIMEOUT_RETRY_ATTEMPTS="${CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS:-2}"
 ROBOT_FAILURE_LOG_LINES="${CRANPOSE_ROBOT_FAILURE_LOG_LINES:-220}"
 ROBOT_KEEP_FAILURE_RESULTS="${CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS:-1}"
 SELECTED_EXAMPLES=()
@@ -166,6 +172,10 @@ while [[ $# -gt 0 ]]; do
             echo "                  Number of staged artifact shards (default: 16)"
             echo "  CRANPOSE_ROBOT_KEEP_FAILURE_RESULTS=0"
             echo "                  Remove per-example result artifacts even when the suite fails"
+            echo "  CRANPOSE_ROBOT_TIMEOUT_RETRY_ATTEMPTS=N"
+            echo "                  Attempts allowed per example when a run is killed by the"
+            echo "                  timeout guard (exit 124/137), default 2. Failures the example"
+            echo "                  itself reports are never retried."
             echo "  --help          Show this help message"
             exit 0
             ;;
@@ -243,6 +253,35 @@ robot_source_path() {
     return 1
 }
 
+# Whether the host can currently present a frame to a real, awake display.
+#
+# A DPMS-blanked panel leaves DISPLAY set and the X connection alive while
+# every present silently stalls: the app is the one that eventually times out
+# and reports "the window is occluded, off-screen, or on a display that is
+# not compositing" (see TIME_WASTERS.md), which names the symptom, not the
+# cause. `xset q` reads the DPMS monitor state directly, so this probe skips
+# the affected tests before they pay for a build and a multi-second present
+# timeout only to fail with that opaque message.
+#
+# Xvfb (what CI's `xvfb-run` gives every robot example) has no DPMS
+# extension, so `xset q` there prints no "Monitor is ..." line at all and
+# this probe reports presentable — CI behavior is unchanged by this check.
+robot_display_can_present() {
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        return 1
+    fi
+    if [ -n "${DISPLAY:-}" ] && command -v xset >/dev/null 2>&1; then
+        local dpms_state
+        dpms_state=$(xset q 2>/dev/null) || return 1
+        case "$dpms_state" in
+            *"Monitor is Off"*|*"Monitor is Standby"*|*"Monitor is Suspend"*)
+                return 1
+                ;;
+        esac
+    fi
+    return 0
+}
+
 robot_capability_skip_reason() {
     local example="$1"
     local source
@@ -252,6 +291,15 @@ robot_capability_skip_reason() {
         case "$example" in
             robot_counter_button_release_external_visual|robot_hacker_news_scroll_exact_external_contract|robot_leetcodedaily_full_layout_scroll_stability|robot_liquid_scroll_exact_external_contract|robot_liquid_*_cheatsheet|robot_markdown_default_visual_contract|robot_markdown_full_demo_code_block_visual_contract|robot_markdown_scroll_exact_external_contract|robot_presented_window_geometry|robot_presented_window_hidpi_geometry|robot_presented_window_redraw|robot_regression_hn_markdown_visual_contract|robot_regression_layout_jitter_contract|robot_regression_shader_visual_contract|robot_renderer_micro_contract|robot_shader_external_x11_drag|robot_shader_full_demo_external_perf|robot_shader_rect_external_animation|robot_tab_walk_text_visual_contract|robot_text_indent_scroll_stability|robot_text_scroll_exact_external_contract|robot_text_strikeout_presented|robot_underline_screenshot|robot_winamp_native_window_geometry)
                 echo "requires an X11 session and xdotool"
+                return 0
+                ;;
+        esac
+    fi
+
+    if ! robot_display_can_present; then
+        case "$example" in
+            robot_shader_backdrop_drag|robot_shader_rect)
+                echo "requires a display that can present a frame (no DISPLAY/WAYLAND_DISPLAY, or the panel is asleep)"
                 return 0
                 ;;
         esac
@@ -644,9 +692,9 @@ run_test() {
         timeout_secs="$ROBOT_TEST_TIMEOUT_CAP_SECS"
     fi
 
-    local max_attempts="$ROBOT_TEST_ATTEMPTS"
-    if ! [[ "$max_attempts" =~ ^[1-9][0-9]*$ ]]; then
-        max_attempts=1
+    local max_timeout_retry_attempts="$ROBOT_TIMEOUT_RETRY_ATTEMPTS"
+    if ! [[ "$max_timeout_retry_attempts" =~ ^[1-9][0-9]*$ ]]; then
+        max_timeout_retry_attempts=1
     fi
 
     local headless_env="CRANPOSE_HEADLESS=1"
@@ -669,10 +717,10 @@ run_test() {
     : > "$output_file"
 
     local attempt=1
-    while [ "$attempt" -le "$max_attempts" ]; do
+    while [ "$attempt" -le "$max_timeout_retry_attempts" ]; do
         local attempt_output="$RESULTS_DIR/$example.attempt.$attempt.output"
         {
-            echo "Attempt $attempt/$max_attempts for $example (timeout=${timeout_secs}s)"
+            echo "Attempt $attempt/$max_timeout_retry_attempts for $example (timeout=${timeout_secs}s)"
             echo "Host before attempt: $(host_state_summary)"
         } >> "$output_file"
 
@@ -722,7 +770,7 @@ run_test() {
                 echo "Attempt $attempt timed out or was killed."
                 echo "Host after timeout: $(host_state_summary)"
             } >> "$output_file"
-            if [ "$attempt" -lt "$max_attempts" ]; then
+            if [ "$attempt" -lt "$max_timeout_retry_attempts" ]; then
                 attempt=$((attempt + 1))
                 continue
             fi
@@ -730,6 +778,10 @@ run_test() {
             return 75
         fi
 
+        # Any other failure (nonzero exit, panic, FAIL/FATAL in the log) is
+        # the example reporting its own result, not the timeout guard cutting
+        # it off — retrying it would risk turning a genuine failure into a
+        # flake-shaped pass. It gets exactly one attempt.
         echo "FAIL:$reason" > "$result_file"
         return 0
     done
@@ -744,7 +796,7 @@ robot_process_env() {
 
     while IFS='=' read -r name value; do
         case "$name" in
-            BASH_FUNC_*|RESULTS_DIR|EXAMPLE_BIN_DIR|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TEST_ATTEMPTS)
+            BASH_FUNC_*|RESULTS_DIR|EXAMPLE_BIN_DIR|ROBOT_TEST_TIMEOUT_CAP_SECS|ROBOT_TIMEOUT_RETRY_ATTEMPTS)
                 ;;
             PATH|HOME|USER|LOGNAME|SHELL|DISPLAY|XAUTHORITY|WAYLAND_DISPLAY|XDG_RUNTIME_DIR|LD_LIBRARY_PATH|LIBGL_ALWAYS_SOFTWARE|LIBGL_DRIVERS_PATH|VK_ICD_FILENAMES|VK_LAYER_PATH|MESA_LOADER_DRIVER_OVERRIDE|MESA_VK_DEVICE_SELECT|RUST_BACKTRACE|RUST_LOG|ROBOT_SHOT_DIR|WINIT_*|WGPU_*|CRANPOSE_*|TMPDIR)
                 env_args+=("$name=$value")
@@ -770,7 +822,7 @@ export -f wait_for_host_capacity
 export RESULTS_DIR
 export EXAMPLE_BIN_DIR
 export ROBOT_TEST_TIMEOUT_CAP_SECS
-export ROBOT_TEST_ATTEMPTS
+export ROBOT_TIMEOUT_RETRY_ATTEMPTS
 
 print_failure_excerpt() {
     local example="$1"
