@@ -122,12 +122,14 @@ shared pair.
   else, so they are only ever exercised on Linux.
 - **`robot_leetcodedaily_code_scroll_pixel_drift` needs Python Pillow** for its
   pixel comparison and is skipped on hosts without it.
-- **`robot_shader_rect` and `robot_shader_backdrop_drag` need a compositing
-  display.** Both call `.with_headless(false)` because they verify real GPU
-  presentation, but the suite's capability skips gate on X11 plus `xdotool`,
-  which these two do not need — so they run wherever the suite runs and fail
-  wherever nothing can present a frame. A sleeping panel is enough to fail them,
-  and the failure says nothing about why.
+- **`robot_shader_rect` and `robot_shader_backdrop_drag` need a display that
+  can present a frame.** Both call `.with_headless(false)` because they verify
+  real GPU presentation. They are skipped, with that reason printed, when
+  `DISPLAY`/`WAYLAND_DISPLAY` is unset or `xset q` reports the X11 monitor
+  asleep (Off/Standby/Suspend) — the condition that otherwise surfaces as an
+  opaque "window ... refused N consecutive frames" failure. `xvfb-run`, which
+  is what CI runs the suite under, has no DPMS extension, so this gate is a
+  no-op there and the pair runs as before.
 
 ## Infrastructure
 
