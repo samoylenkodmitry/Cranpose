@@ -973,11 +973,6 @@ pub fn with_key<K: Hash>(key: &K, content: impl FnOnce()) {
     with_current_composer(|composer| composer.with_group_seed(seed, |_| content()));
 }
 
-#[allow(non_snake_case)]
-pub fn withKey<K: Hash>(key: &K, content: impl FnOnce()) {
-    with_key(key, content)
-}
-
 #[derive(Default)]
 struct DisposableEffectState {
     key: Option<Key>,

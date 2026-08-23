@@ -42,3 +42,6 @@ review.md
 
 # Python bytecode from scripts/
 __pycache__/
+
+# Transient worktrees for background agents; never project content.
+.claude/worktrees/

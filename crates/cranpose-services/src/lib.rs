@@ -90,6 +90,7 @@ pub use content::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use content::{file_content, file_folder, FileContent, FileFolder, FileSink};
+pub use content::{percent_decode, percent_decode_lossy};
 pub use device_info::{
     clear_platform_device_info, device_info, release_free_memory, set_platform_device_info,
     DeviceInfo, DeviceInfoRef,

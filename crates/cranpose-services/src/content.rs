@@ -567,8 +567,102 @@ pub use file::{file_content, file_folder, FileContent, FileFolder, FileSink};
 #[cfg(not(target_arch = "wasm32"))]
 mod file;
 
+/// Decodes the percent-escapes in a platform content URI, refusing input it
+/// cannot decode exactly.
+///
+/// Android hands a folder or document back as an opaque `content://` URI whose
+/// readable name is percent-encoded inside it, so anything that wants to show
+/// the user which folder they picked has to decode it. The pair here mirrors
+/// [`String::from_utf8`] and [`String::from_utf8_lossy`]: this one answers
+/// `None` rather than inventing a character, and [`percent_decode_lossy`] is
+/// the best-effort form for text that is only going to be displayed.
+///
+/// Prefer this when the result is used as an identity -- a key, a filename, a
+/// fingerprint -- where a replacement character would silently make two
+/// different inputs look the same.
+pub fn percent_decode(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = bytes.get(index + 1).copied().and_then(hex_value)?;
+            let low = bytes.get(index + 2).copied().and_then(hex_value)?;
+            out.push((high << 4) | low);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Decodes the percent-escapes in a platform content URI for display.
+///
+/// A byte sequence that is not valid UTF-8 becomes U+FFFD, and an escape that
+/// is truncated or not hexadecimal is passed through as written rather than
+/// discarded -- a name is more useful slightly wrong than absent. Use
+/// [`percent_decode`] when the result carries identity rather than being shown.
+pub fn percent_decode_lossy(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let pair = hex_value(bytes.get(index + 1).copied().unwrap_or(0))
+                .zip(hex_value(bytes.get(index + 2).copied().unwrap_or(0)));
+            if let Some((high, low)) = pair {
+                out.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// The two decoders answered differently across the codebase before they
+    /// were one pair: a strict one that refused what it could not decode and a
+    /// lossy one that substituted. Both behaviours are wanted -- a display name
+    /// should survive a bad byte, an identity must not -- so the split is
+    /// deliberate and pinned here rather than left to whichever copy a caller
+    /// happened to reach for.
+    #[test]
+    fn a_uri_that_cannot_be_decoded_exactly_is_refused_but_still_displays() {
+        assert_eq!(
+            percent_decode("Trip%20Photos").as_deref(),
+            Some("Trip Photos")
+        );
+        assert_eq!(percent_decode_lossy("Trip%20Photos"), "Trip Photos");
+
+        // %FF is a valid escape but not valid UTF-8 on its own.
+        assert_eq!(percent_decode("bad%FFname"), None);
+        assert_eq!(percent_decode_lossy("bad%FFname"), "bad\u{fffd}name");
+
+        // A truncated escape is malformed input, not data.
+        assert_eq!(percent_decode("cut%4"), None);
+        assert_eq!(percent_decode_lossy("cut%4"), "cut%4");
+
+        // A non-hexadecimal escape is passed through by the lossy form.
+        assert_eq!(percent_decode("100%zz"), None);
+        assert_eq!(percent_decode_lossy("100%zz"), "100%zz");
+    }
+
     use super::*;
 
     fn block<T>(future: impl Future<Output = T>) -> T {
