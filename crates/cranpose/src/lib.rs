@@ -67,6 +67,10 @@ mod android_keyboard;
 mod android_launch_args;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_overlay_window;
+/// Panic-hook chaining behind `android.rs`'s `run()`. Built on the host as
+/// well so the chaining logic's test runs everywhere.
+#[cfg(any(test, all(feature = "android", target_os = "android")))]
+mod android_panic_hook;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_perf_hint;
 /// The Play Billing wire format behind `cranpose_services::purchases`. Built on

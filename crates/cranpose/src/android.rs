@@ -1841,25 +1841,34 @@ pub fn run(
     // packaged identity of a running process does not change.
     crate::android_app_info::install_app_info(&app);
 
-    // Install panic hook for better crash logging in Logcat
-    std::panic::set_hook(Box::new(|panic_info| {
-        let location = panic_info
-            .location()
-            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-            .unwrap_or_else(|| "unknown location".to_string());
-        let message = panic_info
-            .payload()
-            .downcast_ref::<&str>()
-            .map(|s| *s)
-            .or_else(|| {
-                panic_info
-                    .payload()
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-            })
-            .unwrap_or("Box<dyn Any>");
-        log::error!("PANIC at {}: {}", location, message);
-    }));
+    // Install a panic hook for crash logging in Logcat. `take_hook()` grabs
+    // whatever hook the application installed before handing control to
+    // `AppLauncher::run_android()` (e.g. its own crash reporter), and
+    // `chained_panic_hook` wraps the framework's hook around it so both run
+    // instead of the framework's silently winning.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(crate::android_panic_hook::chained_panic_hook(
+        |panic_info| {
+            let location = panic_info
+                .location()
+                .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+                .unwrap_or_else(|| "unknown location".to_string());
+            let message = panic_info
+                .payload()
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| {
+                    panic_info
+                        .payload()
+                        .downcast_ref::<String>()
+                        .map(String::as_str)
+                })
+                .unwrap_or("Box<dyn Any>");
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            log::error!("PANIC at {location}: {message}\n{backtrace}");
+        },
+        previous_hook,
+    ));
 
     // Wrap content in Rc<RefCell> for reuse across window recreations
     let content = std::rc::Rc::new(std::cell::RefCell::new(content));
