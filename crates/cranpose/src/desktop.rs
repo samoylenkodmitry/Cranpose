@@ -43,8 +43,30 @@ const NATIVE_WINDOW_POSITION_POLL_INTERVAL: Duration = Duration::from_millis(16)
 const NATIVE_WINDOW_POSITION_SETTLE_TIMEOUT: Duration = Duration::from_millis(36);
 const NATIVE_WINDOW_POSITION_SETTLE_POLL: Duration = Duration::from_millis(1);
 const NATIVE_WINDOW_PLACEMENT_MARGIN: f32 = 32.0;
+/// Soft wall-clock budget for `wait_for_idle`. Elapsing this alone is not
+/// proof the *application* failed to converge -- see
+/// `ROBOT_IDLE_MIN_ITERATIONS` below for why.
 #[cfg(feature = "robot")]
 const ROBOT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Minimum number of `about_to_wait` turns the idle-wait loop must actually
+/// have executed before `ROBOT_IDLE_TIMEOUT` elapsing is trusted to mean the
+/// application stopped converging. While a wait is outstanding the loop runs
+/// at `ControlFlow::Poll` (see `awaiting_progress`), so on a host that is
+/// scheduling this process at all, a genuinely non-converging app races
+/// through far more than this many iterations inside the soft budget above.
+/// A starved host can instead let the whole budget elapse in wall-clock time
+/// while the OS schedules this thread for only one or two of those turns --
+/// observed on CI as "timed out after 1 iterations" with 17 self-hosted
+/// runners sharing a host at load average 14. That is host starvation, not
+/// an application defect, and must not fail the same way.
+#[cfg(feature = "robot")]
+const ROBOT_IDLE_MIN_ITERATIONS: u32 = 100;
+/// Absolute ceiling on `wait_for_idle`, independent of iteration count. Even
+/// a host so overloaded that the loop can barely execute must not hang the
+/// robot driver forever; past this point the wait is abandoned and reported
+/// as host starvation rather than blamed on the application.
+#[cfg(feature = "robot")]
+const ROBOT_IDLE_STARVATION_CEILING: Duration = Duration::from_secs(60);
 #[cfg(feature = "robot")]
 const ROBOT_PUMP_FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 /// A present wait is a wait on the compositor, and a compositor is allowed to
@@ -160,6 +182,22 @@ struct RobotScrollSequence {
     remaining: u32,
 }
 
+/// Why `wait_for_idle` gave up. The two causes need different messages and
+/// different remediation: one names a broken application, the other names a
+/// host that never let the application run.
+#[cfg(feature = "robot")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IdleWaitTimeout {
+    /// The soft budget elapsed AND the loop actually turned enough times for
+    /// that elapsed time to mean something: the application kept producing
+    /// work instead of converging.
+    AppNotConverging,
+    /// The absolute ceiling elapsed without the loop ever reaching the
+    /// iteration floor: the host did not schedule this process enough to
+    /// tell whether the application was converging at all.
+    HostStarved,
+}
+
 #[cfg(feature = "robot")]
 impl RobotController {
     fn new(wake_event_loop: impl Fn() + Send + Sync + 'static) -> (Self, Robot) {
@@ -207,10 +245,19 @@ impl RobotController {
         self.idle_structure_clean_frames = 0;
     }
 
-    fn idle_wait_timed_out(&self, now: Instant) -> bool {
-        self.idle_started_at.is_some_and(|started_at| {
-            now.saturating_duration_since(started_at) >= ROBOT_IDLE_TIMEOUT
-        })
+    /// Convergence-based timeout check: see the constants above for why
+    /// elapsed time alone cannot tell a livelocked application from a
+    /// starved host. Returns `None` while the wait should keep running.
+    fn idle_wait_timeout(&self, now: Instant) -> Option<IdleWaitTimeout> {
+        let started_at = self.idle_started_at?;
+        let elapsed = now.saturating_duration_since(started_at);
+        if elapsed >= ROBOT_IDLE_TIMEOUT && self.idle_iterations >= ROBOT_IDLE_MIN_ITERATIONS {
+            return Some(IdleWaitTimeout::AppNotConverging);
+        }
+        if elapsed >= ROBOT_IDLE_STARVATION_CEILING {
+            return Some(IdleWaitTimeout::HostStarved);
+        }
+        None
     }
 
     fn begin_pump_present_wait(&mut self, target_generation: u64) {
@@ -5592,16 +5639,21 @@ impl ApplicationHandler for App {
                         );
                     }
 
-                    if controller.idle_wait_timed_out(Instant::now()) {
+                    if let Some(timeout) = controller.idle_wait_timeout(Instant::now()) {
+                        let iterations = controller.idle_iterations;
                         controller.finish_idle_wait();
-                        let _ = controller.tx.send(RobotResponse::Error(format!(
-                            "wait_for_idle: timed out after {} iterations; needs_update={}, needs_redraw={}, has_animations={}, waiting_for_present={}",
-                            controller.idle_iterations,
-                            needs_update,
-                            app.needs_redraw(),
-                            has_active_animations,
-                            waiting_for_present
-                        )));
+                        let message = match timeout {
+                            IdleWaitTimeout::AppNotConverging => format!(
+                                "wait_for_idle: timed out after {iterations} iterations; needs_update={needs_update}, needs_redraw={}, has_animations={has_active_animations}, waiting_for_present={waiting_for_present}",
+                                app.needs_redraw(),
+                            ),
+                            IdleWaitTimeout::HostStarved => format!(
+                                "wait_for_idle: host starvation -- only {iterations} iterations ran in {:?} (need {ROBOT_IDLE_MIN_ITERATIONS} to trust the elapsed budget); the process was not scheduled enough to tell whether the application is converging, not an application defect; needs_update={needs_update}, needs_redraw={}, has_animations={has_active_animations}, waiting_for_present={waiting_for_present}",
+                                ROBOT_IDLE_STARVATION_CEILING,
+                                app.needs_redraw(),
+                            ),
+                        };
+                        let _ = controller.tx.send(RobotResponse::Error(message));
                     }
                 }
             }
@@ -6055,7 +6107,8 @@ fn resolve_robot_screenshot_params_with_scale(
 mod tests {
     #[cfg(feature = "robot")]
     use super::{
-        bound_park_for_robot, ControlFlow, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
+        bound_park_for_robot, ControlFlow, IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS,
+        ROBOT_IDLE_STARVATION_CEILING, ROBOT_IDLE_TIMEOUT, ROBOT_PARKED_COMMAND_POLL_INTERVAL,
         ROBOT_PRESENT_WAIT_TIMEOUT,
     };
     use super::{
@@ -6365,17 +6418,79 @@ mod tests {
 
     #[cfg(feature = "robot")]
     #[test]
-    fn robot_idle_timeout_tracks_elapsed_time_instead_of_loop_iterations() {
+    fn robot_idle_wait_times_out_once_the_app_keeps_the_loop_busy() {
+        // A livelocked application keeps producing work every turn, so the
+        // loop races through iterations far faster than
+        // `ROBOT_IDLE_MIN_ITERATIONS` inside the soft budget. That
+        // combination -- budget elapsed AND enough turns to prove the loop
+        // was actually running -- is what must fail, and must fail as an
+        // application defect.
         let (mut controller, _robot) = RobotController::new(|| {});
         let started_at = Instant::now();
 
         controller.start_idle_wait_at(started_at);
-        controller.idle_iterations = u32::MAX;
+        controller.idle_iterations = ROBOT_IDLE_MIN_ITERATIONS;
 
-        assert!(!controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT / 2));
-        assert!(controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT));
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT / 2),
+            None
+        );
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
+            Some(IdleWaitTimeout::AppNotConverging)
+        );
         controller.finish_idle_wait();
-        assert!(!controller.idle_wait_timed_out(started_at + ROBOT_IDLE_TIMEOUT * 2));
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT * 2),
+            None
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_idle_wait_does_not_blame_the_app_for_a_starved_host() {
+        // Regression test for a real CI failure: 17 self-hosted runners
+        // sharing one host at load average 14 let the wall clock run past
+        // `ROBOT_IDLE_TIMEOUT` while scheduling the event-loop thread for a
+        // single turn ("timed out after 1 iterations"). Elapsed time alone
+        // used to fail this as an application defect; the loop must instead
+        // keep waiting past the soft budget when it has not accumulated
+        // enough iterations to prove it was ever given the chance to run.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = 1;
+
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_TIMEOUT),
+            None
+        );
+        assert_eq!(
+            controller.idle_wait_timeout(
+                started_at + ROBOT_IDLE_STARVATION_CEILING - std::time::Duration::from_millis(1)
+            ),
+            None
+        );
+    }
+
+    #[cfg(feature = "robot")]
+    #[test]
+    fn robot_idle_wait_still_gives_up_on_a_permanently_wedged_host() {
+        // The starvation exemption above cannot be unconditional, or a host
+        // that never schedules this process again hangs the driver forever.
+        // Past the absolute ceiling the wait is abandoned and reported as
+        // host starvation, distinctly from an application defect.
+        let (mut controller, _robot) = RobotController::new(|| {});
+        let started_at = Instant::now();
+
+        controller.start_idle_wait_at(started_at);
+        controller.idle_iterations = 1;
+
+        assert_eq!(
+            controller.idle_wait_timeout(started_at + ROBOT_IDLE_STARVATION_CEILING),
+            Some(IdleWaitTimeout::HostStarved)
+        );
     }
 
     #[cfg(feature = "robot")]
