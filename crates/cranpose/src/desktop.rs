@@ -3,7 +3,7 @@
 //! This module provides the desktop event loop implementation using winit.
 
 use crate::app_launcher::{AppSettings, LaunchError};
-use crate::desktop_input::dispatch_keyboard_input;
+use crate::desktop_input::{app_modifiers, dispatch_keyboard_input};
 use crate::native_window::{
     self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
     NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
@@ -2454,6 +2454,13 @@ impl App {
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.current_modifiers = modifiers.state();
+                // Same conversion the wheel path already uses (see
+                // `dispatch_mouse_wheel` below); pointer events need it too so
+                // apps can implement shift/ctrl-click without an X11/Win32
+                // escape hatch of their own.
+                native
+                    .app
+                    .set_modifiers(app_modifiers(self.current_modifiers));
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if native.last_cursor_position.is_none() {
@@ -4571,6 +4578,11 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 // Track current keyboard modifiers for key events
                 self.current_modifiers = modifiers.state();
+                // Same conversion the wheel path already uses (see
+                // `dispatch_mouse_wheel` below); pointer events need it too so
+                // apps can implement shift/ctrl-click without an X11/Win32
+                // escape hatch of their own.
+                app.set_modifiers(app_modifiers(self.current_modifiers));
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 if self.last_cursor_position.is_none()

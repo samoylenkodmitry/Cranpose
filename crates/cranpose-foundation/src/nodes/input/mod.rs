@@ -8,8 +8,8 @@ pub use rotary::{
     DEFAULT_ROTARY_SCROLL_FACTOR_DP,
 };
 pub use types::{
-    PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
-    PointerSource,
+    Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
+    PointerPhase, PointerSource,
 };
 
 pub mod prelude {
@@ -19,7 +19,7 @@ pub mod prelude {
     };
     pub use super::rotary::{RotaryScrollEvent, RotaryStepAccumulator};
     pub use super::types::{
-        PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId, PointerPhase,
-        PointerSource,
+        Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
+        PointerPhase, PointerSource,
     };
 }

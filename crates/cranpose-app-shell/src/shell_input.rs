@@ -12,9 +12,16 @@ where
         global_position: Point,
         event_time: PointerEventTime,
     ) -> PointerEvent {
-        PointerEvent::new(kind, position, global_position)
+        let mut event = PointerEvent::new(kind, position, global_position)
             .with_time_ms(event_time.platform_time_ms)
-            .with_animation_time_nanos(event_time.animation_time_nanos)
+            .with_animation_time_nanos(event_time.animation_time_nanos);
+        // Unlike `source` (stamped per call site because it varies per
+        // event -- a touch vs. a mouse sample), modifiers track continuously
+        // and every PointerEvent the shell builds goes through this one
+        // constructor, so this is the single choke point to stamp it from:
+        // no call site below can forget it, including ones added later.
+        event.modifiers = self.modifiers;
+        event
     }
 
     fn resolve_gesture_targets(
@@ -86,6 +93,25 @@ where
     /// The device source of the most recent pointer sample.
     pub fn pointer_source(&self) -> PointerSource {
         self.pointer_source
+    }
+
+    /// Sets the keyboard modifiers held right now, so the platform's live
+    /// modifier state (winit's `ModifiersChanged`, a DOM event's
+    /// `shiftKey`/`ctrlKey`/`altKey`/`metaKey`) reaches every `PointerEvent`
+    /// the shell dispatches from here on -- the same state the wheel path
+    /// already carries via [`WheelScroll::with_modifiers`](crate::WheelScroll::with_modifiers).
+    /// A platform that never calls this leaves pointer events reporting
+    /// `None` (see [`PointerEvent::modifiers`]) rather than a silently wrong
+    /// "nothing held".
+    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
+        self.modifiers = Some(modifiers);
+    }
+
+    /// The keyboard modifiers most recently set via
+    /// [`set_modifiers`](Self::set_modifiers), or `None` if the platform has
+    /// never reported them.
+    pub fn modifiers(&self) -> Option<Modifiers> {
+        self.modifiers
     }
 
     pub fn set_cursor(&mut self, x: f32, y: f32) -> bool {
@@ -813,8 +839,9 @@ where
                 .rev()
                 .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
                 .collect::<Vec<_>>();
-            let capture_event =
+            let mut capture_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScrollPre, rotary, position);
+            capture_event.modifiers = self.modifiers;
             self.dispatch_targets(capture_targets, capture_event.clone(), true);
             if capture_event.is_consumed() {
                 return true;
@@ -825,8 +852,9 @@ where
                 .iter()
                 .filter_map(|&node_id| self.renderer.scene().find_target(node_id))
                 .collect::<Vec<_>>();
-            let bubble_event =
+            let mut bubble_event =
                 PointerEvent::rotary(PointerEventKind::RotaryScroll, rotary, position);
+            bubble_event.modifiers = self.modifiers;
             self.dispatch_targets(bubble_targets, bubble_event.clone(), true);
             if bubble_event.is_consumed() {
                 return true;

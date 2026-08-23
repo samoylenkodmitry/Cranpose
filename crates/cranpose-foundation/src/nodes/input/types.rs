@@ -134,6 +134,53 @@ impl Default for PointerButtons {
     }
 }
 
+/// Keyboard modifier keys held during an input sample.
+///
+/// Lives here (rather than up in `cranpose-ui`, where the keyboard `KeyEvent`
+/// type lives) because [`PointerEvent`] needs it too and `cranpose-foundation`
+/// sits below `cranpose-ui` in the dependency graph — this is the one crate
+/// both a key event and a pointer event can share it from. `cranpose-ui`
+/// re-exports this type rather than defining its own, so there is exactly one
+/// `Modifiers` in the framework.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Modifiers {
+    /// Shift key is pressed.
+    pub shift: bool,
+    /// Control key is pressed (Cmd on macOS).
+    pub ctrl: bool,
+    /// Alt key is pressed (Option on macOS).
+    pub alt: bool,
+    /// Meta/Super key is pressed (Windows key, Cmd on macOS).
+    pub meta: bool,
+}
+
+impl Modifiers {
+    /// No modifiers pressed.
+    pub const NONE: Modifiers = Modifiers {
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+    };
+
+    /// Returns true if any modifier is pressed.
+    pub fn any(&self) -> bool {
+        self.shift || self.ctrl || self.alt || self.meta
+    }
+
+    /// Returns true if Ctrl (or Cmd on macOS) is pressed.
+    pub fn command_or_ctrl(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.meta
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.ctrl
+        }
+    }
+}
+
 /// Pointer event with consumption tracking for gesture disambiguation.
 ///
 /// Events can be consumed by handlers (e.g., scroll) to prevent other handlers
@@ -171,6 +218,17 @@ pub struct PointerEvent {
     /// The kind of device that produced this event (touch, mouse, stylus), when
     /// the platform reports it. Defaults to [`PointerSource::Unknown`].
     pub source: PointerSource,
+    /// Keyboard modifiers held at the time of this sample, when the platform
+    /// can report them.
+    ///
+    /// `None` means the platform never told the shell what the keyboard state
+    /// was — touch-only Android/iOS input has no channel for it today — and is
+    /// deliberately distinct from `Some(Modifiers::NONE)`, which means the
+    /// platform looked and nothing was held. An app that wants shift/ctrl-click
+    /// multi-select reads this field directly; it must not treat `None` as
+    /// "nothing held" or it silently drops the gesture on the platforms that
+    /// cannot yet report it instead of visibly doing nothing.
+    pub modifiers: Option<Modifiers>,
     /// Tracks whether this event has been consumed by a handler.
     /// Shared via Rc<Cell> so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
@@ -202,6 +260,7 @@ impl PointerEvent {
             animation_time_nanos: None,
             zoom_delta: 1.0,
             source: PointerSource::Unknown,
+            modifiers: None,
             consumed: Rc::new(Cell::new(false)),
             deferred_post_dispatch: DeferredPostDispatch {
                 action: Rc::new(RefCell::new(None)),
@@ -248,6 +307,16 @@ impl PointerEvent {
     /// Set the device source (touch/mouse/stylus) for this event.
     pub fn with_source(mut self, source: PointerSource) -> Self {
         self.source = source;
+        self
+    }
+
+    /// Set the keyboard modifiers held during this event, when the platform
+    /// can report them. See the [`modifiers`](Self::modifiers) field docs for
+    /// why this takes a concrete [`Modifiers`] rather than an `Option`: the
+    /// `None` case is the *absence* of a call to this builder, not a value it
+    /// produces.
+    pub fn with_modifiers(mut self, modifiers: Modifiers) -> Self {
+        self.modifiers = Some(modifiers);
         self
     }
 
@@ -336,6 +405,7 @@ impl PointerEvent {
             animation_time_nanos: self.animation_time_nanos,
             zoom_delta: self.zoom_delta,
             source: self.source,
+            modifiers: self.modifiers,
             consumed: self.consumed.clone(),
             deferred_post_dispatch: self.deferred_post_dispatch.clone(),
         }
@@ -378,6 +448,66 @@ mod tests {
         // Local-position copies (used during hit-test dispatch) keep the source.
         let local = touch.copy_with_local_position(point(5.0, 5.0));
         assert_eq!(local.source, PointerSource::Touch);
+    }
+
+    #[test]
+    fn modifiers_any_is_true_when_any_field_is_set() {
+        assert!(!Modifiers::NONE.any());
+        assert!(!Modifiers::default().any());
+        assert!(Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        }
+        .any());
+    }
+
+    #[test]
+    fn modifiers_command_or_ctrl_reads_the_platform_appropriate_key() {
+        let ctrl_only = Modifiers {
+            ctrl: true,
+            ..Modifiers::NONE
+        };
+        let meta_only = Modifiers {
+            meta: true,
+            ..Modifiers::NONE
+        };
+
+        #[cfg(target_os = "macos")]
+        {
+            assert!(!ctrl_only.command_or_ctrl());
+            assert!(meta_only.command_or_ctrl());
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert!(ctrl_only.command_or_ctrl());
+            assert!(!meta_only.command_or_ctrl());
+        }
+        assert!(!Modifiers::NONE.command_or_ctrl());
+    }
+
+    #[test]
+    fn pointer_event_modifiers_default_to_unreported_and_thread_through_copy() {
+        let event = PointerEvent::new(PointerEventKind::Down, point(1.0, 1.0), point(1.0, 1.0));
+        // Unreported (None) must stay visibly distinct from "reported, none
+        // held" (Some(Modifiers::NONE)) -- see the field doc on why.
+        assert_eq!(event.modifiers, None);
+
+        let shift = event.with_modifiers(Modifiers {
+            shift: true,
+            ..Modifiers::NONE
+        });
+        assert_eq!(
+            shift.modifiers,
+            Some(Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            })
+        );
+
+        // Local-position copies (used during hit-test dispatch) keep the
+        // modifiers, exactly like they keep the source.
+        let local = shift.copy_with_local_position(point(5.0, 5.0));
+        assert_eq!(local.modifiers, shift.modifiers);
     }
 
     #[test]

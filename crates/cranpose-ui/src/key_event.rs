@@ -5,6 +5,12 @@
 
 use std::fmt;
 
+// `Modifiers` lives in `cranpose-foundation` because `PointerEvent` there
+// needs it too and this crate sits above foundation in the dependency graph;
+// re-exported here so keyboard call sites keep importing it from
+// `cranpose_ui`/`cranpose_ui::key_event`.
+pub use cranpose_foundation::Modifiers;
+
 /// Type of keyboard event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyEventType {
@@ -12,46 +18,6 @@ pub enum KeyEventType {
     KeyDown,
     /// Key was released.
     KeyUp,
-}
-
-/// Modifier keys state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Modifiers {
-    /// Shift key is pressed.
-    pub shift: bool,
-    /// Control key is pressed (Cmd on macOS).
-    pub ctrl: bool,
-    /// Alt key is pressed (Option on macOS).
-    pub alt: bool,
-    /// Meta/Super key is pressed (Windows key, Cmd on macOS).
-    pub meta: bool,
-}
-
-impl Modifiers {
-    /// No modifiers pressed.
-    pub const NONE: Modifiers = Modifiers {
-        shift: false,
-        ctrl: false,
-        alt: false,
-        meta: false,
-    };
-
-    /// Returns true if any modifier is pressed.
-    pub fn any(&self) -> bool {
-        self.shift || self.ctrl || self.alt || self.meta
-    }
-
-    /// Returns true if Ctrl (or Cmd on macOS) is pressed.
-    pub fn command_or_ctrl(&self) -> bool {
-        #[cfg(target_os = "macos")]
-        {
-            self.meta
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            self.ctrl
-        }
-    }
 }
 
 /// Physical key codes for keyboard input.
@@ -257,15 +223,5 @@ mod tests {
     fn backspace_has_no_text() {
         let event = KeyEvent::key_down(KeyCode::Backspace, "");
         assert!(!event.has_text());
-    }
-
-    #[test]
-    fn modifiers_any() {
-        assert!(!Modifiers::NONE.any());
-        assert!(Modifiers {
-            shift: true,
-            ..Modifiers::NONE
-        }
-        .any());
     }
 }
