@@ -1272,7 +1272,7 @@ pub fn path_from_uri(uri: &str) -> Option<PathBuf> {
     // `file:///path` has an empty authority; `file://host/path` names a host
     // no local backend can read.
     let path = rest.strip_prefix('/')?;
-    let decoded = percent_decode(path)?;
+    let decoded = crate::content::percent_decode(path)?;
     if decoded.starts_with('/') || decoded.is_empty() {
         return non_empty_path(&decoded);
     }
@@ -1290,26 +1290,6 @@ fn non_empty_path(text: &str) -> Option<PathBuf> {
         return None;
     }
     Some(PathBuf::from(text))
-}
-
-fn percent_decode(text: &str) -> Option<String> {
-    if !text.contains('%') {
-        return Some(text.to_string());
-    }
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let hex = text.get(index + 1..index + 3)?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(out).ok()
 }
 
 // -- Composables -------------------------------------------------------------

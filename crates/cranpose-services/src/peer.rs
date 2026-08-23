@@ -214,7 +214,7 @@ fn handle_connection(
     let Some(handle) = path.strip_prefix("/track/") else {
         return write_status(&mut stream, 404, "Not Found");
     };
-    let handle = percent_decode(handle);
+    let handle = crate::content::percent_decode_lossy(handle);
     let Some(source) = resolver(&handle) else {
         return write_status(&mut stream, 404, "Not Found");
     };
@@ -321,33 +321,6 @@ fn parse_range_header(value: &str) -> Option<(u64, Option<u64>)> {
         Some(end.parse::<u64>().ok()?)
     };
     Some((start, end))
-}
-
-fn percent_decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
-                out.push((h << 4) | l);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_val(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 // ---------------------------------------------------------------------------
