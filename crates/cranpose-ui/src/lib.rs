@@ -77,6 +77,11 @@ pub use draw::{
     command_draw_scope, command_draw_scope_retained, command_draw_scope_reusing,
     execute_draw_commands, DrawCacheBuilder, DrawCommand, DrawCommandFn,
 };
+// Focus invalidation scheduler plumbing (mirrors Compose's internal
+// FocusInvalidationManager). Hosts like cranpose-app-shell service these
+// after composition/layout; custom modifier authors invalidate through
+// `ModifierNode::invalidate` instead.
+#[doc(hidden)]
 pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
@@ -127,6 +132,8 @@ pub use modifier_nodes::{
     FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
     PaddingNode, SizeElement, SizeNode,
 };
+// Pointer repass scheduler plumbing serviced by the host shell each frame.
+#[doc(hidden)]
 pub use pointer_dispatch::{
     clear_pointer_repasses, has_pending_pointer_repasses, process_pointer_repasses,
     schedule_pointer_repass,
@@ -157,22 +164,32 @@ pub use nine_patch::{
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
 pub use render_state::{
-    clear_transient_scroll_motion_contexts, current_density, current_font_scale,
-    current_font_scale_curve, debug_last_fling_velocity, debug_reset_last_fling_velocity,
-    has_current_app_context, has_pending_draw_repasses, has_pending_layout_repasses,
-    has_pending_measure_repasses, peek_focus_invalidation, peek_layout_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, pending_layout_repass_nodes_snapshot,
-    prune_draw_observations_to_nodes, request_focus_invalidation, request_layout_invalidation,
-    request_pointer_invalidation, request_render_invalidation, scale_sp, schedule_draw_repass,
-    schedule_layout_repass, schedule_measure_repass, set_density, set_font_scale,
-    set_font_scale_curve, take_draw_repass_nodes, take_focus_invalidation,
+    current_density, current_font_scale, current_font_scale_curve, scale_sp, set_density,
+    set_font_scale, set_font_scale_curve, AppContext, AppContextScope, MAX_FONT_SCALE,
+    MIN_FONT_SCALE,
+};
+// Render/layout/draw scheduler and invalidation-queue plumbing serviced by
+// the host shell and renderer each frame. Custom modifier authors should
+// invalidate through `ModifierNode::invalidate` instead of reaching for
+// these directly.
+#[doc(hidden)]
+pub use render_state::{
+    clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
+    debug_reset_last_fling_velocity, has_current_app_context, has_pending_draw_repasses,
+    has_pending_layout_repasses, has_pending_measure_repasses, peek_focus_invalidation,
+    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
+    pending_layout_repass_nodes_snapshot, prune_draw_observations_to_nodes,
+    request_focus_invalidation, request_layout_invalidation, request_pointer_invalidation,
+    request_render_invalidation, schedule_draw_repass, schedule_layout_repass,
+    schedule_measure_repass, take_draw_repass_nodes, take_focus_invalidation,
     take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
-    take_pointer_invalidation, take_render_invalidation, AppContext, AppContextScope,
-    MAX_FONT_SCALE, MIN_FONT_SCALE,
+    take_pointer_invalidation, take_render_invalidation,
 };
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
 pub use scroll::{ScrollElement, ScrollMetrics, ScrollNode, ScrollSettlePolicy, ScrollState};
 pub use scrollbar::{content_delta_for_thumb_drag, thumb_geometry, ThumbBounds, ThumbGeometry};
+// Semantics invalidation scheduler plumbing serviced by the host shell each frame.
+#[doc(hidden)]
 pub use semantics_dispatch::{
     clear_semantics_invalidations, has_pending_semantics_invalidations,
     process_semantics_invalidations, schedule_semantics_invalidation,

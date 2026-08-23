@@ -949,7 +949,7 @@ pub fn current_recompose_scope_invalidated_only_by(
 ) -> Option<bool> {
     with_current_composer_opt(|composer| {
         let allowed_sources = allowed_sources.into_iter().collect();
-        let mut scope = composer.current_recranpose_scope();
+        let mut scope = composer.current_recompose_scope();
         let mut saw_unknown_source = false;
         while let Some(current) = scope {
             if current.has_unknown_invalidation_source() {

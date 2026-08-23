@@ -545,9 +545,7 @@ fn cranpose_with_reuse_skips_then_recomposes() {
                 let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.cranpose_with_reuse(slot_key, options, |composer| {
-                        let scope = composer
-                            .current_recranpose_scope()
-                            .expect("scope available");
+                        let scope = composer.current_recompose_scope().expect("scope available");
                         let changed = scope.should_recompose();
                         let has_previous = composer.remember(|| false);
                         if !changed && has_previous.with(|value| *value) {
@@ -596,9 +594,7 @@ fn cranpose_with_reuse_forces_recomposition_when_requested() {
                 let local_state = state_clone;
                 with_current_composer(|composer| {
                     composer.cranpose_with_reuse(slot_key, options, |composer| {
-                        let scope = composer
-                            .current_recranpose_scope()
-                            .expect("scope available");
+                        let scope = composer.current_recompose_scope().expect("scope available");
                         let changed = scope.should_recompose();
                         let has_previous = composer.remember(|| false);
                         if !changed && has_previous.with(|value| *value) {
@@ -642,9 +638,7 @@ fn inactive_scopes_delay_invalidation_until_reactivated() {
     fn capture_scope(state: MutableState<i32>) {
         INVOCATIONS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
-            let scope = composer
-                .current_recranpose_scope()
-                .expect("scope available");
+            let scope = composer.current_recompose_scope().expect("scope available");
             CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
         let _ = state.value();
@@ -721,7 +715,7 @@ fn scope_deactivated_during_invalidation_batch_waits_for_reactivation() {
             CHILD_SCOPE.with(|slot| {
                 slot.replace(Some(
                     composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("child scope available"),
                 ));
             });
@@ -789,7 +783,7 @@ fn scope_beneath_inactive_ancestor_waits_for_tree_reactivation() {
             CHILD_SCOPE.with(|slot| {
                 slot.replace(Some(
                     composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("child scope available"),
                 ));
             });
@@ -802,7 +796,7 @@ fn scope_beneath_inactive_ancestor_waits_for_tree_reactivation() {
             PARENT_SCOPE.with(|slot| {
                 slot.replace(Some(
                     composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("parent scope available"),
                 ));
             });
@@ -878,7 +872,7 @@ fn subcomposition_scope_inherits_source_owner_lifetime() {
             CHILD_SCOPE.with(|slot| {
                 slot.replace(Some(
                     composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("secondary child scope available"),
                 ));
             });
@@ -893,7 +887,7 @@ fn subcomposition_scope_inherits_source_owner_lifetime() {
             OWNER_SCOPE.with(|slot| {
                 slot.replace(Some(
                     composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("source owner scope available"),
                 ));
             });
@@ -911,7 +905,7 @@ fn subcomposition_scope_inherits_source_owner_lifetime() {
                     SECONDARY_ROOT_SCOPE.with(|slot| {
                         slot.replace(Some(
                             secondary_composer
-                                .current_recranpose_scope()
+                                .current_recompose_scope()
                                 .expect("secondary root scope available"),
                         ));
                     });
@@ -1007,9 +1001,7 @@ fn invalidating_active_scope_recomposes_that_scope() {
     fn capture_scope() {
         INVOCATIONS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
-            let scope = composer
-                .current_recranpose_scope()
-                .expect("scope available");
+            let scope = composer.current_recompose_scope().expect("scope available");
             CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
     }
@@ -1063,7 +1055,7 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
         PARENT_INVOCATIONS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
             let scope = composer
-                .current_recranpose_scope()
+                .current_recompose_scope()
                 .expect("parent scope available");
             PARENT_SCOPE.with(|slot| slot.replace(Some(scope.clone())));
             PARENT_SCOPE_ID.with(|slot| slot.set(Some(scope.id())));
@@ -1072,7 +1064,7 @@ fn callbackless_scope_promotes_via_parent_scope_metadata() {
         cranpose_core::with_key(&"callbackless-child", || {
             with_current_composer(|composer| {
                 let scope = composer
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .expect("child scope available");
                 CHILD_SCOPE.with(|slot| slot.replace(Some(scope)));
             });
@@ -1157,7 +1149,7 @@ fn render_stable_reaches_fixpoint_when_internal_invalid_scope_processing_request
         cranpose_core::with_key(&"root-callbackless", || {
             with_current_composer(|composer| {
                 let scope = composer
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .expect("callbackless root scope available");
                 ROOT_CALLBACKLESS_SCOPE.with(|slot| slot.replace(Some(scope)));
             });
@@ -1251,7 +1243,7 @@ fn reconcile_clears_scope_flags_during_root_replay() {
         TRACKED_RENDERS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
             let scope = composer
-                .current_recranpose_scope()
+                .current_recompose_scope()
                 .expect("tracked scope available");
             TRACKED_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
@@ -1261,7 +1253,7 @@ fn reconcile_clears_scope_flags_during_root_replay() {
     fn parent_scope_host() {
         with_current_composer(|composer| {
             let scope = composer
-                .current_recranpose_scope()
+                .current_recompose_scope()
                 .expect("parent scope available");
             PARENT_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
@@ -1283,7 +1275,7 @@ fn reconcile_clears_scope_flags_during_root_replay() {
         cranpose_core::with_key(&"root-callbackless", || {
             with_current_composer(|composer| {
                 let scope = composer
-                    .current_recranpose_scope()
+                    .current_recompose_scope()
                     .expect("callbackless root scope available");
                 CALLBACKLESS_SCOPE.with(|slot| slot.replace(Some(scope)));
             });
@@ -1347,9 +1339,7 @@ fn process_invalid_scopes_preserves_later_fresh_subtree_when_earlier_scope_runs_
     fn earlier_sibling() {
         EARLY_INVOCATIONS.with(|count| count.set(count.get() + 1));
         with_current_composer(|composer| {
-            let scope = composer
-                .current_recranpose_scope()
-                .expect("scope available");
+            let scope = composer.current_recompose_scope().expect("scope available");
             EARLY_SCOPE.with(|slot| slot.replace(Some(scope)));
         });
     }
@@ -1453,9 +1443,7 @@ fn retained_scope_stays_inactive_until_restored() {
             with_current_composer(|composer| {
                 composer.cranpose_with_reuse(branch_key, RecomposeOptions::default(), |composer| {
                     INVOCATIONS.with(|count| count.set(count.get() + 1));
-                    let scope = composer
-                        .current_recranpose_scope()
-                        .expect("scope available");
+                    let scope = composer.current_recompose_scope().expect("scope available");
                     CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
                     OBSERVED_VALUES.with(|values| values.borrow_mut().push(observed.value()));
                 });
@@ -1637,7 +1625,7 @@ fn restored_retained_scope_processes_forced_recompose() {
                 composer.cranpose_with_reuse(BRANCH_KEY, RecomposeOptions::default(), |composer| {
                     INVOCATIONS.with(|count| count.set(count.get() + 1));
                     let scope = composer
-                        .current_recranpose_scope()
+                        .current_recompose_scope()
                         .expect("retained branch scope available");
                     CAPTURED_SCOPE.with(|slot| slot.replace(Some(scope)));
                 });

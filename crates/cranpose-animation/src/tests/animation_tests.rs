@@ -114,7 +114,7 @@ fn animate_float_as_state_invalidates_composition_time_readers() {
     ) {
         {
             let rendered_values = Rc::clone(&rendered_values);
-            composer.set_recranpose_callback(move |composer| {
+            composer.set_recompose_callback(move |composer| {
                 render_animation_reader(composer, target, Rc::clone(&rendered_values));
             });
         }

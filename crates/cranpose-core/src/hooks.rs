@@ -256,7 +256,7 @@ pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> 
         let key = location_key(file!(), line!(), column!());
         composer.with_group(key, |composer| {
             let should_recompute = composer
-                .current_recranpose_scope()
+                .current_recompose_scope()
                 .map(|scope| scope.should_recompose())
                 .unwrap_or(true);
             let runtime = composer.runtime_handle();

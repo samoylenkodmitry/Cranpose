@@ -473,7 +473,7 @@ pub(crate) struct ComposerCore {
     pub(crate) pending_scope_options: RefCell<Option<RecomposeOptions>>,
     pub(crate) phase: Cell<crate::Phase>,
     pub(crate) last_node_reused: Cell<Option<bool>>,
-    pub(crate) recranpose_parent_hint: Cell<Option<NodeId>>,
+    pub(crate) recompose_parent_hint: Cell<Option<NodeId>>,
     pub(crate) root_render_requested: Cell<bool>,
     pub(crate) _not_send: PhantomData<*const ()>,
 }
@@ -538,7 +538,7 @@ impl ComposerCore {
             pending_scope_options: RefCell::new(None),
             phase: Cell::new(crate::Phase::Compose),
             last_node_reused: Cell::new(None),
-            recranpose_parent_hint: Cell::new(None),
+            recompose_parent_hint: Cell::new(None),
             root_render_requested: Cell::new(false),
             _not_send: PhantomData,
         }
@@ -755,7 +755,7 @@ impl Composer {
         let stack_hint = stack
             .last()
             .and_then(|frame| (!frame.synthetic_root).then_some(frame.id));
-        stack_hint.or_else(|| self.core.recranpose_parent_hint.get())
+        stack_hint.or_else(|| self.core.recompose_parent_hint.get())
     }
 
     pub(crate) fn subcompose_stack(&self) -> RefMut<'_, Vec<SubcomposeFrame>> {
@@ -986,7 +986,7 @@ impl Composer {
             }
         }
 
-        let parent_scope = self.current_recranpose_scope();
+        let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
         let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
@@ -1334,7 +1334,7 @@ impl Composer {
 
     #[doc(hidden)]
     pub fn __invalidate_return_consumer_scope(&self) {
-        let Some(scope) = self.current_recranpose_scope() else {
+        let Some(scope) = self.current_recompose_scope() else {
             self.request_root_render();
             return;
         };
@@ -1424,7 +1424,7 @@ impl Composer {
         local.default_value()
     }
 
-    pub fn current_recranpose_scope(&self) -> Option<RecomposeScope> {
+    pub fn current_recompose_scope(&self) -> Option<RecomposeScope> {
         self.core.scope_stack.borrow().last().cloned()
     }
 
@@ -1579,7 +1579,7 @@ impl Composer {
         CapturedCompositionContext {
             locals: self.current_local_stack(),
             owner_scope: self
-                .current_recranpose_scope()
+                .current_recompose_scope()
                 .map(|scope| scope.downgrade()),
         }
     }
@@ -1703,19 +1703,19 @@ impl Composer {
         self.core.runtime.clone()
     }
 
-    pub fn set_recranpose_callback<F>(&self, callback: F)
+    pub fn set_recompose_callback<F>(&self, callback: F)
     where
         F: FnMut(&Composer) + 'static,
     {
-        self.set_recranpose_callback_boxed(Box::new(callback));
+        self.set_recompose_callback_boxed(Box::new(callback));
     }
 
     /// Monomorphic core (`inline(never)` so fat LTO keeps one copy). The
     /// generic entry point above would otherwise re-instantiate this observer
     /// wiring for every composable call site.
     #[inline(never)]
-    fn set_recranpose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
-        if let Some(scope) = self.current_recranpose_scope() {
+    fn set_recompose_callback_boxed(&self, mut callback: Box<dyn FnMut(&Composer)>) {
+        if let Some(scope) = self.current_recompose_scope() {
             let observer = self.observer();
             let scope_weak = scope.downgrade();
             scope.set_recompose(Box::new(move |composer: &Composer| {
@@ -1733,8 +1733,8 @@ impl Composer {
         }
     }
 
-    pub fn set_recranpose_fn(&self, callback: fn(&Composer)) {
-        if let Some(scope) = self.current_recranpose_scope() {
+    pub fn set_recompose_fn(&self, callback: fn(&Composer)) {
+        if let Some(scope) = self.current_recompose_scope() {
             scope.set_recompose_fn(callback);
         }
     }
