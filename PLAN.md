@@ -9,10 +9,10 @@ is acceptable.
 
 ## Gaps in the framework
 
-### Public API test coverage: 365 of 3396 functions
+### Public API test coverage: 364 of 3400 functions
 
-`python3 scripts/public_api_test_coverage.py` reports **3031/3396 (89.3%)**.
-Treat the 365 as a map of where a change is unguarded, not as a backlog of 365
+`python3 scripts/public_api_test_coverage.py` reports **3036/3400 (89.3%)**.
+Treat the 364 as a map of where a change is unguarded, not as a backlog of 364
 tests to write — a test written to raise the number tests the implementation it
 was written against. Tests here are added the other way round: each pins a
 defect found first, or covers a new module's own decisions, which is where a
