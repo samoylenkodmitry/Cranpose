@@ -114,26 +114,26 @@ stopping and relaunching *does* recover, returning to `RESUME / LEVEL 1 FIRST
 LIGHT / CONTINUE`, so the wedge is in-memory screen state and not the save
 file.
 
-Ranked by what the evidence supports:
+The cause is `SwipeToDismissBox`, and it is the framework's, not CranOrbit's.
+After the gesture completes the widget leaves its content translated off screen
+and fires `on_dismiss`, because that is what a dismissed *row* wants: its host
+is about to remove it. A full-content *navigation* dismissal is the opposite
+case -- back means "go up one level", and the host may answer by staying
+composed, which is exactly what backing out of a pause overlay does. The
+content then never returns, and since `SwipeToDismissBox` owns its controller
+internally the application has no state handle to reset it with. The gesture
+stays consumed, which is why back could not escape either.
 
-- **A screen state that composes to nothing.** `composed_screen` returns `None`
-  only for `Screen::Playing` and `Screen::Tutorial`, leaving the arena renderer
-  to draw. If the second back leaves `screen` at `Playing` while the session
-  behind it is gone, the arena has nothing to draw and back stays swallowed by
-  the in-game handler. This fits every observation and is the first thing to
-  test.
-- **A back handler that consumes without transitioning.** The pause overlay's
-  handler may pop its own state and return handled without advancing to a
-  screen, which would explain back being eaten afterwards.
-- **A framework fault** is not excluded and is why this is written here. If the
-  application's state is provably a drawable screen at the moment the display
-  is blank, the fault is in composition or presentation and belongs to
-  Cranpose.
+Two things are worth keeping from how this was found. CranOrbit's state
+machine was tested first and was correct -- `Playing -> back -> Paused -> back`
+returns a drawable `Playing` -- which is what moved the search up a layer
+rather than deeper into the application. And the offset the regression test
+reports without the fix, a full content width, is the blank screen stated as a
+number.
 
-A failing test comes before a fix either way: the state machine can be driven
-headlessly, so `Playing -> back -> paused -> back` should be pinned in
-CranOrbit's own tests, and if the framework turns out to be at fault, in the
-robot suite as well.
+Fixed by `SwipeToDismissSpec::reset_after_dismiss`, off by default so row
+behaviour is unchanged, with `SwipeToDismissBox` opting in. CranOrbit picks it
+up at the next Cranpose release.
 
 ## Robot suite corner cases
 
