@@ -1,4 +1,5 @@
-#![doc = r"Core runtime pieces for the Cranpose experiment."]
+#![doc = include_str!("../README.md")]
+#![deny(unsafe_code)]
 
 pub extern crate self as cranpose_core;
 

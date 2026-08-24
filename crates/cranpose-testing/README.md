@@ -21,11 +21,14 @@ The primary way to test Cranpose apps is via "Robot Runners" — specialized tes
 Use the `run_robot_test.sh` script in the project root to run all robot runners defined in `apps/desktop-demo/robot-runners/`:
 
 ```bash
-# Run all tests in parallel (headless)
+# Run all tests sequentially, one at a time (default; headless)
 ./run_robot_test.sh
 
-# Run sequentially (easier for debugging)
-./run_robot_test.sh --sequential
+# Run tests in parallel, N at a time
+./run_robot_test.sh --parallel 4
+
+# See every flag and environment variable the script supports
+./run_robot_test.sh --help
 ```
 
 ### Writing a Robot Test
@@ -119,7 +122,7 @@ let exists = find_in_semantics(&robot, |elem| find_text(elem, "Success")).is_som
 If a test fails, you can print the entire semantics tree to understand what the robot sees:
 
 ```rust
-use cranpose_testing::robot_test_utils::print_semantics_with_bounds;
+use cranpose_testing::print_semantics_with_bounds;
 
 // Inside test driver:
 if let Ok(semantics) = robot.get_semantics() {

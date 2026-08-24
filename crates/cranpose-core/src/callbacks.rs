@@ -33,7 +33,7 @@ impl<T> ParamState<T> {
 }
 
 /// ParamSlot holds function/closure parameters by ownership (no PartialEq/Clone required).
-/// Used by the #`composable` macro to store Fn-like parameters in the slot table.
+/// Used by the `#[composable]` macro to store Fn-like parameters in the slot table.
 pub struct ParamSlot<T> {
     val: RefCell<Option<T>>,
 }
