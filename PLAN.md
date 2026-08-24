@@ -111,7 +111,7 @@ scrolling list is restored, and the blank screen on backing out of the pause
 overlay is fixed in Cranpose `0.1.99` -- `SwipeToDismissBox` was holding its
 content off screen after firing `on_dismiss`, right for a dismissed row whose
 host removes it and wrong for a navigation gesture whose host stays composed.
-Both are verified on the watch against `v1.3.3`. What is left:
+Both are verified on the watch against `v1.3.3`.
 
 A Daily run that would not launch the ball on a tap is fixed in `v1.3.6`, by
 CranOrbit naming its three gesture surfaces and keying the router on them. The
