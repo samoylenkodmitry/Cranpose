@@ -135,7 +135,14 @@ size-budget:
 # domain-term allowlist is in _typos.toml.
 
 # Spell-check the repository.
+#
+# Installed on demand, the way the workflow provisions sccache and just. A
+# gate that assumes a tool is already on the machine is a gate that passes or
+# fails on which machine ran it: this one failed on a self-hosted mac with
+# `typos: command not found` while passing everywhere the tool happened to be
+# installed.
 typos:
+    @command -v typos >/dev/null || cargo install typos-cli --locked
     typos
 
 # Workspace, lockfile and isolated-demo versions must agree.
