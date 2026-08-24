@@ -1000,3 +1000,43 @@ list-keychains -s $keep` there passes one argument with a leading space
 instead of a list, and `security` resolves it as a relative path — which
 corrupts the search list you were trying to repair. Wrap remote scripts in
 `bash -lc "..."`, or pass each path as its own quoted argument.
+
+## `cargo fmt --all` does not reach `apps/isolated-demo`
+
+It is its own workspace, so the workspace-wide format and format-check both
+skip it and it drifts silently. `just fmt` and `just fmt-check` each run a
+second time with `--manifest-path apps/isolated-demo/Cargo.toml` for this.
+
+## `cargo doc --workspace` collides on two libs named `desktop_app`
+
+`desktop-app` and `desktop-app-platform` both build a lib called
+`desktop_app`, so rustdoc writes both to one path and refuses outright:
+"document output filename collision". The doc gate excludes both, plus
+`xtask`; they are demos and tooling, not published API.
+
+## `#[composable]` cannot be used in cranpose's own doctests unaided
+
+The macro resolves its runtime paths through `proc_macro_crate`, which inside
+the `cranpose` crate's own doctests reports `FoundCrate::Itself` and emits
+`crate::Composer`, `crate::with_current_composer` and friends — pointing at
+the doctest's empty crate root, not at cranpose. Guide examples under
+`crates/cranpose/src/_docs` carry a hidden `# use cranpose::{...}` block so
+the paths resolve; a reader depending on cranpose from their own crate does
+not need it. The example must also declare its own `fn main`, or rustdoc wraps
+the snippet and the prelude glob never reaches the crate root.
+
+## Do not set `CARGO_TARGET_DIR` when running `xtask binary-size` or `dist-min`
+
+They resolve the built binary from the manifest directory, not from cargo's
+configured target directory, so with the variable set the build succeeds and
+then the gate dies with `failed to inspect
+apps/isolated-demo/target/release-small/isolated-demo: No such file`. CI does
+not set it for that job; a hand-run verification easily does.
+
+## The GitHub runner `.env` parser should not be given `#` comments
+
+Its handling of non-`KEY=VALUE` lines is not something to bet a fleet on: a
+parse failure stops the runner starting at all. Put the explanation in a file
+next to the runners instead — `/Volumes/files/actions-runners/README-caches.md`
+does this for the sccache and Gradle redirects.
+
