@@ -953,3 +953,48 @@ The host is shared: samarch-1 serves a runner per repository, so another
 project's build competes with the robot suite, and it carries services of its
 own. During the failure it had 20GB paged out with 55GB of RAM free, and the
 suite's one memory-bound test degraded twice as much as the suite average.
+
+## macOS codesign fails with a chain error that is not a chain problem (2026-08-24)
+
+`codesign` on a self-hosted macOS runner failing with
+
+```
+Warning: unable to build chain to self-signed root for signer "Developer ID Application: ..."
+Cranamp.app: errSecInternalComponent
+```
+
+names the certificate chain, and the chain is fine. The cause is the
+**keychain search list**, which is user-level state that outlives the job. A
+signing step that does
+
+```bash
+security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+```
+
+adds its ephemeral keychain to that list and never removes it. `RUNNER_TEMP`
+is a fixed directory for a given runner, so `$KEYCHAIN` is always the same
+path, and the runner wipes `_temp` between jobs — the entry survives as a
+dangling path, and appending the current list next run re-adds it. `codesign`
+walks the search list to build the chain, hits the dead entry, and dies.
+
+- **Check the search list before reading anything into the error text.**
+  `for k in $(security list-keychains | tr -d '"'); do [ -e "$k" ] || echo "DANGLING $k"; done`
+  answers it in one command, over ssh, without a build.
+- **A pass/fail alternation across releases is the signature.** v0.1.37 ✅,
+  .38 ❌, .39 ✅, .40 ❌, .41 ✅, .42 ❌ — a run starting from a clean list
+  leaves a dirty one and vice versa. Anything alternating that cleanly is
+  leaked state between runs, never a flake and never a code change.
+- **Compare against the sibling workflow that works.** cranscan signs on the
+  same host and never fails, because it deletes its keychain and never touches
+  the search list. Two workflows on one machine, one failing, is a diff to
+  read rather than a mystery to theorise about.
+- **Restore under `always()`.** The job that fails is precisely the one that
+  must not poison the next release, so cleanup belongs in a step that runs on
+  failure too.
+
+**`ssh <host> '...'` runs the remote user's login shell, which on macOS is
+zsh, and zsh does not word-split unquoted expansions.** `security
+list-keychains -s $keep` there passes one argument with a leading space
+instead of a list, and `security` resolves it as a relative path — which
+corrupts the search list you were trying to repair. Wrap remote scripts in
+`bash -lc "..."`, or pass each path as its own quoted argument.
