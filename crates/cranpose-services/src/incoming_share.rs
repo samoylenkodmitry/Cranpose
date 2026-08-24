@@ -116,14 +116,50 @@ struct Inbox {
     backlog: VecDeque<IncomingContent>,
 }
 
-fn inbox() -> &'static Mutex<Inbox> {
-    static INBOX: OnceLock<Mutex<Inbox>> = OnceLock::new();
-    INBOX.get_or_init(|| {
-        Mutex::new(Inbox {
+impl Inbox {
+    fn new() -> Self {
+        Self {
             observers: Vec::new(),
             backlog: VecDeque::new(),
-        })
-    })
+        }
+    }
+
+    /// Registers `observer` and returns the backlog it has to replay.
+    ///
+    /// The replay is handed back rather than delivered here so the caller can
+    /// leave the lock before running application code.
+    fn observe(&mut self, id: u64, observer: Observer) -> Vec<IncomingContent> {
+        self.observers.push((id, observer));
+        self.backlog.drain(..).collect()
+    }
+
+    /// The observers `content` should reach, or `None` when it went to the
+    /// backlog because nobody is listening yet.
+    fn publish(&mut self, content: IncomingContent) -> Option<Vec<Observer>> {
+        if self.observers.is_empty() {
+            self.backlog.push_back(content);
+            return None;
+        }
+        Some(
+            self.observers
+                .iter()
+                .map(|(_, observer)| Arc::clone(observer))
+                .collect(),
+        )
+    }
+
+    fn remove_observer(&mut self, id: u64) {
+        self.observers.retain(|(existing, _)| *existing != id);
+    }
+
+    fn clear(&mut self) {
+        self.backlog.clear();
+    }
+}
+
+fn inbox() -> &'static Mutex<Inbox> {
+    static INBOX: OnceLock<Mutex<Inbox>> = OnceLock::new();
+    INBOX.get_or_init(|| Mutex::new(Inbox::new()))
 }
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -136,7 +172,7 @@ pub struct IncomingContentObserver {
 impl Drop for IncomingContentObserver {
     fn drop(&mut self) {
         if let Ok(mut inbox) = inbox().lock() {
-            inbox.observers.retain(|(id, _)| *id != self.id);
+            inbox.remove_observer(self.id);
         }
     }
 }
@@ -155,8 +191,7 @@ pub fn observe_incoming_content(
         let Ok(mut inbox) = inbox().lock() else {
             return IncomingContentObserver { id };
         };
-        inbox.observers.push((id, Arc::clone(&observer)));
-        inbox.backlog.drain(..).collect::<Vec<_>>()
+        inbox.observe(id, Arc::clone(&observer))
     };
     for item in replay {
         observer(item);
@@ -167,19 +202,13 @@ pub fn observe_incoming_content(
 /// Publishes content shared into the application. Callable from any thread; the
 /// framework moves each item onto the UI thread before a composition sees it.
 pub fn publish_incoming_content(content: IncomingContent) {
-    let observers = {
+    let Some(observers) = ({
         let Ok(mut inbox) = inbox().lock() else {
             return;
         };
-        if inbox.observers.is_empty() {
-            inbox.backlog.push_back(content);
-            return;
-        }
-        inbox
-            .observers
-            .iter()
-            .map(|(_, observer)| Arc::clone(observer))
-            .collect::<Vec<_>>()
+        inbox.publish(content.clone())
+    }) else {
+        return;
     };
     // Every observer sees every item: two screens can each react to a share.
     for observer in observers {
@@ -190,7 +219,7 @@ pub fn publish_incoming_content(content: IncomingContent) {
 /// Discards anything waiting for a collector. Used by tests and host teardown.
 pub fn clear_incoming_content() {
     if let Ok(mut inbox) = inbox().lock() {
-        inbox.backlog.clear();
+        inbox.clear();
     }
 }
 
@@ -218,49 +247,101 @@ pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicUsize;
-
     use super::*;
 
-    fn drain_test_state() {
-        clear_incoming_content();
-    }
-
-    #[test]
-    fn an_item_published_before_anyone_listens_is_replayed() {
-        drain_test_state();
-        publish_incoming_content(IncomingContent::from_bytes(vec![1, 2, 3]).with_name("scan.jpg"));
-
+    fn recording_observer() -> (Observer, Arc<Mutex<Vec<String>>>) {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let recorder = Arc::clone(&seen);
-        let observer = observe_incoming_content(move |item| {
+        let observer: Observer = Arc::new(move |item: IncomingContent| {
             recorder
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .push(item.display_name())
         });
+        (observer, seen)
+    }
+
+    /// These exercise `Inbox` directly rather than the process-global one.
+    ///
+    /// The global is a single instance shared by every test in this binary, and
+    /// the test harness runs tests on parallel threads: one test's publish and
+    /// another's clear interleave, and the assertion fails for reasons that
+    /// have nothing to do with the code under test. Clearing at the start and
+    /// end of each test does not fix that, it only narrows the window. The
+    /// behaviour worth pinning lives in `Inbox`, which a test can own outright.
+    #[test]
+    fn an_item_published_before_anyone_listens_is_backlogged_once() {
+        let mut inbox = Inbox::new();
+
+        assert!(
+            inbox
+                .publish(IncomingContent::from_bytes(vec![1, 2, 3]).with_name("scan.jpg"))
+                .is_none(),
+            "with nobody listening the item belongs in the backlog, not delivered"
+        );
+
+        let (first, _first_seen) = recording_observer();
+        assert_eq!(
+            inbox.observe(1, first).len(),
+            1,
+            "the first observer to register receives the backlog"
+        );
+
+        let (second, _second_seen) = recording_observer();
+        assert!(
+            inbox.observe(2, second).is_empty(),
+            "the backlog drains into that observer and is not replayed to the next"
+        );
+    }
+
+    #[test]
+    fn the_backlog_reaches_the_first_observer_that_registers() {
+        let mut inbox = Inbox::new();
+        inbox.publish(IncomingContent::from_bytes(vec![1, 2, 3]).with_name("scan.jpg"));
+
+        let (observer, seen) = recording_observer();
+        let replay = inbox.observe(1, Arc::clone(&observer));
+        for item in replay {
+            observer(item);
+        }
+
         assert_eq!(
             seen.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
             ["scan.jpg"]
         );
-        drop(observer);
-        drain_test_state();
     }
 
     #[test]
     fn observers_stop_receiving_once_dropped() {
-        drain_test_state();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let counted = Arc::clone(&calls);
-        let observer = observe_incoming_content(move |_| {
-            counted.fetch_add(1, Ordering::Relaxed);
-        });
-        publish_incoming_content(IncomingContent::from_bytes(vec![1]));
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        drop(observer);
-        publish_incoming_content(IncomingContent::from_bytes(vec![2]));
-        assert_eq!(calls.load(Ordering::Relaxed), 1);
-        drain_test_state();
+        let mut inbox = Inbox::new();
+        let (observer, _seen) = recording_observer();
+        inbox.observe(7, observer);
+
+        let delivered = inbox
+            .publish(IncomingContent::from_bytes(vec![1]))
+            .expect("a registered observer receives the item");
+        assert_eq!(delivered.len(), 1);
+
+        inbox.remove_observer(7);
+        assert!(
+            inbox
+                .publish(IncomingContent::from_bytes(vec![2]))
+                .is_none(),
+            "once the last observer is gone the item goes back to the backlog"
+        );
+    }
+
+    #[test]
+    fn clearing_discards_the_backlog() {
+        let mut inbox = Inbox::new();
+        inbox.publish(IncomingContent::from_bytes(vec![1]));
+        inbox.clear();
+
+        let (observer, _seen) = recording_observer();
+        assert!(
+            inbox.observe(1, observer).is_empty(),
+            "a cleared backlog has nothing left to replay"
+        );
     }
 
     #[test]
