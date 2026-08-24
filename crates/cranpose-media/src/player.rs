@@ -217,6 +217,15 @@ fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgre
     }
 }
 
+/// What the decoders compiled into this backend read. Symphonia is built with
+/// every format and codec it has, so this is the widest list the workspace
+/// states: a target that decodes in process carries its own decoders rather
+/// than borrowing the platform's.
+const SOFTWARE_AUDIO_EXTENSIONS: &[&str] = &[
+    "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "mka", "mkv", "mp1", "mp2", "mp3", "mp4",
+    "oga", "ogg", "opus", "wav", "wave", "webm",
+];
+
 impl MediaPlayer for SoftwareMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
         MediaCapabilities {
@@ -232,6 +241,9 @@ impl MediaPlayer for SoftwareMediaPlayer {
         }
     }
 
+    fn audio_extensions(&self) -> Vec<&'static str> {
+        SOFTWARE_AUDIO_EXTENSIONS.to_vec()
+    }
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         self.shared.close();
         *self.shared.item.lock() = Some(item.clone());

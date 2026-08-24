@@ -187,6 +187,13 @@ impl MediaPlayer for AndroidMediaPlayer {
         self.player.probe_duration(item)
     }
 
+    /// What the in-process decoder reads, not what Android's own `MediaPlayer`
+    /// would: the platform decoder is not in this path. AIFF, CAF and MPEG-1
+    /// layers I and II are among the formats that gains.
+    fn audio_extensions(&self) -> Vec<&'static str> {
+        self.player.audio_extensions()
+    }
+
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         self.player.prepare(item)?;
         self.publish_session(SESSION_PAUSED);

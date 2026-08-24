@@ -464,6 +464,31 @@ fn set_analysis_running(browser: &mut Browser, enabled: bool) -> bool {
 
 // --- The service contract ---------------------------------------------------
 
+/// Extension and the media type to ask the browser about. Which of these play
+/// is the browser's answer, not ours: the same page in two browsers decodes a
+/// different set, and Safari and Firefox disagree about most of the second
+/// half of this list.
+const WEB_AUDIO_CANDIDATES: &[(&str, &str)] = &[
+    ("aac", "audio/aac"),
+    ("aif", "audio/aiff"),
+    ("aiff", "audio/aiff"),
+    ("caf", "audio/x-caf"),
+    ("flac", "audio/flac"),
+    ("m4a", "audio/mp4"),
+    ("m4b", "audio/mp4"),
+    ("mka", "audio/x-matroska"),
+    ("mp1", "audio/mpeg"),
+    ("mp2", "audio/mpeg"),
+    ("mp3", "audio/mpeg"),
+    ("mp4", "audio/mp4"),
+    ("oga", "audio/ogg"),
+    ("ogg", "audio/ogg"),
+    ("opus", "audio/ogg; codecs=opus"),
+    ("wav", "audio/wav"),
+    ("wave", "audio/wav"),
+    ("webm", "audio/webm"),
+];
+
 impl MediaPlayer for WebMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
         MediaCapabilities {
@@ -480,6 +505,19 @@ impl MediaPlayer for WebMediaPlayer {
         }
     }
 
+    fn audio_extensions(&self) -> Vec<&'static str> {
+        // `canPlayType` is the browser's own answer, and the only honest one:
+        // an empty string is "no", and anything else ("probably", "maybe") is
+        // as much of a yes as the specification allows a browser to give.
+        with_browser(|browser| {
+            WEB_AUDIO_CANDIDATES
+                .iter()
+                .filter(|(_, media_type)| !browser.element.can_play_type(media_type).is_empty())
+                .map(|(extension, _)| *extension)
+                .collect()
+        })
+        .unwrap_or_default()
+    }
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         with_browser(|browser| {
             browser.element.set_src(&item.uri);
