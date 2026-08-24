@@ -8,6 +8,8 @@
 //! The ref comes from `build.rs`, so the file on screen is the file the running
 //! binary was built from rather than whatever `main` holds today.
 
+use std::rc::Rc;
+
 use cranpose::LazyItems;
 use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
@@ -83,7 +85,7 @@ fn source_url(tab: DemoTab) -> String {
 #[derive(Clone, PartialEq)]
 enum SourceState {
     Loading,
-    Ready(Vec<String>),
+    Ready(Rc<Vec<String>>),
     Error(String),
 }
 
@@ -131,7 +133,7 @@ pub(crate) fn SourcePanel(tab: DemoTab) {
                     .map_err(|error| format!("could not fetch the source: {error}"))
             },
             move |result| match result {
-                Ok(lines) => state.set(SourceState::Ready(lines)),
+                Ok(lines) => state.set(SourceState::Ready(Rc::new(lines))),
                 Err(error) => state.set(SourceState::Error(error)),
             },
         );
