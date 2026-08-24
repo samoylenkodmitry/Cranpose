@@ -65,7 +65,7 @@ impl WheelScroll {
     }
 
     /// The multiplicative zoom step for a ctrl+wheel sample: one notch up
-    /// (positive delta) zooms in by [`ZOOM_PER_NOTCH`].
+    /// (positive delta) zooms in by `ZOOM_PER_NOTCH`.
     pub fn zoom_factor(&self) -> f32 {
         ZOOM_PER_NOTCH.powf(self.delta.y / NOTCH_LOGICAL_PX)
     }

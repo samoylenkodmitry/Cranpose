@@ -199,7 +199,7 @@ fn glide_clock_nanos() -> u64 {
 ///   long-press timeout without dragging it, so the field can (re)open the
 ///   contextual menu even when the selection range has not changed.
 /// * `on_tap` — invoked when the finger lifts after a quick press that did not
-///   drag the handle beyond [`HANDLE_TAP_SLOP_PX`] (and was not a long-press),
+///   drag the handle beyond `HANDLE_TAP_SLOP_PX` (and was not a long-press),
 ///   so the collapsed cursor handle can open its action popup.
 #[allow(clippy::too_many_arguments)]
 #[composable]

@@ -638,7 +638,7 @@ impl WgpuRenderer {
     /// Render the scene to a texture view.
     ///
     /// Producer first, present second: the frontend lowers the frame into a
-    /// [`frame_packet::FramePacket`] (direct root, root surface, and dev
+    /// `frame_packet::FramePacket` (direct root, root surface, and dev
     /// overlay alike), the GPU renderer consumes it, and the present
     /// stage's returns — the recycled scene and the replay ack — fold back
     /// into the frontend afterwards.
@@ -827,7 +827,7 @@ impl WgpuRenderer {
         }
     }
 
-    /// Threaded mode: fold every pending [`RenderReturns`] back into
+    /// Threaded mode: fold every pending `RenderReturns` back into
     /// producer state (scene recycling, replay ack, planner re-queue of
     /// cancelled plans) and free the publish credit. Returns how many were
     /// drained. No-op outside threaded mode.
@@ -875,7 +875,7 @@ impl WgpuRenderer {
 
     /// Threaded mode: install a (re)created surface on the present thread
     /// and wait for the acknowledgement. The caller must have bumped the
-    /// surface epoch first ([`note_surface_reconfigured`]
+    /// surface epoch first (`note_surface_reconfigured`
     /// [Self::note_surface_reconfigured]) when the message invalidates
     /// in-flight packets; the message carries the current epoch.
     #[cfg(not(target_arch = "wasm32"))]

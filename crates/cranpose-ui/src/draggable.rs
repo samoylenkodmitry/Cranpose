@@ -7,18 +7,18 @@
 //! yielding to whoever already consumed the event, and an observable "is this
 //! being dragged right now" for the visuals to react to.
 //!
-//! [`DraggableState`] carries that, and [`Modifier::draggable`] runs the same
+//! [`DraggableState`] carries that, and `Modifier::draggable` runs the same
 //! gesture pipeline the scroll modifiers run, so a dragged control and a
 //! scrolled list respond to a finger identically.
 //!
-//! ```ignore
+//! ```text
 //! let offset = rememberMutableStateOf(|| 0.0_f32);
 //! let drag = rememberDraggableState(move |delta| offset.set(offset.get() + delta));
 //! Box(Modifier::empty().size_points(64.0, 64.0).draggable(Axis::Horizontal, drag.clone()), …);
 //! ```
 //!
 //! Deltas arrive in the same logical pixels layout uses, positive along the
-//! axis (right for [`Axis::Horizontal`], down for [`Axis::Vertical`]).
+//! axis (right for `Axis::Horizontal`, down for `Axis::Vertical`).
 
 #![allow(non_snake_case)]
 

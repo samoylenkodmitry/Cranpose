@@ -55,7 +55,7 @@ impl Modifier {
     /// Add padding in reading order: `start` is the left edge in a
     /// left-to-right layout and the right edge in a right-to-left one.
     ///
-    /// The direction comes from [`crate::layout_direction`], so a screen that
+    /// The direction comes from `crate::layout_direction`, so a screen that
     /// reverses direction reverses this padding with it.
     ///
     /// Example: `Modifier::empty().padding_relative(16.0, 8.0, 4.0, 8.0)`

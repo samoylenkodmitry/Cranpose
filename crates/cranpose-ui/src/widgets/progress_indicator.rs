@@ -53,7 +53,7 @@ const LINEAR_TRACK_ALPHA: f32 = 0.24;
 ///
 /// Follows Jetpack Compose's `CircularProgressIndicator`: an arc sweeps
 /// around a circle forever, rotating while its length pulses between
-/// [`MIN_SWEEP_DEGREES`] and [`MAX_SWEEP_DEGREES`].
+/// `MIN_SWEEP_DEGREES` and `MAX_SWEEP_DEGREES`.
 ///
 /// # Arguments
 ///

@@ -256,8 +256,8 @@ fn tab_lens_left(pointer_x: f32, tab_width: f32, count: usize, has_accessory: bo
 /// The settled lens position for a selected cell: CELL-CENTERED at every
 /// index, exactly like the reference (bottom-bar-click f_0000 measures the
 /// end bubble's center on its cell center, its edge flush with the pill's
-/// rounded end). The rest width ([`TAB_LENS_REST_WIDTH_FACTOR`]) is what
-/// keeps the end cells legal — its overhang stays within [`BLOB_MARGIN`].
+/// rounded end). The rest width (`TAB_LENS_REST_WIDTH_FACTOR`) is what
+/// keeps the end cells legal — its overhang stays within `BLOB_MARGIN`.
 /// Public so alignment tests assert the same rule the widget settles to.
 pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f32 {
     tab_width * selected.min(count.saturating_sub(1)) as f32
@@ -267,9 +267,9 @@ pub fn tab_lens_resting_left(selected: usize, tab_width: f32, count: usize) -> f
 /// public resting contract ([`tab_lens_resting_left`] gives the position).
 ///
 /// A cell-centered bubble on an end cell overhangs the cell strip by half its
-/// excess, and the pill only extends [`BLOB_MARGIN`] past that strip, so the
+/// excess, and the pill only extends `BLOB_MARGIN` past that strip, so the
 /// overhang is what decides whether the end bubble lands flush inside the
-/// pill's rounded end or crosses it. [`TAB_LENS_REST_WIDTH_FACTOR`] sets the
+/// pill's rounded end or crosses it. `TAB_LENS_REST_WIDTH_FACTOR` sets the
 /// reference proportion; the margin caps it, so a bar built with wide cells
 /// keeps its ends legal instead of poking the bubble outside the pill.
 pub fn tab_lens_rest_width(tab_width: f32) -> f32 {

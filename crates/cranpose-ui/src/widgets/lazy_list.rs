@@ -1342,7 +1342,7 @@ fn LazyRowNode(
 /// A vertically scrolling list that only composes visible items.
 ///
 /// Matches Jetpack Compose's `LazyColumn` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements [`LazyListScope`] for defining items.
+/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
 ///
 /// # Example
 ///
@@ -1361,7 +1361,7 @@ fn LazyRowNode(
 /// });
 /// ```
 ///
-/// For convenience with slices, use the [`LazyListScopeExt`] extension methods:
+/// For convenience with slices, use the `LazyListScopeExt` extension methods:
 ///
 /// ```rust,ignore
 /// use cranpose_foundation::lazy::LazyListScopeExt;
@@ -1423,7 +1423,7 @@ where
 /// A horizontally scrolling list that only composes visible items.
 ///
 /// Matches Jetpack Compose's `LazyRow` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements [`LazyListScope`] for defining items.
+/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
 ///
 /// # Example
 ///

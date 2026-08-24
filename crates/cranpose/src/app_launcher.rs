@@ -467,7 +467,7 @@ impl AppLauncher {
     /// Use this for fonts that are not files on disk — an archive entry, a
     /// download cache, or an asset `cranpose-assets` resolved out of a desktop
     /// bundle (its `load_bytes` returns exactly what this wants). For an APK
-    /// asset use [`AppLauncher::with_android_asset_font`] instead: APK entries
+    /// asset use `AppLauncher::with_android_asset_font` instead: APK entries
     /// are not filesystem paths, so a path resolver cannot reach them.
     ///
     /// ```no_run

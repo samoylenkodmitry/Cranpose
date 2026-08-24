@@ -5,10 +5,10 @@
 //! editable text gains or loses focus. The text-field focus manager
 //! ([`crate::text_field_focus`]) fires these notifications:
 //!
-//! - a text field acquired focus → [`notify_text_input_focus_gained`] →
+//! - a text field acquired focus → `notify_text_input_focus_gained` →
 //!   `show_keyboard`
 //! - focus was explicitly cleared, or the focused field left the composition →
-//!   [`notify_text_input_focus_lost`] → `hide_keyboard`
+//!   `notify_text_input_focus_lost` → `hide_keyboard`
 //!
 //! `show_keyboard` fires on *every* focus request, including taps on an
 //! already-focused field. This is intentional: the user may have dismissed the
@@ -143,7 +143,7 @@ pub fn notify_app_paused() {
 /// but the framework must not resurrect the keyboard for it: the platform's
 /// `InputMethodManager` remembers the last editor and would otherwise pop the
 /// keyboard back open on its own. The user brings it back by tapping the field
-/// (which re-requests it through [`notify_text_input_focus_gained`]).
+/// (which re-requests it through `notify_text_input_focus_gained`).
 ///
 /// Always returns `false` so the platform runtime force-hides the OS-restored
 /// keyboard. Pruning stale focus here keeps the keyboard-request bookkeeping

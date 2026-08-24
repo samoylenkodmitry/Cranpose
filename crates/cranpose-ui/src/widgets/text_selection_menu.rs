@@ -358,7 +358,7 @@ struct MenuMotion {
 /// * `center_x` — window-space x to center the capsule on (the selection /
 ///   caret center); clamped to the screen margin.
 /// * `line_top_y` — window-space top of the selection's first line; the
-///   capsule bottom rides [`MENU_GAP_ABOVE_LINE`] above it.
+///   capsule bottom rides `MENU_GAP_ABOVE_LINE` above it.
 /// * `visible` — false while a handle drag is in flight; the menu dissolves
 ///   and rematerializes per the measured timings (it stays mounted while
 ///   fading).

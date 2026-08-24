@@ -36,7 +36,7 @@ use crate::{
 /// Spawns `future` on the current runtime's UI task queue.
 ///
 /// Framework-internal: application code launches through a
-/// [`CoroutineScope`](CoroutineScope) so the work is cancelled with its
+/// [`CoroutineScope`] so the work is cancelled with its
 /// composition. Returns `None` when there is no runtime on this thread.
 pub fn spawn_ui_task(future: impl Future<Output = ()> + 'static) -> Option<TaskHandle> {
     current_runtime_handle().and_then(|runtime| runtime.spawn_ui(future))

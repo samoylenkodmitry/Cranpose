@@ -1,7 +1,7 @@
 //! # Layout
 //!
 //! A composable takes its modifier first, its spec second, and its content
-//! last. [`Text`] is the exception: its value comes first.
+//! last. `Text` is the exception: its value comes first.
 //!
 //! ```no_run
 //! #![allow(non_snake_case)]
@@ -24,13 +24,13 @@
 //! }
 //! ```
 //!
-//! A [`Modifier`] is an ordered chain and the order is the meaning:
+//! A `Modifier` is an ordered chain and the order is the meaning:
 //! `.padding(8.0).background(c)` paints the background inside the padding,
 //! `.background(c).padding(8.0)` paints it outside.
 //!
 //! ## Lists
 //!
-//! A `for` loop composes every item. Anything long belongs in [`LazyColumn`],
+//! A `for` loop composes every item. Anything long belongs in `LazyColumn`,
 //! which composes only what is on screen and takes its state positionally:
 //!
 //! ```no_run
@@ -58,6 +58,6 @@
 //! }
 //! ```
 //!
-//! Give [`LazyItems::content_type`] a real grouping when items differ
+//! Give `LazyItems::content_type` a real grouping when items differ
 //! structurally: it is what lets the runtime reuse a subtree between items of
 //! the same shape instead of building a new one.

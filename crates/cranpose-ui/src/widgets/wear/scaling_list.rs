@@ -63,7 +63,7 @@
 //! term cancels and the anchored item's top is
 //! `round_to_px(viewport/2 - h/2 - offset)` — its own height and nothing else.
 //! From there the measure pass walks outward one item at a time, stacking full
-//! heights the way [`stack_into`] does, and stops when a slot can no longer
+//! heights the way `stack_into` does, and stops when a slot can no longer
 //! reach the viewport. A shrunken row is always **inside** its unscaled slot
 //! (above the centre line the bottom edge is pinned, below it the top edge is),
 //! so a slot that misses the viewport cannot draw a pixel, and the walk is
@@ -83,7 +83,7 @@
 //! fractional item indices rather than in pixels — see
 //! [`crate::round_scroll_indicator::scaling_list_geometry`] — so what it reads
 //! is the window this list already placed, plus the count, plus the blank at
-//! each end. [`IndicatorState`] is that reading, filled by the measure pass and
+//! each end. `IndicatorState` is that reading, filled by the measure pass and
 //! lent out by [`WearScalingListState::with_indicator_list`]. The height cache
 //! reaches it in one place only, the auto-centring spacers, and cannot carry an
 //! estimate into a pixel: a spacer counts only while the row at its own end of

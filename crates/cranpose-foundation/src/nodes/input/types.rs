@@ -234,7 +234,7 @@ pub struct PointerEvent {
     /// cannot yet report it instead of visibly doing nothing.
     pub modifiers: Option<Modifiers>,
     /// Tracks whether this event has been consumed by a handler.
-    /// Shared via Rc<Cell> so consumption can be tracked across copies.
+    /// Shared via `Rc<Cell>` so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
     deferred_post_dispatch: DeferredPostDispatch,
 }

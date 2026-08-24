@@ -242,7 +242,7 @@ impl TextFieldState {
     ///
     /// Each entry is the byte offset where a line starts. For example:
     /// - "ab\ncd" -> [0, 3] (line 0 starts at 0, line 1 starts at 3)
-    /// - "" -> [0]
+    /// - "" -> `0`
     ///
     /// The cache is lazily computed on first access and invalidated on text change.
     /// This avoids O(n) string splitting on every frame during selection rendering.

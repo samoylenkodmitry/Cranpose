@@ -259,7 +259,7 @@ impl HttpBody for EmptyBody {
     }
 }
 
-/// A body already in memory, handed out in [`CHUNK_LEN`]-sized pieces.
+/// A body already in memory, handed out in `CHUNK_LEN`-sized pieces.
 ///
 /// For a backend that has the bytes already — a cache, a bundled asset, a test
 /// double — so it satisfies the same chunked contract as one still on the wire

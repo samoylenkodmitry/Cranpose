@@ -17,10 +17,6 @@
 nightly := `sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain-nightly.toml`
 stable := `sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml`
 
-# The isolated demo is the binary the size budget is measured against: it is
-# what a downstream user actually links, rather than the workspace's own demo.
-size_budget_bytes := "15728640"
-
 default:
     @just --list --unsorted
 
@@ -133,7 +129,7 @@ dep-budget:
 
 # Desktop binary size ceiling, measured against the isolated demo.
 size-budget:
-    cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml --package isolated-demo --bin isolated-demo --profile release-small --patch-workspace-cranpose --max-bytes {{size_budget_bytes}}
+    cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml --package isolated-demo --bin isolated-demo --profile release-small --patch-workspace-cranpose --max-bytes 15728640
 
 # Spell-check prose and identifiers. Runs in about a tenth of a second; the
 # domain-term allowlist is in _typos.toml.

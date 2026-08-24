@@ -31,7 +31,7 @@ use super::{
 /// scope has already resolved alignment into the primitive's rect.
 ///
 /// The policy has to come across. Without it every run drawn through a canvas
-/// takes [`line_box`](super::line_box)'s plain branch while a `Text` composable
+/// takes [`line_box`](fn@super::line_box)'s plain branch while a `Text` composable
 /// of the same style takes the AOSP one, and a screen that does both puts its
 /// two sets of rows a device pixel apart.
 pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
@@ -81,7 +81,7 @@ pub fn draw_style_line_box(style: &DrawTextStyle) -> Option<LineBox> {
 
 /// Measures draw-scope text against the app's fonts.
 ///
-/// Every call lands in [`super::measure::measure_resolved_text`], backed by the
+/// Every call lands in `super::measure::measure_resolved_text`, backed by the
 /// app context's metrics cache — so measuring an unchanged string every frame
 /// is a hash lookup, not a shaping pass.
 ///

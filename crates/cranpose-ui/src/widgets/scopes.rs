@@ -33,7 +33,7 @@ pub trait RowScope {
     fn weight(&self, weight: f32, fill: bool) -> Modifier;
 }
 
-/// Scope exposed to [`BoxWithConstraints`] content.
+/// Scope exposed to `BoxWithConstraints` content.
 pub trait BoxWithConstraintsScope: BoxScope {
     fn constraints(&self) -> Constraints;
     fn min_width(&self) -> Dp;

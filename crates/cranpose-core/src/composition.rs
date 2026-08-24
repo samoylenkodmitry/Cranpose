@@ -310,8 +310,9 @@ impl<A: Applier + 'static> Composition<A> {
     /// - `has_updates()`: composition scopes that were invalidated by state changes
     /// - `needs_frame()`: animation callbacks that may have pending work
     ///
-    /// Note: For scroll performance, ensure scroll state changes use Cell<T> instead
-    /// of MutableState<T> to avoid triggering recomposition on every scroll frame.
+    /// Note: For scroll performance, ensure scroll state changes use `Cell<T>`
+    /// instead of `MutableState<T>` to avoid triggering recomposition on every
+    /// scroll frame.
     pub fn should_render(&self) -> bool {
         self.root_render_requested || self.runtime.needs_frame() || self.runtime.has_updates()
     }
@@ -319,12 +320,12 @@ impl<A: Applier + 'static> Composition<A> {
     /// Whether any composition scope is actually invalid, i.e. whether running
     /// the composable tree could produce a different result than last time.
     ///
-    /// Deliberately excludes [`Runtime::needs_frame`], which [`should_render`]
+    /// Deliberately excludes [`Runtime::needs_frame`], which `should_render`
     /// includes. An armed frame callback means the *runtime* owes someone a
     /// tick - a future to resume, a dispatcher to drain - and every app with a
     /// game loop or a polling effect has one armed at all times. Re-running the
     /// composition for it recomposes a tree that nothing invalidated. Callers
-    /// deciding "should I tick" want [`should_render`]; callers deciding
+    /// deciding "should I tick" want `should_render`; callers deciding
     /// "should I recompose" want this.
     ///
     /// It is only meaningful *after* the frame callbacks have been drained: a

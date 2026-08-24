@@ -316,7 +316,7 @@ pub fn dispatch_lifecycle_state(to: LifecycleState) {
 
 // ---- Observable lifecycle ------------------------------------------------
 
-/// The [`CompositionLocal`] carrying the host's current lifecycle state.
+/// The `CompositionLocal` carrying the host's current lifecycle state.
 ///
 /// [`ProvideLifecycle`] installs it; descendants read it and recompose on every
 /// transition, so a screen can pause its own work without registering an

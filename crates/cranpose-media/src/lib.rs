@@ -2,8 +2,8 @@
 
 //! The desktop media backend behind [`cranpose_services::media`].
 //!
-//! `cranpose-services` defines the Compose-shaped API — [`MediaPlayer`], the
-//! observable [`PlaybackState`], the audio-focus policy, the media-session
+//! `cranpose-services` defines the Compose-shaped API — `MediaPlayer`, the
+//! observable `PlaybackState`, the audio-focus policy, the media-session
 //! commands — and ships nothing that makes sound. On Android, iOS and the web
 //! the platform already has a media stack and the `cranpose` crate registers a
 //! backend for it. On desktop there is no such stack, so this crate is it:

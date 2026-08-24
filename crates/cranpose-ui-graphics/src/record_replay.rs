@@ -347,7 +347,7 @@ pub fn circle_anchor_transform_pinned(
 ///
 /// This is the semantically AUTHORITATIVE arc comparison. The serial
 /// per-pair path (probes, partition, alignment) calls it directly; the
-/// contiguous run loop runs [`match_arc_lanes`], its lane-shaped twin,
+/// contiguous run loop runs `match_arc_lanes`, its lane-shaped twin,
 /// which is pinned to this function verdict-for-verdict by the exhaustive
 /// `lane_kernel_equivalence` corpus — so the tolerance semantics cannot
 /// drift between them. The tolerance terms combine with `&`, not `&&`: each
@@ -389,7 +389,7 @@ pub fn match_arc(
 ///
 /// Like [`match_arc`], this is the semantically authoritative round-rect
 /// comparison, called directly by the serial per-pair path; the contiguous
-/// run loop runs [`match_round_rect_lanes`], its equivalence-pinned
+/// run loop runs `match_round_rect_lanes`, its equivalence-pinned
 /// lane-shaped twin. The tolerance terms combine with `&` because each is
 /// pure, so unconditional evaluation is result-identical (NaN included) and
 /// the all-match case stays branch-light.
@@ -689,7 +689,7 @@ pub struct CommandSegment {
     /// is a patched mirror, never rebuilt, so a record whose color returns
     /// EXACTLY to its capture value needs an explicit restore patch — pure
     /// diff-vs-snapshot emission would leave the mirror stale forever
-    /// (see [`merge_color_restores`]).
+    /// (see `merge_color_restores`).
     pub prev_recolors: Vec<u32>,
 }
 

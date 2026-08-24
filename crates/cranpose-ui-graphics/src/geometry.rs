@@ -524,7 +524,7 @@ pub enum DrawPrimitive {
     /// A circular band: a stroked arc, or a filled annular sector / pie wedge.
     ///
     /// Angles are radians, `0` = +X, increasing **clockwise** on screen (see
-    /// [`crate::stroke`] for the full convention).
+    /// `crate::stroke` for the full convention).
     ///
     /// * `stroke = Some(_)` — the band is `radius ± width/2`, its ends shaped
     ///   by the stroke cap. `inner_radius` is ignored.

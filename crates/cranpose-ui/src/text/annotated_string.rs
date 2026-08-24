@@ -669,7 +669,7 @@ impl Builder {
     }
 
     /// Pushes a [`LinkAnnotation`] covering subsequent appended text.
-    /// Call [`pop`] when done, or use [`with_link`] for the block form.
+    /// Call `pop` when done, or use `with_link` for the block form.
     ///
     /// JC parity: `Builder.pushLink(link)`
     pub fn push_link(mut self, link: LinkAnnotation) -> Self {
@@ -686,7 +686,7 @@ impl Builder {
         self
     }
 
-    /// Block form of [`push_link`] — mirrors JC's `withLink(link) { ... }` DSL.
+    /// Block form of `push_link` — mirrors JC's `withLink(link) { ... }` DSL.
     ///
     /// # Example
     ///

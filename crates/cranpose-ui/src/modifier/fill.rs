@@ -8,7 +8,7 @@ use crate::modifier_nodes::FillElement;
 impl Modifier {
     /// Have the content fill the maximum available width.
     ///
-    /// The [fraction] parameter allows filling only a portion of the available width (0.0 to 1.0).
+    /// The `fraction` parameter allows filling only a portion of the available width (0.0 to 1.0).
     ///
     /// Matches Kotlin: `Modifier.fillMaxWidth(fraction: Float)`
     ///
@@ -32,7 +32,7 @@ impl Modifier {
 
     /// Have the content fill the maximum available height.
     ///
-    /// The [fraction] parameter allows filling only a portion of the available height (0.0 to 1.0).
+    /// The `fraction` parameter allows filling only a portion of the available height (0.0 to 1.0).
     ///
     /// Matches Kotlin: `Modifier.fillMaxHeight(fraction: Float)`
     ///
@@ -56,7 +56,7 @@ impl Modifier {
 
     /// Have the content fill the maximum available size (both width and height).
     ///
-    /// The [fraction] parameter allows filling only a portion of the available size (0.0 to 1.0).
+    /// The `fraction` parameter allows filling only a portion of the available size (0.0 to 1.0).
     ///
     /// Matches Kotlin: `Modifier.fillMaxSize(fraction: Float)`
     ///

@@ -81,7 +81,7 @@ impl Default for GradientFadeMaskSpec {
 ///
 /// Uniform layout:
 /// - 0,1: container size in dp
-/// - 2: progress [0,1]
+/// - 2: progress `0,1`
 /// - 3: feather in dp
 /// - 4: corner radius in dp
 /// - 5: direction code (0=L->R, 1=R->L, 2=T->B, 3=B->T)

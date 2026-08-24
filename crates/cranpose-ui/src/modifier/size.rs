@@ -8,7 +8,7 @@ use super::{inspector_metadata, DimensionConstraint, Modifier, Size};
 use crate::modifier_nodes::{IntrinsicSizeElement, SizeElement};
 
 impl Modifier {
-    /// Declare the preferred size of the content to be exactly [size].
+    /// Declare the preferred size of the content to be exactly `size`.
     ///
     /// The incoming measurement constraints may override this value, forcing the content
     /// to be either smaller or larger.
@@ -27,7 +27,7 @@ impl Modifier {
         self.then(modifier)
     }
 
-    /// Declare the preferred size of the content to be exactly [width]dp by [height]dp.
+    /// Declare the preferred size of the content to be exactly `width`dp by `height`dp.
     ///
     /// Convenience method for `size(Size { width, height })`.
     ///
@@ -36,7 +36,7 @@ impl Modifier {
         self.size(Size { width, height })
     }
 
-    /// Declare the preferred width of the content to be exactly [width]dp.
+    /// Declare the preferred width of the content to be exactly `width`dp.
     ///
     /// The incoming measurement constraints may override this value, forcing the content
     /// to be either smaller or larger.
@@ -52,7 +52,7 @@ impl Modifier {
         self.then(modifier)
     }
 
-    /// Declare the preferred height of the content to be exactly [height]dp.
+    /// Declare the preferred height of the content to be exactly `height`dp.
     ///
     /// The incoming measurement constraints may override this value, forcing the content
     /// to be either smaller or larger.
@@ -90,7 +90,7 @@ impl Modifier {
         self.then(modifier)
     }
 
-    /// Declare the size of the content to be exactly [size], ignoring incoming constraints.
+    /// Declare the size of the content to be exactly `size`, ignoring incoming constraints.
     ///
     /// The incoming measurement constraints will not override this value. If the content
     /// chooses a size that does not satisfy the incoming constraints, the parent layout

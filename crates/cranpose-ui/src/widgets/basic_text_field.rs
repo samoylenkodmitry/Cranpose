@@ -39,7 +39,7 @@ use crate::{
 };
 
 /// Alpha of the selection highlight relative to the field's accent
-/// ([`TextFieldOptions::cursor_color`]): the reference highlight is the tint
+/// (`TextFieldOptions::cursor_color`): the reference highlight is the tint
 /// at ~0.32 opacity, while the caret and both selection handles carry it
 /// solid — one accent drives all three.
 pub const SELECTION_HIGHLIGHT_ALPHA: f32 = 0.32;
