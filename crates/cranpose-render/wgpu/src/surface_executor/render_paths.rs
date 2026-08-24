@@ -74,7 +74,7 @@ fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
     if crate::layer_surface_cache::cache_diag_enabled() {
         log::warn!("[layer-cache-diag] miss site={site} key={key:?}");
     }
-    backend.record_layer_cache_miss(width, height);
+    backend.record_layer_cache_miss(key, width, height);
 }
 
 fn direct_scene_range_cache_enabled() -> bool {
