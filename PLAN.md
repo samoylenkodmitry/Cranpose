@@ -98,6 +98,46 @@ through `start_selected_level` -- because that separates "the ball is waiting
 for input that no longer arrives" from "the session never started". A headless
 test can settle it without a watch, and none exists.
 
+### Back is handled twice, and it looks like back doing nothing
+
+Reported from the watch: the back gesture does not leave the application, it
+lands on the same screen — or one that looks the same. Reported alongside it,
+and probably the same fault: sounds sometimes echo, as though played twice.
+
+`OrbitApp` wires **two** independent paths to `AppState::on_back`:
+
+- `BackHandler(back_enabled.get(), …)` at `app/src/ui/mod.rs:106`, and
+- `SwipeToDismissBox`'s `on_dismiss` at `app/src/ui/mod.rs:153`, which calls
+  `on_back` when `back_intercepted()` and `cranpose::request_exit()` otherwise.
+
+On Wear the back gesture *is* the leading-edge swipe, and the system dispatches
+a back event for the same motion, so one gesture can drive both. `on_back`
+running twice from `Playing` is `pause_game` then `resume_game`: the
+application returns exactly where it started, which is what "it exits to the
+same screen" describes. It also explains back never leaving — the second call
+re-enters a screen that intercepts, so `request_exit()` is never the branch
+taken.
+
+An echo on a sound fits the same cause without needing a second one: a tap
+delivered twice plays its cue twice. Whether input beyond back is doubled is
+unverified and is the first thing to measure, because it decides whether this
+is one fault or two.
+
+**This was hidden until `0.1.99` fixed something else.** Before that,
+`SwipeToDismissBox` left its content off screen after firing, so the second
+`on_back` resumed a game nobody could see and the symptom was a blank screen.
+Fixing the widget did not change the double dispatch; it changed what the
+double dispatch looks like. A fix that makes a fault legible rather than
+removing it is worth saying out loud, because the blank screen is gone and the
+underlying wiring is not.
+
+The application owns this one: two handlers for one gesture is CranOrbit's
+wiring, not the framework's. What the framework should answer is whether a
+composition that installs a `BackHandler` *and* a `SwipeToDismissBox` is
+supposed to see one dispatch or two — nothing states it, and both widgets are
+framework API, so an application cannot get this right by reading either in
+isolation.
+
 ### CranOrbit's list screens share one scroll position
 
 Open Settings, scroll to the bottom, open Credits from the last row: Credits
