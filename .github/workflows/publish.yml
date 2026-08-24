@@ -27,8 +27,11 @@ jobs:
           fetch-depth: 0
       - name: Provision the pinned Rust toolchain
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
           rustc --version
@@ -254,8 +257,11 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
       - name: Provision the pinned Rust toolchain
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
           rustc --version
@@ -427,8 +433,11 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
       - name: Provision the pinned Rust toolchain
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # Named step so the pinned toolchain's first-use download shows up
           # here rather than inside whichever cargo step ran first.
           rustc --version

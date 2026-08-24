@@ -45,8 +45,11 @@ jobs:
 
       - name: Provision the pinned toolchains
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           # rust-toolchain.toml owns the stable pin. dist-min additionally needs
           # nightly cargo for -Zbuild-std, so provision the nightly that
           # rust-toolchain-nightly.toml names rather than whatever `nightly`
@@ -124,8 +127,11 @@ jobs:
 
       - name: Provision the pinned toolchain and Windows target
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           rustc --version
           rustup target add x86_64-pc-windows-msvc
 
@@ -170,8 +176,11 @@ jobs:
 
       - name: Provision the pinned toolchain and Android targets
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # $HOME is not reliable here: actions/checkout temporarily overrides
+          # it, so resolve the account's real home instead.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
           rustc --version
           rustup target add \
             aarch64-linux-android \

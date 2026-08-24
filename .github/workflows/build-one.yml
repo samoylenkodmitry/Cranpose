@@ -51,8 +51,19 @@ jobs:
 
       - name: Provision the pinned toolchain and just
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Resolve the account's real home rather than trusting $HOME:
+          # actions/checkout temporarily overrides HOME, and a step that runs
+          # while it is overridden prepends a .cargo/bin that does not exist.
+          # That is why the sccache line below survived for so long -- sccache
+          # was already on the runner's own PATH, so nothing needed `cargo`
+          # until another tool did, and then it failed with exit 127.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          command -v cargo >/dev/null || {
+            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
+            exit 1
+          }
           rustc --version
           command -v just >/dev/null || cargo install just --locked
 
