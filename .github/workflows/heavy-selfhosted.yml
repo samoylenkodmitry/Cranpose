@@ -50,7 +50,7 @@ jobs:
             echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
             echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
           fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start sccache
         run: |
@@ -103,7 +103,7 @@ jobs:
             echo "CRANPOSE_HOST_RESUME_TEMP_C=93" >> "$GITHUB_ENV"
             echo "SCCACHE_DIR=/home/s/ci-cache/cranpose/sccache" >> "$GITHUB_ENV"
           fi
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Start sccache
         run: |
@@ -127,8 +127,19 @@ jobs:
 
       - name: Provision iOS Rust targets
         run: |
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Resolve the account's real home rather than trusting $HOME:
+          # actions/checkout temporarily overrides HOME, and a step that runs
+          # while it is overridden prepends a .cargo/bin that does not exist.
+          # That is why the sccache line below survived for so long -- sccache
+          # was already on the runner's own PATH, so nothing needed `cargo`
+          # until another tool did, and then it failed with exit 127.
+          real_home="$(eval echo "~$(id -un)")"
+          export PATH="$real_home/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          echo "$real_home/.cargo/bin" >> "$GITHUB_PATH"
+          command -v cargo >/dev/null || {
+            echo "cargo not found. HOME=$HOME real_home=$real_home PATH=$PATH" >&2
+            exit 1
+          }
           # No toolchain action here: rust-toolchain.toml owns the version and
           # the rustup shim installs it on first use. Adding targets without
           # `--toolchain` puts them on that pinned toolchain instead of on
@@ -186,7 +197,7 @@ jobs:
             echo "SCCACHE_DIR=$cache_root/sccache"
             echo "CARGO_TARGET_DIR=$cache_root/target"
           } >> "$GITHUB_ENV"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$(eval echo "~$(id -un)")/.cargo/bin" >> "$GITHUB_PATH"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           echo "$sdk_root/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$sdk_root/platform-tools" >> "$GITHUB_PATH"
