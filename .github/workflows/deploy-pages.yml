@@ -29,10 +29,16 @@ jobs:
           # do not reject that intentional move as a stale event SHA.
           ref: ${{ github.ref_name }}
 
-      - name: Install Rust (nightly for wasm-pack artifact output)
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Provision the pinned toolchain and the wasm target
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # No nightly here. build-web.sh passes no -Z flags and does no
+          # build-std, and the wasm-build job proves the same script builds on
+          # the toolchain rust-toolchain.toml pins. Adding the target without
+          # `--toolchain` puts it on that pinned toolchain.
+          rustc --version
+          rustup target add wasm32-unknown-unknown
 
       - name: Install binaryen (wasm-opt) for size optimization
         run: |

@@ -158,6 +158,65 @@ fn ci_architecture_budget_runs_required_gates() {
     );
 }
 
+/// Every GitHub Action is pinned to a commit, not to a movable tag.
+///
+/// A tag like `@v6` is a pointer its owner can repoint at any commit. These
+/// workflows run on persistent self-hosted machines that keep their workspaces
+/// and caches between runs, so a repointed tag executes with far more reach
+/// than it would on a throwaway cloud runner. The version stays in a trailing
+/// comment so the pin is still readable.
+#[test]
+fn workflow_actions_are_pinned_to_commit_shas() {
+    let mut unpinned = Vec::new();
+    let mut seen = 0usize;
+    for name in [
+        "rust.yml",
+        "heavy-selfhosted.yml",
+        "publish.yml",
+        "release.yml",
+        "deploy-pages.yml",
+        "build-one.yml",
+    ] {
+        let workflow = workspace_source(&format!(".github/workflows/{name}"));
+        for line in workflow.lines() {
+            let trimmed = line.trim();
+            let Some(reference) = trimmed
+                .strip_prefix("- uses:")
+                .or_else(|| trimmed.strip_prefix("uses:"))
+            else {
+                continue;
+            };
+            let reference = reference.trim();
+            seen += 1;
+            // Local composite actions are referenced by path, not by ref.
+            if reference.starts_with('.') {
+                continue;
+            }
+            let Some((_, git_ref)) = reference.split_once('@') else {
+                unpinned.push(format!("{name}: {reference} (no ref at all)"));
+                continue;
+            };
+            let git_ref = git_ref.split_whitespace().next().unwrap_or(git_ref);
+            let pinned = git_ref.len() == 40 && git_ref.chars().all(|c| c.is_ascii_hexdigit());
+            if !pinned {
+                unpinned.push(format!("{name}: {reference}"));
+            }
+        }
+    }
+
+    // A sweep that matches nothing passes for the wrong reason. This test was
+    // once deleted wholesale and its absence looked exactly like success, so
+    // pin the fact that it is still looking at something.
+    assert!(
+        seen >= 10,
+        "expected to inspect many action references, saw only {seen}: the parser has drifted"
+    );
+    assert!(
+        unpinned.is_empty(),
+        "every workflow action must be pinned to a 40-character commit SHA; found movable refs: {unpinned:?}"
+    );
+}
+
 #[test]
 fn render_common_package_embeds_crate_owned_text_assets() {
     let software_text_source =
