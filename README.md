@@ -135,11 +135,13 @@ A list that only composes what is on screen uses `LazyColumn` with
 | `cranpose-storekit` | StoreKit 2 in-app purchases (iOS/macOS) |
 | `cranpose-testing` | The robot harness that drives real windows in tests |
 
-The composition runtime uses Slot Table V2: active groups live in preorder
+The composition runtime uses a slot table: active groups live in preorder
 group, payload, and node tables, and inactive retained branches are explicit
-detached subtrees. The specification is
-[`docs/cranpose_slot_table_v2_design.md`](docs/cranpose_slot_table_v2_design.md);
-gap-table notes elsewhere are historical rationale only.
+detached subtrees. The invariants it must uphold are documented in
+[`docs/slot_table_invariants.md`](docs/slot_table_invariants.md); the design
+history behind the current architecture is
+[`docs/cranpose_slot_table_v2_design.md`](docs/cranpose_slot_table_v2_design.md)
+(historical).
 
 ## Platform support
 

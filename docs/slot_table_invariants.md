@@ -1,8 +1,6 @@
-# Slot Table V2 Invariants
+# Slot Table Invariants
 
-Source of truth: `docs/cranpose_slot_table_v2_design.md`
-
-This document is the short operational checklist for Slot Table V2. Keep it small: the design doc explains the architecture, while this file names the invariants that validation, tests, and reviews must protect.
+This document is the short operational checklist for the slot table implementation in `crates/cranpose-core/src/slot/`. Keep it small: the invariants named here are what validation, tests, and reviews must protect. For background on how this architecture was designed, see `docs/cranpose_slot_table_v2_design.md` (historical).
 
 ## Active Table
 

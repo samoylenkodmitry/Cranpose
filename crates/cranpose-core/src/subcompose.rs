@@ -955,7 +955,7 @@ impl SubcomposeState {
         self.mapping.invalidate_scopes();
     }
 
-    /// Returns whether the last slot registered via `register_active` was reused.
+    /// Returns whether the last slot registered via [`Self::register_active`] was reused.
     ///
     /// Returns `Some(true)` if the slot already existed (was reused from pool or
     /// was recomposed), `Some(false)` if it was newly created, or `None` if no

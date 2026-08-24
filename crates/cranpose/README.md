@@ -208,7 +208,7 @@ reconfigures WGPU from the following `SurfaceView` resize callback.
 
 Cranpose is composed of several crates:
 
--   `cranpose-core`: The composition runtime, Slot Table V2, and state snapshot system. Slot Table V2 is the active runtime; gap-table material is historical rationale only.
+-   `cranpose-core`: The composition runtime, the slot table, and the state snapshot system; gap-table material is historical rationale only.
 -   `cranpose-ui`: UI primitives, layout protocol, and high-level widgets.
 -   `cranpose-foundation`: Essential building blocks (Box, Row, Column) and the Modifier system.
 -   `cranpose-animation`: Physics-based animation system.

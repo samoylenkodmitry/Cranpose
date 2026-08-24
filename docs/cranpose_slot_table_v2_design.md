@@ -1,6 +1,8 @@
 # Cranpose Slot Table V2 — Full Rearchitecture Design Doc
 
-Status: active implementation
+Historical: this is the design and planning document that drove the rewrite of the slot table from the old gap-buffer implementation to the current one in `crates/cranpose-core/src/slot/`. The rewrite is complete and the plan below is kept as a record of that decision, not as current documentation — for the invariants the shipped table upholds today, see `docs/slot_table_invariants.md`.
+
+Status: historical (rewrite complete)
 Target crate: `crates/cranpose-core`  
 Primary files affected: `lib.rs`, `subcompose.rs`, `retention.rs`, `slot/*`, tests
 Principle: keep one slot-table architecture; do not preserve obsolete gap-based surfaces or wrapper modules.

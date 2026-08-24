@@ -6,17 +6,29 @@ Robot testing provides automated UI testing capabilities for Cranpose applicatio
 
 ### Enable Robot Testing
 
-Add `cranpose-testing` as a dev dependency:
+`Robot` and `AppLauncher::with_test_driver` live in the `cranpose` crate behind
+the `robot` feature (which also needs `desktop-shell` and `renderer-wgpu`).
+`apps/desktop-demo` wires this up through its own `robot-app` feature in
+`Cargo.toml`, which every robot-runner example requires:
 
 ```toml
-[dev-dependencies]
-cranpose-testing = { path = "../../crates/cranpose-testing" }
+[features]
+robot-app = ["logging", "cranpose-ui/test-helpers"]
+
+[[example]]
+name = "robot_interactive"
+path = "robot-runners/robot_interactive.rs"
+required-features = ["robot-app"]
 ```
+
+For the separate headless end-to-end harness that drives full example
+binaries via `run_robot_test.sh`, see
+[`crates/cranpose-testing/README.md`](../crates/cranpose-testing/README.md).
 
 ### Basic Example
 
 ```rust
-use compose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 
 AppLauncher::new()
     .with_test_driver(|robot| {
@@ -145,10 +157,13 @@ role=Layout
 
 ```rust
 pub struct SemanticElement {
-    pub role: String,              // "Button", "Text", "Layout", etc.
-    pub text: Option<String>,      // Text content if available
-    pub bounds: SemanticRect,      // Geometric bounds
-    pub clickable: bool,           // Has click actions
+    pub role: String,                              // "Button", "Text", "Layout", etc.
+    pub text: Option<String>,                       // Text content if available
+    pub state_description: Option<String>,          // Compose's `stateDescription`
+    pub bounds: SemanticRect,                       // Geometric bounds
+    pub clickable: bool,                            // Has click actions
+    pub editable_text: bool,                        // Represents editable text
+    pub text_selection: Option<(usize, usize)>,     // Selection as UTF-8 byte offsets
     pub children: Vec<SemanticElement>,
 }
 
@@ -164,7 +179,7 @@ pub struct SemanticRect {
 
 ```rust
 use desktop_app::app;
-use compose_app::{AppLauncher, Robot};
+use cranpose::{AppLauncher, Robot};
 use std::time::Duration;
 
 fn main() {
