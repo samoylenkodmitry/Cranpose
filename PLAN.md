@@ -9,10 +9,10 @@ is acceptable.
 
 ## Gaps in the framework
 
-### Public API test coverage: 356 of 3408 functions
+### Public API test coverage: 357 of 3409 functions
 
-`python3 scripts/public_api_test_coverage.py` reports **3052/3408 (89.6%)**.
-Treat the 356 as a map of where a change is unguarded, not as a backlog of 356
+`python3 scripts/public_api_test_coverage.py` reports **3052/3409 (89.5%)**.
+Treat the 357 as a map of where a change is unguarded, not as a backlog of 357
 tests to write — a test written to raise the number tests the implementation it
 was written against. Tests here are added the other way round: each pins a
 defect found first, or covers a new module's own decisions, which is where a
@@ -40,100 +40,137 @@ These are deliberate. They are here so nobody rediscovers them as bugs.
 - **`cranpose-services/http-native` is not forwarded through the `cranpose`
   umbrella.** Doing so would need one feature per target, which Cargo cannot
   express, so the opt-in stays where applications already write it.
+- **A device-installable iOS build is made locally, not by CI.** The release
+  carries an App Store-signed `.ipa`, which TestFlight takes and a device
+  refuses directly, and `cranscan-*-ios-unsigned.ipa`, which is ad-hoc signed
+  with no embedded profile and which a device also refuses. The repository's
+  only iOS secrets are an App Store *distribution* certificate and profile, so
+  no CI job can sign for a particular device — that needs a development profile
+  carrying that device's UDID, which is per-device and belongs on the machine
+  that has it. Both routes to a phone work and both are outside CI: TestFlight
+  from the release upload, or re-signing the `.ipa` locally against an
+  Xcode-managed development profile and installing it with `devicectl`. The
+  artifacts are named for what they are rather than carrying a signing step
+  that could only fail.
 - **The unused-API deletion rule stops at the Compose-shaped surface.**
   `rememberSaveable`, `ProvideLifecycle`, `rememberLifecycleState`,
   `DurableSaveEffect` and `interval` have no caller and are kept. What makes
   them API is that an application written against Compose expects them to
   exist, not that one of ours has reached for one yet.
 
-## Release artifacts that cannot be installed
+## CranOrbit on the watch
 
-Found by installing releases onto real devices, not by reading the pipeline.
+Found by installing releases on a Pixel Watch 3 and playing them, which is the
+only way any of these surfaces. The radial menu that `9335cff` replaced with a
+scrolling list is restored, and the blank screen on backing out of the pause
+overlay is fixed in Cranpose `0.1.99` -- `SwipeToDismissBox` was holding its
+content off screen after firing `on_dismiss`, right for a dismissed row whose
+host removes it and wrong for a navigation gesture whose host stays composed.
+Both are verified on the watch against `v1.3.3`. What is left:
 
-- **The iOS release IPA still needs re-signing, and now says so.**
-  `cranscan-*-ios-unsigned.ipa` is ad-hoc signed with no embedded provisioning
-  profile, so a device refuses it; installing means re-signing against a
-  development profile carrying that device's UDID. The repository's only iOS
-  secrets are an App Store *distribution* certificate and profile, so no CI job
-  can produce a device-installable build. The artifact is named and documented
-  for what it is rather than carrying a signing step that could only fail.
+### A level does not begin play when it is started
 
-## CranOrbit on the watch: two faults in the shipped build
+Reported from the watch: after the framework-ownership work, tapping to start a
+level does not get the game playing.
 
-Found by installing `v1.3.2` on a Pixel Watch 3 and playing it, which is the
-only way either of these surfaces. Both are CranOrbit's, not the framework's,
-but they are here because nothing else tracks them and because the second one
-is not yet proven to stop at the application boundary.
+Partly reproduced against `v1.3.3`, and the part that did not reproduce matters
+as much as the part that did. Tapping `START` on the level intro **does** open
+the arena, and it animates: five screenshots two seconds apart were all
+different, so the render loop and some simulation are running. What is visible
+in those frames is the ball still sitting on the paddle, unlaunched, with the
+bricks untouched — a level that is loaded and idling rather than one that never
+opened.
 
-### The radial menu was replaced by a scrolling list
+Whether the ball fails to launch, or is waiting for an input that is no longer
+delivered, is **not** established. `robot_*` coverage does not reach this: the
+arena is a real GPU surface and the launch is an input gesture.
 
-CranOrbit selected levels and modes from a radial menu -- the shape the game
-itself is built on, and the reason a round display suits it. The shipped build
-presents a vertical `WearScalingLazyColumn` of pill chips instead: `ORBIT
-BREAKER` over `CAMPAIGN`/`DAILY`, then `CHAPTER 2` over `IGNITION`, then
-`LEVEL 1` over `FIRST LIGHT`. Three taps down a scrolling list to start a
-level, on a 408x408 screen.
+What the next attempt needs to know, because it cost time here: **a dozing
+watch freezes the picture and reads exactly like a frozen game.** Two
+consecutive screenshots came back byte-identical after a tap and a drag, which
+looked like input being ignored, and `dumpsys power` said `mWakefulness=Dozing`.
+Check wakefulness before concluding anything from a still frame, and drive the
+test faster than the display's idle timeout.
 
-The radial model was not deleted, only disconnected. `app/src/app_state.rs`
-still builds a `RadialSpec` (line 628) and `composed_screen` still asks for one
--- `ComposedScreen::Menu` is constructed with `Some(state.radial_spec())` at
-`app/src/ui/composed.rs:324` -- and then `app/src/ui/composed.rs:350` renders
-that spec through `WearScalingLazyColumn`. A radial specification is being fed
-to a linear list widget. There is no radial renderer left in the tree.
+The discriminator to reach for first is whether the simulation is advancing at
+all -- `AppState::needs_frames`/`simulation_runs` on a state driven headlessly
+through `start_selected_level` -- because that separates "the ball is waiting
+for input that no longer arrives" from "the session never started". A headless
+test can settle it without a watch, and none exists.
 
-`composed_screen` routes *every* screen that is not `Playing` or `Tutorial` to
-`ComposedScreen::Menu`, so one list widget now serves settings, credits, level
-select and mode select alike. That is the actual error: the flat Wear list is
-right for **settings**, where a scrolling column of rows is what the platform
-expects, and wrong for level and mode selection, which is what the radial menu
-existed for. Restoring it means a radial renderer for `Menu` and a separate
-list path for the settings-shaped screens, not a flag on one widget.
+### Back is handled twice, and it looks like back doing nothing
 
-### Backing out of the pause overlay wedges the app
+Reported from the watch: the back gesture does not leave the application, it
+lands on the same screen — or one that looks the same. Reported alongside it,
+and probably the same fault: sounds sometimes echo, as though played twice.
 
-Reproduced on the Pixel Watch 3 against `v1.3.2`, with the display confirmed
-awake -- a dozing watch screenshots black and will otherwise be mistaken for
-this:
+`OrbitApp` wires **two** independent paths to `AppState::on_back`:
 
-1. Start a level and play. The arena draws.
-2. Back-gesture once. `PAUSED / LEVEL 1 SCORE 0 / RESUME` appears, which is
-   correct.
-3. Back-gesture again. The screen goes to a flat `#121116`.
+- `BackHandler(back_enabled.get(), …)` at `app/src/ui/mod.rs:106`, and
+- `SwipeToDismissBox`'s `on_dismiss` at `app/src/ui/mod.rs:153`, which calls
+  `on_back` when `back_intercepted()` and `cranpose::request_exit()` otherwise.
 
-`#121116` is the application's own background, not the device's black, so the
-renderer is running and painting an empty scene rather than having stopped.
-Everything else agrees: the process stays alive, the activity keeps window
-focus, `[android-frame-rate]` keeps voting 60 Hz, and
-`cranpose_render_wgpu::render: [segment-encode]` keeps reporting work after the
-screen goes blank. No panic and no `AndroidRuntime` entry.
+On Wear the back gesture *is* the leading-edge swipe, and the system dispatches
+a back event for the same motion, so one gesture can drive both. `on_back`
+running twice from `Playing` is `pause_game` then `resume_game`: the
+application returns exactly where it started, which is what "it exits to the
+same screen" describes. It also explains back never leaving — the second call
+re-enters a screen that intercepts, so `request_exit()` is never the branch
+taken.
 
-Nothing on the device recovers it. A tap does nothing. Further back gestures
-neither redraw nor leave -- the application still consumes back, so the user is
-trapped in a blank screen with no way out but the system app switcher. Force
-stopping and relaunching *does* recover, returning to `RESUME / LEVEL 1 FIRST
-LIGHT / CONTINUE`, so the wedge is in-memory screen state and not the save
-file.
+An echo on a sound fits the same cause without needing a second one: a tap
+delivered twice plays its cue twice. Whether input beyond back is doubled is
+unverified and is the first thing to measure, because it decides whether this
+is one fault or two.
 
-The cause is `SwipeToDismissBox`, and it is the framework's, not CranOrbit's.
-After the gesture completes the widget leaves its content translated off screen
-and fires `on_dismiss`, because that is what a dismissed *row* wants: its host
-is about to remove it. A full-content *navigation* dismissal is the opposite
-case -- back means "go up one level", and the host may answer by staying
-composed, which is exactly what backing out of a pause overlay does. The
-content then never returns, and since `SwipeToDismissBox` owns its controller
-internally the application has no state handle to reset it with. The gesture
-stays consumed, which is why back could not escape either.
+**This was hidden until `0.1.99` fixed something else.** Before that,
+`SwipeToDismissBox` left its content off screen after firing, so the second
+`on_back` resumed a game nobody could see and the symptom was a blank screen.
+Fixing the widget did not change the double dispatch; it changed what the
+double dispatch looks like. A fix that makes a fault legible rather than
+removing it is worth saying out loud, because the blank screen is gone and the
+underlying wiring is not.
 
-Two things are worth keeping from how this was found. CranOrbit's state
-machine was tested first and was correct -- `Playing -> back -> Paused -> back`
-returns a drawable `Playing` -- which is what moved the search up a layer
-rather than deeper into the application. And the offset the regression test
-reports without the fix, a full content width, is the blank screen stated as a
-number.
+The application owns this one: two handlers for one gesture is CranOrbit's
+wiring, not the framework's. What the framework should answer is whether a
+composition that installs a `BackHandler` *and* a `SwipeToDismissBox` is
+supposed to see one dispatch or two — nothing states it, and both widgets are
+framework API, so an application cannot get this right by reading either in
+isolation.
 
-Fixed by `SwipeToDismissSpec::reset_after_dismiss`, off by default so row
-behaviour is unchanged, with `SwipeToDismissBox` opting in. CranOrbit picks it
-up at the next Cranpose release.
+### CranOrbit's list screens share one scroll position
+
+Open Settings, scroll to the bottom, open Credits from the last row: Credits
+opens already scrolled to its end. The scroll position is not per screen.
+
+`WearListScreen` remembers exactly one list state, at
+`app/src/ui/composed.rs:342`:
+
+```rust
+let list = rememberWearScalingListState(CentreAnchor {
+    index: CENTRED_ITEM,
+    offset: 0.0,
+});
+```
+
+and `OrbitApp` calls `WearListScreen` from a single site, passing the screen as
+an argument. One call site is one composition slot, so Settings, Credits,
+Volume and Haptics all read and write the same remembered state, and switching
+screens carries the offset across. `remember` is doing exactly what it
+promises — the slot did not change, so the value does not — and the identity
+the state should hang off, which screen is being shown, is never stated.
+
+The framework already has what states it: `cranpose_core::with_key`, Compose's
+`key(…) { }`. Keying the list screen by its screen gives each one its own slot
+and its own scroll position, and drops the stale one when a screen goes away.
+Resetting the anchor on a screen change would look similar and is not the same
+thing: it would return to Credits from a sub-screen having forgotten where the
+reader was, which is the bug in the other direction.
+
+This is a hazard for any screen-switching composable that remembers scroll
+state at one call site, not a quirk of this application. Nothing in the widget
+or its documentation points at it, and the failure is quiet — a wrong starting
+offset reads as a rendering glitch rather than as shared state.
 
 ## CranAmp plays no music since the framework-ownership work
 
