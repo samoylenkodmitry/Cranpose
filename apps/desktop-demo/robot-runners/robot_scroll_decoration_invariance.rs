@@ -25,7 +25,13 @@ const TARGET_TEXT: &str =
 const CAPTURE_SCALE: f32 = 2.0;
 const UNDERLINE_TRACK_STEPS: usize = 12;
 const UNDERLINE_TRACK_SCROLL_DELTA_Y: f32 = -0.7;
-const UNDERLINE_LOCAL_Y_TOLERANCE: f32 = 0.35;
+/// The underline is rasterised onto the pixel grid while the semantic bounds
+/// it is measured against stay unsnapped, so their difference must swing by up
+/// to one snap step as a fractional scroll sweeps the phase. That swing is
+/// correct rendering. What must not happen is the swing widening, or the row
+/// walking away from the text.
+const UNDERLINE_LOCAL_Y_SPREAD: f32 = 0.5;
+const UNDERLINE_LOCAL_Y_TREND: f32 = 0.25;
 const MIN_NORMALIZED_TEXT_INK_PIXELS: usize = 500;
 
 fn main() {
@@ -91,14 +97,31 @@ fn verify_underline_row_tracks_fractional_scroll(robot: &cranpose::Robot) {
         }
     }
 
-    let baseline = samples[0];
-    for (step, local_y) in samples.iter().copied().enumerate().skip(1) {
-        let drift = (local_y - baseline).abs();
-        assert!(
-            drift <= UNDERLINE_LOCAL_Y_TOLERANCE,
-            "underlined span decoration row drifted relative to text bounds at step {step}: baseline={baseline:.3} local_y={local_y:.3} drift={drift:.3}"
-        );
-    }
+    // Anchoring on samples[0] would make this test pass or fail on where the
+    // first sample happened to land in that swing: with a 0.40-wide swing and
+    // a 0.35 tolerance, a run starting at the floor of the swing failed while
+    // the identical rendering starting mid-swing passed. Both bounds below are
+    // independent of where the sweep starts.
+    let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
+    let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let spread = max - min;
+    assert!(
+        spread <= UNDERLINE_LOCAL_Y_SPREAD,
+        "underlined span decoration row swings wider than one snap step: min={min:.3} max={max:.3} spread={spread:.3} samples={samples:?}"
+    );
+
+    // A row that is slowly walking away from its text stays inside the spread
+    // bound for as long as the walk is smaller than a snap step per sweep, so
+    // compare where the sweep starts against where it ends.
+    let half = samples.len() / 2;
+    let mean = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+    let first_half = mean(&samples[..half]);
+    let second_half = mean(&samples[half..]);
+    let trend = (second_half - first_half).abs();
+    assert!(
+        trend <= UNDERLINE_LOCAL_Y_TREND,
+        "underlined span decoration row is walking away from its text: first_half={first_half:.3} second_half={second_half:.3} trend={trend:.3} samples={samples:?}"
+    );
 }
 
 fn find_presented_underline_row(

@@ -92,14 +92,14 @@ enum SourceState {
 /// Toggles the source panel for the active tab.
 #[allow(non_snake_case)]
 #[composable]
-pub(crate) fn SourceToggleButton(showing: MutableState<bool>) {
+pub(crate) fn SourceToggleButton(showing: MutableState<bool>, modifier: Modifier) {
     let label = if showing.get() {
         "Hide source"
     } else {
         "Show source"
     };
     Button(
-        Modifier::empty().padding(8.0),
+        modifier.rounded_corners(12.0).padding(10.0),
         ButtonSpec::default(),
         move || showing.set(!showing.get()),
         move || {

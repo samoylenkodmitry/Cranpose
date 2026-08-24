@@ -409,7 +409,10 @@ fn TabButton(tab: DemoTab, active_tab: cranpose_core::MutableState<DemoTab>, pad
 
 #[allow(non_snake_case)]
 #[composable]
-fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
+fn TabBarHorizontal(
+    active_tab: cranpose_core::MutableState<DemoTab>,
+    showing_source: cranpose_core::MutableState<bool>,
+) {
     let tabs_scroll_state =
         cranpose_core::remember(|| cranpose_ui::ScrollState::new(0.0)).with(|state| *state);
     Row(
@@ -431,6 +434,10 @@ fn TabBarHorizontal(active_tab: cranpose_core::MutableState<DemoTab>) {
                     for tab in DEMO_TABS {
                         TabButton(tab, active_tab, 10.0);
                     }
+                    // Last in the strip: the tabs keep their positions, the
+                    // content below keeps its height, and nothing is drawn
+                    // over a tab that has to stay clickable.
+                    source_view::SourceToggleButton(showing_source, Modifier::empty());
                 },
             );
         },
@@ -443,31 +450,26 @@ fn TabContent(
     active_tab: cranpose_core::MutableState<DemoTab>,
     startup: StartupSelection,
     winamp_tab_state: WinampTabState,
+    showing_source: cranpose_core::MutableState<bool>,
     modifier: Modifier,
 ) {
     let active = active_tab.get();
-    let showing_source = cranpose_core::rememberMutableStateOf(|| false);
+    // The source panel replaces the tab's content rather than sitting above it.
+    // A control that pushes every tab down costs each one a row of height for
+    // a button they are not using, and moves content the renderer's e2e suite
+    // measures against the window.
     cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
-        Column(
-            Modifier::empty().fill_max_size(),
-            ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
-            move || {
-                source_view::SourceToggleButton(showing_source);
-                if showing_source.get() {
-                    source_view::SourcePanel(active);
+        if showing_source.get() {
+            source_view::SourcePanel(active);
+        } else {
+            cranpose_core::with_key(&active, || {
+                if tab_requires_scroll(active) {
+                    ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
                 } else {
-                    cranpose_core::with_key(&active, || {
-                        if tab_requires_scroll(active) {
-                            ScrollableTab(move || {
-                                render_active_tab(active, startup, winamp_tab_state)
-                            });
-                        } else {
-                            render_active_tab(active, startup, winamp_tab_state);
-                        }
-                    });
+                    render_active_tab(active, startup, winamp_tab_state);
                 }
-            },
-        );
+            });
+        }
     });
 }
 
@@ -499,11 +501,13 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
         *cell.borrow_mut() = Some(active_tab);
     });
 
+    let showing_source = cranpose_core::rememberMutableStateOf(|| false);
+
     Column(
         Modifier::empty().fill_max_size(),
         ColumnSpec::default(),
         move || {
-            TabBarHorizontal(active_tab);
+            TabBarHorizontal(active_tab, showing_source);
 
             Spacer(Size {
                 width: 0.0,
@@ -514,6 +518,7 @@ pub fn combined_app_with_startup(startup: StartupSelection) {
                 active_tab,
                 startup,
                 winamp_tab_state,
+                showing_source,
                 Modifier::empty().fill_max_width().weight(1.0).padding_each(
                     DEMO_PAGE_PADDING,
                     0.0,
