@@ -263,8 +263,10 @@ fn aosp_line_box(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::style::{ParagraphStyle, PlatformParagraphStyle};
-    use crate::text::TextUnit;
+    use crate::text::{
+        style::{ParagraphStyle, PlatformParagraphStyle},
+        TextUnit,
+    };
 
     /// Roboto at 16sp on a density-2 watch: 32px of glyph, `hhea` ascender
     /// 1900/2048 and descender 500/2048, so 29.69px above the baseline and

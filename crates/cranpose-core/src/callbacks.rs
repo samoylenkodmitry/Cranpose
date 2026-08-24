@@ -1,7 +1,6 @@
-use crate::composer_context;
-use crate::{Composer, ComposerCore, RecomposeScope};
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{composer_context, Composer, ComposerCore, RecomposeScope};
 
 pub struct ParamState<T> {
     pub(crate) value: Option<T>,
@@ -237,11 +236,10 @@ impl<T> Default for ReturnSlot<T> {
 
 #[cfg(test)]
 mod callback_holder_tests {
+    use std::{cell::Cell, rc::Rc};
+
     use super::{CallbackHolder, CallbackHolder1, ParamSlot};
-    use crate::runtime::TestRuntime;
-    use crate::RecomposeScope;
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use crate::{runtime::TestRuntime, RecomposeScope};
 
     #[test]
     fn param_slot_take_reports_absence_instead_of_panicking() {

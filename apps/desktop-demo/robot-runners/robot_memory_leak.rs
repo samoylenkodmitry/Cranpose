@@ -11,12 +11,13 @@
 //! cargo run --profile robot --package desktop-app --example robot_memory_leak --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose_testing::find_text_by_prefix_in_semantics;
-use desktop_app::app;
 #[cfg(target_os = "linux")]
 use std::collections::HashMap;
 use std::time::Duration;
+
+use cranpose::AppLauncher;
+use cranpose_testing::find_text_by_prefix_in_semantics;
+use desktop_app::app;
 
 const WINDOW_WIDTH: u32 = 1024;
 const WINDOW_HEIGHT: u32 = 768;

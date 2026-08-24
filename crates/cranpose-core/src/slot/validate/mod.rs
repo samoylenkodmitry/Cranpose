@@ -15,11 +15,12 @@ mod scopes;
 #[cfg(any(test, debug_assertions))]
 mod writer;
 
-use super::SlotTable;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use errors::{PayloadAnchorRecord, SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
 use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeView};
+
+use super::SlotTable;
 
 impl SlotTable {
     #[track_caller]

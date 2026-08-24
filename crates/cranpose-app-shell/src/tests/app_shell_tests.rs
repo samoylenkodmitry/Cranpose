@@ -1,10 +1,18 @@
-use super::*;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::{Mutex, MutexGuard, OnceLock},
+    time::Duration,
+};
+
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, compositionLocalOf, location_key,
     rememberMutableStateOf, CompositionLocal, CompositionLocalProvider, MutableState, TaskSite,
 };
-use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
-use cranpose_foundation::{Modifiers, PointerEvent, PointerEventKind, PointerSource};
+use cranpose_foundation::{
+    lazy::{rememberLazyListState, LazyListScope, LazyListState},
+    Modifiers, PointerEvent, PointerEventKind, PointerSource,
+};
 use cranpose_macros::composable;
 use cranpose_ui::{
     Alignment, BlendMode, Box, BoxSpec, Brush, Button, ButtonSpec, Color, Column, ColumnSpec,
@@ -16,10 +24,8 @@ use cranpose_ui_graphics::{
     CompositingStrategy, DrawPrimitive, GraphicsLayer, Point, RenderEffect, RoundedCornerShape,
     RuntimeShader,
 };
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+
+use super::*;
 
 fn test_guard() -> MutexGuard<'static, ()> {
     static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

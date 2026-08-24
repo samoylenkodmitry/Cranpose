@@ -1,12 +1,16 @@
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_button_in_semantics;
-use cranpose_ui::widgets::{
-    Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, LazyColumn, LazyColumnSpec,
-    Spacer, Text, PROGRESS_INDICATOR_COLOR,
+use cranpose_ui::{
+    composable,
+    widgets::{
+        Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, LazyColumn,
+        LazyColumnSpec, Spacer, Text, PROGRESS_INDICATOR_COLOR,
+    },
+    Modifier, Size, TextStyle,
 };
-use cranpose_ui::{composable, Modifier, Size, TextStyle};
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

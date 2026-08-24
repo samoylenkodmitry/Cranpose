@@ -1,5 +1,4 @@
-use std::ffi::OsStr;
-use std::path::PathBuf;
+use std::{ffi::OsStr, path::PathBuf};
 
 pub fn diagnostic_path(name: &str) -> PathBuf {
     let root = temp_root();

@@ -10,10 +10,11 @@
 //! cargo run --package desktop-app --example robot_tabs_scroll --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{bounds_span, collect_tab_bounds, detect_tab_axis, root_bounds, TabAxis};
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

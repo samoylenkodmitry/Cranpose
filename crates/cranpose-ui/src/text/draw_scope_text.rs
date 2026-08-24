@@ -16,10 +16,12 @@ use cranpose_ui_graphics::{
     TextStyle as DrawTextStyle,
 };
 
-use super::font::{FontFamily, FontStyle, FontWeight};
-use super::line_box::LineBox;
-use super::style::{SpanStyle, TextStyle};
-use super::unit::TextUnit;
+use super::{
+    font::{FontFamily, FontStyle, FontWeight},
+    line_box::LineBox,
+    style::{SpanStyle, TextStyle},
+    unit::TextUnit,
+};
 
 /// Builds the [`TextStyle`] that describes a draw-scope text run.
 ///
@@ -141,8 +143,9 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{FontWeight as DrawFontWeight, TextAlign, TextVerticalAlign};
+
+    use super::*;
 
     #[test]
     fn draw_style_maps_onto_span_attributes() {
@@ -181,8 +184,10 @@ mod tests {
         // took different line-box rules, so every drawn row landed a device
         // pixel off the composed rows beside it. Roboto at 16sp on a density-2
         // watch, in device pixels.
-        use crate::text::line_box::{line_box, FontExtent};
-        use crate::widgets::wear::wear_line_height_style;
+        use crate::{
+            text::line_box::{line_box, FontExtent},
+            widgets::wear::wear_line_height_style,
+        };
 
         let extent = FontExtent::new(32.0 * 1900.0 / 2048.0, 32.0 * 500.0 / 2048.0, 0.0);
         let drawn = DrawTextStyle::new(32.0)

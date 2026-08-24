@@ -25,9 +25,12 @@
     allow(dead_code)
 )]
 
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32, Ordering},
+    Arc,
+};
+
 use crate::ring::{Consumer, Producer};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
 
 /// How many clips the engine holds at once. One byte of index, and far more
 /// than the couple of dozen cues a game keeps resident.

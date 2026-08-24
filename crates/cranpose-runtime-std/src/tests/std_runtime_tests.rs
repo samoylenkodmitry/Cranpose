@@ -1,12 +1,16 @@
-use super::StdRuntime;
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, RuntimeScheduler};
-use std::cell::{Cell, RefCell};
-use std::panic::{self, AssertUnwindSafe};
-use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+use std::{
+    cell::{Cell, RefCell},
+    panic::{self, AssertUnwindSafe},
+    rc::Rc,
+};
+
+use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, RuntimeScheduler};
+
+use super::StdRuntime;
 
 #[test]
 fn std_runtime_requests_frame_and_recomposes_on_state_change() {

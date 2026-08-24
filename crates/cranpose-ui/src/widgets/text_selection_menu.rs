@@ -19,21 +19,28 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use crate::composable;
-use crate::modifier::{Color, Modifier};
-use crate::text::{measure_text, AnnotatedString, TextStyle, TextUnit};
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::popup::{local_popup_viewport, Popup};
-use crate::widgets::{Row, RowSpec, Text};
-use crate::PointerInputScope;
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{remember, with_current_composer, SideEffect};
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{
     liquid_menu_glass_effect, GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size,
+};
+
+use crate::{
+    composable,
+    modifier::{Color, Modifier},
+    text::{measure_text, AnnotatedString, TextStyle, TextUnit},
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        popup::{local_popup_viewport, Popup},
+        Row, RowSpec, Text,
+    },
+    PointerInputScope,
 };
 
 /// Capsule height (dp) — the measured 133 px @3x.
@@ -680,10 +687,11 @@ pub fn CaretActionMenu(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
     use cranpose_foundation::PointerEvent;
     use cranpose_ui_graphics::Point;
+
+    use super::*;
+    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
 
     /// Collects the button's live pointer-input handler. Returns the owning
     /// [`ModifierNodeSlices`] too: it keeps the attached node (and its running

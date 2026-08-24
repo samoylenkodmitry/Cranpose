@@ -6,20 +6,23 @@
 //! lets the lens shrink back slowly; the white thumb rematerializes at the
 //! end of the settle. The thumb is swipable; a tap flips.
 
-use crate::material::{
-    Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape,
-};
-use crate::motion::LiquidMotion;
-use crate::theme::liquid_colors;
 use cranpose_animation::{
     animateColorAsState, animateFloatAsState, spring, AnimationSpec, AnimationType, Easing,
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
-use cranpose_ui::widgets::{Box, BoxSpec};
-use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, Size};
+use cranpose_ui::{
+    widgets::{Box, BoxSpec},
+    Modifier, PointerEventKind, PointerInputScope, Size,
+};
 use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
+
+use crate::{
+    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    motion::LiquidMotion,
+    theme::liquid_colors,
+};
 
 pub(crate) const TRACK_WIDTH: f32 = 63.0;
 pub(crate) const TRACK_HEIGHT: f32 = 28.0;

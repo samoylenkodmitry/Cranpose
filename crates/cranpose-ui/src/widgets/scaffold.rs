@@ -2,14 +2,19 @@
 
 #![allow(non_snake_case)]
 
-use super::SubcomposeLayout;
-use crate::layout_direction::{layout_direction, LayoutDirection};
-use crate::subcompose_layout::{SubcomposeLayoutScope, SubcomposeMeasureScope};
-use crate::{composable, Modifier};
+use std::rc::Rc;
+
 use cranpose_core::{NodeId, SlotId};
 use cranpose_ui_graphics::{Color, EdgeInsets};
 use cranpose_ui_layout::{Constraints, Placement};
-use std::rc::Rc;
+
+use super::SubcomposeLayout;
+use crate::{
+    composable,
+    layout_direction::{layout_direction, LayoutDirection},
+    subcompose_layout::{SubcomposeLayoutScope, SubcomposeMeasureScope},
+    Modifier,
+};
 
 /// Insets supplied to a scaffold's content slot, in reading order.
 ///

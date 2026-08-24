@@ -19,16 +19,21 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::density::Density;
-use crate::modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguration};
-use crate::widgets::wear::theme::{WearColors, WearTextStyle};
-use crate::widgets::{Layout, Text};
-use crate::SemanticsWidgetRole;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
+
+use crate::{
+    composable,
+    density::Density,
+    modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguration},
+    widgets::{
+        wear::theme::{WearColors, WearTextStyle},
+        Layout, Text,
+    },
+    SemanticsWidgetRole,
 };
 
 /// `ButtonDefaults` plus `FilledButtonTokens`.

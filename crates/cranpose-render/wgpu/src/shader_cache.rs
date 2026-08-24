@@ -3,9 +3,10 @@
 //! Compiles and caches `wgpu::RenderPipeline` objects keyed by WGSL source hash,
 //! so the same shader with different uniform values reuses its pipeline.
 
+use std::collections::{HashMap, HashSet};
+
 use cranpose_ui_graphics::RuntimeShader;
 use naga::ShaderStage;
-use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum RuntimeShaderPipelineMode {
@@ -257,12 +258,13 @@ fn validate_glsl_portability(
 
 #[cfg(test)]
 mod tests {
-    use super::validate_runtime_shader_source;
-    use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
     use cranpose_ui_graphics::{
         GRADIENT_BLUR_WGSL, GRADIENT_CUT_MASK_WGSL, GRADIENT_FADE_DST_OUT_WGSL, LIQUID_GLASS_WGSL,
         ROUNDED_ALPHA_MASK_WGSL,
     };
+
+    use super::validate_runtime_shader_source;
+    use crate::pipeline::GPU_TEXT_BRUSH_EFFECT_SHADER;
 
     const VALID_SHADER: &str = r#"
 struct VertexOutput {

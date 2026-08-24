@@ -2,14 +2,17 @@
 
 mod output_paths;
 
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    process::Command,
+    time::{Duration, Instant},
+};
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::process::Command;
-use std::time::{Duration, Instant};
 
 const WINDOW_TITLE: &str = "Robot Winamp Native Geometry";
 const MOVE_STEPS: usize = 12;

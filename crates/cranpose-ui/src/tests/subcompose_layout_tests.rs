@@ -1,11 +1,11 @@
-use super::*;
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
     self, Applier, ConcreteApplierHost, MutableState, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 use smallvec::SmallVec;
+
+use super::*;
 
 #[derive(Default)]
 struct DummyNode;

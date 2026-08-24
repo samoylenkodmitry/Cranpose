@@ -1,39 +1,41 @@
-use crate::effect_renderer::CompositeSampleMode;
-#[cfg(test)]
-use crate::pipeline::UiTextLayoutResolver;
-use crate::pipeline::{
-    emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
-    scene_emission_counts, SceneEmissionCounts, TextLayoutResolver,
-};
-use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
-};
-use crate::surface_executor::backend::LayerSurfaceRoundedClip;
-use crate::surface_executor::layer_source_uses_external_backdrop_underlay;
-use crate::surface_plan::{
-    composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
-    layer_contains_descendant_backdrop, layer_needs_rigid_snap, layer_surface_requirements_cached,
-    layer_surface_scale, translated_content_axes_for_layer, LayerSurfaceRequirements,
-    TranslatedContentAxes, TranslationRenderContext,
-};
-use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::NodeId;
-use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
-use cranpose_render_common::graph::DrawRunNode;
-use cranpose_render_common::graph::{
-    quad_bounds, CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderNode,
-};
-use cranpose_render_common::layer_composition::{
-    effective_layer_isolation, local_content_layer_for, LayerIsolation,
-};
-use cranpose_render_common::primitive_emit::{
-    arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
-    round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
+use cranpose_core::{collections::map::HashMap, NodeId};
+use cranpose_render_common::{
+    geometry::{expand_blurred_rect, union_rect},
+    graph::{
+        quad_bounds, CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderNode,
+    },
+    layer_composition::{effective_layer_isolation, local_content_layer_for, LayerIsolation},
+    primitive_emit::{
+        arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
+        round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
+    },
 };
 use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
+
+#[cfg(test)]
+use crate::pipeline::UiTextLayoutResolver;
+use crate::{
+    effect_renderer::CompositeSampleMode,
+    pipeline::{
+        emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
+        scene_emission_counts, SceneEmissionCounts, TextLayoutResolver,
+    },
+    scene::{
+        BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
+        SceneCapacityHint, ShadowDraw, SnapAnchor, TextDraw,
+    },
+    surface_executor::{
+        backend::LayerSurfaceRoundedClip, layer_source_uses_external_backdrop_underlay,
+    },
+    surface_plan::{
+        composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
+        layer_contains_descendant_backdrop, layer_needs_rigid_snap,
+        layer_surface_requirements_cached, layer_surface_scale, translated_content_axes_for_layer,
+        LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
+    },
+    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
+};
 
 const NORMALIZED_SCENE_AFFINE_TOLERANCE: f32 = 1e-4;
 const MOTION_STABLE_CAPTURE_MIN_LEADING_GUARD: f32 = 64.0;
@@ -1058,8 +1060,10 @@ fn try_command_feed<'a>(
     shape_run: &mut Vec<ShapeRunEntry<'a>>,
     context: &LocalPrimitiveContext<'_>,
 ) -> bool {
-    use crate::scene::{ColorPatch, PendingFeedCapture};
-    use crate::shape_replay::command_feed_enabled;
+    use crate::{
+        scene::{ColorPatch, PendingFeedCapture},
+        shape_replay::command_feed_enabled,
+    };
     // Guard order and content are the happy path's exact current checks —
     // when they all pass, nothing below this block costs anything new.
     let feed_ready = command_feed_enabled()

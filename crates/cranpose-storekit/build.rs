@@ -10,9 +10,7 @@
 //! fails the link loudly. `rustc-link-lib` and `rustc-link-search` *do*
 //! propagate, so everything below is expressed with those two.
 
-use std::env;
-use std::path::PathBuf;
-use std::process::Command;
+use std::{env, path::PathBuf, process::Command};
 
 const LIB_NAME: &str = "cranpose_storekit_swift";
 

@@ -14,13 +14,16 @@
 //! reader buffers the whole asset, and that is the thing worth avoiding for
 //! exactly the assets big enough to be shipped this way.
 
+use std::{
+    fs::File,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
+
 use cranpose_services::{
     set_platform_bundled_assets, BundledAssetError, BundledAssetReader, BundledAssets,
     StreamingAssetReader,
 };
-use std::fs::File;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
 /// Installs the desktop bundled-asset backend.
 pub(crate) fn register() {

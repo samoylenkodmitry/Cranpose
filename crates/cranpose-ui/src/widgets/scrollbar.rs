@@ -13,16 +13,21 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::draggable::rememberDraggableState;
-use crate::modifier::Modifier;
-use crate::scroll::ScrollState;
-use crate::scrollbar::{content_delta_for_thumb_drag, ThumbBounds};
-use crate::widgets::scopes::{BoxWithConstraintsScope, BoxWithConstraintsScopeImpl};
-use crate::widgets::{BoxWithConstraints, Canvas};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, DrawScope, Point, Rect, Size};
 use cranpose_ui_layout::Axis;
+
+use crate::{
+    composable,
+    draggable::rememberDraggableState,
+    modifier::Modifier,
+    scroll::ScrollState,
+    scrollbar::{content_delta_for_thumb_drag, ThumbBounds},
+    widgets::{
+        scopes::{BoxWithConstraintsScope, BoxWithConstraintsScopeImpl},
+        BoxWithConstraints, Canvas,
+    },
+};
 
 /// How wide a bar is across its short axis.
 pub const DEFAULT_SCROLLBAR_THICKNESS: f32 = 8.0;
@@ -261,10 +266,12 @@ pub fn draw_scrollbar(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::Arc;
+
     use cranpose_core::{DefaultScheduler, Runtime};
     use cranpose_ui_graphics::{DrawPrimitive, DrawScopeDefault};
-    use std::sync::Arc;
+
+    use super::*;
 
     fn scrollable_state(viewport: f32, content: f32, offset: f32) -> ScrollState {
         let state = ScrollState::new(0.0);

@@ -7,12 +7,12 @@
 mod output_paths;
 mod text_showcase_external_helpers;
 
+use std::{path::PathBuf, time::Duration};
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button_exact_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
 use image::RgbaImage;
-use std::path::PathBuf;
-use std::time::Duration;
 use text_showcase_external_helpers::{
     capture_x11_window, find_window_id, focus_x11_window, mouse_down_x11_button,
     mouse_up_x11_button, move_x11_mouse_in_window,

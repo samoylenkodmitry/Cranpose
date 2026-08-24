@@ -13,9 +13,10 @@
 //! Add `--` `headless=false` to watch it in a window instead of reading the
 //! numbers.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::test_screens::text_wrap_repro::TextWrapReproScreen;
-use std::time::Duration;
 
 fn main() {
     let headless = !std::env::args().any(|arg| arg == "headless=false");

@@ -1,10 +1,10 @@
-use crate::slot::NodeSlotUpdate;
-use crate::{
-    debug_scope_label, Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble,
-    EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode,
-    ParentFrame,
-};
 use std::any::TypeId;
+
+use crate::{
+    debug_scope_label, slot::NodeSlotUpdate, Applier, ChildList, Command, CommandQueue, Composer,
+    DirtyBubble, EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState,
+    ParentAttachMode, ParentFrame,
+};
 
 impl Composer {
     fn recorded_node_parent(&self, id: NodeId) -> Option<NodeId> {

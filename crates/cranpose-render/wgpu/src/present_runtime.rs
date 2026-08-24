@@ -20,20 +20,28 @@
 //! and pump the message queue by hand, so every protocol path is
 //! observable deterministically.
 
-use crate::display_clip::DisplayVisibleRegion;
-use crate::frame_packet::{
-    CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns, ReplayAck,
-    ReplayFrameOps,
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{
+            channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError,
+            TrySendError,
+        },
+        Arc,
+    },
+    time::Duration,
 };
-use crate::render::GpuRenderer;
+
 use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{
-    channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError,
-    TrySendError,
+
+use crate::{
+    display_clip::DisplayVisibleRegion,
+    frame_packet::{
+        CancelReason, FramePacket, PresentOutcome, PresentTimings, RenderReturns, ReplayAck,
+        ReplayFrameOps,
+    },
+    render::GpuRenderer,
 };
-use std::sync::Arc;
-use std::time::Duration;
 
 /// Wakes the producer's event loop after the runtime sends returns (the
 /// Android frame waker: `Send + Sync`, installed at runtime init).

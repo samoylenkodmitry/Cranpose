@@ -1,8 +1,10 @@
-use std::any::{Any, TypeId};
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::{
+    any::{Any, TypeId},
+    collections::{HashMap, HashSet},
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierInvalidation, ModifierNode, ModifierNodeChain,

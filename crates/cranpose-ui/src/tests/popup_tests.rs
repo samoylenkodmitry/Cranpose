@@ -4,15 +4,18 @@
 //! top-level overlay, positioned at its anchor, and is NOT clipped by the
 //! bounds of the ancestor the `Popup` call site sits under.
 
-use crate::layout::LayoutEngine;
-use crate::modifier::{Brush, Color, Modifier};
-use crate::primitives::{Column, ColumnSpec};
-use crate::renderer::{HeadlessRenderer, RenderOp};
-use crate::widgets::{Popup, PopupHost};
-use crate::{layout::LayoutTree, Composition, LazyColumn, LazyColumnSpec};
 use cranpose_core::{location_key, MemoryApplier, NodeId};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_ui_graphics::{DrawPrimitive, Point, Rect, Size};
+
+use crate::{
+    layout::{LayoutEngine, LayoutTree},
+    modifier::{Brush, Color, Modifier},
+    primitives::{Column, ColumnSpec},
+    renderer::{HeadlessRenderer, RenderOp},
+    widgets::{Popup, PopupHost},
+    Composition, LazyColumn, LazyColumnSpec,
+};
 
 /// A distinctive brush color the overlay content paints, so it can be located
 /// unambiguously in the rendered scene.

@@ -216,8 +216,9 @@ pub fn take_exit_request() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     /// Every global in this module is process-wide and the runner is threaded,
     /// so the tests take turns. They share one lock rather than one each: the

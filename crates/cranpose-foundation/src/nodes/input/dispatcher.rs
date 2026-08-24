@@ -43,9 +43,10 @@ impl PointerDispatcher {
 
 #[cfg(test)]
 mod tests {
+    use cranpose_ui_graphics::Point;
+
     use super::*;
     use crate::nodes::input::PointerEventKind;
-    use cranpose_ui_graphics::Point;
 
     fn event(id: u64, x: f32) -> PointerEvent {
         let position = Point { x, y: 0.0 };

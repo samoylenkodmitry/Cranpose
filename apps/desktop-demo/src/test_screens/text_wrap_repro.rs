@@ -27,8 +27,9 @@
 //! and nothing shows.
 
 use cranpose_ui::{
-    composable, text::SpanStyle, text::TextUnit, Color, Column, ColumnSpec, LinearArrangement,
-    Modifier, Size, Spacer, Text, TextStyle,
+    composable,
+    text::{SpanStyle, TextUnit},
+    Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text, TextStyle,
 };
 
 /// Width the paragraph is measured under. Chosen so the re-wrap grows a line.

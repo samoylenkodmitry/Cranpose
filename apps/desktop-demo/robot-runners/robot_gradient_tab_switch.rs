@@ -5,10 +5,11 @@
 //! 2. Move cursor over the pointer-reactive area.
 //! 3. Ensure the "Pointer:" coordinates update after moves.
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
 use desktop_app::app;
-use std::time::Duration;
 
 fn wait_for_prefix(
     robot: &Robot,

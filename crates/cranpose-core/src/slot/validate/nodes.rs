@@ -1,5 +1,5 @@
-use super::super::{GroupRecord, NodeLifecycle, NodeRecord};
 use super::{
+    super::{GroupRecord, NodeLifecycle, NodeRecord},
     groups::{SlotTreeChecks, SlotTreeView},
     SlotInvariantError,
 };

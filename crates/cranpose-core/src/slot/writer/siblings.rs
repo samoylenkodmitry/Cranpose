@@ -1,7 +1,10 @@
-use super::super::{ActiveSubtreeRoot, ChildCursor, DirectChildRange, GroupKey, SlotTable};
-use super::state::SlotWriteSessionState;
-use crate::{collections::map::HashMap, AnchorId};
 use smallvec::SmallVec;
+
+use super::{
+    super::{ActiveSubtreeRoot, ChildCursor, DirectChildRange, GroupKey, SlotTable},
+    state::SlotWriteSessionState,
+};
+use crate::{collections::map::HashMap, AnchorId};
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
 // `option_env!` is evaluated by rustc. Changing this variable requires a

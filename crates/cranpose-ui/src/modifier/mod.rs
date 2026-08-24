@@ -7,9 +7,11 @@
 
 #![allow(non_snake_case)]
 
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::{
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 use cranpose_core::hash::default;
 
@@ -35,7 +37,6 @@ mod slices;
 mod toggleable;
 mod weight;
 
-pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 #[allow(unused_imports)]
 pub use chain::{ModifierChainHandle, ModifierChainInspectorNode, ModifierLocalsHandle};
 pub use cranpose_foundation::{
@@ -53,15 +54,21 @@ pub use cranpose_ui_graphics::{
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 #[allow(unused_imports)]
 pub use focus::FocusDirection;
+use focus::FocusTargetElement;
 pub use graphics_layer::GlassMaterial;
 pub(crate) use local::{
     ModifierLocalAncestorResolver, ModifierLocalSource, ModifierLocalToken, ResolvedModifierLocal,
 };
+use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
 #[allow(unused_imports)]
 pub use local::{ModifierLocalKey, ModifierLocalReadScope};
 #[allow(unused_imports)]
 pub use pointer_input::{AwaitPointerEventScope, PointerInputScope};
 pub use rotary_input::RotaryInputModifierNode;
+// Test accessibility for fling velocity (only with test-helpers feature)
+#[cfg(feature = "test-helpers")]
+pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
+use semantics::SemanticsElement;
 pub use semantics::{
     collect_semantics_from_chain, collect_semantics_from_modifier, SemanticsRequester,
     SemanticsRequesterElement,
@@ -70,14 +77,9 @@ pub use slices::{
     collect_modifier_slices, collect_modifier_slices_into, collect_slices_from_modifier,
     ModifierNodeSlices, ModifierNodeSlicesDebugStats,
 };
-// Test accessibility for fling velocity (only with test-helpers feature)
-#[cfg(feature = "test-helpers")]
-pub use scroll::{last_fling_velocity, reset_last_fling_velocity};
 
+pub use crate::draw::{DrawCacheBuilder, DrawCommand};
 use crate::modifier_nodes::ClipToBoundsElement;
-use focus::FocusTargetElement;
-use local::{ModifierLocalConsumerElement, ModifierLocalProviderElement};
-use semantics::SemanticsElement;
 
 /// Minimal inspector metadata storage.
 #[derive(Clone, Debug, Default)]

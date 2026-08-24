@@ -1,3 +1,5 @@
+use std::{any::TypeId, mem};
+
 use super::{
     segments::{
         extract_subtree_segment, group_segment_len, group_segment_range_checked,
@@ -9,8 +11,6 @@ use super::{
     PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
 };
 use crate::{retention::RetentionManager, AnchorId};
-use std::any::TypeId;
-use std::mem;
 
 #[derive(Clone, Copy)]
 pub(in crate::slot) struct PayloadLocationRefresh {

@@ -18,13 +18,19 @@
 //! cargo run --package desktop-app --example robot_liquid_dropdown_accordion --features desktop,robot-app
 //! ```
 
-use cranpose::liquid::prelude::*;
-use cranpose::text::TextStyle;
-use cranpose::widgets::{Box as CBox, BoxSpec, Text};
-use cranpose::{rememberMutableStateOf, AppLauncher, Color, Modifier, Size};
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::{
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
+
+use cranpose::{
+    liquid::prelude::*,
+    rememberMutableStateOf,
+    text::TextStyle,
+    widgets::{Box as CBox, BoxSpec, Text},
+    AppLauncher, Color, Modifier, Size,
+};
 
 const WINDOW_WIDTH: u32 = 520;
 const WINDOW_HEIGHT: u32 = 520;

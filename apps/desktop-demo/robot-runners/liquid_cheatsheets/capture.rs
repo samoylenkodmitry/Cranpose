@@ -1,15 +1,17 @@
 //! Real-X11 capture support for the static Liquid cheatsheet fixtures.
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{Arc, Condvar, Mutex},
+    thread::JoinHandle,
+    time::{Duration, Instant},
+};
+
 use anyhow::{bail, Context, Result};
 use cranpose::{Robot, RobotScreenshot};
-use image::imageops::crop_imm;
-use image::RgbaImage;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use image::{imageops::crop_imm, RgbaImage};
 
 const WORKER_READY_TIMEOUT: Duration = Duration::from_secs(5);
 

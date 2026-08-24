@@ -4,8 +4,9 @@
 //! [`Mixer`](crate::mixer::Mixer), and keep the stream alive. All mixing,
 //! resampling and voice management is shared, so a new platform is one file.
 
-use crate::mixer::MixerSeed;
 use cranpose_services::AudioError;
+
+use crate::mixer::MixerSeed;
 
 #[cfg(all(feature = "aaudio", target_os = "android"))]
 mod aaudio;

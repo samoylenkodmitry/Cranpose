@@ -112,7 +112,7 @@ echo "timeout: ${VERIFY_TIMEOUT_SECS}s"
 echo "mode: $VERIFY_MODE"
 
 run_core_validation() {
-    run_logged "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$ROOT_DIR" "${CARGO_RUNNER[@]}" fmt
+    run_logged "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$ROOT_DIR" just fmt-check
     scan_log "cargo fmt" "$ROOT_DIR/cargo_fmt.tmp" "$RUST_LOG_PATTERN"
 
     run_logged_timed_retry \
@@ -121,7 +121,7 @@ run_core_validation() {
         "$ROOT_DIR" \
         "${CRANPOSE_VERIFY_CARGO_TEST_TIMEOUT_SECS:-1800}" \
         "${CRANPOSE_VERIFY_CARGO_TEST_ATTEMPTS:-2}" \
-        "${CARGO_RUNNER[@]}" test --jobs "$CARGO_BUILD_JOBS" -- --test-threads "$RUST_TEST_THREADS"
+        "${CARGO_RUNNER[@]}" test --profile ci --workspace --jobs "$CARGO_BUILD_JOBS" -- --test-threads "$RUST_TEST_THREADS"
     scan_log "cargo test" "$ROOT_DIR/1.tmp" "$RUST_LOG_PATTERN"
 
     run_logged_timed_retry \
@@ -148,7 +148,7 @@ run_core_validation() {
         "$ROOT_DIR" \
         "${CRANPOSE_VERIFY_WASM_TIMEOUT_SECS:-1200}" \
         "${CRANPOSE_VERIFY_WASM_ATTEMPTS:-2}" \
-        "$ROOT_DIR/apps/desktop-demo/build-web.sh"
+        "$ROOT_DIR/apps/desktop-demo/build-web.sh" --release
     scan_log "wasm build" "$ROOT_DIR/apps/desktop-demo/web-build.tmp" "$WEB_LOG_PATTERN"
 }
 

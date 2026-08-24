@@ -14,8 +14,9 @@
 //! delivers dropped files and not opened ones, and this says so rather than
 //! implying coverage it does not have.
 
-use cranpose_services::{media::uri_for_path, publish_incoming_content, IncomingContent};
 use std::path::Path;
+
+use cranpose_services::{media::uri_for_path, publish_incoming_content, IncomingContent};
 
 /// Publishes one file as incoming content.
 ///

@@ -1,8 +1,6 @@
 //! Brush definitions for painting (solid colors, gradients, etc.)
 
-use crate::color::Color;
-use crate::geometry::Point;
-use crate::render_effect::TileMode;
+use crate::{color::Color, geometry::Point, render_effect::TileMode};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Brush {

@@ -1,6 +1,9 @@
-use crate::gesture_constants::DRAG_THRESHOLD;
-use crate::nodes::input::{PointerEvent, PointerEventKind, PointerId};
 use cranpose_ui_graphics::Point;
+
+use crate::{
+    gesture_constants::DRAG_THRESHOLD,
+    nodes::input::{PointerEvent, PointerEventKind, PointerId},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DragGestureEvent {

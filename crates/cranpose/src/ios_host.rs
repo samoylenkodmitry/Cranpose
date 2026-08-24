@@ -2,13 +2,14 @@
 
 #![allow(unsafe_code)]
 
+use std::sync::Arc;
+
 use cranpose_services::{
     set_application_id, set_host_controller, HostController, PlatformDirectories,
 };
 use objc2::MainThreadMarker;
 use objc2_foundation::{NSBundle, NSHomeDirectory};
 use objc2_ui_kit::UIApplication;
-use std::sync::Arc;
 
 struct IosHost;
 

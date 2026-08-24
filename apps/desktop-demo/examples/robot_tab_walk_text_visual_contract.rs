@@ -1,10 +1,13 @@
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1083;
 const WINDOW_HEIGHT: u32 = 813;

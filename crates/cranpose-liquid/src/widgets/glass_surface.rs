@@ -1,10 +1,13 @@
 //! The primitive glass container.
 
-use crate::material::{Glass, LiquidModifierExt};
 use cranpose_macros::composable;
-use cranpose_ui::widgets::{Box, BoxSpec};
-use cranpose_ui::Modifier;
+use cranpose_ui::{
+    widgets::{Box, BoxSpec},
+    Modifier,
+};
 use cranpose_ui_layout::Alignment;
+
+use crate::material::{Glass, LiquidModifierExt};
 
 /// A container rendered on the Liquid Glass material: its backdrop is
 /// refracted/blurred behind `content`, clipped to `glass.shape`.

@@ -7,8 +7,10 @@
 //! adapters over this trait, so the chain that reaches the device is
 //! `decoder -> equalizer -> analysis` with nothing else in it.
 
-use std::num::{NonZeroU16, NonZeroU32};
-use std::time::Duration;
+use std::{
+    num::{NonZeroU16, NonZeroU32},
+    time::Duration,
+};
 
 /// One interleaved sample.
 pub(crate) type Sample = f32;

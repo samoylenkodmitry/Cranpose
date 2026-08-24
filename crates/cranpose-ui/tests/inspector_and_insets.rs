@@ -4,9 +4,7 @@
 //! padding that is correct in English and mirrored in Arabic, and a shortcut
 //! that works on Linux and not on a Mac.
 
-use cranpose_ui::widgets::scaffold::PaddingValues;
-use cranpose_ui::Modifier;
-use cranpose_ui::{LayoutDirection, Modifiers};
+use cranpose_ui::{widgets::scaffold::PaddingValues, LayoutDirection, Modifier, Modifiers};
 
 #[test]
 fn relative_padding_mirrors_with_the_reading_order() {

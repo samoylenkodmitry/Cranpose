@@ -11,12 +11,15 @@
 //! cargo run --package desktop-app --example robot_liquid_bar_alignment --features robot-app
 //! ```
 
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+    time::Duration,
+};
+
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use desktop_app::app;
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 640;

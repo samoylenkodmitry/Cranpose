@@ -5,32 +5,38 @@
 
 #![allow(non_snake_case)]
 
-use crate::bring_into_view::local_bring_into_view_responder;
-use crate::clipboard_session::{
-    clipboard_can_paste, clipboard_paste_into_focus, clipboard_write_text,
+use std::{
+    cell::{Cell, RefCell},
+    rc::{Rc, Weak},
 };
-use crate::composable;
-use crate::layout::policies::EmptyMeasurePolicy;
-use crate::modifier::Modifier;
-use crate::safe_area::local_ime_insets;
-use crate::text::{measure_text, AnnotatedString, TextStyle};
-use crate::text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all};
-use crate::text_field_modifier_node::{
-    TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
-};
-use crate::text_selection::{
-    selection_after_handle_drag, HandleGrabOffset, HandleKind, LineAffinity, HANDLE_RADIUS,
-};
-use crate::widgets::{
-    loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
-    TextSelectionMenu,
-};
+
 use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
-use cranpose_foundation::modifier_element;
-use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
+use cranpose_foundation::{
+    modifier_element,
+    text::{TextFieldLineLimits, TextFieldState, TextRange},
+};
 use cranpose_ui_graphics::{Color, Point, Rect};
-use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+
+use crate::{
+    bring_into_view::local_bring_into_view_responder,
+    clipboard_session::{clipboard_can_paste, clipboard_paste_into_focus, clipboard_write_text},
+    composable,
+    layout::policies::EmptyMeasurePolicy,
+    modifier::Modifier,
+    safe_area::local_ime_insets,
+    text::{measure_text, AnnotatedString, TextStyle},
+    text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all},
+    text_field_modifier_node::{
+        TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
+    },
+    text_selection::{
+        selection_after_handle_drag, HandleGrabOffset, HandleKind, LineAffinity, HANDLE_RADIUS,
+    },
+    widgets::{
+        loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
+        TextSelectionMenu,
+    },
+};
 
 /// Alpha of the selection highlight relative to the field's accent
 /// ([`TextFieldOptions::cursor_color`]): the reference highlight is the tint
@@ -930,8 +936,9 @@ mod tests {
             "the grab bias must anchor on the handle's CURRENT line"
         );
     }
-    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
     use std::sync::Arc;
+
+    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
@@ -943,10 +950,9 @@ mod tests {
     /// published metrics, and returns the rendered scene. The teardrop
     /// rasterizes to an image primitive, so counting images counts handles.
     fn render_collapsed_handles(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::PopupHost;
         use cranpose_ui_graphics::Size;
+
+        use crate::{layout::LayoutEngine, renderer::HeadlessRenderer, widgets::PopupHost};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let key = location_key(file!(), line!(), column!());
@@ -1003,10 +1009,9 @@ mod tests {
     /// Composes the handles + contextual menu for a range selection with the
     /// given metrics, returning the rendered scene.
     fn render_range_menu(direct_manipulation: bool) -> crate::renderer::RecordedRenderScene {
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::PopupHost;
         use cranpose_ui_graphics::Size;
+
+        use crate::{layout::LayoutEngine, renderer::HeadlessRenderer, widgets::PopupHost};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let key = location_key(file!(), line!(), column!());
@@ -1071,10 +1076,13 @@ mod tests {
     fn render_range_menu_subcomposed(
         direct_manipulation: bool,
     ) -> crate::renderer::RecordedRenderScene {
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::{BoxWithConstraints, PopupHost};
         use cranpose_ui_graphics::Size;
+
+        use crate::{
+            layout::LayoutEngine,
+            renderer::HeadlessRenderer,
+            widgets::{BoxWithConstraints, PopupHost},
+        };
 
         let mut composition = Composition::new(MemoryApplier::new());
         let key = location_key(file!(), line!(), column!());
@@ -1156,12 +1164,13 @@ mod tests {
     fn render_range_menu_lazy_column(
         direct_manipulation: bool,
     ) -> crate::renderer::RecordedRenderScene {
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::PopupHost;
-        use crate::{LazyColumn, LazyColumnSpec};
         use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
         use cranpose_ui_graphics::Size;
+
+        use crate::{
+            layout::LayoutEngine, renderer::HeadlessRenderer, widgets::PopupHost, LazyColumn,
+            LazyColumnSpec,
+        };
 
         let mut composition = Composition::new(MemoryApplier::new());
         let key = location_key(file!(), line!(), column!());
@@ -1247,15 +1256,18 @@ mod tests {
     /// handle-grab hit region) pointed at the wrong character.
     #[test]
     fn field_window_origin_follows_vertical_scroll() {
-        use crate::layout::policies::EmptyMeasurePolicy;
-        use crate::layout::{LayoutBox, LayoutEngine};
-        use crate::renderer::HeadlessRenderer;
-        use crate::scroll::ScrollState;
-        use crate::widgets::{Column, ColumnSpec, Layout, PopupHost, Spacer};
+        use std::cell::RefCell;
+
         use cranpose_core::{remember, Key};
         use cranpose_foundation::modifier_element;
         use cranpose_ui_graphics::Size;
-        use std::cell::RefCell;
+
+        use crate::{
+            layout::{policies::EmptyMeasurePolicy, LayoutBox, LayoutEngine},
+            renderer::HeadlessRenderer,
+            scroll::ScrollState,
+            widgets::{Column, ColumnSpec, Layout, PopupHost, Spacer},
+        };
 
         let _app_context = crate::render_state::app_context_test_scope();
 
@@ -1584,10 +1596,9 @@ mod tests {
         can_undo: bool,
         can_redo: bool,
     ) -> crate::renderer::RecordedRenderScene {
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::PopupHost;
         use cranpose_ui_graphics::Size;
+
+        use crate::{layout::LayoutEngine, renderer::HeadlessRenderer, widgets::PopupHost};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let key = location_key(file!(), line!(), column!());
@@ -1751,8 +1762,9 @@ mod tests {
     }
 
     fn image_count(scene: &crate::renderer::RecordedRenderScene) -> usize {
-        use crate::renderer::RenderOp;
         use cranpose_ui_graphics::DrawPrimitive;
+
+        use crate::renderer::RenderOp;
         scene
             .operations()
             .iter()
@@ -1828,15 +1840,19 @@ mod tests {
     /// sign.
     #[test]
     fn lazy_column_responder_scrolls_a_hidden_caret_into_view() {
-        use crate::bring_into_view::local_bring_into_view_responder;
-        use crate::layout::LayoutEngine;
-        use crate::renderer::HeadlessRenderer;
-        use crate::widgets::{Box, BoxSpec, PopupHost};
-        use crate::{LazyColumn, LazyColumnSpec};
+        use std::cell::RefCell;
+
         use cranpose_core::Key;
         use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
         use cranpose_ui_graphics::Size;
-        use std::cell::RefCell;
+
+        use crate::{
+            bring_into_view::local_bring_into_view_responder,
+            layout::LayoutEngine,
+            renderer::HeadlessRenderer,
+            widgets::{Box, BoxSpec, PopupHost},
+            LazyColumn, LazyColumnSpec,
+        };
 
         let _app_context = crate::render_state::app_context_test_scope();
         let mut composition = Composition::new(MemoryApplier::new());

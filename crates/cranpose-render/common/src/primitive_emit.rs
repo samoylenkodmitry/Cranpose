@@ -9,14 +9,16 @@ use cranpose_ui_graphics::{
     ShadowPrimitive, Stroke, TextPrimitive,
 };
 
-use crate::graph::quad_bounds;
-use crate::layer_transform::{
-    apply_layer_affine_to_point, apply_layer_affine_to_rect, apply_layer_to_quad,
-    apply_layer_to_rect, layer_uniform_scale,
-};
-use crate::style_shared::{
-    apply_layer_to_color, compose_color_filters, resolve_layer_brush, scale_corner_radii,
-    ResolvedBrush,
+use crate::{
+    graph::quad_bounds,
+    layer_transform::{
+        apply_layer_affine_to_point, apply_layer_affine_to_rect, apply_layer_to_quad,
+        apply_layer_to_rect, layer_uniform_scale,
+    },
+    style_shared::{
+        apply_layer_to_color, compose_color_filters, resolve_layer_brush, scale_corner_radii,
+        ResolvedBrush,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -516,8 +518,9 @@ fn text_draw_params(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{Brush, Color, CornerRadii};
+
+    use super::*;
 
     #[test]
     fn draw_shape_params_for_primitive_returns_transformed_rect_shape() {
@@ -619,8 +622,9 @@ mod tests {
 
     // ── Stroke / arc lowering ───────────────────────────────────────────────
 
-    use cranpose_ui_graphics::{Stroke, StrokeCap, StrokeJoin};
     use std::f32::consts::FRAC_PI_2;
+
+    use cranpose_ui_graphics::{Stroke, StrokeCap, StrokeJoin};
 
     fn approx(a: f32, b: f32) -> bool {
         (a - b).abs() < 1e-3
@@ -934,10 +938,11 @@ mod tests {
 
     // ── Text lowering ───────────────────────────────────────────────────────
 
+    use std::rc::Rc as StdRc;
+
     use cranpose_ui_graphics::{
         FontWeight as DrawFontWeight, TextPrimitive, TextStyle as DrawTextStyle,
     };
-    use std::rc::Rc as StdRc;
 
     #[derive(Default)]
     struct CollectingTextSink {

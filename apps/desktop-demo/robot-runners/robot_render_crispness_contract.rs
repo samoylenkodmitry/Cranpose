@@ -2,16 +2,18 @@
 
 mod output_paths;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::crop_screenshot_logical;
 use cranpose_ui::{
-    composable, text::SpanStyle, text::TextUnit, Alignment, Box, BoxSpec, Brush, Canvas, Color,
-    ImageBitmap, Modifier, Rect, ScrollState, Size, Text, TextStyle,
+    composable,
+    text::{SpanStyle, TextUnit},
+    Alignment, Box, BoxSpec, Brush, Canvas, Color, ImageBitmap, Modifier, Rect, ScrollState, Size,
+    Text, TextStyle,
 };
 use cranpose_ui_graphics::DrawScope;
 use image::{ImageBuffer, RgbaImage};
-use std::path::Path;
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 320;
 const WINDOW_HEIGHT: u32 = 170;

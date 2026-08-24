@@ -48,10 +48,11 @@ pub fn ProvideLazyItemKey(key: Option<u64>, content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{cell::Cell, rc::Rc};
+
     use cranpose_core::{location_key, Composition, MemoryApplier};
-    use std::cell::Cell;
-    use std::rc::Rc;
+
+    use super::*;
 
     /// Runs `body` once inside a real composition and returns what it recorded.
     fn composed<T: Copy + Default + 'static>(body: impl Fn(&Cell<T>) + 'static) -> T {

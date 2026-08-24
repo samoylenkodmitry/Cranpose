@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::Point;
 

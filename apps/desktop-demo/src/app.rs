@@ -1,3 +1,8 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::{
     animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
     AnimationType, RepeatMode, StartOffset,
@@ -6,18 +11,15 @@ use cranpose_core::{
     self, compositionLocalOf, CompositionLocal, CompositionLocalProvider, DisposableEffect,
     DisposableEffectResult, LaunchedEffect, MutableState,
 };
-use cranpose_foundation::lazy::LazyListState;
-use cranpose_foundation::text::TextFieldState;
-use cranpose_foundation::PointerEventKind;
-use cranpose_foundation::SemanticsConfiguration;
+use cranpose_foundation::{
+    lazy::LazyListState, text::TextFieldState, PointerEventKind, SemanticsConfiguration,
+};
 use cranpose_ui::{
     composable, BasicTextField, BasicTextFieldOptions, BasicTextFieldWithOptions, BoxSpec, Brush,
     Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, GraphicsLayer, IntrinsicSize,
     LinearArrangement, Modifier, Point, PointerInputScope, RoundedCornerShape, Row, RowSpec,
     ScrollState, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 mod animations;
 mod hacker_news;
@@ -31,6 +33,7 @@ mod mineswapper2;
 pub mod rotary;
 mod shader_rect;
 mod shaders;
+mod source_view;
 mod text_showcase;
 pub mod wear;
 mod web_fetch;
@@ -38,6 +41,7 @@ mod winamp;
 mod xkcd;
 
 use animations::AnimationsTab;
+pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
 use hacker_news::{HackerNewsScrollStabilityFixtureTab, HackerNewsTab};
 use images::images_tab;
 use interactive_anim::InteractiveAnimTab;
@@ -47,6 +51,7 @@ pub use liquid_ui::{
     set_tab_swipe_reference_page, LiquidReferenceFixture, LiquidReferenceFixtureCase,
     LIQUID_SCROLL_VIEWPORT_TAG, TAB_SWIPE_REFERENCE_STAGE_HEIGHT, TAB_SWIPE_REFERENCE_STAGE_WIDTH,
 };
+pub use markdown::{markdown_scroll_stress_fixture, MARKDOWN_SCROLL_STABILITY_TARGET_TEXT};
 use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
@@ -60,9 +65,6 @@ use web_fetch::web_fetch_example;
 pub use winamp::WinampStandaloneApp;
 use winamp::{remember_winamp_tab_state, WinampTab, WinampTabState};
 use xkcd::xkcd_tab;
-
-pub use hacker_news::HACKER_NEWS_SCROLL_STABILITY_TARGET_TITLE;
-pub use markdown::{markdown_scroll_stress_fixture, MARKDOWN_SCROLL_STABILITY_TARGET_TEXT};
 
 const DEMO_PAGE_PADDING: f32 = 20.0;
 const DEMO_TAB_BAR_PADDING: f32 = 8.0;
@@ -444,14 +446,28 @@ fn TabContent(
     modifier: Modifier,
 ) {
     let active = active_tab.get();
+    let showing_source = cranpose_core::rememberMutableStateOf(|| false);
     cranpose_ui::Box(modifier.clip_to_bounds(), BoxSpec::default(), move || {
-        cranpose_core::with_key(&active, || {
-            if tab_requires_scroll(active) {
-                ScrollableTab(move || render_active_tab(active, startup, winamp_tab_state));
-            } else {
-                render_active_tab(active, startup, winamp_tab_state);
-            }
-        });
+        Column(
+            Modifier::empty().fill_max_size(),
+            ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(6.0)),
+            move || {
+                source_view::SourceToggleButton(showing_source);
+                if showing_source.get() {
+                    source_view::SourcePanel(active);
+                } else {
+                    cranpose_core::with_key(&active, || {
+                        if tab_requires_scroll(active) {
+                            ScrollableTab(move || {
+                                render_active_tab(active, startup, winamp_tab_state)
+                            });
+                        } else {
+                            render_active_tab(active, startup, winamp_tab_state);
+                        }
+                    });
+                }
+            },
+        );
     });
 }
 
@@ -1653,8 +1669,9 @@ fn counter_app() {
                 // Simulate background work with a delay on native
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    use instant::Duration;
                     use std::thread;
+
+                    use instant::Duration;
                     for _ in 0..5 {
                         if token.is_cancelled() {
                             return String::new();

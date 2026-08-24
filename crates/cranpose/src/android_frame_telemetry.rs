@@ -23,8 +23,10 @@
 //! Set them with `adb shell setprop` before launching the activity.
 #![allow(unsafe_code)]
 
-use std::ffi::{c_void, CString};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::{
+    ffi::{c_void, CString},
+    sync::atomic::{AtomicBool, AtomicI64, Ordering},
+};
 
 /// Frames aggregated into one report when `debug.cranpose.frame_telemetry=1`.
 const DEFAULT_WINDOW_FRAMES: usize = 120;

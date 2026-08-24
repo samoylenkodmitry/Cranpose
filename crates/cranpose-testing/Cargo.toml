@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Testing utilities and harness for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [features]
 default = []
 # Renderer-agnostic robot harness. The consuming application selects the

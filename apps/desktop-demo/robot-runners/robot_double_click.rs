@@ -5,10 +5,11 @@
 //! cargo run --package desktop-app --example robot_double_click --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
-use std::time::Duration;
 
 mod text_input_robot_helpers;
 

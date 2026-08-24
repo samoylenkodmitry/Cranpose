@@ -1,10 +1,12 @@
+use std::rc::Rc;
+
+use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive};
+
 use super::{
     inspector_metadata, Brush, Color, DrawCommand, LayerShape, Modifier, Point, Rect, Shadow,
     ShadowScope, Size,
 };
 use crate::modifier_nodes::DrawCommandElement;
-use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive};
-use std::rc::Rc;
 
 impl Modifier {
     /// Draws a drop shadow behind the current content.

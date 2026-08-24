@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 #![allow(clippy::type_complexity)]
 
 mod fps_monitor;
@@ -7,24 +6,30 @@ mod shell_debug;
 mod shell_frame;
 mod shell_input;
 mod wheel;
-#[cfg(test)]
-use shell_frame::build_draw_refresh_scope;
-
-pub use fps_monitor::FpsStats;
-
-use std::fmt::{Debug, Write};
-use std::rc::Rc;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Mutex, MutexGuard,
+use std::{
+    collections::HashSet,
+    fmt::{Debug, Write},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex, MutexGuard,
+    },
 };
-// Use web_time for cross-platform time support (native + WASM) - compatible with winit
-use web_time::Instant;
 
 use cranpose_core::{
     enter_event_handler_scope, location_key, run_in_mutable_snapshot, Applier, Composition, Key,
     MemoryApplier, NodeError, NodeId,
 };
+// Re-export the rotary (Wear OS crown / rotating bezel) event so platform
+// backends can build one and apps can type their window-level handler.
+pub use cranpose_foundation::{
+    rotary_scroll_pixels_from_detents, RotaryScrollEvent, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+};
+// Re-export the pointer device source and the keyboard-modifiers type so
+// platform backends can stamp them. `Modifiers` lives in cranpose-foundation
+// (not cranpose-ui, which merely re-exports it) because `PointerEvent` needs
+// it too; re-exported from here directly rather than via cranpose-ui.
+pub use cranpose_foundation::{Modifiers, PointerSource};
 use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
@@ -38,22 +43,15 @@ use cranpose_ui::{
     take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
     LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
 };
-use cranpose_ui_graphics::{Point, Rect, Size};
-use hit_path_tracker::{HitPathTracker, PointerId};
-use std::collections::HashSet;
-
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
-// Re-export the pointer device source and the keyboard-modifiers type so
-// platform backends can stamp them. `Modifiers` lives in cranpose-foundation
-// (not cranpose-ui, which merely re-exports it) because `PointerEvent` needs
-// it too; re-exported from here directly rather than via cranpose-ui.
-pub use cranpose_foundation::{Modifiers, PointerSource};
-// Re-export the rotary (Wear OS crown / rotating bezel) event so platform
-// backends can build one and apps can type their window-level handler.
-pub use cranpose_foundation::{
-    rotary_scroll_pixels_from_detents, RotaryScrollEvent, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
-};
+use cranpose_ui_graphics::{Point, Rect, Size};
+pub use fps_monitor::FpsStats;
+use hit_path_tracker::{HitPathTracker, PointerId};
+#[cfg(test)]
+use shell_frame::build_draw_refresh_scope;
+// Use web_time for cross-platform time support (native + WASM) - compatible with winit
+use web_time::Instant;
 // The wheel sample every host normalizes into, and the convention it carries.
 pub use wheel::WheelScroll;
 
@@ -92,10 +90,6 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
     }
 }
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
-pub use cranpose_ui::PlatformTextInputHandler;
-// Re-export the IME editable-state snapshot for platform text-input bridges
-pub use cranpose_ui::ImeEditorState;
-
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
     debug_recompose_scope_registry_stats, MemoryApplierDebugStats,
@@ -109,6 +103,9 @@ use cranpose_core::{
     snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats},
     CompositionPassDebugStats, SlotId,
 };
+// Re-export the IME editable-state snapshot for platform text-input bridges
+pub use cranpose_ui::ImeEditorState;
+pub use cranpose_ui::PlatformTextInputHandler;
 
 /// How the platform should vote the display's frame rate on behalf of the app.
 ///
@@ -1184,11 +1181,15 @@ pub fn default_root_key() -> Key {
 
 #[cfg(test)]
 mod frame_pacing_tests {
-    use super::{FramePacingMode, FrameSchedule, FrameScheduler, PlatformFrameDriver};
-    use std::cell::RefCell;
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    use std::time::Duration;
+    use std::{
+        cell::RefCell,
+        panic::{catch_unwind, AssertUnwindSafe},
+        time::Duration,
+    };
+
     use web_time::Instant;
+
+    use super::{FramePacingMode, FrameSchedule, FrameScheduler, PlatformFrameDriver};
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum DriverCall {

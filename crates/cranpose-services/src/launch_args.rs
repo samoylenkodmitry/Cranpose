@@ -39,10 +39,10 @@
 //! }
 //! ```
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// One launch-argument value, in the type the platform delivered it.
 ///
@@ -339,9 +339,10 @@ pub fn isDebuggable() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell as StdRefCell;
+
     use super::*;
     use crate::run_test_composition;
-    use std::cell::RefCell as StdRefCell;
 
     fn args(entries: &[(&str, LaunchArgValue)]) -> LaunchArgs {
         LaunchArgs::new(

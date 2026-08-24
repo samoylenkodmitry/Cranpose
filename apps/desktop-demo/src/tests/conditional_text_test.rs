@@ -32,9 +32,10 @@ fn conditional_text_with_external_state(counter_state: cranpose_core::MutableSta
 
 #[test]
 fn test_conditional_text_reactivity() {
+    use std::cell::RefCell;
+
     use cranpose_core::{MutableState, NodeError};
     use cranpose_ui::run_test_composition;
-    use std::cell::RefCell;
 
     thread_local! {
         static TEST_COUNTER: RefCell<Option<MutableState<i32>>> = const { RefCell::new(None) };

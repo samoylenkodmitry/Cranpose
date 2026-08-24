@@ -1,7 +1,7 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_services::{isSystemInDarkTheme, ProvideSystemTheme, SystemTheme};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 fn run_test_composition(build: impl FnMut()) {
     let mut composition = Composition::new(MemoryApplier::new());

@@ -1,5 +1,6 @@
-use cranpose_core::snapshot_v2::take_mutable_snapshot;
 use std::sync::mpsc;
+
+use cranpose_core::snapshot_v2::take_mutable_snapshot;
 
 #[test]
 fn mutable_snapshots_ignore_open_snapshots_from_other_threads() {

@@ -1,9 +1,10 @@
-use super::debug::SlotTableDiagnostics;
-use super::{
-    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
-    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState,
-};
 use std::rc::Rc;
+
+use super::{
+    debug::SlotTableDiagnostics, AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord,
+    PayloadAnchorRegistry, PayloadRecord, ScopeIndex, SlotLifecycleCoordinator,
+    SlotWriteSessionState,
+};
 
 mod metadata;
 mod mutation;

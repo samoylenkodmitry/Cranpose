@@ -11,18 +11,16 @@
 //! cargo run --package desktop-app --example robot_subcompose_lazy --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose::LazyItems;
+use std::time::Duration;
+
+use cranpose::{AppLauncher, LazyItems};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::widgets::*;
-use cranpose_ui::{Modifier, TextStyle};
-use std::time::Duration;
+use cranpose_ui::{widgets::*, Modifier, TextStyle};
 
 /// Minimal test UI focused on SubcomposeLayout and LazyColumn behavior
 fn test_app() {
-    use cranpose_ui::Color;
-    use cranpose_ui::LinearArrangement;
+    use cranpose_ui::{Color, LinearArrangement};
 
     let list_state = rememberLazyListState();
 

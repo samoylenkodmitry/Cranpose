@@ -1,15 +1,19 @@
-use std::cell::{Cell, RefCell};
-use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    cmp::Reverse,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 
-use crate::graph::{ProjectiveTransform, RenderGraph};
-use crate::{HitTestTarget, RenderScene};
+use crate::{
+    graph::{ProjectiveTransform, RenderGraph},
+    HitTestTarget, RenderScene,
+};
 
 pub struct RenderDiagnostics {
     reported_warnings: RefCell<HashSet<&'static str>>,
@@ -442,8 +446,9 @@ fn triangle_sign(point: Point, a: [f32; 2], b: [f32; 2]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
         [

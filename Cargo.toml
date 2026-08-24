@@ -66,6 +66,22 @@ cranpose-ui-graphics = { path = "crates/cranpose-ui-graphics", version = "0.1.99
 cranpose-ui-layout = { path = "crates/cranpose-ui-layout", version = "0.1.99" }
 web-time = "1.1"
 
+# Rules that AGENTS.md states as prose, enforced by the compiler instead.
+#
+# `unsafe_code` replaced 31 identical `#![deny(unsafe_code)]` crate-root
+# attributes. The FFI modules that genuinely need it still opt in with a
+# module-level `#![allow(unsafe_code)]`, exactly as before -- a source
+# attribute overrides a lint level Cargo sets on the command line.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+# "don't put unfinished parts here" and "never leave debug logs", as gates.
+[workspace.lints.clippy]
+todo = "deny"
+dbg_macro = "deny"
+clone_on_copy = "deny"
+redundant_locals = "deny"
+
 [patch.crates-io]
 # Upstream master moved on to hashbrown 0.17. Pin the 0.16 alignment commit so
 # WGPU 29 and gpu-descriptor share one hashbrown/foldhash version family.
@@ -80,6 +96,30 @@ debug = false
 
 [profile.dev.build-override]
 debug = false
+
+# A debug-mode graphics and decoding stack changes what a dev build feels like:
+# these are the crates that run per frame or per asset, not per build. They are
+# third-party and rebuilt rarely, so optimising them costs one compile and buys
+# every subsequent run. The workspace's own crates stay unoptimised so stepping
+# through them still works.
+[profile.dev.package.wgpu]
+opt-level = 3
+[profile.dev.package.wgpu-core]
+opt-level = 3
+[profile.dev.package.wgpu-hal]
+opt-level = 3
+[profile.dev.package.wgpu-types]
+opt-level = 3
+[profile.dev.package.naga]
+opt-level = 3
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.ttf-parser]
+opt-level = 3
 
 # CI keeps full dev debuginfo instead of inheriting local iteration settings.
 [profile.ci]

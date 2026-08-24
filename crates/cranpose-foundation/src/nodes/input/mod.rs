@@ -13,13 +13,16 @@ pub use types::{
 };
 
 pub mod prelude {
-    pub use super::gestures::{
-        DragGesture, DragGestureEvent, FlingGesture, FlingGestureEvent, ScrollGesture,
-        ScrollGestureEvent, TapGesture, TapGestureEvent, TransformGesture, TransformGestureEvent,
-    };
-    pub use super::rotary::{RotaryScrollEvent, RotaryStepAccumulator};
-    pub use super::types::{
-        Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
-        PointerPhase, PointerSource,
+    pub use super::{
+        gestures::{
+            DragGesture, DragGestureEvent, FlingGesture, FlingGestureEvent, ScrollGesture,
+            ScrollGestureEvent, TapGesture, TapGestureEvent, TransformGesture,
+            TransformGestureEvent,
+        },
+        rotary::{RotaryScrollEvent, RotaryStepAccumulator},
+        types::{
+            Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,
+            PointerPhase, PointerSource,
+        },
     };
 }

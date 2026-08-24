@@ -1,17 +1,14 @@
-use std::collections::HashSet;
-use std::mem::size_of;
-use std::rc::Rc;
+use std::{collections::HashSet, mem::size_of, rc::Rc};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::PointerEvent;
-use cranpose_ui::text::AnnotatedString;
 use cranpose_ui::{
-    GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
+    text::AnnotatedString, GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape,
+    TextLayoutOptions, TextStyle,
 };
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
 
-use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::DrawPlacement;
+use crate::{raster_cache::LayerRasterCacheHashes, style_shared::DrawPlacement};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProjectiveTransform {
@@ -780,9 +777,10 @@ fn solve_homography(source: [[f32; 2]; 4], target: [[f32; 2]; 4]) -> Option<[f32
 
 #[cfg(test)]
 mod tests {
+    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
+
     use super::*;
     use crate::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui_graphics::{Brush, Color, DrawPrimitive};
 
     fn test_layer(local_bounds: Rect, children: Vec<RenderNode>) -> LayerNode {
         LayerNode {

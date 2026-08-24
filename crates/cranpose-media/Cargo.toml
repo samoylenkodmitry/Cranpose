@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Desktop media playback backend for Cranpose (symphonia decoders, cpal output)"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-services = { workspace = true }
 log = "0.4"

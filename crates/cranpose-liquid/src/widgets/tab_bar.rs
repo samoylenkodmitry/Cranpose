@@ -2,25 +2,28 @@
 //! liquid selection blob (dual-spring stretch), plus an optional detached
 //! circular accessory (the iOS 26 search button).
 
-use crate::material::{
-    neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, GlassShadow,
-    LiquidModifierExt,
-};
-use crate::motion::LiquidMotion;
-use crate::theme::{liquid_colors, liquid_typography, LiquidTypography};
-use crate::widgets::content_scope::ScopeContent;
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_macros::composable;
-use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row, RowSpec,
-    Text,
-};
 use cranpose_ui::{
+    text::{FontWeight, SpanStyle, TextStyle},
+    widgets::{
+        Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row,
+        RowSpec, Text,
+    },
     Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, SemanticsWidgetRole, Size,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use crate::{
+    material::{
+        neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, GlassShadow,
+        LiquidModifierExt,
+    },
+    motion::LiquidMotion,
+    theme::{liquid_colors, liquid_typography, LiquidTypography},
+    widgets::content_scope::ScopeContent,
+};
 
 /// Visual treatment for a tab icon.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

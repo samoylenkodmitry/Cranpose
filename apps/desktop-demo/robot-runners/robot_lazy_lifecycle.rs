@@ -8,17 +8,17 @@
 //! cargo run --package desktop-app --example robot_lazy_lifecycle --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose::LazyItems;
+use std::time::Duration;
+
+use cranpose::{AppLauncher, LazyItems};
 use cranpose_core::{DisposableEffect, DisposableEffectResult, MutableState};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::widgets::*;
 use cranpose_ui::{
-    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+    widgets::*, Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle,
+    VerticalAlignment,
 };
-use std::time::Duration;
 
 /// Lifecycle stats stored in compose state
 #[derive(Clone, Default, PartialEq)]

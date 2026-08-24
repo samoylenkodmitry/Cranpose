@@ -25,12 +25,11 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 90
     env:
-      RUSTUP_TOOLCHAIN: stable
       RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure machine-local knobs
         env:
@@ -56,6 +55,7 @@ jobs:
       - name: Start sccache
         run: |
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
           sccache --zero-stats || true
 
@@ -72,13 +72,7 @@ jobs:
         # host-level lock serialises the two robot jobs against each other
         # without serialising anything else in the fleet — see
         # scripts/ci/with_robot_host_lock.sh.
-        run: >
-          scripts/ci/with_robot_host_lock.sh
-          xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh
-          --sequential
-          --skip robot_underline_screenshot
-          --skip robot_text_strikeout_presented
-          --skip robot_leetcodedaily_full_layout_scroll_stability
+        run: just robot-gpu
 
       - name: sccache stats
         if: always()
@@ -92,12 +86,11 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
     env:
-      RUSTUP_TOOLCHAIN: stable
       RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure machine-local knobs
         env:
@@ -115,78 +108,55 @@ jobs:
       - name: Start sccache
         run: |
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
       - name: Run the external capture trio on software present
         # See robot-e2e-gpu above: this suite and that one share a
         # host-level lock so they never run at once on the same box.
-        env:
-          WGPU_BACKEND: gl
-          LIBGL_ALWAYS_SOFTWARE: "1"
-        run: >
-          scripts/ci/with_robot_host_lock.sh
-          xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh
-          --sequential
-          --example robot_underline_screenshot
-          --example robot_text_strikeout_presented
-          --example robot_leetcodedaily_full_layout_scroll_stability
+        run: just robot-captures
 
   ios-build:
     name: iOS build (self-hosted)
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     env:
-      RUSTUP_TOOLCHAIN: stable
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios-sim,aarch64-apple-ios
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision iOS Rust targets
         run: |
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          rustup run stable rustc --version
-          rustup target add --toolchain stable \
+          # No toolchain action here: rust-toolchain.toml owns the version and
+          # the rustup shim installs it on first use. Adding targets without
+          # `--toolchain` puts them on that pinned toolchain instead of on
+          # whatever the runner currently calls `stable`.
+          rustc --version
+          rustup target add \
             aarch64-apple-ios-sim \
             aarch64-apple-ios
 
       - name: Clippy iOS simulator
-        run: >
-          cargo clippy
-          -p desktop-app --bin cranpose-ios
-          --target aarch64-apple-ios-sim
-          --no-default-features --features ios
-          -- -D warnings -A clippy::question_mark
+        run: just clippy-ios
 
       - name: Build iOS device binary
-        run: >
-          cargo build
-          -p desktop-app --bin cranpose-ios
-          --target aarch64-apple-ios
-          --no-default-features --features ios
+        run: just ios-device
 
       - name: Assemble simulator app bundle
-        run: apps/ios-demo/ios/build-app.sh aarch64-apple-ios-sim
+        run: just ios-sim
 
   android-release:
     name: Android release build (self-hosted)
     runs-on: [self-hosted, cranpose-heavy]
     timeout-minutes: 90
     env:
-      RUSTUP_TOOLCHAIN: stable
       RUSTC_WRAPPER: sccache
       SCCACHE_CACHE_SIZE: 40G
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Configure machine-local SDK and cache paths
         env:
@@ -223,14 +193,16 @@ jobs:
 
       - name: Provision toolchains and start sccache
         run: |
-          rustup run stable rustc --version
-          rustup target add --toolchain stable \
+          # rust-toolchain.toml owns the version; the targets land on it.
+          rustc --version
+          rustup target add \
             aarch64-linux-android \
             armv7-linux-androideabi \
             i686-linux-android \
             x86_64-linux-android
           command -v sccache >/dev/null \
             || RUSTC_WRAPPER= cargo install sccache --locked
+          command -v just >/dev/null || cargo install just --locked
           command -v cargo-ndk >/dev/null || cargo install cargo-ndk --locked
           if [[ ! -f "$ANDROID_NDK_HOME/source.properties" ]]; then
             yes | sdkmanager "ndk;27.0.12077973"
@@ -243,13 +215,12 @@ jobs:
           sccache --zero-stats || true
 
       - name: Build Android release APK
-        working-directory: apps/android-demo/android
         # --no-daemon: never attach to a shared/foreign Gradle daemon on this
         # self-hosted box. Reused daemons started by other builds on the runner
         # can carry a PATH without ~/.cargo/bin, which makes the cargo-ndk check
         # (providers.exec "cargo ndk") fail spuriously. A single-use daemon
         # inherits this step's PATH (which includes ~/.cargo/bin), fixing the race.
-        run: ./gradlew --no-daemon :app:assembleRelease
+        run: just android
 
       - name: sccache stats
         if: always()

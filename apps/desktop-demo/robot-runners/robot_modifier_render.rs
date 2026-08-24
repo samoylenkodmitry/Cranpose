@@ -1,11 +1,11 @@
 //! Robot test to reproduce modifier showcase rendering issue
 //! Tests that clicking "Positioned Boxes" in modifier tab shows content
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button, find_button_in_semantics, find_in_semantics, find_text};
-use desktop_app::app::combined_app;
-use desktop_app::fonts::DEMO_FONTS;
-use std::time::Duration;
+use desktop_app::{app::combined_app, fonts::DEMO_FONTS};
 
 fn wait_for_condition(
     _robot: &cranpose::Robot,

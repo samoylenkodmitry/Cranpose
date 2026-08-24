@@ -1,10 +1,11 @@
 //! Core layout traits and types shared by Compose UI widgets.
 
-use crate::constraints::Constraints;
-use crate::{Alignment, HorizontalAlignment, VerticalAlignment};
+use std::rc::Rc;
+
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
-use std::rc::Rc;
+
+use crate::{constraints::Constraints, Alignment, HorizontalAlignment, VerticalAlignment};
 
 /// Parent data for flex layouts (Row/Column weights and alignment).
 #[derive(Clone, Copy, Debug, Default)]

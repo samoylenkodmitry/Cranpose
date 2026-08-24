@@ -9,11 +9,14 @@
 //! recreation and process death. It stores through a [`Saver`], so a type that
 //! is not a string still has one obvious, testable way to become one.
 
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, OnceLock},
+};
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::host::application_directories;
 use crate::registry::ServiceRegistry;
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, OnceLock};
 
 /// Errors produced by a preferences backend.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]

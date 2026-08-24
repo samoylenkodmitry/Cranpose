@@ -1,10 +1,13 @@
-use cranpose::widgets::{Box, BoxSpec, Row, RowSpec};
-use cranpose::LazyItems;
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use cranpose::{
+    widgets::{Box, BoxSpec, Row, RowSpec},
+    AppLauncher, Color, LazyItems, Modifier, Size,
+};
 use cranpose_testing::sample_screenshot_pixel_logical;
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, WearScalingLazyColumn, WearScalingLazyColumnSpec,
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::wear::{
+        rememberWearScalingListState, WearScalingLazyColumn, WearScalingLazyColumnSpec,
+    },
 };
 
 const WIDTH: u32 = 774;

@@ -1,10 +1,13 @@
+use std::fmt::Debug;
+
 use cranpose_app_shell::AppShell;
 use cranpose_core::MutableState;
 use cranpose_render_common::Renderer;
-use cranpose_testing::robot::{RobotTestRule, TestRenderer};
-use cranpose_testing::ComposeTestRule;
+use cranpose_testing::{
+    robot::{RobotTestRule, TestRenderer},
+    ComposeTestRule,
+};
 use desktop_app::app::{DemoTab, TEST_ACTIVE_TAB_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE};
-use std::fmt::Debug;
 
 pub fn with_active_tab<F>(f: F)
 where

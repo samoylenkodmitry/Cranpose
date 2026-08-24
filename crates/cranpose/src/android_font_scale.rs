@@ -17,10 +17,10 @@
 //! Wear OS quality guideline WO-V1 asks that text follow this setting, and an
 //! app cannot honour it if the framework never tells it what the setting is.
 
-use cranpose_ui::FontScaleCurve;
-use jni::objects::JObject;
-use jni::{jni_sig, jni_str};
 use std::cell::Cell;
+
+use cranpose_ui::FontScaleCurve;
+use jni::{jni_sig, jni_str, objects::JObject};
 
 /// `TypedValue.COMPLEX_UNIT_SP`.
 const COMPLEX_UNIT_SP: i32 = 2;

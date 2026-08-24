@@ -1,12 +1,12 @@
+use std::{cmp::Reverse, collections::BinaryHeap, mem};
+
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
     generational_registry::{GenerationalRegistryStorage, RegistryState},
     DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable,
 };
-use crate::collections::map::HashMap;
-use crate::AnchorId;
-use std::{cmp::Reverse, collections::BinaryHeap, mem};
+use crate::{collections::map::HashMap, AnchorId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PayloadAnchorState {

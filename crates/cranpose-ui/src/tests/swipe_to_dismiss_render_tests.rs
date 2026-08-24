@@ -12,12 +12,13 @@
 //!    at rest (offset 0), so it cannot flash through content that fades in with
 //!    alpha < 1 during an entrance animation. It must draw once displaced.
 
-use super::*;
-use crate::modifier::ModifierNodeSlices;
-use crate::modifier::{Color, PointerEvent, PointerEventKind};
+use std::rc::Rc;
+
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawPrimitive, Point, Size as ViewportSize, Size as PrimSize};
-use std::rc::Rc;
+
+use super::*;
+use crate::modifier::{Color, ModifierNodeSlices, PointerEvent, PointerEventKind};
 
 const BIN_RED: Color = Color(1.0, 0.0, 0.0, 1.0);
 

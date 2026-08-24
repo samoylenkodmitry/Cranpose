@@ -1,0 +1,14 @@
+# The single source of truth for the toolchain this repo builds with.
+#
+# Pinned, not floating: the fleet runners are persistent machines, so a
+# `rustup update` on any of them would otherwise silently move the gate that
+# every pull request is measured against. Bump this file deliberately, in its
+# own pull request, so a toolchain change is reviewable like any other change.
+#
+# `cargo fmt` is the one command that does NOT use this toolchain -- rustfmt's
+# import rules are unstable, so formatting runs on the pinned nightly in
+# rust-toolchain-nightly.toml instead.
+[toolchain]
+channel = "1.98.0"
+profile = "minimal"
+components = ["clippy", "rustfmt", "rust-src"]

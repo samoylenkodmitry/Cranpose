@@ -16,9 +16,12 @@
 //! and takes no view of how they are drawn, so it costs nothing to a platform
 //! that never shows it and can be tested without a GPU.
 
-use crate::round_scaling_list::ScalingParams;
-use crate::scrollbar::{thumb_geometry, ThumbBounds};
 use std::f32::consts::FRAC_PI_2;
+
+use crate::{
+    round_scaling_list::ScalingParams,
+    scrollbar::{thumb_geometry, ThumbBounds},
+};
 
 /// `ScrollIndicatorDefaults.indicatorHeight` — how far the track reaches up and
 /// down from 3 o'clock, as a straight-line height rather than an arc length.

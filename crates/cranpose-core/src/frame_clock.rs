@@ -1,10 +1,15 @@
-use crate::runtime::{FrameCallbackKind, RuntimeHandle};
-use crate::FrameCallbackId;
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
+
+use crate::{
+    runtime::{FrameCallbackKind, RuntimeHandle},
+    FrameCallbackId,
+};
 
 #[derive(Clone)]
 pub struct FrameClock {
@@ -192,11 +197,14 @@ impl Drop for FrameCallbackRegistration {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        panic::{catch_unwind, AssertUnwindSafe},
+        sync::Arc,
+        task::{Context, Poll, Wake, Waker},
+    };
+
     use super::*;
     use crate::{DefaultScheduler, Runtime};
-    use std::panic::{catch_unwind, AssertUnwindSafe};
-    use std::sync::Arc;
-    use std::task::{Context, Poll, Wake, Waker};
 
     thread_local! {
         static REENTRANT_NEXT_FRAME_STATE: RefCell<Option<Rc<RefCell<NextFrameState>>>> =

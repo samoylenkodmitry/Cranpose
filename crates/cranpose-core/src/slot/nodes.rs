@@ -1,3 +1,5 @@
+use std::mem;
+
 use super::{
     checked_usize_to_i64,
     segments::{
@@ -9,7 +11,6 @@ use super::{
     GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
 use crate::{AnchorId, NodeId};
-use std::mem;
 
 impl SlotTable {
     fn group_node_start_at(&self, group_index: usize) -> usize {

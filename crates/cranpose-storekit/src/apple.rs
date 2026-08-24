@@ -5,12 +5,15 @@
 //! code and this is the only module that opts back in.
 #![allow(unsafe_code)]
 
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    ffi::{c_char, c_void, CStr, CString},
+    sync::{Arc, Mutex},
+};
+
 use cranpose_services::purchases::{
     set_platform_purchases, Product, PurchaseEvent, Purchases, StorePhase, StoreState,
 };
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::ffi::{c_char, c_void, CStr, CString};
-use std::sync::{Arc, Mutex};
 
 // ---------------------------------------------------------------- ABI codes
 //

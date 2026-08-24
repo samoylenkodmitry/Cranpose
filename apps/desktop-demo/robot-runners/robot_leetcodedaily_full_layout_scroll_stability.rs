@@ -10,6 +10,13 @@ mod perf_robot_stats;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap, HashSet},
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
 use cranpose::AppLauncher;
 use cranpose_core::{remember, rememberMutableStateOf, MutableState};
 use cranpose_foundation::{
@@ -20,20 +27,16 @@ use cranpose_testing::{
     crop_screenshot_logical, normalize_screenshot_region, screenshot_difference_stats,
 };
 use cranpose_ui::{
-    composable, Alignment, BasicText, BasicTextFieldOptions, BitmapPainter, Box as ComposeBox,
-    BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush, Button, ButtonSpec, Color,
-    ColorFilter, CompositingStrategy, ContentScale, CornerRadii, Image, ImageBitmap, LayerShape,
-    LinearArrangement, Modifier, ParagraphStyle, Point, Rect, RoundedCornerShape, Row, RowSpec,
-    ScrollState, Size, Spacer, SpanStyle, Text, TextOverflow, TextStyle, VerticalAlignment,
+    composable, widgets::BasicTextFieldWithOptions, Alignment, BasicText, BasicTextFieldOptions,
+    BitmapPainter, Box as ComposeBox, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Brush,
+    Button, ButtonSpec, Color, ColorFilter, Column, ColumnSpec, CompositingStrategy, ContentScale,
+    CornerRadii, Image, ImageBitmap, LayerShape, LinearArrangement, Modifier, ParagraphStyle,
+    Point, Rect, RoundedCornerShape, Row, RowSpec, ScrollState, Size, Spacer, SpanStyle, Text,
+    TextOverflow, TextStyle, VerticalAlignment,
 };
-use cranpose_ui::{widgets::BasicTextFieldWithOptions, Column, ColumnSpec};
 use image::{imageops::FilterType, ImageBuffer, RgbaImage};
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
 
 const APP_WIDTH: u32 = 1100;

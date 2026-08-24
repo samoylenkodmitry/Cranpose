@@ -1,15 +1,16 @@
+use std::{cmp::Ordering, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_foundation::{
-    lazy::rememberLazyListState, lazy::LazyListScope, SemanticsConfiguration,
+    lazy::{rememberLazyListState, LazyListScope},
+    SemanticsConfiguration,
 };
 use cranpose_testing::find_element_by_text_exact;
-use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
 use cranpose_ui::{
-    composable, Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text,
-    TextStyle,
+    composable,
+    widgets::{LazyColumn, LazyColumnSpec},
+    Color, Column, ColumnSpec, LinearArrangement, Modifier, Size, Spacer, Text, TextStyle,
 };
-use std::cmp::Ordering;
-use std::time::Duration;
 
 fn collect_visible_items(robot: &cranpose::Robot) -> Vec<(usize, f32)> {
     let Ok(semantics) = robot.get_semantics() else {

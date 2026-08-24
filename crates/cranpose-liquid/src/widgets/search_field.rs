@@ -1,16 +1,18 @@
 //! A pill search field on glass.
 
-use crate::material::Glass;
-use crate::material::LiquidModifierExt;
-use crate::theme::{liquid_colors, liquid_typography};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_macros::composable;
-use cranpose_ui::text::{SpanStyle, TextStyle};
-use cranpose_ui::widgets::{
-    BasicTextFieldDecorated, BasicTextFieldOptions, Box, BoxSpec, Row, RowSpec, Text,
+use cranpose_ui::{
+    text::{SpanStyle, TextStyle},
+    widgets::{BasicTextFieldDecorated, BasicTextFieldOptions, Box, BoxSpec, Row, RowSpec, Text},
+    Modifier,
 };
-use cranpose_ui::Modifier;
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
+
+use crate::{
+    material::{Glass, LiquidModifierExt},
+    theme::{liquid_colors, liquid_typography},
+};
 
 /// Configuration for [`LiquidSearchField`].
 #[derive(Clone, Debug, PartialEq)]

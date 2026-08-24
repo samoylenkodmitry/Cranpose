@@ -5,12 +5,12 @@
 mod output_paths;
 mod text_showcase_external_helpers;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, find_text_in_semantics};
 use desktop_app::app;
 use image::RgbaImage;
-use std::path::Path;
-use std::time::Duration;
 use text_showcase_external_helpers::{
     capture_x11_window_screenshot, find_window_id, open_text_tab, scroll_text_into_view,
 };

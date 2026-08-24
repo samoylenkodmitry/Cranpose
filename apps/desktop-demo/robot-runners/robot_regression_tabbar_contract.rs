@@ -2,6 +2,8 @@
 
 mod output_paths;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     bounds_span, changed_pixel_count_in_region, collect_tab_bounds, detect_tab_axis,
@@ -9,8 +11,6 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
-use std::path::Path;
-use std::time::Duration;
 
 type Rect = (f32, f32, f32, f32);
 

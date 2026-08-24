@@ -13,15 +13,13 @@
 //! cargo run --package desktop-app --example robot_subcompose_invalidation --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose::LazyItems;
+use std::time::Duration;
+
+use cranpose::{AppLauncher, LazyItems};
 use cranpose_core::rememberMutableStateOf;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button, find_in_semantics, find_text_in_semantics};
-use cranpose_ui::widgets::*;
-use cranpose_ui::SemanticsWidgetRole;
-use cranpose_ui::{Color, Modifier, TextStyle};
-use std::time::Duration;
+use cranpose_ui::{widgets::*, Color, Modifier, SemanticsWidgetRole, TextStyle};
 
 /// Test UI that changes LazyColumn item colors on button click
 fn test_app() {

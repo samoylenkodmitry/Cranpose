@@ -8,12 +8,10 @@
 //! export through a save dialog instead — so `is_supported` is `false` there and
 //! the UI can offer "Save…" rather than "Share".
 
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ShareError {
@@ -136,8 +134,9 @@ pub fn ProvideShareSheet(content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     struct RecordingShareSheet {
         shared: RefCell<Option<ShareContent>>,

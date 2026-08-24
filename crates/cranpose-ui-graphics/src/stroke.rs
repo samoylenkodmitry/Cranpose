@@ -466,8 +466,9 @@ pub fn inflate_rect(rect: Rect, amount: f32) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    use super::*;
 
     /// Bounds are deliberately conservative now: endpoint trig is
     /// approximate and the box is padded by its worst-case error, so

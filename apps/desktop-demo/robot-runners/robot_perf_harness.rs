@@ -9,26 +9,30 @@
 mod markdown_fixture_client;
 mod perf_robot_stats;
 
-use cranpose::AppLauncher;
-use cranpose::LazyItems;
+use std::{
+    cell::RefCell,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use cranpose::{AppLauncher, LazyItems};
+use cranpose_animation::{
+    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+};
 use cranpose_core::CompositionLocalProvider;
 use cranpose_foundation::lazy::{
     rememberLazyListState, LazyLayoutStats, LazyListScope, LazyListState,
 };
 use cranpose_services::{local_http_client, HttpClientRef};
 use cranpose_testing::{find_button_exact_in_semantics, find_text};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text,
-};
 use cranpose_ui::{
-    composable, Color, GraphicsLayer, LinearArrangement, Modifier, RenderEffect, TextStyle,
+    composable,
+    widgets::{Box, BoxSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec, Text},
+    Color, GraphicsLayer, LinearArrangement, Modifier, RenderEffect, TextStyle,
 };
 use desktop_app::app;
 use markdown_fixture_client::MarkdownFixtureClient;
 use perf_robot_stats::{print_render_summary, RenderStatsAccumulator};
-use std::cell::RefCell;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 const DEFAULT_DURATION_SECS: u64 = 3;
 const DEFAULT_WARMUP_SECS: u64 = 5;
@@ -60,6 +64,7 @@ enum PerfScenario {
     MarkdownDefaultViewerScroll,
     BackdropBlur,
     OpaqueScene,
+    GlassLazyScroll,
 }
 
 impl PerfScenario {
@@ -72,6 +77,7 @@ impl PerfScenario {
             "markdown_default_viewer_scroll" => Some(Self::MarkdownDefaultViewerScroll),
             "backdrop_blur" => Some(Self::BackdropBlur),
             "opaque_scene" => Some(Self::OpaqueScene),
+            "glass_lazy_scroll" => Some(Self::GlassLazyScroll),
             _ => None,
         }
     }
@@ -93,6 +99,7 @@ impl PerfScenario {
             Self::MarkdownDefaultViewerScroll => "markdown_default_viewer_scroll",
             Self::BackdropBlur => "backdrop_blur",
             Self::OpaqueScene => "opaque_scene",
+            Self::GlassLazyScroll => "glass_lazy_scroll",
         }
     }
 
@@ -105,6 +112,7 @@ impl PerfScenario {
             Self::MarkdownDefaultViewerScroll => "Default Markdown Viewer Scroll",
             Self::BackdropBlur => "Backdrop Blur Panel",
             Self::OpaqueScene => "Opaque Scene",
+            Self::GlassLazyScroll => "Glass Lazy Scroll",
         }
     }
 
@@ -117,12 +125,13 @@ impl PerfScenario {
             Self::MarkdownDefaultViewerScroll => 0,
             Self::BackdropBlur => 220,
             Self::OpaqueScene => 260,
+            Self::GlassLazyScroll => 400,
         }
     }
 
     fn drag_x(self) -> f32 {
         match self {
-            Self::BackdropBlur => SCROLL_X_BACKDROP,
+            Self::BackdropBlur | Self::GlassLazyScroll => SCROLL_X_BACKDROP,
             Self::MarkdownScroll => SCROLL_X_DEFAULT,
             _ => SCROLL_X_DEFAULT,
         }
@@ -137,6 +146,7 @@ impl PerfScenario {
             Self::MarkdownDefaultViewerScroll => Color(0.42, 0.80, 0.72, 0.88),
             Self::BackdropBlur => Color(0.72, 0.86, 0.98, 0.24),
             Self::OpaqueScene => Color(0.3, 0.36, 0.44, 1.0),
+            Self::GlassLazyScroll => Color(0.72, 0.84, 0.98, 0.9),
         }
     }
 
@@ -253,6 +263,9 @@ fn ScenarioViewport(list_state: LazyListState, scenario: PerfScenario) {
                             if scenario == PerfScenario::BackdropBlur {
                                 BackdropOverlayCard();
                             }
+                            if scenario == PerfScenario::GlassLazyScroll {
+                                AnimatedGlassOverlay();
+                            }
                         }
                     },
                 );
@@ -293,6 +306,7 @@ fn PerfScenarioItem(index: usize, scenario: PerfScenario) {
         PerfScenario::MarkdownDefaultViewerScroll => TextHeavyRow(index, scenario),
         PerfScenario::BackdropBlur => BackdropRow(index),
         PerfScenario::OpaqueScene => OpaqueRow(index),
+        PerfScenario::GlassLazyScroll => GlassRow(index),
     }
 }
 
@@ -554,6 +568,120 @@ fn BackdropOverlayCard() {
                         TextStyle::default(),
                     );
                     PerfBadge("blur".to_string(), Color(0.66, 0.78, 0.96, 0.55));
+                },
+            );
+        },
+    );
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn GlassRow(index: usize) {
+    let tint = match index % 4 {
+        0 => Color(0.20, 0.26, 0.36, 0.55),
+        1 => Color(0.28, 0.20, 0.34, 0.55),
+        2 => Color(0.18, 0.32, 0.30, 0.55),
+        _ => Color(0.32, 0.26, 0.20, 0.55),
+    };
+    // Every row blurs what is behind it. That is the difference from
+    // `backdrop_blur`, where one overlay blurs once per frame: here the cost
+    // scales with the number of rows the viewport holds, which is what a real
+    // glass list does.
+    Box(
+        Modifier::empty()
+            .fill_max_width()
+            .height(96.0)
+            .backdrop_effect(RenderEffect::blur(12.0))
+            .background(tint)
+            .rounded_corners(18.0)
+            .padding(14.0),
+        BoxSpec::new(),
+        move || {
+            Row(
+                Modifier::empty().fill_max_width(),
+                RowSpec::new().horizontal_arrangement(LinearArrangement::SpacedBy(12.0)),
+                move || {
+                    Column(
+                        Modifier::empty(),
+                        ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(4.0)),
+                        move || {
+                            Text(
+                                format!("Glass row {}", index),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            Text(
+                                "Blurred backdrop, tinted fill, rounded clip.".to_string(),
+                                Modifier::empty(),
+                                TextStyle::default(),
+                            );
+                            PerfBadge(
+                                format!("layer {}", index % 4),
+                                Color(0.70, 0.82, 0.98, 0.55),
+                            );
+                        },
+                    );
+                },
+            );
+        },
+    );
+}
+
+/// A glass card that never stops moving, so the scenario measures animation
+/// alongside blur rather than a still frame that happens to contain both.
+#[composable]
+#[allow(non_snake_case)]
+fn AnimatedGlassOverlay() {
+    let transition = rememberInfiniteTransition("glass_overlay");
+    let drift = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(2_400),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "glass_drift",
+    );
+    let pulse = transition.animateFloat(
+        0.0,
+        1.0,
+        infiniteRepeatable(
+            AnimationSpec::linear(1_700),
+            RepeatMode::Reverse,
+            StartOffset::default(),
+        ),
+        "glass_pulse",
+    );
+
+    let drift_value = drift.get();
+    let pulse_value = pulse.get();
+
+    Box(
+        Modifier::empty()
+            .offset(48.0 + drift_value * 180.0, 72.0 + drift_value * 96.0)
+            .width(300.0)
+            .height(164.0)
+            .backdrop_effect(RenderEffect::blur(10.0 + pulse_value * 14.0))
+            .background(Color(0.80, 0.88, 0.98, 0.20 + pulse_value * 0.12))
+            .rounded_corners(22.0)
+            .padding(18.0),
+        BoxSpec::new(),
+        move || {
+            Column(
+                Modifier::empty(),
+                ColumnSpec::new().vertical_arrangement(LinearArrangement::SpacedBy(8.0)),
+                move || {
+                    Text(
+                        "Animated glass".to_string(),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
+                    Text(
+                        "Drifting offset and pulsing blur radius, every frame.".to_string(),
+                        Modifier::empty(),
+                        TextStyle::default(),
+                    );
                 },
             );
         },
@@ -1201,13 +1329,14 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::perf_robot_stats::RenderStatsAccumulator;
+    use cranpose_render_wgpu::RenderStatsSnapshot;
+
     use super::{
         format_lazy_summary, fps_budget_from, frame_ms_budget_from, lazy_reuse_rate_pct,
-        timeout_budget_secs, timeout_slack_secs_from, FpsPacingAccumulator, LazyLayoutStats,
-        PerfScenario, DEFAULT_MAX_P95_FRAME_MS, DEFAULT_MIN_FPS, DEFAULT_TIMEOUT_SLACK_SECS,
+        perf_robot_stats::RenderStatsAccumulator, timeout_budget_secs, timeout_slack_secs_from,
+        FpsPacingAccumulator, LazyLayoutStats, PerfScenario, DEFAULT_MAX_P95_FRAME_MS,
+        DEFAULT_MIN_FPS, DEFAULT_TIMEOUT_SLACK_SECS,
     };
-    use cranpose_render_wgpu::RenderStatsSnapshot;
 
     #[test]
     fn timeout_slack_uses_default_for_missing_or_invalid_values() {

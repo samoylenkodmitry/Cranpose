@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+
 use web_time::Instant;
 
 /// Creates an immutable GPU resource on first use and reports its real cost.
@@ -86,8 +87,9 @@ impl PassPipeline {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     #[test]
     fn resource_is_created_only_when_first_requested() {

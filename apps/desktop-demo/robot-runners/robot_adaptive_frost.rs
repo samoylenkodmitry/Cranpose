@@ -5,15 +5,20 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_adaptive_frost --features desktop,robot-app`
 
-use cranpose::liquid::prelude::*;
-use cranpose::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
-use cranpose::widgets::{Box as CBox, BoxSpec, Text};
-use cranpose::{Alignment, AppLauncher, Color, Modifier, Size};
+use std::{
+    path::PathBuf,
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
+
+use cranpose::{
+    liquid::prelude::*,
+    text::{FontWeight, SpanStyle, TextStyle, TextUnit},
+    widgets::{Box as CBox, BoxSpec, Text},
+    Alignment, AppLauncher, Color, Modifier, Size,
+};
 use image::RgbaImage;
-use std::path::PathBuf;
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 460;
 const WINDOW_HEIGHT: u32 = 340;

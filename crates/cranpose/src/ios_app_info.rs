@@ -1,8 +1,9 @@
 //! Reads the version identity from the running iOS application bundle.
 
+use std::rc::Rc;
+
 use cranpose_services::{set_platform_app_info, AppInfo};
 use objc2_foundation::{ns_string, NSBundle, NSString};
-use std::rc::Rc;
 
 struct IosAppInfo {
     version_name: Option<String>,

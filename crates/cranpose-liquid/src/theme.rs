@@ -4,13 +4,13 @@
 
 #![allow(non_snake_case)]
 
+use std::cell::RefCell;
+
 use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
 use cranpose_services::isSystemInDarkTheme;
-use cranpose_ui::text::FontWeight;
-use cranpose_ui::text::{SpanStyle, TextStyle, TextUnit};
+use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
 use cranpose_ui_graphics::Color;
-use std::cell::RefCell;
 
 /// Whether the theme follows the OS appearance or is pinned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

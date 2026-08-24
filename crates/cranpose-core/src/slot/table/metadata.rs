@@ -1,5 +1,4 @@
-use super::super::GroupRecord;
-use super::SlotTable;
+use super::{super::GroupRecord, SlotTable};
 use crate::{AnchorId, ScopeId};
 
 impl SlotTable {

@@ -7,10 +7,10 @@
 //! driver that changes a value must force a root render (for example
 //! `AppShell::request_root_render`) for composition to observe it.
 
+use std::{cell::Cell, rc::Rc};
+
 use cranpose_services::{set_platform_system_theme, SystemTheme};
 use cranpose_ui::{local_ime_insets, local_safe_area_insets, EdgeInsets};
-use std::cell::Cell;
-use std::rc::Rc;
 
 /// Live environment values a platform driver feeds into composition.
 #[derive(Default)]

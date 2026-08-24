@@ -11,12 +11,14 @@
 //! whose `next` future wakes its collector when the provider discovers another
 //! file. Nothing here polls.
 
-use std::cell::RefCell;
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
+use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
 
 /// Chunk size the framework's own readers hand back per [`ContentReader::read_chunk`].
 pub const DEFAULT_CHUNK_LEN: usize = 256 * 1024;

@@ -1,32 +1,39 @@
+use std::{
+    hash::{Hash, Hasher},
+    rc::Rc,
+    sync::{Arc, Mutex, MutexGuard},
+};
+
 use ab_glyph::{
     point, Font, FontArc, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont, VariableFont,
 };
 use cranpose_core::hash::default as default_hash;
-use cranpose_ui::text::{
-    AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, RangeStyle, RenderString,
-    Shadow, SpanStyle, TextDrawStyle, TextMotion, TextShaping, TextStyle,
+use cranpose_ui::{
+    text::{
+        AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, RangeStyle,
+        RenderString, Shadow, SpanStyle, TextDrawStyle, TextMotion, TextShaping, TextStyle,
+    },
+    text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
+    TextLinePrefixWidths, TextMeasurer, TextMetrics,
 };
-use cranpose_ui::text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult};
-use cranpose_ui::{TextLinePrefixWidths, TextMeasurer, TextMetrics};
 use cranpose_ui_graphics::{Color, ImageBitmap, Rect};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
 
-use crate::bounded_lru_cache::BoundedLruCache;
-use crate::brush_sampling::{color_to_rgba, sample_brush_rgba};
 #[cfg(test)]
 use crate::font_layout::layout_line_glyphs;
-use crate::font_layout::{
-    align_glyph_to_pixel_grid, line_advance_width, pixel_bounds_from_outlined, vertical_metrics,
-    GlyphPixelBounds,
-};
-use crate::gpos_kerning::KernedFont;
 #[cfg(feature = "text-hyphenation")]
 use crate::text_hyphenation::HyphenationDictionaryError;
-use crate::text_hyphenation::HyphenationDictionaryStore;
-use crate::Brush;
+use crate::{
+    bounded_lru_cache::BoundedLruCache,
+    brush_sampling::{color_to_rgba, sample_brush_rgba},
+    font_layout::{
+        align_glyph_to_pixel_grid, line_advance_width, pixel_bounds_from_outlined,
+        vertical_metrics, GlyphPixelBounds,
+    },
+    gpos_kerning::KernedFont,
+    text_hyphenation::HyphenationDictionaryStore,
+    Brush,
+};
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
 const SHADOW_SIGMA_SCALE: f32 = 0.57735;
@@ -4907,9 +4914,10 @@ fn transform_outline_point(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui::text::{RangeStyle, SpanStyle};
     use cranpose_ui_graphics::Point;
+
+    use super::*;
 
     fn count_ink_pixels(image: &ImageBitmap) -> usize {
         image
@@ -6695,8 +6703,9 @@ mod tests {
 
 #[cfg(test)]
 mod line_alignment_tests {
-    use super::*;
     use cranpose_ui::text::{ParagraphStyle, TextAlign};
+
+    use super::*;
 
     /// The x range of every non-transparent pixel on the rows a line occupies.
     fn ink_columns(image: &ImageBitmap, rows: std::ops::Range<u32>) -> Option<(u32, u32)> {

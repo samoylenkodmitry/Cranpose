@@ -22,10 +22,16 @@ jobs:
     outputs:
       should_publish: ${{ steps.sync.outputs.should_publish }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Provision the pinned Rust toolchain
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Named step so the pinned toolchain's first-use download shows up
+          # here rather than inside whichever cargo step ran first.
+          rustc --version
 
       - name: Sync Cargo versions with tag
         id: sync
@@ -242,11 +248,17 @@ jobs:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Provision the pinned Rust toolchain
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Named step so the pinned toolchain's first-use download shows up
+          # here rather than inside whichever cargo step ran first.
+          rustc --version
 
       - name: Verify tag and workspace versions
         run: |
@@ -409,11 +421,17 @@ jobs:
       TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Provision the pinned Rust toolchain
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # Named step so the pinned toolchain's first-use download shows up
+          # here rather than inside whichever cargo step ran first.
+          rustc --version
 
       # apps/isolated-demo is the canary that proves a release is consumable
       # from crates.io, so `sync_versions` deliberately leaves it alone before
@@ -494,7 +512,7 @@ jobs:
       - name: Build the isolated demo for the web
         run: |
           set -euo pipefail
-          rustup target add --toolchain stable wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           apps/isolated-demo/build-web.sh
 

@@ -17,8 +17,9 @@
 //!
 //! Run headless with `CRANPOSE_HEADLESS=1`.
 
-use cranpose::AppLauncher;
 use std::time::Duration;
+
+use cranpose::AppLauncher;
 
 const WINDOW_WIDTH: u32 = 700;
 const WINDOW_HEIGHT: u32 = 500;

@@ -1,12 +1,13 @@
 //! High level UI primitives built on top of the Compose core runtime.
 
-#![deny(unsafe_code)]
+use std::{
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
 use cranpose_core::{location_key, ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle};
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
-use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 
 pub mod bring_into_view;
 pub mod clipboard_session;
@@ -52,27 +53,38 @@ mod word_boundaries;
 pub mod zoom;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
-pub use text_field_focus::has_focused_field;
-// Editable-state snapshot for platform IMEs (Android InputConnection, web
-// composition) - platform runtimes read it through the shell
-pub use text_field_focus::ImeEditorState;
-// Platform soft-keyboard bridge - platform runtimes install a handler so text
-// field focus changes can show/hide the on-screen keyboard
-pub use text_input_session::PlatformTextInputHandler;
-// Export cursor blink timing for WaitUntil scheduling
-pub use cursor_animation::{
-    is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
-    stop_cursor_blink, tick_cursor_blink,
-};
-
 pub use bring_into_view::{
     local_bring_into_view_responder, scroll_delta_to_reveal, BringIntoViewResponder,
+};
+// Lazy list exports - single source from cranpose-foundation
+pub use cranpose_foundation::lazy::{
+    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
+};
+// The accessibility vocabulary an app writes against. It is declared in
+// cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
+// against cranpose-ui and should not have to reach past it to describe a
+// button.
+pub use cranpose_foundation::{
+    CanvasSemanticsNode, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
 };
 pub use cranpose_foundation::{
     DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
 };
 pub use cranpose_ui_graphics::{BlurredEdgeTreatment, ColorFilter, Dp, ImageBitmap, ImageSampling};
 pub use cranpose_ui_layout::IntrinsicSize;
+// Export cursor blink timing for WaitUntil scheduling
+pub use cursor_animation::{
+    is_cursor_visible, next_cursor_blink_time, reset_cursor_blink, start_cursor_blink,
+    stop_cursor_blink, tick_cursor_blink,
+};
+// Debug utilities
+pub use debug::{
+    format_layout_tree, format_modifier_chain, format_render_scene, format_screen_summary,
+    install_modifier_chain_trace, log_layout_tree, log_modifier_chain, log_render_scene,
+    log_screen_summary, ModifierChainTraceGuard,
+};
+pub use density::{density, local_density, Density, DensityMeasureScope};
+pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
 pub use draw::{
     command_draw_scope, command_draw_scope_retained, command_draw_scope_reusing,
     execute_draw_commands, DrawCacheBuilder, DrawCommand, DrawCommandFn,
@@ -86,11 +98,13 @@ pub use focus_dispatch::{
     active_focus_target, clear_focus_invalidations, has_pending_focus_invalidations,
     process_focus_invalidations, schedule_focus_invalidation, set_active_focus_target,
 };
+pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
     collect_is_pressed_as_state, rememberMutableInteractionSource, Interaction,
     MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
     PressInteractionRelease,
 };
+pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use layout::{
     build_layout_tree_from_applier, build_semantics_tree_from_applier,
     build_semantics_tree_from_layout_tree,
@@ -106,16 +120,9 @@ pub use layout::{
 pub use layout_direction::{
     layout_direction, local_layout_direction, LayoutDirection, ProvideLayoutDirection,
 };
+pub use lazy_item::{lazy_item_key, local_lazy_item_key, ProvideLazyItemKey};
 pub use modal::{
     clear_modals, dispatch_modal_back, local_modal_depth, modal_depth, ModalRegistration,
-};
-pub use safe_area::{local_ime_insets, local_safe_area_insets, window_insets, WindowInsets};
-// The accessibility vocabulary an app writes against. It is declared in
-// cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
-// against cranpose-ui and should not have to reach past it to describe a
-// button.
-pub use cranpose_foundation::{
-    CanvasSemanticsNode, SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
 };
 pub use modifier::{
     collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
@@ -126,11 +133,17 @@ pub use modifier::{
     ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape,
     RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
 };
+// Test utilities for fling velocity verification (only with test-helpers feature)
+#[cfg(feature = "test-helpers")]
+pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use modifier_nodes::{
     AlphaElement, AlphaNode, BackgroundElement, BackgroundNode, ClickableElement, ClickableNode,
     CornerShapeElement, CornerShapeNode, FillDirection, FillElement, FillNode,
     FractionalOffsetElement, FractionalOffsetNode, OffsetElement, OffsetNode, PaddingElement,
     PaddingNode, SizeElement, SizeNode,
+};
+pub use nine_patch::{
+    nine_patch_quads, tile_count, tile_quads, NinePatchInsets, PatchFill, PatchQuad,
 };
 // Pointer repass scheduler plumbing serviced by the host shell each frame.
 #[doc(hidden)]
@@ -148,26 +161,9 @@ pub use primitives::{
     RowSpec, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions,
     DEFAULT_ALPHA,
 };
-// Lazy list exports - single source from cranpose-foundation
-pub use cranpose_foundation::lazy::{
-    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
-};
-pub use density::{density, local_density, Density, DensityMeasureScope};
-pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
-pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
-pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-pub use lazy_item::{lazy_item_key, local_lazy_item_key, ProvideLazyItemKey};
-pub use nine_patch::{
-    nine_patch_quads, tile_count, tile_quads, NinePatchInsets, PatchFill, PatchQuad,
-};
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
 pub use render_state::reset_render_state_for_tests;
-pub use render_state::{
-    current_density, current_font_scale, current_font_scale_curve, scale_sp, set_density,
-    set_font_scale, set_font_scale_curve, AppContext, AppContextScope, MAX_FONT_SCALE,
-    MIN_FONT_SCALE,
-};
 // Render/layout/draw scheduler and invalidation-queue plumbing serviced by
 // the host shell and renderer each frame. Custom modifier authors should
 // invalidate through `ModifierNode::invalidate` instead of reaching for
@@ -185,7 +181,13 @@ pub use render_state::{
     take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
     take_pointer_invalidation, take_render_invalidation,
 };
+pub use render_state::{
+    current_density, current_font_scale, current_font_scale_curve, scale_sp, set_density,
+    set_font_scale, set_font_scale_curve, AppContext, AppContextScope, MAX_FONT_SCALE,
+    MIN_FONT_SCALE,
+};
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
+pub use safe_area::{local_ime_insets, local_safe_area_insets, window_insets, WindowInsets};
 pub use scroll::{ScrollElement, ScrollMetrics, ScrollNode, ScrollSettlePolicy, ScrollState};
 pub use scrollbar::{content_delta_for_thumb_drag, thumb_geometry, ThumbBounds, ThumbGeometry};
 // Semantics invalidation scheduler plumbing serviced by the host shell each frame.
@@ -194,10 +196,6 @@ pub use semantics_dispatch::{
     clear_semantics_invalidations, has_pending_semantics_invalidations,
     process_semantics_invalidations, schedule_semantics_invalidation,
 };
-pub use zoom::ZoomState;
-// Test utilities for fling velocity verification (only with test-helpers feature)
-#[cfg(feature = "test-helpers")]
-pub use modifier::{last_fling_velocity, reset_last_fling_velocity};
 pub use subcompose_layout::{
     Constraints, MeasureResult, Placement, SubcomposeLayoutNode, SubcomposeLayoutScope,
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
@@ -211,24 +209,27 @@ pub use text::{
     TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
     TextShaping, TextStyle,
 };
+pub use text_field_focus::has_focused_field;
+// Editable-state snapshot for platform IMEs (Android InputConnection, web
+// composition) - platform runtimes read it through the shell
+pub use text_field_focus::ImeEditorState;
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
+// Platform soft-keyboard bridge - platform runtimes install a handler so text
+// field focus changes can show/hide the on-screen keyboard
+pub use text_input_session::PlatformTextInputHandler;
 pub use text_modifier_node::{TextModifierElement, TextModifierNode};
-pub use widgets::clickable_text::ClickableText;
-pub use widgets::lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec};
-pub use widgets::linked_text::LinkedText;
-pub use widgets::slider::{Slider, SliderOrientation, SliderScope, SliderSpec};
-pub use widgets::swipe_to_dismiss::{
-    rememberSwipeDismissState, SwipeDismissDirection, SwipeDismissSide, SwipeDismissState,
-    SwipeToDismiss, SwipeToDismissBox, SwipeToDismissSpec,
+pub use widgets::{
+    clickable_text::ClickableText,
+    lazy_list::{LazyColumn, LazyColumnSpec, LazyRow, LazyRowSpec},
+    linked_text::LinkedText,
+    slider::{Slider, SliderOrientation, SliderScope, SliderSpec},
+    swipe_to_dismiss::{
+        rememberSwipeDismissState, SwipeDismissDirection, SwipeDismissSide, SwipeDismissState,
+        SwipeToDismiss, SwipeToDismissBox, SwipeToDismissSpec,
+    },
+    text_selection_menu::local_on_light_surface,
 };
-pub use widgets::text_selection_menu::local_on_light_surface;
-
-// Debug utilities
-pub use debug::{
-    format_layout_tree, format_modifier_chain, format_render_scene, format_screen_summary,
-    install_modifier_chain_trace, log_layout_tree, log_modifier_chain, log_render_scene,
-    log_screen_summary, ModifierChainTraceGuard,
-};
+pub use zoom::ZoomState;
 
 /// In-memory composition helper used by tests.
 pub struct TestComposition {

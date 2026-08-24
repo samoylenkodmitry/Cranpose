@@ -8,11 +8,13 @@
 //! than per platform, so every platform reads the same release feed the same
 //! way and none of them link a second HTTP stack to do it.
 
-use crate::app_update::{
-    set_app_update_status, AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater,
-    GitHubReleaseUpdate, PackageDigest, UpdatePackage,
+use crate::{
+    app_update::{
+        set_app_update_status, AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater,
+        GitHubReleaseUpdate, PackageDigest, UpdatePackage,
+    },
+    http::{default_http_client, HttpClient, HttpClientRef, HttpControl, HttpRequest},
 };
-use crate::http::{default_http_client, HttpClient, HttpClientRef, HttpControl, HttpRequest};
 
 /// Root of the GitHub REST API this checker reads.
 ///

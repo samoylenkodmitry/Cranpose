@@ -2,14 +2,14 @@
 //! behavior. The controller state machine is driven with synthetic pointer
 //! events; spring animations advance through manual frame-clock pumps.
 
-use super::*;
-use crate::collect_modifier_slices;
-use crate::scroll::ScrollState;
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons,
 };
 use cranpose_ui_graphics::Point;
+
+use super::*;
+use crate::{collect_modifier_slices, scroll::ScrollState};
 
 const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
 

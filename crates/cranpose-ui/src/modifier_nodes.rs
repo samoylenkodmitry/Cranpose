@@ -60,6 +60,12 @@
 //! these nodes. The system achieves complete 1:1 parity with Jetpack Compose's modifier
 //! architecture.
 
+use std::{
+    cell::Cell,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_core::NodeId;
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
@@ -68,14 +74,12 @@ use cranpose_foundation::{
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, IntrinsicSize, VerticalAlignment};
 
-use std::cell::Cell;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
-
-use crate::draw::DrawCommand;
-use crate::modifier::{
-    BlendMode, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer, LayoutWeight,
-    Point, RoundedCornerShape,
+use crate::{
+    draw::DrawCommand,
+    modifier::{
+        BlendMode, Color, ColorFilter, CompositingStrategy, EdgeInsets, GraphicsLayer,
+        LayoutWeight, Point, RoundedCornerShape,
+    },
 };
 
 fn hash_f32_value<H: Hasher>(state: &mut H, value: f32) {
@@ -1125,11 +1129,11 @@ impl ModifierNodeElement for SizeElement {
 // Clickable Modifier Node
 // ============================================================================
 
+use std::cell::RefCell;
+
 /// Node that handles click/tap interactions.
 // Drag threshold is now shared via cranpose_foundation::DRAG_THRESHOLD
 use cranpose_foundation::DRAG_THRESHOLD;
-
-use std::cell::RefCell;
 
 // Press position is stored per-node via Rc<RefCell> for sharing with handler closure
 // Node reuse is ensured by ClickableElement implementing key() to return a stable key

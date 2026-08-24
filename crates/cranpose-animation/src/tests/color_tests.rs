@@ -1,9 +1,9 @@
-use super::*;
+use std::{cell::RefCell, rc::Rc};
 
-use crate::animation::{AnimationSpec, AnimationType, Lerp, SpringSpec};
 use cranpose_core::{location_key, with_current_composer, Composition, MemoryApplier, State};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use super::*;
+use crate::animation::{AnimationSpec, AnimationType, Lerp, SpringSpec};
 
 fn assert_color_near(actual: Color, expected: Color, tolerance: f32) {
     let channels = [

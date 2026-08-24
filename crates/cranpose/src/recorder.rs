@@ -34,9 +34,11 @@
 //! execute_actions(&robot, &actions);
 //! ```
 
-use std::io::Write;
-use std::path::PathBuf;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    io::Write,
+    path::PathBuf,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 /// An action that can be executed by a robot test.
 ///
@@ -337,9 +339,9 @@ fn generated_timestamp() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Read, path::PathBuf};
+
     use super::*;
-    use std::io::Read;
-    use std::path::PathBuf;
 
     fn workspace_test_output_path(filename: &str) -> PathBuf {
         crate::test_scratch_dir("recorder").join(filename)

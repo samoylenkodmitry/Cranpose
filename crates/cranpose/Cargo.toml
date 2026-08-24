@@ -11,6 +11,15 @@ categories.workspace = true
 readme = "README.md"
 description = "Cranpose runtime and UI facade"
 
+[package.metadata.docs.rs]
+# docs.rs builds on Linux, where the android/ios/web features cannot compile.
+# Name the desktop set so the published page shows the API a reader can use.
+features = ["desktop", "renderer-wgpu"]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [package.metadata.cargo-machete]
 ignored = ["cranpose-render-pixels"]
 

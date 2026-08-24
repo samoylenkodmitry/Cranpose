@@ -2,9 +2,10 @@
 
 use std::cell::RefCell;
 
-use crate::Modifier;
 use cranpose_core::{compositionLocalOf, CompositionLocal};
 use cranpose_ui_graphics::EdgeInsets;
+
+use crate::Modifier;
 
 /// Insets needed to keep content clear of system UI and the on-screen keyboard.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -91,8 +92,9 @@ impl Modifier {
 
 #[cfg(test)]
 mod tests {
-    use super::{local_ime_insets, local_safe_area_insets, WindowInsets};
     use cranpose_ui_graphics::EdgeInsets;
+
+    use super::{local_ime_insets, local_safe_area_insets, WindowInsets};
 
     #[test]
     fn defaults_to_zero_insets() {
@@ -128,8 +130,7 @@ mod tests {
 
     #[test]
     fn explicit_window_insets_become_padding() {
-        use crate::modifier::ModifierChainHandle;
-        use crate::Modifier;
+        use crate::{modifier::ModifierChainHandle, Modifier};
 
         let _app_context = crate::render_state::app_context_test_scope();
         let insets = EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0);

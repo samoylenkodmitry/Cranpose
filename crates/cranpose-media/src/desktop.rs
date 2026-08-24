@@ -7,20 +7,24 @@
 //! notices the end of the item, which the sink reports by having pushed
 //! everything the source had and having had all of it taken.
 
-use crate::analysis::AnalysisTap;
-use crate::decode::Decoder;
-use crate::equalizer::EqualizerTap;
-use crate::path_from_uri;
-use crate::sink::Sink;
-use crate::source::SampleSource;
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+
 use cranpose_services::{
     publish_playback_progress, publish_playback_state, EqualizerBand, EqualizerSettings,
     MediaCapabilities, MediaError, MediaItem, MediaPlayer, PlaybackProgress, PlaybackState,
 };
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use crate::{
+    analysis::AnalysisTap, decode::Decoder, equalizer::EqualizerTap, path_from_uri, sink::Sink,
+    source::SampleSource,
+};
 
 /// How often the progress thread wakes while analysis samples are wanted.
 const ANALYSIS_TICK: Duration = Duration::from_millis(8);

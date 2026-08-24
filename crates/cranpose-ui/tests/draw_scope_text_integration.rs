@@ -5,12 +5,11 @@
 //! scope built by `draw_behind` picks the app's fonts up rather than the
 //! font-free estimate.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
-use cranpose_ui::text::{AnnotatedString, TextLayoutResult};
 use cranpose_ui::{
     collect_slices_from_modifier, execute_draw_commands, set_font_scale, set_text_measurer,
+    text::{AnnotatedString, TextLayoutResult},
     AppContext, DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
 };
 use cranpose_ui_graphics::{

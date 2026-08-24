@@ -1,4 +1,7 @@
-use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
+#[cfg(test)]
+use std::cell::Cell;
+use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc};
+
 use cranpose::LazyItems;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
@@ -18,12 +21,8 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 use serde::Deserialize;
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::Arc;
+
+use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
 
 const PAGE_SIZE: usize = 20;
 const AUTOLOAD_THRESHOLD: usize = 1;
@@ -2158,22 +2157,26 @@ fn scroll_stability_news_data() -> NewsData {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        fetch_stories_page, html_to_plain_text, load_comment_page, load_initial_comment_page,
-        story_comments_url, story_target_url, CommentThreadData, HackerNewsTab, Story,
+    use std::{
+        collections::HashMap,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex, MutexGuard, OnceLock,
+        },
+        time::Duration,
     };
+
     use cranpose_core::{run_in_mutable_snapshot, CompositionLocalProvider};
     use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
     use cranpose_services::HttpClientRef;
     use cranpose_testing::robot::{create_headless_robot_test, RobotTestRule, TestRenderer};
     use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole};
     use serde_json::json;
-    use std::collections::HashMap;
-    use std::sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, MutexGuard, OnceLock,
+
+    use super::{
+        fetch_stories_page, html_to_plain_text, load_comment_page, load_initial_comment_page,
+        story_comments_url, story_target_url, CommentThreadData, HackerNewsTab, Story,
     };
-    use std::time::Duration;
 
     #[cfg(not(target_arch = "wasm32"))]
     fn test_guard() -> MutexGuard<'static, ()> {

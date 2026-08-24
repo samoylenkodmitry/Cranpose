@@ -15,12 +15,14 @@ use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, ListHeader, ListHeaderSpec, WearColors, WearScalingLazyColumn,
-    WearScalingLazyColumnSpec, WearTextStyle,
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::wear::{
+        rememberWearScalingListState, ListHeader, ListHeaderSpec, WearColors,
+        WearScalingLazyColumn, WearScalingLazyColumnSpec, WearTextStyle,
+    },
+    Color, Modifier, Text,
 };
-use cranpose_ui::{Color, Modifier, Text};
 
 /// A 454x454 watch, rendered one framebuffer pixel per layout point so the
 /// count below is in the same units the screen is specified in.

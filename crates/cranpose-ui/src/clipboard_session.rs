@@ -12,11 +12,9 @@
 //! like the text-input and focus sessions, so multiple app instances in one
 //! process do not share a clipboard.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 #[cfg(test)]
 use std::cell::Cell;
+use std::{cell::RefCell, rc::Rc};
 
 /// A platform-provided OS clipboard. Installed by the platform runtime so that
 /// in-tree UI (the selection menu) can read/write the system clipboard.
@@ -219,8 +217,9 @@ pub fn local_clipboard() -> cranpose_core::CompositionLocal<ClipboardManager> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::RefCell;
+
+    use super::*;
 
     struct RecordingClipboard {
         value: RefCell<Option<String>>,

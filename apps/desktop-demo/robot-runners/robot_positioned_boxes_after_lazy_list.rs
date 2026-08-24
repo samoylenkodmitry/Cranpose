@@ -5,10 +5,11 @@
 //! cargo run --package desktop-app --example robot_positioned_boxes_after_lazy_list --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
-use std::time::Duration;
 
 fn count_text_occurrences(elements: &[SemanticElement], text: &str) -> usize {
     let mut count = 0;

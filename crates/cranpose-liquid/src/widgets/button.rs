@@ -1,22 +1,30 @@
 //! Glass buttons: capsule glass with a spring press (scale + specular boost)
 //! and haptic feedback.
 
-use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
-use crate::motion::{liquid_press_scale, LiquidMotion};
-use crate::theme::{liquid_colors, liquid_typography};
-use crate::widgets::content_scope::ScopeContent;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::{AnimationSpec, AnimationType, Easing};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
-use cranpose_ui::rememberMutableInteractionSource;
-use cranpose_ui::text::TextStyle;
-use cranpose_ui::widgets::{Box, BoxSpec, Text};
-use cranpose_ui::{Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size};
+use cranpose_ui::{
+    rememberMutableInteractionSource,
+    text::TextStyle,
+    widgets::{Box, BoxSpec, Text},
+    Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size,
+};
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use crate::{
+    material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
+    motion::{liquid_press_scale, LiquidMotion},
+    theme::{liquid_colors, liquid_typography},
+    widgets::content_scope::ScopeContent,
+};
 
 const ICON_BACKPLATE_DIAMETER_RATIO: f32 = 0.50;
 const ICON_BACKPLATE_GLYPH_RATIO: f32 = 0.28;

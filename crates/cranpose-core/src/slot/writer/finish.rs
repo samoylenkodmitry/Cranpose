@@ -1,8 +1,10 @@
-use super::super::{
-    ChildCursor, DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable,
-    SlotWriteSession,
+use super::{
+    super::{
+        ChildCursor, DetachedSubtree, FinishGroupResult, SlotLifecycleCoordinator, SlotTable,
+        SlotWriteSession,
+    },
+    SlotWriteSessionState,
 };
-use super::SlotWriteSessionState;
 
 impl SlotTable {
     fn detach_unvisited_children_internal(

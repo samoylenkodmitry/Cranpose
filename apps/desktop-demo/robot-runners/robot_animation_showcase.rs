@@ -3,12 +3,13 @@
 //! Verifies that the Animations tab loads and that the lazy list animation
 //! updates over time (text content changes).
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn read_lazy_pulse(robot: &cranpose::Robot) -> Option<String> {
     find_text_by_prefix_in_semantics(robot, "Lazy Pulse:").map(|(_, _, _, _, text)| text)

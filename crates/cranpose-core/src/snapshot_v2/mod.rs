@@ -22,16 +22,20 @@
 // This is safe because snapshots are thread-local and never cross thread boundaries.
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crate::collections::map::HashMap;
-use crate::collections::map::HashSet;
-use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
-use crate::snapshot_pinning::{self, PinHandle};
-use crate::snapshot_weak_set::SnapshotWeakSetDebugStats;
-use crate::state::{StateObject, StateRecord};
-use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
-use std::sync::{Arc, Weak};
+use std::{
+    cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
+    rc::Rc,
+    sync::{Arc, Weak},
+};
+
+use crate::{
+    collections::map::{HashMap, HashSet},
+    snapshot_id_set::{SnapshotId, SnapshotIdSet},
+    snapshot_pinning::{self, PinHandle},
+    snapshot_weak_set::SnapshotWeakSetDebugStats,
+    state::{StateObject, StateRecord},
+};
 
 mod global;
 mod mutable;
@@ -47,12 +51,10 @@ pub use global::{advance_global_snapshot, GlobalSnapshot};
 pub use mutable::MutableSnapshot;
 pub use nested::{NestedMutableSnapshot, NestedReadonlySnapshot};
 pub use readonly::ReadonlySnapshot;
-pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
-
 pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
-
 #[cfg(test)]
 pub(crate) use runtime::{reset_runtime_for_tests, TestRuntimeGuard};
+pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
 
 /// Observer that is called when a state object is read.
 pub type ReadObserver = Arc<dyn Fn(&dyn StateObject) + 'static>;

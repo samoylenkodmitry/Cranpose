@@ -1,0 +1,6 @@
+# Without this, the editor checks the default feature set and greys out every
+# android, ios, web, audio and storekit path in the workspace -- which is most
+# of the platform code. "all" mirrors the `cargo check --workspace
+# --all-features` gate in CI, so what the editor reports is what the gate
+# reports.
+cargo.features = "all"

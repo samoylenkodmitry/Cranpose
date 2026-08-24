@@ -23,15 +23,26 @@
 
 #![allow(unsafe_code)]
 
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+    time::Duration,
+};
+
 use block2::RcBlock;
 use cranpose_services::{
     publish_audio_focus, publish_media_command, publish_playback_progress, publish_playback_state,
     set_platform_media_player, AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem,
     MediaMetadata, MediaPlayer, PlaybackProgress, PlaybackState,
 };
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{define_class, msg_send, sel, AllocAnyThread};
+use objc2::{
+    define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
+    sel, AllocAnyThread,
+};
 use objc2_avf_audio::{
     AVAudioPlayer, AVAudioPlayerDelegate, AVAudioSession, AVAudioSessionCategoryPlayback,
     AVAudioSessionInterruptionNotification, AVAudioSessionInterruptionOptionKey,
@@ -48,9 +59,6 @@ use objc2_media_player::{
     MPNowPlayingInfoPropertyElapsedPlaybackTime, MPNowPlayingInfoPropertyPlaybackRate,
     MPRemoteCommandCenter, MPRemoteCommandEvent, MPRemoteCommandHandlerStatus,
 };
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
 
 /// How often the position is published while something plays.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);

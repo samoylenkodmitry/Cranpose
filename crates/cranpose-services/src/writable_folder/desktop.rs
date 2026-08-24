@@ -6,16 +6,19 @@
 //! backing filesystem rejects rename. A permission/EROFS failure maps to
 //! [`FolderError::ReadOnly`] so the caller can degrade to receive-only.
 
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::UNIX_EPOCH,
+};
+
 use super::{
     FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
     WritableFolderStoreRef,
 };
 use crate::content::DEFAULT_CHUNK_LEN;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
 
 /// Fixed-name probe used by [`is_writable`](WritableFolderStore::is_writable);
 /// created and immediately deleted, so it never accumulates.
@@ -212,9 +215,12 @@ fn map_err(error: std::io::Error) -> FolderError {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::atomic::{AtomicU32, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::*;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     // Tests write under the workspace `target/test-output` (never tmpfs), per
     // the workspace source-hygiene policy.

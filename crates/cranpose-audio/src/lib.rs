@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! The real-time audio engine behind [`cranpose_services::audio`].
@@ -50,11 +49,11 @@ mod engine;
 mod mixer;
 pub mod ring;
 
-pub use engine::AudioEngine;
-pub use mixer::{MAX_CLIPS, MAX_VOICES};
+use std::sync::{Arc, OnceLock};
 
 use cranpose_services::{set_platform_audio, AudioPlayerRef};
-use std::sync::{Arc, OnceLock};
+pub use engine::AudioEngine;
+pub use mixer::{MAX_CLIPS, MAX_VOICES};
 
 static INSTALLED_ENGINE: OnceLock<Arc<AudioEngine>> = OnceLock::new();
 
@@ -84,8 +83,9 @@ pub fn has_device_backend() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_services::{clear_platform_audio, default_audio};
+
+    use super::*;
 
     #[test]
     fn install_registers_the_engine_as_the_platform_player() {

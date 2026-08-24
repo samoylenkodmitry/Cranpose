@@ -6,12 +6,12 @@
 //! controller, presented from the root view controller.
 #![allow(unsafe_code)]
 
+use std::rc::Rc;
+
 use cranpose_services::{set_platform_share_sheet, ShareContent, ShareError, ShareSheet};
-use objc2::runtime::AnyObject;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::{runtime::AnyObject, MainThreadMarker, MainThreadOnly};
 use objc2_foundation::{NSArray, NSString, NSTemporaryDirectory, NSURL};
 use objc2_ui_kit::{UIActivityViewController, UIViewController};
-use std::rc::Rc;
 
 /// Installs the iOS share sheet as the platform share sheet.
 pub(crate) fn register() {

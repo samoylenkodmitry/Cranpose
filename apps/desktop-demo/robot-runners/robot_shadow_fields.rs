@@ -5,6 +5,8 @@
 
 mod output_paths;
 
+use std::{fs, path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
@@ -13,9 +15,6 @@ use cranpose_testing::{
 };
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use image::{ImageBuffer, Rgba, RgbaImage};
-use std::fs;
-use std::path::Path;
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 900;

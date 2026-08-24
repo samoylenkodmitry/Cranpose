@@ -1,3 +1,13 @@
+use std::{cell::Cell, rc::Rc, sync::Arc};
+
+use cranpose_foundation::{
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
+};
+use cranpose_ui_graphics::{
+    BlurredEdgeTreatment, Brush, ColorFilter, Dp, DrawPrimitive, GradientBlurDirection,
+    ShadowPrimitive, TileMode,
+};
+
 use super::{
     collect_slices_from_modifier, inspector_metadata, modifier_element, Alignment, BlendMode,
     Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset, DrawCommand,
@@ -6,16 +16,6 @@ use super::{
     RenderEffect, RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size,
     TransformOrigin, VerticalAlignment,
 };
-use cranpose_foundation::{
-    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState,
-};
-use cranpose_ui_graphics::{
-    BlurredEdgeTreatment, Brush, ColorFilter, Dp, DrawPrimitive, GradientBlurDirection,
-    ShadowPrimitive, TileMode,
-};
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
 
 /// Records a draw command into a fresh consumer-owned scope, the way the
 /// renderers do, and returns what it recorded.
@@ -305,8 +305,7 @@ fn alignment_modifiers_record_values() {
 #[test]
 fn graphics_layer_modifier_creates_node() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use crate::modifier::ModifierChainHandle;
-    use crate::modifier_nodes::GraphicsLayerNode;
+    use crate::{modifier::ModifierChainHandle, modifier_nodes::GraphicsLayerNode};
 
     let layer = GraphicsLayer {
         alpha: 0.5,
@@ -1928,8 +1927,9 @@ fn reading_order_padding_swaps_its_ends_in_a_right_to_left_layout() {
 
 #[test]
 fn padding_relative_follows_the_direction_its_composition_provides() {
-    use crate::layout_direction::{LayoutDirection, ProvideLayoutDirection};
     use cranpose_core::{location_key, Composition, MemoryApplier};
+
+    use crate::layout_direction::{LayoutDirection, ProvideLayoutDirection};
 
     let _app_context = crate::render_state::app_context_test_scope();
     let mut composition = Composition::new(MemoryApplier::new());

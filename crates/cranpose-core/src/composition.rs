@@ -1,3 +1,7 @@
+use std::rc::Rc;
+
+use web_time::Instant;
+
 use crate::{
     collections::map::HashMap, debug_scope_invalidation_sources, debug_scope_label, runtime,
     scheduler_ref, snapshot_state_observer, Applier, ApplierGuard, ApplierHost, CommandQueue,
@@ -5,8 +9,6 @@ use crate::{
     NodeId, RecomposeScope, RetentionPolicy, Runtime, RuntimeHandle, ScopeId, SlotDebugSnapshot,
     SlotTable, SlotTableDebugStats, SlotsHost, SnapshotStateObserver,
 };
-use std::rc::Rc;
-use web_time::Instant;
 
 pub struct Composition<A: Applier + 'static> {
     pub(crate) composer_state: Rc<crate::composer::ComposerRuntimeState>,

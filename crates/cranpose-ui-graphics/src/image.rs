@@ -1,10 +1,14 @@
 //! Image bitmap primitives used by render backends.
 
-use crate::{BlendMode, Color, Size};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use thiserror::Error;
+
+use crate::{BlendMode, Color, Size};
 
 /// Errors returned while constructing an [`ImageBitmap`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

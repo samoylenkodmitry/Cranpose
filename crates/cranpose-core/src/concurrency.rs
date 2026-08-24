@@ -8,22 +8,30 @@
 //! application never keeps its own task list or its own "is this still alive"
 //! flag.
 
-use crate::hooks::{mutableStateOf, remember};
-use crate::runtime::{current_runtime_handle, RuntimeHandle, TaskHandle};
-use crate::state::{MutableState, State};
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Condvar, Mutex};
-use std::task::{Context, Poll, Waker};
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, OnceLock,
+    },
+    task::{Context, Poll, Waker},
+    time::Duration,
+};
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsCast;
 use web_time::Instant;
+
+use crate::{
+    hooks::{mutableStateOf, remember},
+    runtime::{current_runtime_handle, RuntimeHandle, TaskHandle},
+    state::{MutableState, State},
+};
 
 /// Spawns `future` on the current runtime's UI task queue.
 ///
@@ -1012,8 +1020,7 @@ mod timer_race_tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn blocking_work_reuses_its_threads_instead_of_one_per_call() {
-        use std::collections::HashSet;
-        use std::sync::mpsc;
+        use std::{collections::HashSet, sync::mpsc};
 
         // A pool of this test's own: the process-wide one is shared with every
         // other test in the binary, and they run at the same time, so what it

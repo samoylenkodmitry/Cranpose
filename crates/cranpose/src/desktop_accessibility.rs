@@ -1,18 +1,20 @@
 //! Native desktop accessibility through AccessKit platform adapters.
 #![allow(unsafe_code)]
 
-use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
 use accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, CustomAction,
     DeactivationHandler, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
 };
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use winit::event::WindowEvent;
-use winit::event_loop::EventLoopProxy;
-use winit::window::Window;
+use winit::{event::WindowEvent, event_loop::EventLoopProxy, window::Window};
+
+use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 const ROOT_ID: NodeId = NodeId(u64::MAX);
 

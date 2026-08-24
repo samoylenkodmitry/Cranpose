@@ -1,4 +1,16 @@
-use super::{inspector_metadata, Modifier, PointerEvent};
+use std::{
+    any::TypeId,
+    cell::{Cell, RefCell},
+    collections::{HashMap, VecDeque},
+    fmt,
+    future::Future,
+    hash::{Hash, Hasher},
+    pin::Pin,
+    rc::Rc,
+    sync::Arc,
+    task::{Context, Poll, Waker},
+};
+
 use cranpose_core::hash::default;
 use cranpose_foundation::{
     impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,
@@ -6,16 +18,8 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::Size;
 use futures_task::{waker, ArcWake};
-use std::any::TypeId;
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
-use std::future::Future;
-use std::hash::{Hash, Hasher};
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+
+use super::{inspector_metadata, Modifier, PointerEvent};
 
 impl Modifier {
     pub fn pointer_input<K, F, Fut>(self, key: K, handler: F) -> Self

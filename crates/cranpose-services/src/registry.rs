@@ -1,8 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use web_time::{Duration, Instant};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use web_time::{Duration, Instant};
 
 pub(crate) struct ServiceRegistry<T: ?Sized> {
     value: RwLock<Option<Arc<T>>>,
@@ -117,9 +119,9 @@ impl RecoveryGate {
 
 #[cfg(test)]
 mod tests {
+    use std::{thread, time::Duration};
+
     use super::RecoveryGate;
-    use std::thread;
-    use std::time::Duration;
 
     #[test]
     fn recovery_gate_retries_after_backoff_and_resets() {

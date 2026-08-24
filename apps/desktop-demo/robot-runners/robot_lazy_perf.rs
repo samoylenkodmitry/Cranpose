@@ -8,13 +8,12 @@
 //! cargo run --package desktop-app --example robot_lazy_perf --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose::LazyItems;
+use std::time::{Duration, Instant};
+
+use cranpose::{AppLauncher, LazyItems};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::widgets::*;
-use cranpose_ui::{Color, LinearArrangement, Modifier, TextStyle};
-use std::time::{Duration, Instant};
+use cranpose_ui::{widgets::*, Color, LinearArrangement, Modifier, TextStyle};
 
 /// Total items = usize::MAX (18,446,744,073,709,551,615 on 64-bit)
 const ITEM_COUNT: usize = usize::MAX;

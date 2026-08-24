@@ -2,12 +2,13 @@
 //! background, captured at several times after mount. Isolates the pressed
 //! toggle's "white box" overhang artifact from the demo page.
 
-use cranpose::liquid::material::GlassMorph;
-use cranpose::liquid::prelude::*;
-use cranpose::widgets::{Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Brush, Color, GraphicsLayer, Modifier, Size};
-use std::path::PathBuf;
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
+
+use cranpose::{
+    liquid::{material::GlassMorph, prelude::*},
+    widgets::{Box as CBox, BoxSpec},
+    AppLauncher, Brush, Color, GraphicsLayer, Modifier, Size,
+};
 
 const NODE_W: f32 = 78.0;
 const NODE_H: f32 = 59.0;

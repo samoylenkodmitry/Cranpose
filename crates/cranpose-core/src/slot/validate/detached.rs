@@ -1,5 +1,5 @@
-use super::super::{DetachedSubtree, GroupKey, GroupRecord, PayloadAnchor, PayloadRecord};
 use super::{
+    super::{DetachedSubtree, GroupKey, GroupRecord, PayloadAnchor, PayloadRecord},
     anchors,
     groups::{validate_slot_tree, SlotTreeChecks, SlotTreeView},
     SlotInvariantError, SlotTreeContext,

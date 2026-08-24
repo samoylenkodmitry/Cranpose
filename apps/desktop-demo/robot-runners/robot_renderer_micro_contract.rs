@@ -6,16 +6,18 @@
 mod output_paths;
 mod text_showcase_external_helpers;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{crop_screenshot_logical, sample_screenshot_pixel_logical};
 use cranpose_ui::{
-    composable, text::SpanStyle, text::TextDecoration, text::TextUnit, Alignment, BasicText,
-    BitmapPainter, Box, BoxSpec, Color, ContentScale, Image, ImageBitmap, Modifier, Rect, Row,
-    RowSpec, Size, Spacer, Text, TextOptions, TextOverflow, TextStyle, TextWithOptions,
+    composable,
+    text::{SpanStyle, TextDecoration, TextUnit},
+    Alignment, BasicText, BitmapPainter, Box, BoxSpec, Color, ContentScale, Image, ImageBitmap,
+    Modifier, Rect, Row, RowSpec, Size, Spacer, Text, TextOptions, TextOverflow, TextStyle,
+    TextWithOptions,
 };
 use image::{ImageBuffer, RgbaImage};
-use std::path::Path;
-use std::time::Duration;
 use text_showcase_external_helpers::{capture_x11_window_screenshot, find_window_id};
 
 const WINDOW_TITLE: &str = "Robot Renderer Micro Contract";

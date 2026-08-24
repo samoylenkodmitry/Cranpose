@@ -1,6 +1,9 @@
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    time::Instant,
+};
+
 use log::{LevelFilter, Log, Metadata, Record};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
 
 static TELEMETRY_RECORDS: OnceLock<Arc<Mutex<Vec<FrameTelemetryRecord>>>> = OnceLock::new();
 static LOGGER: TelemetryLogger = TelemetryLogger;

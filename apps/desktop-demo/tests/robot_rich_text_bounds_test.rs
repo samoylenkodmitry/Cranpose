@@ -1,5 +1,4 @@
-use cranpose::prelude::*;
-use cranpose::text::*;
+use cranpose::{prelude::*, text::*};
 use cranpose_testing::robot::create_headless_robot_test_with_text_measurer;
 
 #[test]

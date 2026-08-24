@@ -83,9 +83,9 @@ mod tests {
 
     #[test]
     fn a_provided_direction_reaches_the_content_and_ends_with_it() {
+        use std::{cell::Cell, rc::Rc};
+
         use cranpose_core::{location_key, Composition, MemoryApplier};
-        use std::cell::Cell;
-        use std::rc::Rc;
 
         let mut composition = Composition::new(MemoryApplier::new());
         let outer = Rc::new(Cell::new(LayoutDirection::Rtl));
@@ -124,9 +124,9 @@ mod tests {
 
     #[test]
     fn the_composition_local_is_one_instance_per_thread() {
+        use std::{cell::Cell, rc::Rc};
+
         use cranpose_core::{location_key, Composition, MemoryApplier};
-        use std::cell::Cell;
-        use std::rc::Rc;
 
         // Two calls that returned different locals would each carry their own
         // value, and a provision made through one would be invisible to the

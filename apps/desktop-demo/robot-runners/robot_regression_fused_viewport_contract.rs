@@ -8,12 +8,15 @@
 //! guards the scrolled-tab-switch path against ghost pixels of the previous
 //! tab (a squeezed first frame leaves stale pixels uncovered).
 
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;

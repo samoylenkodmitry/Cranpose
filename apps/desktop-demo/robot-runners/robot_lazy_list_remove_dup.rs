@@ -5,14 +5,14 @@
 //! cargo run --package desktop-app --example robot_lazy_list_remove_dup --features robot-app
 //! ```
 
+use std::{collections::HashMap, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    collect_by_text_exact, collect_text_prefix_counts, print_semantics_with_bounds,
+    collect_by_text_exact, collect_text_prefix_counts, find_button_in_semantics,
+    find_text_in_semantics, print_semantics_with_bounds,
 };
-use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
-use std::collections::HashMap;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

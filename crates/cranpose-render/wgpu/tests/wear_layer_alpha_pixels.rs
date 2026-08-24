@@ -56,18 +56,23 @@
 
 mod support;
 
+use std::cell::Cell;
+
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, SwitchButton, SwitchButtonSpec, WearColors,
-    WearScalingLazyColumn, WearScalingLazyColumnSpec,
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::{
+        wear::{
+            rememberWearScalingListState, SwitchButton, SwitchButtonSpec, WearColors,
+            WearScalingLazyColumn, WearScalingLazyColumnSpec,
+        },
+        Box, BoxSpec, Spacer,
+    },
+    Color, Modifier, Size,
 };
-use cranpose_ui::widgets::{Box, BoxSpec, Spacer};
-use cranpose_ui::{Color, Modifier, Size};
-use std::cell::Cell;
 
 /// A 454x454 watch, one framebuffer pixel per layout point.
 const SIZE: u32 = 454;

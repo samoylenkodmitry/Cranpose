@@ -1,0 +1,12 @@
+{
+  "name": "cranpose",
+  "description": "Cranpose UI framework conventions and best practices skill for Claude Code",
+  "version": "1.0.0",
+  "author": {
+    "name": "Dmitry Samoylenko"
+  },
+  "homepage": "https://samoylenkodmitry.github.io/cranpose/",
+  "repository": "https://github.com/samoylenkodmitry/cranpose",
+  "license": "Apache-2.0",
+  "keywords": ["cranpose", "rust", "ui", "compose", "declarative"]
+}

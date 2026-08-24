@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 #[cfg(any(
     all(feature = "android", target_os = "android", feature = "renderer-wgpu"),
     all(feature = "web", target_arch = "wasm32", feature = "renderer-wgpu")

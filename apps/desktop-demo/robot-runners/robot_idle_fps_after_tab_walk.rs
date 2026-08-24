@@ -3,10 +3,11 @@
 
 mod perf_contract;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_button_exact_in_semantics;
 use desktop_app::app;
-use std::time::Duration;
 
 const WINDOW_TITLE: &str = "Robot Idle FPS After Tab Walk";
 

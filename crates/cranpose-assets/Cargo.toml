@@ -11,4 +11,11 @@ categories.workspace = true
 readme = "README.md"
 description = "Asset loading and management utilities for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]

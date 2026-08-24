@@ -8,14 +8,17 @@
 //! video, a database seed — one chunk at a time and never materialises it
 //! whole, the way the crate's own default (buffer-then-chunk) reader would.
 
+use std::{
+    fs::File,
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
+
 use cranpose_services::{
     set_platform_bundled_assets, BundledAssetError, BundledAssetReader, BundledAssets,
     StreamingAssetReader,
 };
 use objc2_foundation::NSBundle;
-use std::fs::File;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
 /// Installs the iOS bundled-assets reader.
 pub(crate) fn register() {

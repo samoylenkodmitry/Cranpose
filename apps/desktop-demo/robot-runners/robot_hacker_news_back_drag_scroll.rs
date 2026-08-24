@@ -1,5 +1,7 @@
 pub mod hacker_news_robot_support;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::local_http_client;
@@ -10,7 +12,6 @@ use hacker_news_robot_support::{
     semantics_bounds, settle_visible_mock_story_numbers, visible_mock_story_numbers,
     wait_for_comments_data, wait_for_no_text, wait_for_text,
 };
-use std::time::Duration;
 
 const DRAG_MEASUREMENT_GESTURES: usize = 1;
 const DRAG_SETTLE_ATTEMPTS: usize = 8;

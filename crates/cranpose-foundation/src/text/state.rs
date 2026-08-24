@@ -3,12 +3,16 @@
 //! Matches Jetpack Compose's `TextFieldState` from
 //! `compose/foundation/foundation/src/commonMain/kotlin/androidx/compose/foundation/text/input/TextFieldState.kt`.
 
-use super::{TextFieldBuffer, TextRange};
+use std::{
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_core::MutableState;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+
+use super::{TextFieldBuffer, TextRange};
 
 /// Immutable snapshot of text field content.
 ///
@@ -555,9 +559,11 @@ impl PartialEq for TextFieldState {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_core::{DefaultScheduler, Runtime};
     use std::sync::Arc;
+
+    use cranpose_core::{DefaultScheduler, Runtime};
+
+    use super::*;
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.
     /// This is required because TextFieldState uses MutableState which requires
@@ -664,8 +670,7 @@ mod tests {
     #[test]
     fn nested_edit_is_rejected() {
         with_test_runtime(|| {
-            use std::cell::Cell;
-            use std::rc::Rc;
+            use std::{cell::Cell, rc::Rc};
 
             let state = TextFieldState::new("Hello");
             let state_clone = state;
@@ -682,8 +687,7 @@ mod tests {
     #[test]
     fn listener_is_called_on_change() {
         with_test_runtime(|| {
-            use std::cell::Cell;
-            use std::rc::Rc;
+            use std::{cell::Cell, rc::Rc};
 
             let state = TextFieldState::new("Hello");
             let called = Rc::new(Cell::new(false));

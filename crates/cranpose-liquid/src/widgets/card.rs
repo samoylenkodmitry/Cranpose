@@ -1,17 +1,21 @@
 //! Grouped-inset surfaces: cards, list sections and rows (the Settings look).
 
-use crate::theme::{liquid_colors, liquid_typography};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_animation::animateColorAsState;
 use cranpose_macros::composable;
-use cranpose_ui::rememberMutableInteractionSource;
-use cranpose_ui::text::{SpanStyle, TextStyle};
-use cranpose_ui::widgets::{Box, BoxSpec, Column, ColumnSpec, Text};
-use cranpose_ui::Modifier;
+use cranpose_ui::{
+    rememberMutableInteractionSource,
+    text::{SpanStyle, TextStyle},
+    widgets::{Box, BoxSpec, Column, ColumnSpec, Text},
+    Modifier,
+};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii};
-use std::cell::RefCell;
-use std::rc::Rc;
 
-use crate::motion::LiquidMotion;
+use crate::{
+    motion::LiquidMotion,
+    theme::{liquid_colors, liquid_typography},
+};
 
 const CARD_RADIUS: f32 = 20.0;
 

@@ -22,8 +22,10 @@
 //! like the focus state itself, so multiple app instances in one process do
 //! not observe each other's keyboards.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 /// Callbacks a platform installs to control its on-screen keyboard.
 ///
@@ -156,8 +158,9 @@ pub fn notify_app_resumed() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::RefCell as StdRefCell;
+
+    use super::*;
 
     #[derive(Default)]
     struct RecordingHandler {

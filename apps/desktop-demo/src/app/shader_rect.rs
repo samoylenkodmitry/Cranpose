@@ -7,6 +7,8 @@
 
 #![allow(non_snake_case)]
 
+use std::sync::{Arc, OnceLock};
+
 use cranpose_animation::{
     animateFloatAsState, infiniteRepeatable, rememberInfiniteTransition, AnimationSpec,
     AnimationType, RepeatMode, StartOffset,
@@ -19,7 +21,6 @@ use cranpose_ui::{
     TextStyle,
 };
 use cranpose_ui_graphics::{CompositingStrategy, RenderEffect, RuntimeShader};
-use std::sync::{Arc, OnceLock};
 
 // ---------------------------------------------------------------------------
 // Shared WGSL boilerplate

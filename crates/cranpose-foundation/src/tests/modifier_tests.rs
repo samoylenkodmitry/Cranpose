@@ -1,8 +1,11 @@
+use std::{
+    any::TypeId,
+    cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use super::*;
-use std::any::TypeId;
-use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 fn count_nodes_with_capability(chain: &ModifierNodeChain, capability: NodeCapabilities) -> usize {
     let mut count = 0;

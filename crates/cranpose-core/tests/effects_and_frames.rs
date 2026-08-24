@@ -6,15 +6,18 @@
 //! that created it, so each test here composes, drives, and then asks what
 //! survived.
 
-use cranpose_core::composer_context::current_composer;
-use cranpose_core::{
-    derivedStateOf, launchBlocking, location_key, mutableStateOf, remember, rememberCoroutineScope,
-    CollectEvents, Composition, EventChannel, MemoryApplier,
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+
+use cranpose_core::{
+    composer_context::current_composer, derivedStateOf, launchBlocking, location_key,
+    mutableStateOf, remember, rememberCoroutineScope, CollectEvents, Composition, EventChannel,
+    MemoryApplier,
+};
 
 fn composition() -> Composition<MemoryApplier> {
     Composition::new(MemoryApplier::new())

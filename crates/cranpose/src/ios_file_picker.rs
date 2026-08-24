@@ -12,28 +12,32 @@
 //! runs on the UIKit main thread.
 #![allow(unsafe_code)]
 
+use std::{
+    cell::RefCell,
+    future::Future,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    pin::Pin,
+    rc::Rc,
+    task::{Context, Poll, Waker},
+};
+
 use cranpose_services::{
     set_platform_file_picker, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
     ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink,
     ContentSinkRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
     SaveDocumentRequest, DEFAULT_CHUNK_LEN,
 };
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{
+    define_class, msg_send, rc::Retained, runtime::ProtocolObject, DefinedClass, MainThreadMarker,
+    MainThreadOnly, Message,
+};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSURL};
 use objc2_ui_kit::{
     UIApplication, UIDocumentPickerDelegate, UIDocumentPickerViewController, UIViewController,
     UIWindowScene,
 };
 use objc2_uniform_type_identifiers::{UTType, UTTypeFolder, UTTypeItem};
-use std::cell::RefCell;
-use std::future::Future;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-use std::rc::Rc;
-use std::task::{Context, Poll, Waker};
 
 /// Installs the iOS chooser as the platform file picker.
 pub(crate) fn register() {

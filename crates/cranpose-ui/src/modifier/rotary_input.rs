@@ -17,15 +17,19 @@
 //!
 //! The first handler that returns `true` ends both passes.
 
-use super::{inspector_metadata, Modifier};
+use std::{
+    cell::Cell,
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_foundation::{
     impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
     NodeState, PointerEvent, PointerEventKind, PointerInputNode, RotaryScrollEvent,
 };
-use std::cell::Cell;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+
+use super::{inspector_metadata, Modifier};
 
 /// Which dispatch pass a rotary handler listens on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -235,9 +239,11 @@ impl PointerInputNode for RotaryInputModifierNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_ui_graphics::Point;
     use std::cell::RefCell;
+
+    use cranpose_ui_graphics::Point;
+
+    use super::*;
 
     fn rotary_event(kind: PointerEventKind, vertical: f32) -> PointerEvent {
         PointerEvent::rotary(

@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "UI primitives for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-core = { workspace = true, features = ["internal"] }
 cranpose-macros = { workspace = true }

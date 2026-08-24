@@ -38,9 +38,10 @@
 //! (`CRANPOSE_DESKTOP_FRAME_TELEMETRY_MS=1` shows it as `present_ms≈998`),
 //! which crawls every capped mode and reads as a pacing failure it is not.
 
+use std::time::{Duration, Instant};
+
 use cranpose::{AppLauncher, FramePacingMode};
 use cranpose_testing::find_text_in_semantics;
-use std::time::{Duration, Instant};
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 700;

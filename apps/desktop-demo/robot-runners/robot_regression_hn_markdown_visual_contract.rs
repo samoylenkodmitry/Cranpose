@@ -5,13 +5,13 @@ mod output_paths;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
 
+use std::{sync::Arc, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef};
 use cranpose_testing::{crop_screenshot_logical, find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
-use std::sync::Arc;
-use std::time::Duration;
 use text_showcase_external_helpers::{
     capture_x11_window_screenshot, find_window_id, focus_x11_window,
 };

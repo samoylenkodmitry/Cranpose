@@ -4,8 +4,10 @@
 //! Asserts the same thing the screen shows: every paragraph on it PAINTS the
 //! height LAYOUT measured, so the sibling placed under it is never drawn over.
 
-use cranpose_render_common::graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode};
-use cranpose_render_common::scene_builder::build_graph_from_applier;
+use cranpose_render_common::{
+    graph::{LayerNode, PrimitiveNode, RenderNode, TextPrimitiveNode},
+    scene_builder::build_graph_from_applier,
+};
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::{LayoutBox, LayoutEngine, Size};
 use desktop_app::test_screens::text_wrap_repro::TextWrapReproScreen;

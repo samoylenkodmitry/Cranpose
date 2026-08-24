@@ -10,14 +10,13 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::Modifier;
-use crate::widgets::Canvas;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, Color, Rect, VectorPath};
+
+use crate::{composable, modifier::Modifier, widgets::Canvas};
 
 /// Default diameter of [`CircularProgressIndicator`] in dp.
 pub const CIRCULAR_INDICATOR_DIAMETER: f32 = 20.0;
@@ -223,9 +222,11 @@ pub(crate) fn linear_indicator_band(width: f32, phase: f32) -> Option<(f32, f32)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
     use std::sync::Arc;
+
+    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
+
+    use super::*;
 
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
@@ -331,8 +332,7 @@ mod tests {
     /// primitives from the same draw closure.
     #[test]
     fn circular_progress_indicator_animates_transition() {
-        use crate::layout::MeasureLayoutOptions;
-        use crate::measure_layout_with_options;
+        use crate::{layout::MeasureLayoutOptions, measure_layout_with_options};
 
         let _app_context = crate::render_state::app_context_test_scope();
         let mut composition = Composition::new(MemoryApplier::new());

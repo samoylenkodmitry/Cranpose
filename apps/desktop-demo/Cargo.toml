@@ -6,9 +6,8 @@ description = "Cranpose desktop demo application."
 repository = "https://github.com/samoylenkodmitry/cranpose"
 license = "Apache-2.0"
 
-[lints.clippy]
-clone_on_copy = "deny"
-redundant_locals = "deny"
+[lints]
+workspace = true
 
 [lib]
 crate-type = ["rlib"]

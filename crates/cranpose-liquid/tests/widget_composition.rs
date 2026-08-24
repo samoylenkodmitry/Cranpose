@@ -11,14 +11,12 @@
 //! composition, renders the content once, and hands back the root; a widget that
 //! cannot be composed never reaches the assertion.
 
+use std::{cell::Cell, rc::Rc};
+
 use cranpose_foundation::text::TextFieldState;
 use cranpose_liquid::prelude::*;
-use cranpose_ui::run_test_composition;
-use cranpose_ui::widgets::popup::PopupHost;
-use cranpose_ui::Modifier;
+use cranpose_ui::{run_test_composition, widgets::popup::PopupHost, Modifier};
 use cranpose_ui_graphics::Color;
-use std::cell::Cell;
-use std::rc::Rc;
 
 /// Runs `content` inside a Liquid theme.
 ///

@@ -8,6 +8,11 @@ mod output_paths;
 mod perf_contract;
 mod text_showcase_external_helpers;
 
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::find_button_exact_in_semantics;
 use desktop_app::app::{self, DemoTab};
@@ -15,8 +20,6 @@ use external_x11_frame_telemetry::{
     clear_records, install_primary_frame_telemetry_logger, summarize_records, FrameTelemetryRecord,
 };
 use image::RgbaImage;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{capture_x11_window, find_window_id, focus_x11_window};
 
 const WINDOW_TITLE: &str = "Robot Shader Rect External Animation";

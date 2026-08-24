@@ -6,6 +6,8 @@ mod output_paths;
 mod perf_contract;
 mod text_showcase_external_helpers;
 
+use std::{path::Path, sync::Arc, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef};
@@ -15,9 +17,6 @@ use cranpose_testing::{
 use desktop_app::app;
 use image::RgbaImage;
 use markdown_fixture_client::MarkdownFixtureClient;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use text_showcase_external_helpers::{
     capture_x11_window, click_x11_button, click_x11_button_repeated, find_window_id,
     focus_x11_window, mouse_down_x11_button, mouse_up_x11_button, move_x11_mouse_in_window,

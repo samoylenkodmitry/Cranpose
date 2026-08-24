@@ -9,10 +9,11 @@
 //!
 //! Every tab must show its expected visible marker after each switch.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
 use desktop_app::app;
-use std::time::Duration;
 
 fn wait_for_text(robot: &cranpose::Robot, text: &str, attempts: usize, delay: Duration) -> bool {
     for _ in 0..attempts {

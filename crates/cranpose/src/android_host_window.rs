@@ -1,12 +1,13 @@
 //! Android host-window size request state.
 
-use cranpose_core::MutableState;
-use cranpose_ui::{composable, Point, Size};
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
     time::Duration,
 };
+
+use cranpose_core::MutableState;
+use cranpose_ui::{composable, Point, Size};
 use thiserror::Error;
 
 const SIZE_EPSILON: f32 = 0.5;
@@ -471,8 +472,9 @@ fn logical_dimension_to_physical(logical: f32, density: f32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     struct TestState {
         _runtime: cranpose_core::Runtime,

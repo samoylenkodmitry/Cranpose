@@ -1,12 +1,16 @@
-use crate::output_paths;
-use crate::text_showcase_external_helpers::{capture_x11_window, find_window_id};
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_ui::{
     composable, Alignment, Box, BoxSpec, Brush, Canvas, Color, Modifier, Rect, Size,
 };
 use cranpose_ui_graphics::DrawScope;
 use image::RgbaImage;
-use std::time::Duration;
+
+use crate::{
+    output_paths,
+    text_showcase_external_helpers::{capture_x11_window, find_window_id},
+};
 
 const WINDOW_WIDTH: u32 = 360;
 const WINDOW_HEIGHT: u32 = 240;

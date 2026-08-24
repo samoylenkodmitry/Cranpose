@@ -20,15 +20,19 @@
 //! `unrestricted_background_work` and `request_unrestricted_background_work`
 //! keep their [`PowerMonitor`] defaults.
 
+use std::{
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        Arc,
+    },
+};
+
 use cranpose_services::{
     power_state, publish_power_state, set_platform_power_monitor, BatteryStatus, PowerCapabilities,
     PowerMonitor, PowerReading,
 };
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 
 /// Installs the browser power monitor. Battery readings stay

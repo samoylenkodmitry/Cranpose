@@ -7,8 +7,10 @@
 //! O(1) key dispatch: The focused field's handler is stored for direct invocation,
 //! avoiding O(N) tree scans on every keystroke.
 
-use std::cell::{Cell, RefCell};
-use std::rc::{Rc, Weak};
+use std::{
+    cell::{Cell, RefCell},
+    rc::{Rc, Weak},
+};
 
 use crate::key_event::KeyEvent;
 

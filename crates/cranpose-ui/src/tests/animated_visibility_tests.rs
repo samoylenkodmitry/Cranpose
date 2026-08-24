@@ -1,12 +1,16 @@
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use cranpose_animation::{tween, AnimationType, Easing};
+use cranpose_core::{DisposableEffectResult, MutableState};
+use cranpose_macros::composable;
+
 use crate::{
     fade_in, fade_out, run_test_composition, slide_in_vertically, slide_out_vertically,
     AnimatedVisibility, EnterTransition, ExitTransition, TestComposition,
 };
-use cranpose_animation::{tween, AnimationType, Easing};
-use cranpose_core::{DisposableEffectResult, MutableState};
-use cranpose_macros::composable;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
 const TRANSITION_MILLIS: u64 = 160;

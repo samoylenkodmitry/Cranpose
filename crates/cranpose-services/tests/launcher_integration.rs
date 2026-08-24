@@ -2,14 +2,14 @@
 //! for it, including when the host destroyed and rebuilt that composition while
 //! the chooser was in front.
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_services::{
     clear_launcher_state, clear_platform_file_picker, set_platform_file_picker, BytesContent,
     ContentFolderRef, ContentHandle, FilePicker, FilePickerError, FilePickerOptions,
     LauncherResult, PickerFuture, RecoveredPick,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// A picker whose chooser never resolves in this process, and which instead
 /// reports the selection the host recovered — exactly what Android does when it

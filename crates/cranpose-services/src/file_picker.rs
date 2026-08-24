@@ -13,15 +13,12 @@
 //! [`crate::launcher`], which own the request across host recreation and hand
 //! the result back through a callback.
 
-use crate::content::{ContentError, ContentFolderRef, ContentHandle, ContentSinkRef};
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
+
+use crate::content::{ContentError, ContentFolderRef, ContentHandle, ContentSinkRef};
 
 /// Errors produced while presenting a chooser.
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
@@ -341,7 +338,6 @@ mod builtin {
     pub(super) use super::desktop::{
         pick_file, pick_files, pick_folder, pick_writable_folder, save_document,
     };
-
     #[cfg(all(target_arch = "wasm32", feature = "file-picker-web"))]
     pub(super) use super::web::{
         pick_file, pick_files, pick_folder, pick_writable_folder, save_document,
@@ -357,9 +353,9 @@ mod builtin {
         all(target_arch = "wasm32", feature = "file-picker-web")
     )))]
     mod unsupported {
-        use crate::content::{ContentFolderRef, ContentHandle, ContentSinkRef};
-        use crate::file_picker::{
-            FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest,
+        use crate::{
+            content::{ContentFolderRef, ContentHandle, ContentSinkRef},
+            file_picker::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest},
         };
 
         pub(in crate::file_picker) fn pick_file(

@@ -11,12 +11,13 @@
 //! (which the app shell renderer and semantics use) culled its whole subtree.
 //! These tests exercise those applier-traversal builds specifically.
 
-use super::*;
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::NodeId;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope};
 use cranpose_ui_graphics::Size as ViewportSize;
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use super::*;
 
 fn compose_lazy_swipe_rows() -> TestComposition {
     run_test_composition(|| {

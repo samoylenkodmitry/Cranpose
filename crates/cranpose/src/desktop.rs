@@ -2,40 +2,45 @@
 //!
 //! This module provides the desktop event loop implementation using winit.
 
-use crate::app_launcher::{AppSettings, LaunchError};
-use crate::desktop_input::{app_modifiers, dispatch_keyboard_input};
-use crate::native_window::{
-    self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
-    NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
-    WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet, VecDeque},
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
 };
+
+#[cfg(feature = "robot")]
+use cranpose_app_shell::PointerSource;
+use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode, FrameUpdateResult};
+use cranpose_platform_desktop_winit::DesktopWinitPlatform;
+use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
+use winit::{
+    application::ApplicationHandler,
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position},
+    event::{ButtonSource, ElementState, MouseButton, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    window::{ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel},
+};
+
 #[cfg(feature = "robot")]
 use crate::robot::{
     char_to_key_code, extract_semantics, find_button_in_app, find_text_in_app,
     panic_payload_message, robot_key_code_and_text, robot_wait_for_idle_animation_loop_only, Robot,
     RobotChannel, RobotCommand, RobotResponse, RobotScreenshot, RobotTimelineAction,
 };
-use crate::wgpu_surface::surface_present_required;
-use crate::wgpu_surface::{current_surface_texture, SurfaceFrame};
-use crate::winit_pointer::{
-    is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
-};
-#[cfg(feature = "robot")]
-use cranpose_app_shell::PointerSource;
-use cranpose_app_shell::{default_root_key, AppShell, FramePacingMode, FrameUpdateResult};
-use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-use cranpose_render_wgpu::{WgpuRenderer, WgpuTextSystem};
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use winit::application::ApplicationHandler;
-use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize, Position};
-use winit::event::{ButtonSource, ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::window::{
-    ResizeDirection, Window, WindowAttributes, WindowId as WinitWindowId, WindowLevel,
+use crate::{
+    app_launcher::{AppSettings, LaunchError},
+    desktop_input::{app_modifiers, dispatch_keyboard_input},
+    native_window::{
+        self, NativeWindowEvents, NativeWindowKey, NativeWindowOptions, NativeWindowPositionOrigin,
+        NativeWindowRequest, WindowGraphMove, WindowGraphNodeSnapshot, WindowGraphPeerSnapshot,
+        WindowGraphState, WindowGroupId, WindowResizeDirection, WindowState,
+    },
+    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    winit_pointer::{
+        is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+    },
 };
 
 const NATIVE_WINDOW_DRAG_POLL_INTERVAL: Duration = Duration::ZERO;
@@ -3501,8 +3506,10 @@ impl X11WindowClient {
     }
 
     fn configure_windows(&self, windows: &[(u32, PhysicalPosition<i32>)]) -> Option<()> {
-        use x11rb::connection::Connection;
-        use x11rb::protocol::xproto::{ConfigureWindowAux, ConnectionExt};
+        use x11rb::{
+            connection::Connection,
+            protocol::xproto::{ConfigureWindowAux, ConnectionExt},
+        };
 
         for (window, position) in windows {
             self.connection
@@ -6105,6 +6112,12 @@ fn resolve_robot_screenshot_params_with_scale(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    #[cfg(feature = "robot")]
+    use cranpose_app_shell::FrameUpdateResult;
+    use winit::dpi::{PhysicalPosition, PhysicalSize};
+
     #[cfg(feature = "robot")]
     use super::{
         bound_park_for_robot, ControlFlow, IdleWaitTimeout, ROBOT_IDLE_MIN_ITERATIONS,
@@ -6128,18 +6141,13 @@ mod tests {
         NativeWindowPollingDragSession, NativeWindowPositionObservation,
         NativeWindowPositionOrigin, PendingNativeWindowPositions, PrimaryPointerGesturePollAction,
     };
-    use crate::app_launcher::AppSettings;
-    use std::time::Instant;
-    use winit::dpi::{PhysicalPosition, PhysicalSize};
-
     #[cfg(feature = "robot")]
     use super::{
         parse_robot_capture_scale, resolve_robot_screenshot_params,
         resolve_robot_screenshot_params_with_scale, robot_query_visual_dirty,
         robot_visible_present_target, robot_visible_pump_present_target, RobotController,
     };
-    #[cfg(feature = "robot")]
-    use cranpose_app_shell::FrameUpdateResult;
+    use crate::app_launcher::AppSettings;
 
     #[test]
     fn native_window_screen_position_is_declarative() {

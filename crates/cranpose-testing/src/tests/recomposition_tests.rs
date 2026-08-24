@@ -1,5 +1,6 @@
-use super::*;
 use cranpose_macros::composable;
+
+use super::*;
 
 #[derive(Default)]
 struct TestContainerNode {

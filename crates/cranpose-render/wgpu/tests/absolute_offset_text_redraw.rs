@@ -1,12 +1,15 @@
 mod support;
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_render_wgpu::CapturedFrame;
-use cranpose_ui::text::{SpanStyle, TextUnit};
-use cranpose_ui::{composable, Box, BoxSpec, Color, Modifier, Text, TextStyle};
-use std::cell::RefCell;
-use std::rc::Rc;
+use cranpose_ui::{
+    composable,
+    text::{SpanStyle, TextUnit},
+    Box, BoxSpec, Color, Modifier, Text, TextStyle,
+};
 
 const FRAME_WIDTH: u32 = 400;
 const FRAME_HEIGHT: u32 = 300;

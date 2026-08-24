@@ -17,16 +17,21 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::density::Density;
-use crate::modifier::{Brush, Color, CornerRadii, Modifier, Point, Rect};
-use crate::widgets::wear::theme::{WearColors, WearTextStyle};
-use crate::widgets::{Layout, Text};
 use cranpose_core::NodeId;
 use cranpose_foundation::SemanticsWidgetRole;
 use cranpose_ui_graphics::{DrawScope, Size, VectorPath};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
+
+use crate::{
+    composable,
+    density::Density,
+    modifier::{Brush, Color, CornerRadii, Modifier, Point, Rect},
+    widgets::{
+        wear::theme::{WearColors, WearTextStyle},
+        Layout, Text,
+    },
 };
 
 /// `SwitchButtonDefaults` plus `ToggleButton`'s layout constants.
@@ -519,8 +524,9 @@ impl MeasurePolicy for SwitchButtonMeasurePolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{DrawScopeDefault, Size as GraphicsSize};
+
+    use super::*;
 
     fn colors() -> WearColors {
         WearColors {

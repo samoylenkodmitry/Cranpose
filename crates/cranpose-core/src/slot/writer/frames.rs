@@ -1,5 +1,4 @@
-use super::key_state::FrameKeyState;
-use super::siblings::SiblingIndex;
+use super::{key_state::FrameKeyState, siblings::SiblingIndex};
 use crate::AnchorId;
 
 #[derive(Default)]

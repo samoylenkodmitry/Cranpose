@@ -1,7 +1,5 @@
-use super::super::{
-    checked_usize_to_u32, GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable,
-};
 use super::{
+    super::{checked_usize_to_u32, GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable},
     anchors,
     nodes::{self, validate_group_nodes},
     payloads::{self, validate_group_payloads},

@@ -276,8 +276,9 @@ elements through the semantics tree, sends input, and captures presented frames
 compositor actually presents them, not as the scene graph describes them.
 
 ```bash
-./run_robot_test.sh --sequential     # the end-to-end suite
-./liquid_cheatsheets.sh              # glass component reference sheets
+just robot         # the end-to-end suite
+just cheatsheets   # glass component reference sheets
+just perf-max-fps  # unthrottled frame rate on the heaviest glass scene
 ```
 
 See [`docs/ROBOT_TESTING.md`](docs/ROBOT_TESTING.md).
@@ -285,15 +286,14 @@ See [`docs/ROBOT_TESTING.md`](docs/ROBOT_TESTING.md).
 ## Verification gates
 
 ```bash
-cargo fmt --check
-cargo test
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace --no-default-features
-cargo xtask dependency-budget --strict --explain
-cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml \
-  --package isolated-demo --bin isolated-demo \
-  --profile release-small --patch-workspace-cranpose --max-bytes 15728640
+just ci
 ```
+
+That is formatting, spell check, version alignment, the test suite, clippy,
+rustdoc, and the architecture budgets: featureless and all-features builds, the
+per-backend winit checks, the duplicate-dependency budgets and the desktop
+binary-size ceiling. CI runs the same recipes, so a gate cannot mean one thing
+here and another thing in a pull request. `just` on its own lists every recipe.
 
 Zero warnings is the standard, not a target. Contributor conventions live in
 [`AGENTS.md`](AGENTS.md); the starter project's own checks are in

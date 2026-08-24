@@ -1,5 +1,6 @@
-use super::{DetachedSubtree, SlotLifecycleDebugStats, SlotTable};
 use std::any::Any;
+
+use super::{DetachedSubtree, SlotLifecycleDebugStats, SlotTable};
 
 /// Coordinates deferred payload disposal for the slot lifecycle described in
 /// `docs/SLOT_TABLE_LIFECYCLE.md`.

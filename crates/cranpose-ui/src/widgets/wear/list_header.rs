@@ -23,16 +23,21 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::density::Density;
-use crate::modifier::Modifier;
-use crate::text::paragraph::TextAlign;
-use crate::widgets::wear::theme::{WearColors, WearTextStyle};
-use crate::widgets::{Layout, Text};
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
+};
+
+use crate::{
+    composable,
+    density::Density,
+    modifier::Modifier,
+    text::paragraph::TextAlign,
+    widgets::{
+        wear::theme::{WearColors, WearTextStyle},
+        Layout, Text,
+    },
 };
 
 /// `ListHeaderDefaults` plus `ListHeaderTokens.Height`.

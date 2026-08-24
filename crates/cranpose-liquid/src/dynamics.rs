@@ -14,11 +14,9 @@
 //! never wall time — so poses stay exact under robot keyframe captures and
 //! on wasm.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::with_current_composer;
-use cranpose_core::RuntimeHandle;
+use cranpose_core::{with_current_composer, RuntimeHandle};
 use cranpose_macros::composable;
 
 use crate::material::GlassDeformation;

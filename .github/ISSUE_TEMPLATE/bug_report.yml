@@ -1,0 +1,64 @@
+name: Bug Report
+description: Report a bug in Cranpose
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Smallest thing that shows the bug. A composable that fits in a screen beats a repository.
+    validations:
+      required: true
+  - type: input
+    id: cranpose-version
+    attributes:
+      label: Cranpose version
+      description: Cranpose is pre-alpha and versions are not compatible with each other, so the exact one matters.
+      placeholder: e.g. 0.1.98
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      multiple: true
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Android
+        - Wear OS
+        - iOS
+        - Web (WebAssembly)
+    validations:
+      required: true
+  - type: dropdown
+    id: renderer
+    attributes:
+      label: Renderer
+      options:
+        - renderer-wgpu
+        - renderer-wgpu-gles
+        - renderer-pixels
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust version
+      description: Output of `rustc --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Anything else
+      description: Backtraces, screenshots, GPU and driver for rendering bugs.

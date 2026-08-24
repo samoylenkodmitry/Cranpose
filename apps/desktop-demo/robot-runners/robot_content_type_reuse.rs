@@ -10,9 +10,10 @@
 //! cargo run --package desktop-app --example robot_content_type_reuse --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
-use std::time::Duration;
 
 const MAX_NEW_COMPOSES_DURING_SCROLL: usize = 200;
 const MIN_RETAINED_SLOTS_AFTER_ROUNDTRIP: usize = 1;

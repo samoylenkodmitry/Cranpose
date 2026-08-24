@@ -10,6 +10,13 @@ readme = "README.md"
 license.workspace = true
 description = "Standard library backed runtime services for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-core = { workspace = true }
 web-time = { workspace = true }

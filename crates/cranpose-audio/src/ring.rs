@@ -21,10 +21,14 @@
 //! is the one place in the engine that reaches past the borrow checker.
 #![allow(unsafe_code)]
 
-use std::cell::UnsafeCell;
-use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    cell::UnsafeCell,
+    mem::MaybeUninit,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 struct Ring<T> {
     slots: Box<[UnsafeCell<MaybeUninit<T>>]>,
@@ -151,8 +155,9 @@ impl<T> Consumer<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize as TestCounter;
+
+    use super::*;
 
     #[test]
     fn capacity_rounds_up_to_a_power_of_two() {

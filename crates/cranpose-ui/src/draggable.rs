@@ -22,9 +22,12 @@
 
 #![allow(non_snake_case)]
 
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_core::{remember, MutableState, State};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 /// What a [`DraggableState`] hands each drag delta to.
 pub type DragDeltaHandler = Rc<dyn Fn(f32)>;
@@ -138,9 +141,11 @@ mod draggable_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_core::{DefaultScheduler, Runtime};
     use std::sync::Arc;
+
+    use cranpose_core::{DefaultScheduler, Runtime};
+
+    use super::*;
 
     fn with_runtime<T>(body: impl FnOnce() -> T) -> T {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));

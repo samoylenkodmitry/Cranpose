@@ -5,11 +5,14 @@ use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
 use cranpose_core::{rememberMutableStateOf, MutableState};
-use cranpose_ui::widgets::{
-    BoxWithConstraints, Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, Row,
-    RowSpec, Text,
+use cranpose_ui::{
+    composable,
+    widgets::{
+        BoxWithConstraints, Button, ButtonSpec, CircularProgressIndicator, Column, ColumnSpec, Row,
+        RowSpec, Text,
+    },
+    Modifier, TextStyle,
 };
-use cranpose_ui::{composable, Modifier, TextStyle};
 use cranpose_ui_graphics::Color;
 
 #[composable]

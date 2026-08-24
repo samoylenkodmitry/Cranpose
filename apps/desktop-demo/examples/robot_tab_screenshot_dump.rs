@@ -18,11 +18,14 @@
 //! in [`NONDETERMINISTIC_TABS`] so callers can treat a nonzero diff on those
 //! tabs as expected rather than as a renderer gap.
 
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use desktop_app::app::{self, DemoTab, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 800;

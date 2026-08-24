@@ -8,12 +8,12 @@
 //! cargo run --package desktop-app --example robot_lazy_max_demo --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
-use std::time::Duration;
-
 // Use the actual app's lazy_list_example
 use desktop_app::app::lazy_list::lazy_list_example;
 

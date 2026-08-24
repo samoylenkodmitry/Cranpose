@@ -18,11 +18,12 @@
 //! module invented would read as a measurement while being a guess — so it
 //! answers `Unsupported`, which is what it can honestly say.
 
+use std::sync::Arc;
+
 use cranpose_services::{
     set_platform_power_monitor, BatteryStatus, PowerCapabilities, PowerMonitor, PowerReading,
     ThermalState,
 };
-use std::sync::Arc;
 
 /// Installs the desktop power monitor.
 pub(crate) fn register() {
@@ -77,8 +78,9 @@ mod macos {
 
 #[cfg(target_os = "linux")]
 mod linux {
-    use super::{BatteryStatus, PowerReading};
     use std::path::Path;
+
+    use super::{BatteryStatus, PowerReading};
 
     const POWER_SUPPLY: &str = "/sys/class/power_supply";
 

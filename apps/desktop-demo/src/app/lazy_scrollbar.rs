@@ -1,9 +1,9 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_foundation::SemanticsConfiguration;
 use cranpose_ui::{
     composable, Box as UiBox, BoxSpec, Brush, Color, LinearArrangement, Modifier, Row, RowSpec,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct LazyScrollbarStyle {
@@ -208,9 +208,10 @@ pub(crate) fn LazyScrollbarRail(
                 );
             })
             .pointer_input("lazy_scrollbar_drag", move |scope| async move {
+                use std::time::Duration;
+
                 use cranpose_foundation::{PointerButton, PointerEventKind};
                 use instant::Instant;
-                use std::time::Duration;
 
                 loop {
                     scope
@@ -369,14 +370,16 @@ pub(crate) fn LazyListWithScrollbar<F>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::cell::RefCell;
+
     use cranpose_core::{location_key, Applier, Composition, MemoryApplier, MutableState, NodeId};
     use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope};
     use cranpose_ui::{
         BoxWithConstraints, Column, ColumnSpec, HeadlessRenderer, LayoutEngine, LazyColumn,
         LazyColumnSpec, Modifier, RenderOp, Size, Text, TextStyle,
     };
-    use std::cell::RefCell;
+
+    use super::*;
 
     thread_local! {
         static CAPTURED_SCROLLBAR_LIST_STATE: RefCell<Option<cranpose_foundation::lazy::LazyListState>> = const { RefCell::new(None) };

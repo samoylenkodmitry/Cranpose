@@ -1,22 +1,24 @@
 //! Filter chip: a pill that lifts onto glass when selected.
 
-use crate::material::{Glass, LiquidModifierExt};
-use crate::motion::liquid_press_scale;
-use crate::theme::{liquid_colors, liquid_typography};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_animation::animateColorAsState;
 use cranpose_macros::composable;
 use cranpose_services::{default_haptics, HapticFeedback};
-use cranpose_ui::rememberMutableInteractionSource;
-use cranpose_ui::text::FontWeight;
-use cranpose_ui::text::{SpanStyle, TextStyle};
-use cranpose_ui::widgets::{Box, BoxSpec, Text};
-use cranpose_ui::Modifier;
+use cranpose_ui::{
+    rememberMutableInteractionSource,
+    text::{FontWeight, SpanStyle, TextStyle},
+    widgets::{Box, BoxSpec, Text},
+    Modifier,
+};
 use cranpose_ui_graphics::{Brush, CornerRadii};
 use cranpose_ui_layout::Alignment;
-use std::cell::RefCell;
-use std::rc::Rc;
 
-use crate::motion::LiquidMotion;
+use crate::{
+    material::{Glass, LiquidModifierExt},
+    motion::{liquid_press_scale, LiquidMotion},
+    theme::{liquid_colors, liquid_typography},
+};
 
 /// A selectable filter pill (the Library "All / Receipts" chips). Selected
 /// chips render on glass; unselected ones sit on the fill color.

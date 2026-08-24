@@ -11,6 +11,9 @@ categories.workspace = true
 readme = "README.md"
 description = "Web platform adapter for Cranpose"
 
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-foundation = { workspace = true }
 cranpose-ui-graphics = { workspace = true }

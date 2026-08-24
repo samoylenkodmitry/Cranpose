@@ -1,8 +1,11 @@
-use crate::layout::{LayoutBox, LayoutNodeData, LayoutTree};
-use crate::modifier::{DrawCommand as ModifierDrawCommand, Point, Rect, Size};
-use crate::widgets::LayoutNode;
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui_graphics::DrawPrimitive;
+
+use crate::{
+    layout::{LayoutBox, LayoutNodeData, LayoutTree},
+    modifier::{DrawCommand as ModifierDrawCommand, Point, Rect, Size},
+    widgets::LayoutNode,
+};
 
 /// Layer that a paint operation targets within the rendering pipeline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

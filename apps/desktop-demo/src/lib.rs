@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 pub mod app;
 pub mod fonts;
 
@@ -15,7 +13,8 @@ pub mod test_screens;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use crate::fonts::DEMO_FONTS;
+use cranpose::AppLauncher;
+
 #[cfg(all(
     feature = "desktop",
     feature = "renderer-wgpu",
@@ -23,7 +22,7 @@ use crate::fonts::DEMO_FONTS;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-use cranpose::AppLauncher;
+use crate::fonts::DEMO_FONTS;
 
 #[cfg(all(
     feature = "desktop",
@@ -59,11 +58,12 @@ pub fn entry_point() {
 }
 
 #[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
-use crate::fonts::DEMO_FONTS as IOS_DEMO_FONTS;
-#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
 use cranpose::{
     local_safe_area_insets, AppLauncher as IosAppLauncher, Box as CranposeBox, BoxSpec, Modifier,
 };
+
+#[cfg(all(feature = "ios", feature = "renderer-wgpu", target_os = "ios"))]
+use crate::fonts::DEMO_FONTS as IOS_DEMO_FONTS;
 
 /// iOS root: insets the demo by the system safe area (status bar, notch, home
 /// indicator) read from [`local_safe_area_insets`], which the iOS backend

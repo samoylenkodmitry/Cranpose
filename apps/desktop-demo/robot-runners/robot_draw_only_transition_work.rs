@@ -1,12 +1,18 @@
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
 use cranpose_testing::find_button_in_semantics;
-use cranpose_ui::widgets::{
-    CircularProgressIndicator, CIRCULAR_INDICATOR_STROKE_WIDTH, PROGRESS_INDICATOR_COLOR,
+use cranpose_ui::{
+    composable,
+    widgets::{
+        CircularProgressIndicator, CIRCULAR_INDICATOR_STROKE_WIDTH, PROGRESS_INDICATOR_COLOR,
+    },
+    Button, ButtonSpec, Column, ColumnSpec, Modifier, Text, TextStyle,
 };
-use cranpose_ui::{composable, Button, ButtonSpec, Column, ColumnSpec, Modifier, Text, TextStyle};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 

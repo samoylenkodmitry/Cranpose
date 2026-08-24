@@ -5,12 +5,16 @@
 //! and completes several animations in one drain — the failure mode observed
 //! live was every later recomposition/animation dying after such a frame.
 
-use crate::{run_test_composition, TestComposition};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType};
 use cranpose_core::with_current_composer;
 use cranpose_macros::composable;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use crate::{run_test_composition, TestComposition};
 
 fn drain(composition: &mut TestComposition) {
     while composition

@@ -4,8 +4,9 @@
 //! computed during text measurement, enabling O(1) cursor positioning and
 //! selection rendering instead of O(n²) substring measurements.
 
-use cranpose_core::hash::default;
 use std::hash::{Hash, Hasher};
+
+use cranpose_core::hash::default;
 
 /// Layout information for a single line of text.
 #[derive(Debug, Clone)]

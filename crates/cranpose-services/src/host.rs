@@ -1,8 +1,12 @@
 //! Framework-owned application-host state and controls.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, AtomicU8, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+};
 
 /// Platform directory roots for application-owned files.
 #[derive(Clone, Debug, Eq, PartialEq)]

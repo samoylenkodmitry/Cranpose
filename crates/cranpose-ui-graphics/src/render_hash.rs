@@ -1,8 +1,9 @@
+use std::hash::{Hash, Hasher};
+
 use crate::{
     Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, FxHasher, ImageBitmap, LayerShape,
     Point, Rect, RenderEffect, RuntimeShader, ShadowPrimitive, Stroke,
 };
-use std::hash::{Hash, Hasher};
 
 pub trait RenderHash {
     fn render_hash(&self) -> u64;

@@ -1,27 +1,27 @@
-use std::collections::HashSet;
-use std::rc::Rc;
+use std::{collections::HashSet, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_ui::text::AnnotatedString;
-use cranpose_ui::text::{resolve_text_direction, TextAlign, TextStyle};
 use cranpose_ui::{
-    prepare_text_layout, DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect,
-    ResolvedModifiers, Size, SubcomposeLayoutNode, TextLayoutOptions, TextOverflow,
-    TextPanResolver,
+    prepare_text_layout,
+    text::{resolve_text_direction, AnnotatedString, TextAlign, TextStyle},
+    DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, ResolvedModifiers, Size,
+    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver,
 };
 use cranpose_ui_graphics::{
     rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, LayerShape,
     RoundedCornerShape,
 };
 
-use crate::graph::{
-    CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
-    PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    TextPrimitiveNode,
+use crate::{
+    graph::{
+        CachePolicy, DrawCommandId, DrawRunNode, HitTestNode, IsolationReasons, LayerNode,
+        PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
+        RenderNode, TextPrimitiveNode,
+    },
+    layer_transform::layer_transform_to_parent,
+    raster_cache::LayerRasterCacheHashes,
+    style_shared::{primitives_for_placement_verified, DrawPlacement},
 };
-use crate::layer_transform::layer_transform_to_parent;
-use crate::raster_cache::LayerRasterCacheHashes;
-use crate::style_shared::{primitives_for_placement_verified, DrawPlacement};
 
 const TEXT_CLIP_PAD: f32 = 1.0;
 const ROUNDED_CLIP_EDGE_FEATHER: f32 = 1.0;
@@ -1664,14 +1664,11 @@ fn resolve_text_horizontal_offset(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
-    use cranpose_ui::text::{
-        AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion,
-    };
     use cranpose_ui::{
+        text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
         Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
         LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
         ScrollState, Size, Spacer, Text, TextStyle,
@@ -2519,8 +2516,9 @@ mod tests {
     /// rely on, since the layout `place` pass never runs in the runtime.
     #[test]
     fn scene_build_publishes_live_window_rect_without_layout_tree() {
-        use cranpose_ui::{measure_layout_with_options, Box, BoxSpec, MeasureLayoutOptions};
         use std::cell::Cell;
+
+        use cranpose_ui::{measure_layout_with_options, Box, BoxSpec, MeasureLayoutOptions};
 
         let spacer_before = 120.0_f32;
         let sink: Rc<Cell<Rect>> = Rc::new(Cell::new(Rect {
@@ -3956,8 +3954,7 @@ mod tests {
 
     #[test]
     fn scrolled_lazy_column_item_text_keeps_unspecified_motion_at_rest() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
+        use std::{cell::RefCell, rc::Rc};
 
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
@@ -4050,8 +4047,7 @@ mod tests {
 
     #[test]
     fn scrolled_lazy_column_render_graph_keeps_beyond_bound_text_rows() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
+        use std::{cell::RefCell, rc::Rc};
 
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();
@@ -4116,8 +4112,7 @@ mod tests {
 
     #[test]
     fn scrolled_lazy_column_uses_visible_item_offset_as_snap_anchor_offset() {
-        use std::cell::RefCell;
-        use std::rc::Rc;
+        use std::{cell::RefCell, rc::Rc};
 
         let state_holder: Rc<RefCell<Option<LazyListState>>> = Rc::new(RefCell::new(None));
         let state_holder_for_comp = state_holder.clone();

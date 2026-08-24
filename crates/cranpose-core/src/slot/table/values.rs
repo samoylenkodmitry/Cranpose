@@ -1,8 +1,7 @@
-use super::super::ValueSlotId;
-use super::SlotTable;
-use crate::slot::PayloadAnchor;
-use crate::AnchorId;
 use std::fmt;
+
+use super::{super::ValueSlotId, SlotTable};
+use crate::{slot::PayloadAnchor, AnchorId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueSlotError {

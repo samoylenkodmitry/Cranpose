@@ -1,5 +1,6 @@
-use crate::nodes::input::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::Point;
+
+use crate::nodes::input::{PointerEvent, PointerEventKind};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScrollGestureEvent {

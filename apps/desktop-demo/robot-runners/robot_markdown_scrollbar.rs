@@ -3,6 +3,8 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_markdown_scrollbar --features robot-app`
 
+use std::{fs, sync::Arc, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef, StubHttpClient};
@@ -10,9 +12,6 @@ use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, print_semantics_with_bounds,
 };
 use desktop_app::app;
-use std::fs;
-use std::sync::Arc;
-use std::time::Duration;
 
 const VIEWPORT_TAG: &str = "MarkdownListViewport";
 const SCROLLBAR_TAG: &str = "MarkdownScrollbarRail";

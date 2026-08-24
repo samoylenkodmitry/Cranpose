@@ -6,12 +6,18 @@
 //! slot the progress thread drains, and a block that arrives while the slot is
 //! held is counted and dropped rather than made to wait.
 
-use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cranpose_services::{publish_media_samples, record_dropped_media_samples, MediaSamples};
 use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+
+use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 
 /// How many frames make up one published block.
 ///

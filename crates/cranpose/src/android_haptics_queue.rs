@@ -23,10 +23,15 @@
 //!
 //! Built on the host as well so the ordering/coalescing test runs everywhere.
 
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Condvar, Mutex, MutexGuard, PoisonError,
+    },
+};
+
 use cranpose_services::{HapticEffect, HapticFeedback};
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 /// One `Haptics` call, carried from the calling thread to the delivery
 /// thread. Waveform payloads are pre-converted to the JNI array element types
@@ -202,8 +207,9 @@ impl HapticQueue {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     /// The delivery contract in one pass: discrete effects survive saturation
     /// in order, a saturated tail waveform is last-write-wins, shutdown

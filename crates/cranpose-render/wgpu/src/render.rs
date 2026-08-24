@@ -1,28 +1,55 @@
 //! GPU rendering implementation using WGPU
 
-use crate::display_clip;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    borrow::Cow,
+    cell::Cell,
+    hash::{Hash, Hasher},
+    ops::Range,
+    rc::Rc,
+    sync::{mpsc, Arc},
+    time::Duration,
+};
+
+use bytemuck::{Pod, Zeroable};
+#[cfg(any(not(target_arch = "wasm32"), test))]
+use cranpose_core::collections::map::HashMap;
+use cranpose_core::{hash::default as default_hash, NodeId};
+#[cfg(test)]
+use cranpose_render_common::graph::{
+    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+    RenderNode,
+};
+#[cfg(test)]
+use cranpose_render_common::raster_cache::ScaleBucket;
+use cranpose_render_common::{
+    bounded_lru_cache::BoundedLruCache,
+    geometry::blur_extent_margin,
+    graph::quad_bounds,
+    raster_cache::LayerRasterCacheKey,
+    software_text_raster::{
+        collect_solid_text_atlas_run, measure_text_with_font,
+        rasterize_annotated_text_to_image_with_glyph_cache,
+        rasterize_text_to_image_with_glyph_cache, SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey,
+        SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
+        SoftwareTextFontSet,
+    },
+};
+#[cfg(test)]
+use cranpose_ui_graphics::GraphicsLayer;
+use cranpose_ui_graphics::{
+    BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
+    RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
+};
+use web_time::Instant;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::display_clip::DisplayVisibleRegion;
-use crate::effect_renderer::{
-    projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
-    EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
-    ShaderCompositeBatchItem,
-};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::effect_renderer::{PreparedProjectiveComposite, ProjectiveCompositeItem};
-use crate::frame_graph::{
-    FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
-};
-use crate::frame_packet::{
-    CancelReason, FramePacket, PacketRoot, PresentOutcome, RenderReturns, RootSurfacePacket,
-};
-use crate::layer_events::{
-    collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind,
-};
-use crate::layer_surface_cache::LayerSurfaceCache;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::lazy_resource::LazyGpuResource;
-use crate::lazy_resource::PassPipeline;
 #[cfg(test)]
 use crate::normalized_scene::{
     build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
@@ -30,34 +57,13 @@ use crate::normalized_scene::{
 };
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
-use crate::normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer};
-use crate::offscreen::{composition_bytes_per_pixel, OffscreenTarget, COMPOSITION_FORMAT};
-use crate::output_conversion::OutputConverter;
-use crate::rect_to_quad;
-use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    RetainedDraw, SceneBrush, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
-};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::segment_surface::{
     Affine2, CaptureRect, SegmentSurfaceCache, SegmentSurfaceDecision, SegmentSurfaceKey,
     SEGMENT_CAPTURE_SLOTS, SEGMENT_CAPTURE_UNIFORM_STRIDE,
 };
-use crate::shaders;
 #[cfg(test)]
 use crate::surface_executor::surface_target_size;
-use crate::surface_executor::{
-    apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
-    axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
-    canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
-    composite_surface_to_view as execute_composite_surface_to_view, device_pixel_bounds_for_rect,
-    offscreen_byte_size, render_effect_layer_to_target as execute_render_effect_layer_to_target,
-    render_layer_surface as execute_render_layer_surface,
-    render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
-    scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad,
-    translation_stable_anchored_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
-    SurfaceExecutionBackend,
-};
 #[cfg(test)]
 use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 #[cfg(test)]
@@ -69,52 +75,53 @@ use crate::surface_plan::{
     layer_surface_requirements, layer_surface_requirements_cached, layer_surface_scale,
     layer_surface_target_scale, layer_uses_external_backdrop_input, TranslatedContentAxes,
 };
-use crate::surface_plan::{LayerSurfaceRequest, TranslationRenderContext};
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
-use crate::surface_requirements::SurfaceRequirementSet;
-use crate::DebugCpuAllocationStats;
-use bytemuck::{Pod, Zeroable};
-#[cfg(any(not(target_arch = "wasm32"), test))]
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::{hash::default as default_hash, NodeId};
-use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
-use cranpose_render_common::geometry::blur_extent_margin;
-use cranpose_render_common::graph::quad_bounds;
-#[cfg(test)]
-use cranpose_render_common::graph::{
-    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderNode,
+use crate::{
+    display_clip,
+    effect_renderer::{
+        projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
+        EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
+        ShaderCompositeBatchItem,
+    },
+    frame_graph::{
+        FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
+    },
+    frame_packet::{
+        CancelReason, FramePacket, PacketRoot, PresentOutcome, RenderReturns, RootSurfacePacket,
+    },
+    gpu_stats,
+    gpu_stats::gpu_stats_enabled,
+    layer_events::{collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind},
+    layer_surface_cache::LayerSurfaceCache,
+    lazy_resource::PassPipeline,
+    normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer},
+    offscreen::{composition_bytes_per_pixel, OffscreenTarget, COMPOSITION_FORMAT},
+    output_conversion::OutputConverter,
+    pipeline::push_layer_shadow,
+    rect_to_quad,
+    scene::{
+        BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
+        RetainedDraw, SceneBrush, ShadowDraw, SimilarityTransform, SnapAnchor, TextDraw,
+    },
+    shaders,
+    surface_executor::{
+        apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
+        axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
+        canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
+        composite_surface_to_view as execute_composite_surface_to_view,
+        device_pixel_bounds_for_rect, offscreen_byte_size,
+        render_effect_layer_to_target as execute_render_effect_layer_to_target,
+        render_layer_surface as execute_render_layer_surface,
+        render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
+        scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad,
+        translation_stable_anchored_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
+        SurfaceExecutionBackend,
+    },
+    surface_plan::{LayerSurfaceRequest, TranslationRenderContext},
+    surface_requirements::SurfaceRequirementSet,
+    DebugCpuAllocationStats,
 };
-use cranpose_render_common::raster_cache::LayerRasterCacheKey;
-#[cfg(test)]
-use cranpose_render_common::raster_cache::ScaleBucket;
-use cranpose_render_common::software_text_raster::{
-    collect_solid_text_atlas_run, measure_text_with_font,
-    rasterize_annotated_text_to_image_with_glyph_cache, rasterize_text_to_image_with_glyph_cache,
-    SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
-    SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-};
-#[cfg(test)]
-use cranpose_ui_graphics::GraphicsLayer;
-use cranpose_ui_graphics::{
-    BlendMode, Brush, Color, ColorFilter, FxHasher, ImageBitmap, ImageSampling, Point, Rect,
-    RenderEffect, RenderHash, RuntimeShader, StrokeCap, StrokeJoin, TileMode,
-};
-use std::borrow::Cow;
-use std::cell::Cell;
-use std::hash::{Hash, Hasher};
-use std::ops::Range;
-use std::rc::Rc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
-use web_time::Instant;
-
-use crate::gpu_stats;
-use crate::gpu_stats::gpu_stats_enabled;
-use crate::pipeline::push_layer_shadow;
 
 /// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
 /// shader source is used verbatim, so a larger batch cap here would index past
@@ -17207,17 +17214,17 @@ mod shape_batch_limits_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::normalized_scene::visible_draw_rect;
     use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
-    use cranpose_render_common::graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode};
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_render_common::scene_builder::build_graph_from_applier;
-    use cranpose_ui::text::{
-        AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
-        TextDrawStyle, TextGeometricTransform, TextMotion, TextUnit,
+    use cranpose_render_common::{
+        graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode},
+        raster_cache::LayerRasterCacheHashes,
+        scene_builder::build_graph_from_applier,
     };
     use cranpose_ui::{
+        text::{
+            AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
+            TextDrawStyle, TextGeometricTransform, TextMotion, TextUnit,
+        },
         LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text, TextLayoutOptions,
         TextStyle,
     };
@@ -17225,6 +17232,9 @@ mod tests {
         Brush, Color, CornerRadii, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
         RuntimeShader,
     };
+
+    use super::*;
+    use crate::normalized_scene::visible_draw_rect;
 
     fn chunk(batches: &[SegmentBatchPlan]) -> SegmentDrawChunkPlan {
         let mut chunk = SegmentDrawChunkPlan::default();
@@ -20728,8 +20738,9 @@ mod tests {
     #[test]
     #[ignore]
     fn shape_run_collect_timing_harness() {
-        use cranpose_render_common::graph::DrawPrimitiveNode;
-        use cranpose_render_common::layer_composition::local_content_layer_for;
+        use cranpose_render_common::{
+            graph::DrawPrimitiveNode, layer_composition::local_content_layer_for,
+        };
         use cranpose_ui_graphics::Stroke;
 
         let bounds = Rect {
@@ -20837,9 +20848,11 @@ mod tests {
 
     /// Shared body for the serial and forced-parallel equivalence tests:
     fn assert_shape_run_collect_matches_per_primitive_emission() {
-        use cranpose_render_common::graph::DrawPrimitiveNode;
-        use cranpose_render_common::layer_composition::local_content_layer_for;
-        use cranpose_render_common::primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace};
+        use cranpose_render_common::{
+            graph::DrawPrimitiveNode,
+            layer_composition::local_content_layer_for,
+            primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace},
+        };
         use cranpose_ui_graphics::{CornerRadii, Stroke};
 
         let bounds = Rect {

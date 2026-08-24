@@ -12,8 +12,7 @@
 //!
 //! ```rust,no_run
 //! use cranpose_macros::composable;
-//! use cranpose_services::launcher::rememberOpenFileLauncher;
-//! use cranpose_services::FilePickerOptions;
+//! use cranpose_services::{launcher::rememberOpenFileLauncher, FilePickerOptions};
 //!
 //! #[composable]
 //! fn ImportButton() {
@@ -26,18 +25,24 @@
 //! }
 //! ```
 
-use crate::content::{ContentFolderRef, ContentHandle, ContentSinkRef};
-use crate::file_picker::{
-    local_file_picker, FilePickerError, FilePickerOptions, FilePickerRef, RecoveredPick,
-    SaveDocumentRequest,
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    future::Future,
+    rc::Rc,
 };
-use crate::preferences::preferences;
+
 use cranpose_core::{current_runtime_handle, RuntimeHandle};
 use cranpose_macros::composable;
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::future::Future;
-use std::rc::Rc;
+
+use crate::{
+    content::{ContentFolderRef, ContentHandle, ContentSinkRef},
+    file_picker::{
+        local_file_picker, FilePickerError, FilePickerOptions, FilePickerRef, RecoveredPick,
+        SaveDocumentRequest,
+    },
+    preferences::preferences,
+};
 
 /// What a launcher hands back once the chooser resolves.
 ///

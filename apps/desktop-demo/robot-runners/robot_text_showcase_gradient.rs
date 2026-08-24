@@ -3,13 +3,14 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_text_showcase_gradient --features robot-app`
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     crop_screenshot_logical, find_button_exact_in_semantics, find_button_in_semantics,
     find_in_semantics, find_text,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     println!("FATAL: {message}");

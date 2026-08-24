@@ -1,11 +1,16 @@
-use cranpose_core::{current_runtime_handle, NodeId, SnapshotStateObserver};
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
-use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::OnceLock;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    rc::{Rc, Weak},
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        Arc, Mutex, MutexGuard,
+    },
+};
+
+use cranpose_core::{current_runtime_handle, NodeId, SnapshotStateObserver};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -1027,9 +1032,10 @@ pub(crate) fn render_state_test_guard() -> RenderStateTestGuard {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{mpsc, Arc};
+
     use super::*;
     use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};
-    use std::sync::{mpsc, Arc};
 
     struct TestTextMeasurer;
 

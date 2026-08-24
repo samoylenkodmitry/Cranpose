@@ -4,12 +4,10 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::layout::policies::LeafMeasurePolicy;
-use crate::modifier::Modifier;
-use crate::widgets::Layout;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Size};
+
+use crate::{composable, layout::policies::LeafMeasurePolicy, modifier::Modifier, widgets::Layout};
 
 /// A composable that draws custom content using a [`DrawScope`].
 ///
@@ -53,8 +51,9 @@ pub fn Canvas(modifier: Modifier, on_draw: impl Fn(&mut dyn DrawScope) + 'static
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, DrawScopeDefault, Rect, Size};
+
+    use super::*;
 
     #[test]
     fn canvas_on_draw_closure_produces_primitives() {

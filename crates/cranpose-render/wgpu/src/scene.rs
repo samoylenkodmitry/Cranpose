@@ -1,6 +1,7 @@
 //! Scene structures for GPU rendering
 
-use crate::surface_requirements::SurfaceRequirementSet;
+use std::rc::Rc;
+
 use cranpose_core::NodeId;
 pub use cranpose_render_common::graph_scene::{ClickAction, HitRegion, Scene};
 use cranpose_render_common::style_shared::ResolvedBrush;
@@ -9,7 +10,8 @@ use cranpose_ui_graphics::{
     ArcGeometry, BlendMode, Brush, Color, ColorFilter, ImageBitmap, ImageSampling, Point, Rect,
     RenderEffect, RoundedCornerShape, Stroke,
 };
-use std::rc::Rc;
+
+use crate::surface_requirements::SurfaceRequirementSet;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct SnapAnchor {

@@ -13,8 +13,6 @@ pub use annotated_string::{
     shared_plain_annotated_string, AnnotatedString, LinkAnnotation, LinkKey, RangeStyle,
     RenderString, StringAnnotation,
 };
-
-pub use crate::text_layout_result::TextLayoutResult;
 pub use decoration::{Shadow, TextDecoration};
 pub use draw_scope_text::{draw_style_line_box, text_style_for_draw_style, AppContextTextMeasurer};
 pub use font::{
@@ -40,3 +38,5 @@ pub use style::{
     SpanStyle, TextDrawStyle, TextGeometricTransform, TextMotion, TextShaping, TextStyle,
 };
 pub use unit::TextUnit;
+
+pub use crate::text_layout_result::TextLayoutResult;

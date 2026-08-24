@@ -23,28 +23,31 @@
 //!      enclosing scrollables abandon the gesture (they see consumed moves).
 //! 3. **Up/Cancel**: Clean up state, consume if was dragging
 
-use super::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
-use crate::current_density;
-use crate::draggable::DraggableState;
-use crate::fling_animation::{
-    fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY,
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
 };
-use crate::render_state::schedule_modifier_slices_repass;
-use crate::scroll::{
-    scroll_motion_context_for_key, ScrollElement, ScrollMotionContext, ScrollMotionContextKey,
-    ScrollSettlePolicy, ScrollState,
-};
-use cranpose_core::internal::FrameCallbackRegistration;
-use cranpose_core::{current_runtime_handle, NodeId};
+
+use cranpose_core::{current_runtime_handle, internal::FrameCallbackRegistration, NodeId};
 use cranpose_foundation::{
     velocity_tracker::ASSUME_STOPPED_MS, DelegatableNode, ModifierNode, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD,
     MAX_FLING_VELOCITY,
 };
 use cranpose_ui_layout::Axis;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use web_time::Instant;
+
+use super::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
+use crate::{
+    current_density,
+    draggable::DraggableState,
+    fling_animation::{fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY},
+    render_state::schedule_modifier_slices_repass,
+    scroll::{
+        scroll_motion_context_for_key, ScrollElement, ScrollMotionContext, ScrollMotionContextKey,
+        ScrollSettlePolicy, ScrollState,
+    },
+};
 
 #[cfg(feature = "test-helpers")]
 pub fn last_fling_velocity() -> f32 {

@@ -3,13 +3,13 @@
 //! Registered as the platform device info (see
 //! [`cranpose_services::set_platform_device_info`]) by the iOS backend.
 
+use std::{rc::Rc, sync::Arc};
+
 use cranpose_services::{
     set_platform_device_info, set_platform_power_monitor, BatteryStatus, DeviceInfo,
     PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
 };
 use objc2_foundation::NSProcessInfo;
-use std::rc::Rc;
-use std::sync::Arc;
 
 /// Installs the iOS device info as the platform device info.
 pub(crate) fn register() {

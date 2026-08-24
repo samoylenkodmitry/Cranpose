@@ -8,12 +8,14 @@
 
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_testing::{ComposeTestRule, PlacedSemanticsNode};
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, WearScalingLazyColumn, WearScalingLazyColumnSpec,
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::{
+        wear::{rememberWearScalingListState, WearScalingLazyColumn, WearScalingLazyColumnSpec},
+        BoxSpec,
+    },
+    Modifier, Size,
 };
-use cranpose_ui::widgets::BoxSpec;
-use cranpose_ui::{Modifier, Size};
 
 /// The watch these widgets are dimensioned for, in layout points.
 const WATCH: f32 = 454.0;

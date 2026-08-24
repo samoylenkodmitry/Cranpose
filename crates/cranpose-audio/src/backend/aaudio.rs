@@ -21,17 +21,25 @@
 //! place it is unavoidable: turning AAudio's raw output pointer into a slice.
 #![allow(unsafe_code)]
 
-use crate::backend::AudioSink;
-use crate::mixer::{Mixer, MixerSeed, RenderStatus};
+use std::{
+    ffi::c_void,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
+    thread::{self, JoinHandle},
+};
+
 use cranpose_services::AudioError;
 use ndk::audio::{
     AudioCallbackResult, AudioDirection, AudioError as AAudioError, AudioFormat,
     AudioPerformanceMode, AudioSharingMode, AudioStream, AudioStreamBuilder, AudioStreamState,
 };
-use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
-use std::thread::{self, JoinHandle};
+
+use crate::{
+    backend::AudioSink,
+    mixer::{Mixer, MixerSeed, RenderStatus},
+};
 
 /// The rate the mixer assumes until the stream reports the one it negotiated.
 const NOMINAL_SAMPLE_RATE: f32 = 48_000.0;

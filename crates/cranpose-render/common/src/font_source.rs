@@ -17,9 +17,11 @@
 //! a desktop bundle. `cranpose-assets` is a filesystem path resolver, so it
 //! covers bundles but not APK entries, which are not filesystem paths.
 
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
 
@@ -320,7 +322,7 @@ impl SoftwareTextFontRegistry {
     /// as bytes.
     pub fn into_font_set_or_default(mut self, fonts: &[&[u8]]) -> SoftwareTextFontSet {
         for bytes in fonts {
-            // Unparseable app bytes have always been skipped rather than fatal.
+            // Unparsable app bytes have always been skipped rather than fatal.
             let _ = self.register_fallback_bytes((*bytes).to_vec());
         }
         if self.faces.is_empty() {
@@ -519,9 +521,11 @@ fn font_files_for(family: &FontFamily) -> Result<Vec<FontFile>, FontLoadError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_ui::text::{SpanStyle, TextStyle};
     use std::io::Cursor;
+
+    use cranpose_ui::text::{SpanStyle, TextStyle};
+
+    use super::*;
 
     const REGULAR: &[u8] = include_bytes!("../assets/NotoSansMerged.ttf");
     const BOLD: &[u8] = include_bytes!("../assets/NotoSansBold.ttf");

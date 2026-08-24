@@ -24,17 +24,19 @@
 
 mod wav;
 
-use crate::registry::ServiceRegistry;
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{
+    cell::RefCell,
+    fmt,
+    ops::Index,
+    rc::Rc,
+    sync::{Arc, OnceLock},
+};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
 use parking_lot::Mutex;
-use std::cell::RefCell;
-use std::fmt;
-use std::ops::Index;
-use std::rc::Rc;
-use std::sync::{Arc, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// Identifies a decoded clip held by the audio engine.
 ///
@@ -935,10 +937,12 @@ fn sound_bank_key(specs: &[SoundSpec<'_>]) -> (usize, u64) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
+    use parking_lot::Mutex;
+
     use super::*;
     use crate::run_test_composition;
-    use parking_lot::Mutex;
-    use std::cell::Cell;
 
     /// A minimal single-frame mono WAVE stream.
     fn tiny_wav() -> Vec<u8> {

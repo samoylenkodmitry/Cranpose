@@ -5,21 +5,23 @@
 //! construct a [`StdRuntime`] and pass it to [`cranpose_core::Composition`]
 //! to power the runtime with `std` primitives.
 
-#![deny(unsafe_code)]
-
 #[cfg(target_arch = "wasm32")]
 use std::cell::RefCell;
-use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
-use std::time::Duration;
-use web_time::Instant;
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 #[cfg(feature = "internal")]
 use cranpose_core::internal::FrameClock;
 use cranpose_core::{Clock, Runtime, RuntimeHandle, RuntimeScheduler};
+use web_time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 type NativeFrameWaker = Arc<dyn Fn() + Send + Sync + 'static>;

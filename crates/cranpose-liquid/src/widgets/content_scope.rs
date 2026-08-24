@@ -5,8 +5,7 @@
 //! built. Sharing the list means a scope type only has to state its own
 //! vocabulary — `tab`, `segment`, `action` — and never the plumbing under it.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 /// The list a scope appends its declarations to.
 pub(crate) struct ScopeContent<T> {

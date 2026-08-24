@@ -4,9 +4,9 @@
 //! `FocusInvalidationManager`. When focus modifiers change, they mark nodes for
 //! reprocessing without forcing layout/draw passes.
 
+use std::{cell::RefCell, collections::HashSet};
+
 use cranpose_core::NodeId;
-use std::cell::RefCell;
-use std::collections::HashSet;
 
 /// Manages focus invalidations across the UI tree.
 ///

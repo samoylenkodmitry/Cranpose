@@ -1,5 +1,7 @@
-use super::super::{ChildCursor, SlotTable, SlotWriteSessionState};
-use super::SlotInvariantError;
+use super::{
+    super::{ChildCursor, SlotTable, SlotWriteSessionState},
+    SlotInvariantError,
+};
 use crate::AnchorId;
 
 fn writer_frame_out_of_bounds(

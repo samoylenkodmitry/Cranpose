@@ -2,15 +2,15 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::interaction::MutableInteractionSource;
-use crate::layout::policies::FlexMeasurePolicy;
-use crate::modifier::Modifier;
-use crate::widgets::Layout;
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::NodeId;
 use cranpose_ui_layout::{HorizontalAlignment, LinearArrangement};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use crate::{
+    composable, interaction::MutableInteractionSource, layout::policies::FlexMeasurePolicy,
+    modifier::Modifier, widgets::Layout,
+};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ButtonSpec {
@@ -85,8 +85,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_core::{Composition, MemoryApplier};
+
+    use super::*;
 
     #[test]
     fn default_button_spec_has_no_interaction_source() {

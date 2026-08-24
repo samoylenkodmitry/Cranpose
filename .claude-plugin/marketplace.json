@@ -1,0 +1,16 @@
+{
+  "name": "cranpose-marketplace",
+  "owner": {
+    "name": "Dmitry Samoylenko"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for the Cranpose UI framework"
+  },
+  "plugins": [
+    {
+      "name": "cranpose",
+      "source": "./plugins/cranpose",
+      "description": "Cranpose API conventions and best practices skill"
+    }
+  ]
+}

@@ -1,8 +1,9 @@
+use std::rc::Rc;
+
 use crate::{
     debug_scope_invalidation_sources, debug_scope_label, Command, Composer, ComposerCore,
     DirtyBubble, NodeId, RecomposeScope,
 };
-use std::rc::Rc;
 
 impl Composer {
     pub(crate) fn recompose_group(&self, scope: &RecomposeScope) {

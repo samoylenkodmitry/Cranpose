@@ -1,7 +1,11 @@
-use super::rotary::RotaryScrollEvent;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_ui_graphics::Point;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use super::rotary::RotaryScrollEvent;
 
 pub type PointerId = u64;
 

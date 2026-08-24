@@ -1,21 +1,22 @@
 use std::rc::Rc;
 
-use cranpose_render_common::brush_sampling::sample_brush_rgba;
-use cranpose_render_common::graph_scene::RenderDiagnostics;
-use cranpose_render_common::shape_sdf;
-use cranpose_render_common::software_text_raster::rasterize_text_to_image;
-use cranpose_render_common::text_measure::SoftwareTextResources;
 #[cfg(test)]
 use cranpose_render_common::text_measure::{
     fallback_char_width, fallback_cursor_x_for_byte_offset, fallback_line_height,
     fallback_text_metrics,
 };
+use cranpose_render_common::{
+    brush_sampling::sample_brush_rgba, graph_scene::RenderDiagnostics, shape_sdf,
+    software_text_raster::rasterize_text_to_image, text_measure::SoftwareTextResources,
+};
 use cranpose_ui::text::TextMotion;
 use cranpose_ui_graphics::{BlendMode, ColorFilter, Point, Rect};
 
-use crate::pipeline;
-use crate::scene::{ImageDraw, RasterScene, Scene, TextDraw};
-use crate::style::point_in_resolved_rounded_rect;
+use crate::{
+    pipeline,
+    scene::{ImageDraw, RasterScene, Scene, TextDraw},
+    style::point_in_resolved_rounded_rect,
+};
 
 fn is_blend_mode_supported(mode: BlendMode) -> bool {
     matches!(mode, BlendMode::SrcOver | BlendMode::DstOut)
@@ -700,15 +701,18 @@ fn apply_color_filter(sample: [f32; 4], filter: ColorFilter) -> [f32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_render_common::brush_sampling::normalize_gradient_t;
-    use cranpose_render_common::graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+    use cranpose_render_common::{
+        brush_sampling::normalize_gradient_t,
+        graph::{
+            CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry,
+            PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        },
+        raster_cache::LayerRasterCacheHashes,
     };
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
     use cranpose_ui::Brush;
     use cranpose_ui_graphics::{Color, TileMode};
+
+    use super::*;
 
     fn draw_raster_scene_for_test(frame: &mut [u8], width: u32, height: u32, scene: &RasterScene) {
         let diagnostics = RenderDiagnostics::new();

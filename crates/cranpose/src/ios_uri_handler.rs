@@ -8,13 +8,12 @@
 //! instead.
 #![allow(unsafe_code)]
 
+use std::rc::Rc;
+
 use cranpose_services::{set_platform_uri_handler, UriHandler, UriHandlerError};
-use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::MainThreadMarker;
+use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker};
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 use objc2_ui_kit::UIApplication;
-use std::rc::Rc;
 
 /// Installs the iOS opener as the platform URI handler.
 pub(crate) fn register() {
@@ -32,7 +31,7 @@ impl UriHandler for IosUriHandler {
         };
 
         let string = NSString::from_str(uri);
-        // `URLWithString:` returns nil for an unparseable URL, handled below.
+        // `URLWithString:` returns nil for an unparsable URL, handled below.
         let url = NSURL::URLWithString(&string)
             .ok_or_else(|| UriHandlerError::OpenFailed(format!("invalid URL: {uri}")))?;
 

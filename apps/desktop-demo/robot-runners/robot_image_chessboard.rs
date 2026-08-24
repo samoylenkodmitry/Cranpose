@@ -3,12 +3,13 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_image_chessboard --features robot-app`
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, sample_screenshot_pixel_logical,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 const EXPECTED_LIGHT: [u8; 3] = [240, 240, 240];
 const EXPECTED_DARK: [u8; 3] = [36, 54, 72];

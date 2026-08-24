@@ -6,14 +6,14 @@
 //! exact match exists, the [`SlotReusePolicy`] is consulted to determine whether
 //! a node produced for another slot is compatible with the requested slot.
 
-use crate::collections::map::HashMap;
-use crate::collections::map::HashSet;
-use smallvec::SmallVec;
-use std::collections::VecDeque;
-use std::fmt;
-use std::rc::Rc;
+use std::{collections::VecDeque, fmt, rc::Rc};
 
-use crate::{CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost};
+use smallvec::SmallVec;
+
+use crate::{
+    collections::map::{HashMap, HashSet},
+    CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost,
+};
 
 pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
 

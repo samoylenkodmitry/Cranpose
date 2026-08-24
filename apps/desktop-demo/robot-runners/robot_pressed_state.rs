@@ -1,13 +1,14 @@
 //! Robot test: a sprite button must visibly switch to its pressed sprite while the
 //! pointer is held down, and back to normal after release.
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::capture_screenshot;
 use desktop_app::test_screens::pressed_state_repro::{
     PressedStateReproScreen, NORMAL_RGBA, PRESSED_RGBA, SPRITE_HEIGHT, SPRITE_OFFSET_X,
     SPRITE_OFFSET_Y, SPRITE_WIDTH,
 };
-use std::time::Duration;
 
 const COLOR_TOLERANCE: i32 = 24;
 const SAMPLE_ATTEMPTS: usize = 20;

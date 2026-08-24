@@ -1,11 +1,10 @@
+use std::{path::Path, process::Command, time::Duration};
+
 use cranpose_testing::{
     find_button_exact_in_semantics, find_button_in_semantics, find_in_semantics, find_text_exact,
     find_text_in_semantics,
 };
 use image::RgbaImage;
-use std::path::Path;
-use std::process::Command;
-use std::time::Duration;
 
 #[allow(dead_code)]
 pub(crate) fn find_window_id(title: &str) -> String {

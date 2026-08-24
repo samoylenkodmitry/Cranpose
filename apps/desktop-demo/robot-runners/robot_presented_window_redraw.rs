@@ -1,14 +1,14 @@
 mod output_paths;
 mod text_showcase_external_helpers;
 
+use std::{path::PathBuf, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_exact_in_semantics, find_text_by_prefix_in_semantics, print_semantics_with_bounds,
 };
 use desktop_app::app;
 use image::RgbaImage;
-use std::path::PathBuf;
-use std::time::Duration;
 use text_showcase_external_helpers::{capture_x11_window, find_window_id};
 
 const WINDOW_TITLE: &str = "Robot Presented Window Redraw";

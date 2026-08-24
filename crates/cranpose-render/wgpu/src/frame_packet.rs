@@ -13,16 +13,19 @@
 //! pointer, a borrowed graph node) fails the build here rather than at the
 //! future channel.
 
-use crate::normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource};
-use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
-    ShadowDraw, TextDraw,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::scene::{ColorPatch, PendingFeedCapture};
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{DrawCommandId, ProjectiveTransform};
 use cranpose_ui_graphics::{GraphicsLayer, Rect, RenderEffect};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::scene::{ColorPatch, PendingFeedCapture};
+use crate::{
+    normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource},
+    scene::{
+        BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
+        ShadowDraw, TextDraw,
+    },
+};
 
 /// One frame's replay plan, emitted by the producer-side planner
 /// ([`ShapeReplayState::take_frame_ops`](crate::shape_replay::ShapeReplayState))

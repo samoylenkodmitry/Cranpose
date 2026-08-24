@@ -40,7 +40,10 @@
 /// let multi = TextFieldLineLimits::default();
 ///
 /// // Multi-line with 3-5 visible lines
-/// let constrained = TextFieldLineLimits::MultiLine { min_lines: 3, max_lines: 5 };
+/// let constrained = TextFieldLineLimits::MultiLine {
+///     min_lines: 3,
+///     max_lines: 5,
+/// };
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextFieldLineLimits {

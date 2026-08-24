@@ -97,8 +97,9 @@ impl Hasher for FxHasher {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::hash::Hash;
+
+    use super::*;
 
     fn hash_of<T: Hash>(value: &T) -> u64 {
         let mut hasher = FxHasher::default();

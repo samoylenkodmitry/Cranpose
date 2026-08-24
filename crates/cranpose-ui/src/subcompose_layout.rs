@@ -1,26 +1,28 @@
-use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::collections::HashMap;
-use std::rc::Rc;
-use web_time::Instant;
+use std::{
+    cell::{Cell, Ref, RefCell, RefMut},
+    collections::HashMap,
+    rc::Rc,
+};
 
 use cranpose_core::{
     Composer, NodeError, NodeId, Phase, SlotId, SlotTable, SlotsHost, SubcomposeState,
 };
-use smallvec::SmallVec;
-
-use crate::layout::MeasuredNode;
-use crate::modifier::{
-    collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
-    ResolvedModifiers, Size,
-};
-use crate::widgets::nodes::{
-    allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode,
-    LayoutNodeCacheHandles, LayoutState,
-};
-
 use cranpose_foundation::{InvalidationKind, ModifierInvalidation, NodeCapabilities};
-
 pub use cranpose_ui_layout::{Constraints, MeasureResult, Placement};
+use smallvec::SmallVec;
+use web_time::Instant;
+
+use crate::{
+    layout::MeasuredNode,
+    modifier::{
+        collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
+        ResolvedModifiers, Size,
+    },
+    widgets::nodes::{
+        allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode,
+        LayoutNodeCacheHandles, LayoutState,
+    },
+};
 
 fn subcompose_telemetry_enabled() -> bool {
     cranpose_core::env_flag!("CRANPOSE_SUBCOMPOSE_TELEMETRY")

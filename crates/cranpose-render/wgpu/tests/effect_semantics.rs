@@ -3,20 +3,22 @@ mod support;
 #[path = "../src/test_support.rs"]
 mod shared_test_support;
 
-use cranpose_render_common::graph::{
-    CachePolicy, DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-    ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+use cranpose_render_common::{
+    graph::{
+        CachePolicy, DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    image_compare::{image_difference_stats, normalize_rgba_region, sample_pixel},
+    Renderer,
 };
-use cranpose_render_common::image_compare::{
-    image_difference_stats, normalize_rgba_region, sample_pixel,
-};
-use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
-use cranpose_ui::text::{
-    AnnotatedString, FontStyle, FontWeight, SpanStyle, TextDecoration, TextDrawStyle, TextStyle,
-    TextUnit,
+use cranpose_ui::{
+    text::{
+        AnnotatedString, FontStyle, FontWeight, SpanStyle, TextDecoration, TextDrawStyle,
+        TextStyle, TextUnit,
+    },
+    TextLayoutOptions,
 };
-use cranpose_ui::TextLayoutOptions;
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, ImageBitmap,
     ImageSampling, Point, Rect, RenderEffect, ShadowPrimitive,

@@ -1,7 +1,12 @@
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_core::{
     remember, with_current_composer, MutableState, OwnedMutableState, RuntimeHandle, State,
 };
@@ -9,10 +14,11 @@ use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerInputNode,
 };
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    modifier::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind},
+};
 
 #[derive(Clone, Copy)]
 pub struct MutableInteractionSource {
@@ -378,8 +384,9 @@ impl PointerInputNode for PressInteractionNode {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_core::{Composition, MemoryApplier};
+
+    use super::*;
 
     #[test]
     fn interaction_ids_do_not_use_process_global_counters() {

@@ -7,10 +7,9 @@ use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_ui::{
     composable,
     text::{FontWeight, SpanStyle},
-    Color, Column, ColumnSpec, GraphicsLayer, LinearArrangement, Modifier, Row, RowSpec, Size,
-    Spacer, Text, TextStyle, VerticalAlignment,
+    Color, Column, ColumnSpec, GraphicsLayer, LazyColumn, LazyColumnSpec, LinearArrangement,
+    Modifier, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
-use cranpose_ui::{LazyColumn, LazyColumnSpec};
 
 #[derive(Clone)]
 struct PulseSample {

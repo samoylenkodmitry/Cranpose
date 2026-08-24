@@ -1,13 +1,21 @@
 //! UIKit accessibility bridge for the retained Cranpose semantics tree.
 #![allow(unsafe_code)]
 
-use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
-use crate::ios_file_picker::root_view_controller;
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    rc::Rc,
+};
+
 use cranpose_app_shell::{AppShell, PointerSource};
 use cranpose_render_common::Renderer;
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
+use objc2::{
+    define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, Bool},
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message,
+};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};
 use objc2_ui_kit::{
@@ -18,11 +26,12 @@ use objc2_ui_kit::{
     UIAccessibilityTraitNone, UIAccessibilityTraitNotEnabled, UIAccessibilityTraitSelected,
     UIAccessibilityTraitStaticText, UIView,
 };
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
-use std::fmt::Debug;
-use std::rc::Rc;
 use winit::event_loop::EventLoopProxy;
+
+use crate::{
+    accessibility::{self, AccessibilityElement, AccessibilityRole},
+    ios_file_picker::root_view_controller,
+};
 
 struct AccessibilityElementIvars {
     /// The shared accessibility element id, not the layout node id: a node

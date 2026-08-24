@@ -8,15 +8,16 @@
 //
 // Root cause: Conditional rendering breaks RecomposeScope connections for sibling components
 
-use crate::{
-    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec,
-    Size, Spacer, Text, TextStyle,
-};
 use cranpose_core::{
     __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
     MemoryApplier, MutableState, Node, TaskSite,
 };
 use cranpose_macros::composable;
+
+use crate::{
+    Brush, Button, ButtonSpec, Color, Column, ColumnSpec, CornerRadii, Modifier, Row, RowSpec,
+    Size, Spacer, Text, TextStyle,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct AnimationState {

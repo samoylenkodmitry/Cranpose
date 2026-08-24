@@ -2,11 +2,14 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::layout::policies::LeafMeasurePolicy;
-use crate::modifier::{Modifier, Size};
-use crate::widgets::Layout;
 use cranpose_core::NodeId;
+
+use crate::{
+    composable,
+    layout::policies::LeafMeasurePolicy,
+    modifier::{Modifier, Size},
+    widgets::Layout,
+};
 
 /// A component that represents an empty space.
 ///

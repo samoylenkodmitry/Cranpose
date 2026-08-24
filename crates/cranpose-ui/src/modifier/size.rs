@@ -2,9 +2,10 @@
 //!
 //! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Size.kt
 
+use cranpose_ui_layout::IntrinsicSize;
+
 use super::{inspector_metadata, DimensionConstraint, Modifier, Size};
 use crate::modifier_nodes::{IntrinsicSizeElement, SizeElement};
-use cranpose_ui_layout::IntrinsicSize;
 
 impl Modifier {
     /// Declare the preferred size of the content to be exactly [size].

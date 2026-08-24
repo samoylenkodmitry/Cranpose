@@ -6,14 +6,19 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_menu_slide --features desktop,robot-app`
 
-use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use std::{
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
+
+use cranpose::{
+    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, Size,
+};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 460;
 const WINDOW_HEIGHT: u32 = 340;

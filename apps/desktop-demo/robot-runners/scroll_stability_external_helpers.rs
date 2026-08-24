@@ -1,10 +1,16 @@
-use crate::output_paths;
-use crate::text_showcase_external_helpers::{find_window_id, take_x11_screenshot};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+
 use cranpose_testing::{find_in_semantics, find_text_exact, print_semantics_with_bounds};
 use image::{ImageBuffer, RgbaImage};
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Duration;
+
+use crate::{
+    output_paths,
+    text_showcase_external_helpers::{find_window_id, take_x11_screenshot},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ActiveFrameConfig {

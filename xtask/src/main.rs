@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 #[cfg(test)]
 use std::io;
 use std::{
@@ -601,8 +599,9 @@ fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
     // xtask` the PATH cargo is the toolchain binary itself, so go through
     // rustup explicitly. The outer cargo also exports its own toolchain via
     // CARGO/RUSTC/RUSTDOC, which must not leak into the nightly child.
+    let nightly = pinned_nightly_channel(&workspace)?;
     let mut command = Command::new("rustup");
-    command.args(["run", "nightly", "cargo", "build"]);
+    command.args(["run", nightly.as_str(), "cargo", "build"]);
     command.env_remove("CARGO");
     command.env_remove("RUSTC");
     command.env_remove("RUSTDOC");
@@ -647,9 +646,9 @@ fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
     if !status.success() {
         return Err(format!(
             "dist-min build failed with status {status}; it requires the \
-             nightly toolchain with the rust-src component \
-             (rustup component add rust-src --toolchain nightly) and the \
-             lld linker on PATH"
+             {nightly} toolchain with the rust-src component \
+             (rustup toolchain install {nightly} --component rust-src) and \
+             the lld linker on PATH"
         ));
     }
 
@@ -682,6 +681,25 @@ fn bundle_binary_options(options: &BundleMacosOptions) -> CargoBinaryOptions {
         manifest_path: None,
         patch_workspace_cranpose: false,
     }
+}
+
+/// The nightly toolchain named by `rust-toolchain-nightly.toml`.
+///
+/// `dist-min` needs nightly cargo for `-Zbuild-std`, but spelling the channel
+/// `nightly` would build release artifacts against whatever nightly the host
+/// happens to hold that day. Reading the pin keeps a tag reproducible.
+fn pinned_nightly_channel(workspace: &Path) -> Result<String, String> {
+    let path = workspace.join("rust-toolchain-nightly.toml");
+    let text = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    text.lines()
+        .filter_map(|line| line.trim().strip_prefix("channel"))
+        .filter_map(|rest| rest.trim_start().strip_prefix('='))
+        .filter_map(|rest| rest.trim().strip_prefix('"'))
+        .filter_map(|rest| rest.strip_suffix('"'))
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("no `channel = \"...\"` entry in {}", path.display()))
 }
 
 fn workspace_root() -> Result<PathBuf, String> {
@@ -1475,8 +1493,9 @@ fn make_executable(_path: &Path) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
 
     #[test]
     fn parse_bundle_defaults() {

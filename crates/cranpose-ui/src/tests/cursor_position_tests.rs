@@ -1,13 +1,22 @@
 //! Tests for cursor draw command position in text fields.
 
-use crate::modifier::{collect_modifier_slices, collect_semantics_from_chain};
-use crate::text::{SpanStyle, TextStyle, TextUnit};
-use crate::text_field_modifier_node::{TextFieldElement, TextFieldModifierNode};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use cranpose_core::{DefaultScheduler, Runtime};
-use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
-use cranpose_foundation::{modifier_element, BasicModifierNodeContext, ModifierNodeChain};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use cranpose_foundation::{
+    modifier_element,
+    text::{TextFieldLineLimits, TextFieldState, TextRange},
+    BasicModifierNodeContext, ModifierNodeChain,
+};
+
+use crate::{
+    modifier::{collect_modifier_slices, collect_semantics_from_chain},
+    text::{SpanStyle, TextStyle, TextUnit},
+    text_field_modifier_node::{TextFieldElement, TextFieldModifierNode},
+};
 
 fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));
@@ -321,8 +330,10 @@ fn focused_single_line_chain(state: TextFieldState, style: TextStyle) -> Modifie
 /// three select its line/paragraph.
 #[test]
 fn tap_count_selects_cursor_word_and_line() {
-    use cranpose_foundation::nodes::input::{PointerEvent, PointerEventKind};
-    use cranpose_foundation::PointerInputNode;
+    use cranpose_foundation::{
+        nodes::input::{PointerEvent, PointerEventKind},
+        PointerInputNode,
+    };
     use cranpose_ui_graphics::Point;
 
     let _app_context = crate::render_state::app_context_test_scope();

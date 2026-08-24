@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Real-time audio engine for Cranpose (AAudio on Android/Wear OS, cpal on desktop)"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-services = { workspace = true }
 log = "0.4"

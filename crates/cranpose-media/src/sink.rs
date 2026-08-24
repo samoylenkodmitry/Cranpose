@@ -15,14 +15,21 @@
 //! The ring is [`cranpose_audio::ring`], the same wait-free queue the audio
 //! engine feeds its own callback through.
 
-use crate::source::{SampleSource, SeekError};
+use std::{
+    sync::{
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        mpsc,
+        mpsc::{Receiver, Sender, TryRecvError},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_audio::ring;
 use cranpose_services::MediaError;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender, TryRecvError};
-use std::sync::{mpsc, Arc};
-use std::time::Duration;
+
+use crate::source::{SampleSource, SeekError};
 
 /// How much decoded audio the ring holds, as a fraction of a second.
 ///

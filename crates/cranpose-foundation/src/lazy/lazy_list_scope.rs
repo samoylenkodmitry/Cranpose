@@ -5,9 +5,7 @@
 //!
 //! Based on JC's `LazyLayoutIntervalContent` pattern.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// Key type for lazy list items.
 ///
@@ -758,8 +756,9 @@ impl<T: LazyListScope + ?Sized> LazyListScopeExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     #[test]
     fn key_overflow_warning_suppression_has_no_process_global_state() {

@@ -11,12 +11,13 @@
 //!
 //! If the bug exists, FirstIndex will still show 0 after clicking the buttons.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

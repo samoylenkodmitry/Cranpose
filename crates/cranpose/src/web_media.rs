@@ -16,17 +16,19 @@
 //! and a browser without the API should not fail to play — so it is looked up
 //! by name and skipped when it is not there.
 
+use std::{
+    cell::{Cell, RefCell},
+    sync::Arc,
+    time::Duration,
+};
+
 use cranpose_services::{
     publish_media_command, publish_media_samples, publish_playback_progress,
     publish_playback_state, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand,
     MediaError, MediaItem, MediaMetadata, MediaPlayer, MediaSamples, PlaybackProgress,
     PlaybackState,
 };
-use std::cell::{Cell, RefCell};
-use std::sync::Arc;
-use std::time::Duration;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{
     AnalyserNode, AudioContext, BiquadFilterNode, BiquadFilterType, GainNode, HtmlAudioElement,
     MediaElementAudioSourceNode,

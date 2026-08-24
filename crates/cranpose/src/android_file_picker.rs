@@ -18,6 +18,21 @@
 //! globals and wake the awaiting future.
 #![allow(unsafe_code)]
 
+use std::{
+    collections::HashMap,
+    fs::File,
+    future::Future,
+    io::{self, Read, Write},
+    os::fd::FromRawFd,
+    pin::Pin,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Mutex, OnceLock,
+    },
+    task::{Context, Poll, Waker},
+};
+
 use cranpose_services::{
     set_platform_content_resolver, set_platform_file_picker, Content, ContentEntry, ContentError,
     ContentFolder, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata, ContentReader,
@@ -25,19 +40,12 @@ use cranpose_services::{
     ContentStreamRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture, RecoveredPick,
     SaveDocumentRequest, DEFAULT_CHUNK_LEN,
 };
-use jni::objects::{JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jint, jlong};
-use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
-use std::collections::HashMap;
-use std::fs::File;
-use std::future::Future;
-use std::io::{self, Read, Write};
-use std::os::fd::FromRawFd;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Mutex, OnceLock};
-use std::task::{Context, Poll, Waker};
+use jni::{
+    jni_sig, jni_str,
+    objects::{JClass, JObject, JString, JValue},
+    sys::{jboolean, jint, jlong},
+    EnvUnowned, Outcome,
+};
 
 /// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
 const FLAG_FOLDER: i32 = 1;

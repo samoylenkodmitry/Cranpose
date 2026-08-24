@@ -5,9 +5,9 @@
 //! composition that asked, so leaving the screen gives it back. That tie is
 //! the whole contract, and it only exists if the effect actually composes.
 
+use std::{cell::Cell, rc::Rc};
+
 use cranpose_ui::run_test_composition;
-use std::cell::Cell;
-use std::rc::Rc;
 
 #[test]
 fn keeping_the_screen_on_composes_enabled_and_disabled() {

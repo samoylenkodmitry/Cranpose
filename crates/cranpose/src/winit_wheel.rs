@@ -40,11 +40,11 @@ pub(crate) fn wheel_scroll_from_winit(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_app_shell::RotaryScrollEvent;
     use cranpose_platform_desktop_winit::DesktopWinitPlatform;
-    use winit::dpi::PhysicalPosition;
-    use winit::event::MouseScrollDelta;
+    use winit::{dpi::PhysicalPosition, event::MouseScrollDelta};
+
+    use super::*;
 
     /// One wheel notch as normalized by `DesktopWinitPlatform`.
     const NOTCH_PIXELS: f32 = 40.0;

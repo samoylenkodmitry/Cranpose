@@ -9,17 +9,16 @@
 //!   - `stats` (items_in_use, items_in_pool)
 //! - Non-reactive internals (caches, callbacks, prefetch, diagnostic counters) are in inner state
 
-use std::cell::RefCell;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::rc::Rc;
+use std::{cell::RefCell, cmp::Reverse, collections::BinaryHeap, rc::Rc};
 
 use cranpose_core::{MutableState, NodeId, StateId};
 use cranpose_macros::composable;
 
-use super::diagnostics;
-use super::nearest_range::NearestRangeState;
-use super::prefetch::{PrefetchScheduler, PrefetchStrategy};
+use super::{
+    diagnostics,
+    nearest_range::NearestRangeState,
+    prefetch::{PrefetchScheduler, PrefetchStrategy},
+};
 
 const MAX_PENDING_SCROLL_DELTA: f32 = 2000.0;
 const ITEM_SIZE_CACHE_CAPACITY: usize = 8192;
@@ -1246,9 +1245,11 @@ fn snap_anchor_item_offset(info: &LazyListLayoutInfo, item: &LazyListItemInfo) -
 /// Test helpers for creating LazyListState without composition context.
 #[cfg(test)]
 pub mod test_helpers {
-    use super::*;
-    use cranpose_core::{DefaultScheduler, Runtime};
     use std::sync::Arc;
+
+    use cranpose_core::{DefaultScheduler, Runtime};
+
+    use super::*;
 
     /// Creates a test runtime and keeps it alive for the duration of the closure.
     /// Use this to create LazyListState in unit tests.
@@ -1323,13 +1324,14 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::test_helpers::{
-        new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
-    };
-    use super::{LazyListItemInfo, LazyListLayoutInfo, LazyListState};
+    use std::{cell::Cell, rc::Rc};
+
     use cranpose_core::{location_key, Composition, MemoryApplier};
-    use std::cell::Cell;
-    use std::rc::Rc;
+
+    use super::{
+        test_helpers::{new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime},
+        LazyListItemInfo, LazyListLayoutInfo, LazyListState,
+    };
 
     fn set_scroll_bounds(state: &LazyListState, can_forward: bool, can_backward: bool) {
         state.can_scroll_forward_state.set(can_forward);

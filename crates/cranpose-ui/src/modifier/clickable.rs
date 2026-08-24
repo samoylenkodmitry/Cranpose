@@ -1,6 +1,7 @@
+use std::rc::Rc;
+
 use super::{inspector_metadata, Modifier, Point, SemanticsConfiguration};
 use crate::modifier_nodes::ClickableElement;
-use std::rc::Rc;
 
 impl Modifier {
     /// Make the component clickable.

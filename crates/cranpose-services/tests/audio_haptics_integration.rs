@@ -5,6 +5,8 @@
 //! — that every type an app needs is exported, and that an app with no backend
 //! installed composes and runs without panicking.
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_services::{
     clear_platform_audio, clear_platform_haptics, default_audio, default_haptics, local_audio,
@@ -12,8 +14,6 @@ use cranpose_services::{
     HapticFeedback, HapticPattern, PlaybackParams, ProvideAudio, ProvideHaptics, SoundId,
     SoundSpec, VoiceId,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 fn run_test_composition(build: impl FnMut()) {
     let mut composition = Composition::new(MemoryApplier::new());

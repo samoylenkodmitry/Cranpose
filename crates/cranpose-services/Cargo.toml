@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Multiplatform system services for Cranpose (HTTP, URI, and OS integrations)"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }

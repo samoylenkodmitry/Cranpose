@@ -5,12 +5,13 @@
 //! cargo run --package desktop-app --example robot_recursive_layout --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::{
     find_button_in_semantics, find_text_by_prefix_in_semantics, find_text_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 const WINDOW_WIDTH: f32 = 1200.0;
 const WINDOW_HEIGHT: f32 = 800.0;

@@ -1,13 +1,17 @@
-use crate::effect_key::EffectKey;
-use crate::{with_current_composer, Key, RuntimeHandle, TaskHandle};
 #[cfg(not(target_arch = "wasm32"))]
 use std::cell::{Cell, RefCell};
-use std::future::Future;
-use std::pin::Pin;
 #[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
+use crate::{effect_key::EffectKey, with_current_composer, Key, RuntimeHandle, TaskHandle};
 
 #[derive(Default)]
 struct LaunchedEffectState {

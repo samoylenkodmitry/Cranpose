@@ -7,8 +7,9 @@
 //! is resolved from the current scene on each dispatch, avoiding stale coordinates
 //! during scroll/layout changes while still preserving per-hit capture ordering.
 
-use cranpose_core::NodeId;
 use std::collections::HashMap;
+
+use cranpose_core::NodeId;
 
 /// Pointer ID type for tracking multi-touch gestures.
 /// Currently we only use a single primary pointer (id=0), but this design

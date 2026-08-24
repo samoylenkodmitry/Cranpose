@@ -7,11 +7,16 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::{GraphicsLayer, Modifier};
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::crossfade::animate_float_with_initial;
 use cranpose_animation::AnimationType;
+
+use crate::{
+    composable,
+    modifier::{GraphicsLayer, Modifier},
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        crossfade::animate_float_with_initial,
+    },
+};
 
 /// Progress below which exiting content is considered fully hidden and can
 /// leave the composition.

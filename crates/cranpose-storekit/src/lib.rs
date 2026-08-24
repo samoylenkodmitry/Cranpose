@@ -1,5 +1,4 @@
 #![deny(missing_docs)]
-#![deny(unsafe_code)]
 
 //! StoreKit 2 backend for [`cranpose_services::purchases`].
 //!

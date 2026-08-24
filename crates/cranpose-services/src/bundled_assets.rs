@@ -1,9 +1,10 @@
 //! Read-only assets packaged with the application.
 
-use crate::registry::ServiceRegistry;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+use crate::registry::ServiceRegistry;
 
 /// Error reading an asset from the application bundle.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -458,8 +459,10 @@ mod tests {
         assert_eq!(WholeAssets.len("small.txt"), None);
     }
 
-    use std::collections::BTreeMap;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     #[test]
     fn registration_round_trips() {

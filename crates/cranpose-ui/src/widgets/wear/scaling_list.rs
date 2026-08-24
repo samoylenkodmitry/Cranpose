@@ -91,35 +91,41 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::density::Density;
-use crate::fling_animation::FlingAnimation;
-use crate::modifier::{
-    GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin,
+use std::{
+    cell::{Cell, RefCell},
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
 };
-use crate::round_scaling_list::{
-    leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
-    CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+
+use cranpose_core::{
+    internal::FrameCallbackRegistration, remember, rememberMutableStateOf, MutableState, NodeId,
+    SlotId,
 };
-use crate::round_scroll_indicator::{
-    scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength,
+use cranpose_foundation::{
+    lazy::{LazyItems, LazyLayoutKey},
+    VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY,
 };
-use crate::subcompose_layout::{
-    MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
-    SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
-};
-use crate::widgets::Layout;
-use cranpose_core::internal::FrameCallbackRegistration;
-use cranpose_core::{remember, rememberMutableStateOf, MutableState, NodeId, SlotId};
-use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
-use cranpose_foundation::{VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
-use std::cell::{Cell, RefCell};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    density::Density,
+    fling_animation::FlingAnimation,
+    modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
+    round_scaling_list::{
+        leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
+        CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+    },
+    round_scroll_indicator::{scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength},
+    subcompose_layout::{
+        MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
+        SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+    },
+    widgets::Layout,
+};
 
 /// The channel one item's scale and alpha travel down.
 ///

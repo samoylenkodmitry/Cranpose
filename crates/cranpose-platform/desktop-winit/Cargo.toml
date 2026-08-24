@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Desktop winit platform adapter for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [features]
 default = ["x11", "wayland"]
 x11 = ["winit/x11"]

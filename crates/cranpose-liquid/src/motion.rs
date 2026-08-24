@@ -1,15 +1,17 @@
 //! Liquid motion: the spring presets every component shares, and the press
 //! interaction (scale + specular boost) that makes glass feel physical.
 
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::{spring, tween, Animatable, AnimationType, Easing};
 use cranpose_core::{with_current_composer, RuntimeHandle, State};
 use cranpose_foundation::VelocityTracker1D;
 use cranpose_macros::composable;
-use cranpose_ui::Modifier;
-use cranpose_ui::MutableInteractionSource;
+use cranpose_ui::{Modifier, MutableInteractionSource};
 use cranpose_ui_graphics::GraphicsLayer;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 use crate::dynamics::{LiquidDynamics, LiquidPose};
 

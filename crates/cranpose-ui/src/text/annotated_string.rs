@@ -1,5 +1,4 @@
-use std::ops::Range;
-use std::rc::Rc;
+use std::{ops::Range, rc::Rc};
 
 use crate::{ParagraphStyle, SpanStyle};
 
@@ -254,9 +253,11 @@ pub struct RangeStyle<T> {
 /// content on hit, so a hash collision costs a fresh copy, never wrong text.
 /// The pool clears itself when full; a live scene re-warms within one frame.
 pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        hash::{Hash, Hasher},
+    };
 
     const POOL_CAPACITY: usize = 256;
     thread_local! {

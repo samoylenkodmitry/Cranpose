@@ -5,12 +5,16 @@
 //! rather than an application's — which is exactly why nothing in the
 //! application-facing test suite touches them, and why they need a test here.
 
-use crate::frame_clock::FrameClock;
-use crate::{Composition, MemoryApplier};
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::{
+    cell::Cell,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
+
+use crate::{frame_clock::FrameClock, Composition, MemoryApplier};
 
 #[test]
 fn a_frame_callback_fires_once_for_the_frame_it_registered_for() {
@@ -83,9 +87,9 @@ fn a_snapshot_id_range_adds_every_id_in_it_and_nothing_outside() {
 
 #[test]
 fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
+    use std::{cell::Cell, rc::Rc};
+
     use crate::callbacks::CallbackHolder;
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     let holder = CallbackHolder::new();
     let calls = Rc::new(Cell::new(0u32));
@@ -111,9 +115,12 @@ fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
 
 #[test]
 fn a_ui_task_label_is_taken_by_the_next_task_and_not_the_one_after() {
+    use std::sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    };
+
     use crate::runtime::label_next_ui_task;
-    use std::sync::atomic::{AtomicU32, Ordering};
-    use std::sync::Arc;
 
     let composition = Composition::new(MemoryApplier::new());
     let runtime = composition.runtime_handle();

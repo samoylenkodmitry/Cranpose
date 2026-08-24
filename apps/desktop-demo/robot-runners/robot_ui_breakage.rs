@@ -10,15 +10,16 @@
 //!    Structure becomes `Column -> Row -> Text("Persistent")`.
 //! 3. Verify `Text("Persistent")` is still visible and has valid bounds.
 
+use std::time::Duration;
+
+// use desktop_app::app;
+use cranpose::AppLauncher;
 use cranpose_core::rememberMutableStateOf;
+use cranpose_testing::find_text_in_semantics;
 use cranpose_ui::{
     composable, Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Text,
     TextStyle,
 };
-// use desktop_app::app;
-use cranpose::AppLauncher;
-use cranpose_testing::find_text_in_semantics;
-use std::time::Duration;
 
 #[composable]
 fn reproduction_app() {

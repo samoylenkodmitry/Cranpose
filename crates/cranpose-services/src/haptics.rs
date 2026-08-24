@@ -12,13 +12,15 @@
 //! that degrades to the closest [`HapticFeedback`] constant, so a backend that
 //! implements only [`Haptics::perform`] still answers the whole trait.
 
-use crate::registry::ServiceRegistry;
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{
+    cell::RefCell,
+    sync::{Arc, OnceLock},
+};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::sync::{Arc, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// A haptic feedback event.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -375,9 +377,10 @@ pub fn ProvideHaptics(content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+
     use super::*;
     use crate::run_test_composition;
-    use parking_lot::Mutex;
 
     /// A backend that implements only `perform`, exactly as one written before
     /// the waveform methods existed would.

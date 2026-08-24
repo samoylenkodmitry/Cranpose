@@ -34,12 +34,17 @@
 //! [`take_event`] drains one-shot events — the things a snapshot cannot
 //! express, like "the user cancelled" — for showing a message once.
 
-use crate::registry::{RecoveryGate, ServiceRegistry};
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
-use std::sync::{Arc, OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, OnceLock,
+    },
+};
+
+use crate::registry::{RecoveryGate, ServiceRegistry};
 
 /// A product as the store describes it, in the user's locale and currency.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -467,8 +472,9 @@ pub fn rememberPurchaseEvents() -> cranpose_core::EventStream<PurchaseEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn default_backend_sells_nothing_and_owns_nothing() {

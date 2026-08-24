@@ -6,12 +6,14 @@
 //! the point: a spacer that is half a pixel out, or a modifier that quietly
 //! drops what it was handed, is invisible in a screenshot and obvious here.
 
-use cranpose_ui::density::Density;
-use cranpose_ui::round_scaling_list::{
-    leading_auto_centring_spacer, trailing_auto_centring_spacer,
+use cranpose_ui::{
+    density::Density,
+    font_scale::FontScaleCurve,
+    round_scaling_list::{leading_auto_centring_spacer, trailing_auto_centring_spacer},
+    run_test_composition,
+    widgets::wear::color_appearance::hct_solve,
+    Modifier,
 };
-use cranpose_ui::widgets::wear::color_appearance::hct_solve;
-use cranpose_ui::{font_scale::FontScaleCurve, run_test_composition, Modifier};
 
 #[test]
 fn the_leading_spacer_pushes_the_anchor_onto_the_centre_line() {

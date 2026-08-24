@@ -16,18 +16,21 @@
 //! - Tracks focus state for cursor visibility
 //! - Handles pointer events for cursor positioning
 
+use std::{
+    cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_core::{mutableStateOf, MutableState};
-use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
 use cranpose_foundation::{
+    text::{TextFieldLineLimits, TextFieldState, TextRange},
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
 };
 use cranpose_ui_graphics::{Brush, Color, Point};
-use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 /// Live geometry a `BasicTextField` needs to place and drive its selection
 /// handles: whether the field is focused and is under direct manipulation, its
@@ -636,12 +639,14 @@ impl TextFieldModifierNode {
     ) -> Rc<dyn Fn(PointerEvent)> {
         // Tap-count classification plus word/line/paragraph boundaries drive the
         // multi-tap selection granularity gestures.
-        use crate::text_selection::{
-            classify_tap_count, find_line_boundaries, find_paragraph_boundaries,
-            resolve_selection_tap_count, tap_selection_granularity, SelectionGranularity,
-            MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
+        use crate::{
+            text_selection::{
+                classify_tap_count, find_line_boundaries, find_paragraph_boundaries,
+                resolve_selection_tap_count, tap_selection_granularity, SelectionGranularity,
+                MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
+            },
+            word_boundaries::find_word_boundaries,
         };
-        use crate::word_boundaries::find_word_boundaries;
 
         Rc::new(move |event: PointerEvent| {
             // Seed the field node's window-space origin from this pointer event
@@ -1626,10 +1631,12 @@ impl ModifierNodeElement for TextFieldElement {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use cranpose_core::{DefaultScheduler, Runtime};
+
     use super::*;
     use crate::text::TextStyle;
-    use cranpose_core::{DefaultScheduler, Runtime};
-    use std::sync::Arc;
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {

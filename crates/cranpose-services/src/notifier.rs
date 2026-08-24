@@ -7,14 +7,16 @@
 //! / osascript / PowerShell toast); CI without a notification service simply
 //! drops them.
 
-use crate::registry::ServiceRegistry;
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{
+    cell::RefCell,
+    sync::{Arc, OnceLock},
+};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
 use parking_lot::Mutex;
-use std::cell::RefCell;
-use std::sync::{Arc, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// A local notification to post.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,8 +178,9 @@ pub fn default_notifier() -> NotifierRef {
     not(target_os = "ios")
 ))]
 mod desktop {
-    use super::{Notifier, NotifyRequest};
     use std::process::{Command, Stdio};
+
+    use super::{Notifier, NotifyRequest};
 
     pub(super) struct DesktopNotifier;
 
@@ -294,8 +297,9 @@ pub fn ProvideNotifier(content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use parking_lot::Mutex;
+
+    use super::*;
 
     #[test]
     fn an_ongoing_request_is_the_one_a_user_cannot_swipe_away() {

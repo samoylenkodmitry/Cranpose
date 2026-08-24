@@ -1,3 +1,13 @@
+use std::{
+    any::{Any, TypeId},
+    cell::Cell,
+    collections::{BTreeMap, HashSet},
+    fmt::Write as _,
+    mem,
+    panic::{self, AssertUnwindSafe},
+    rc::Rc,
+};
+
 use super::{
     ActiveSubtreeRoot, AnchorState, ChildCursor, DetachedSubtree, GroupRange, GroupRecord,
     NodeLifecycle, NodeRecord, PayloadAnchorLifecycle, PayloadKind, PayloadRecord,
@@ -13,13 +23,6 @@ use crate::{
     },
     AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
-use std::any::{Any, TypeId};
-use std::cell::Cell;
-use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write as _;
-use std::mem;
-use std::panic::{self, AssertUnwindSafe};
-use std::rc::Rc;
 
 struct SlotHarness {
     table: SlotTable,

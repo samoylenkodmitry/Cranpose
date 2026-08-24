@@ -22,13 +22,14 @@
 //! robot.wait_for_idle();
 //! ```
 
+use std::rc::Rc;
+
 use cranpose_app_shell::AppShell;
 use cranpose_core::location_key;
 use cranpose_foundation::PointerEvent;
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Point, Rect, Size};
-use std::rc::Rc;
 
 /// Main robot testing rule that provides programmatic control over a real app.
 ///

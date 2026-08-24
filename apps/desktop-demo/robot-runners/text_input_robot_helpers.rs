@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 use cranpose::Robot;
 use cranpose_testing::{
     find_button_in_semantics, find_in_semantics, find_text, find_text_in_semantics,
 };
-use std::time::Duration;
 
 type Bounds = (f32, f32, f32, f32);
 

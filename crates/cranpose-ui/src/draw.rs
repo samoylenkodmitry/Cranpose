@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use crate::modifier::Size;
-use crate::text::AppContextTextMeasurer;
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope, DrawScopeDefault};
+
+use crate::{modifier::Size, text::AppContextTextMeasurer};
 
 /// A draw command records into a scope the CONSUMER provides, instead of
 /// returning a freshly allocated primitive vector. This is the boundary that

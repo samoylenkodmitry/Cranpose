@@ -2,19 +2,22 @@
 //!
 //! This module provides the web event loop implementation using wasm-bindgen and WebGPU.
 
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
+
+use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
+use cranpose_platform_web::WebPlatform;
+use cranpose_render_wgpu::WgpuRenderer;
+use wasm_bindgen::{prelude::*, JsCast};
+use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
+
 use crate::{
     app_launcher::AppSettings,
     wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
-use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
-use cranpose_platform_web::WebPlatform;
-use cranpose_render_wgpu::WgpuRenderer;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::Arc;
-use wasm_bindgen::prelude::*;
-use wasm_bindgen::JsCast;
-use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 /// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
 /// out only when the render loop itself needs replacing (never); held behind

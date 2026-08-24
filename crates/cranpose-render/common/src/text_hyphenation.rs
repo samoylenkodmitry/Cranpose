@@ -1,12 +1,13 @@
-use cranpose_ui::text::TextStyle;
-#[cfg(feature = "text-hyphenation")]
-use hyphenation::{Hyphenator, Language, Load, Standard};
 #[cfg(feature = "text-hyphenation")]
 use std::collections::HashMap;
 #[cfg(feature = "text-hyphenation")]
 use std::path::Path;
 #[cfg(feature = "text-hyphenation")]
 use std::sync::RwLock;
+
+use cranpose_ui::text::TextStyle;
+#[cfg(feature = "text-hyphenation")]
+use hyphenation::{Hyphenator, Language, Load, Standard};
 
 #[cfg(feature = "text-hyphenation")]
 const MIN_SEGMENT_CHARS: usize = 2;
@@ -324,8 +325,9 @@ mod disabled_tests {
 
 #[cfg(all(test, feature = "text-hyphenation-embedded"))]
 mod tests {
-    use super::*;
     use cranpose_ui::text::{LocaleList, SpanStyle, TextStyle};
+
+    use super::*;
 
     fn style_with_locale(tags: &str) -> TextStyle {
         TextStyle {

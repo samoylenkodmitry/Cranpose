@@ -6,11 +6,12 @@
 //! cargo run --package desktop-app --example robot_multiline_click --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use cranpose_ui::TextStyle;
 use desktop_app::app;
-use std::time::Duration;
 
 mod text_input_robot_helpers;
 

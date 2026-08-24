@@ -3,7 +3,6 @@
 //! This crate contains geometry primitives, color definitions, brushes,
 //! and unit types that are used throughout the Cranpose framework.
 
-#![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
 pub mod alpha_mask;
@@ -42,11 +41,13 @@ pub use unit::*;
 pub use vector_path::*;
 
 pub mod prelude {
-    pub use crate::brush::Brush;
-    pub use crate::color::Color;
-    pub use crate::geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size};
-    pub use crate::image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling};
-    pub use crate::stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin};
-    pub use crate::unit::{Dp, Sp};
-    pub use crate::vector_path::{PathFillRule, SvgPathError, VectorPath};
+    pub use crate::{
+        brush::Brush,
+        color::Color,
+        geometry::{CornerRadii, EdgeInsets, Point, Rect, RoundedCornerShape, Size},
+        image::{ColorFilter, ImageBitmap, ImageBitmapError, ImageSampling},
+        stroke::{ArcGeometry, Stroke, StrokeCap, StrokeJoin},
+        unit::{Dp, Sp},
+        vector_path::{PathFillRule, SvgPathError, VectorPath},
+    };
 }

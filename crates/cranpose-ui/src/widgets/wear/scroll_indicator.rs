@@ -15,17 +15,21 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::{Brush, Color, Modifier, Point};
-use crate::round_scroll_indicator::{
-    indicator_arc, indicator_segments, scaling_list_geometry, IndicatorGeometry, IndicatorPart,
-    IndicatorSegment,
-};
-use crate::widgets::wear::scaling_list::WearScalingListState;
-use crate::widgets::wear::theme::WearColors;
-use crate::widgets::Canvas;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{DrawScope, Stroke, StrokeCap};
+
+use crate::{
+    composable,
+    modifier::{Brush, Color, Modifier, Point},
+    round_scroll_indicator::{
+        indicator_arc, indicator_segments, scaling_list_geometry, IndicatorGeometry, IndicatorPart,
+        IndicatorSegment,
+    },
+    widgets::{
+        wear::{scaling_list::WearScalingListState, theme::WearColors},
+        Canvas,
+    },
+};
 
 /// How a [`ScrollIndicator`] is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -181,8 +185,9 @@ pub fn ScrollIndicator(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{DrawPrimitive, DrawScopeDefault, Size};
+
+    use super::*;
 
     fn scene(geometry: IndicatorGeometry, alpha: f32) -> Vec<DrawPrimitive> {
         let mut scope = DrawScopeDefault::new(Size::new(227.0, 227.0));

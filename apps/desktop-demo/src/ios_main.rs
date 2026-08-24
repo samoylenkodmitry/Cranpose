@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 #[cfg(target_os = "ios")]
 fn main() {
     desktop_app::ios_entry_point();

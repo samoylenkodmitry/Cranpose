@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

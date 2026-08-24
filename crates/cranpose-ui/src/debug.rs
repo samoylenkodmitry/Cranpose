@@ -21,12 +21,15 @@
 //! log_screen_summary(&layout_tree, &render_scene);
 //! ```
 
-use crate::layout::{LayoutBox, LayoutTree};
-use crate::modifier::{ModifierChainInspectorNode, ModifierInspectorRecord};
-use crate::renderer::{RecordedRenderScene, RenderOp};
+use std::{fmt::Write, sync::Arc};
+
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities};
-use std::fmt::Write;
-use std::sync::Arc;
+
+use crate::{
+    layout::{LayoutBox, LayoutTree},
+    modifier::{ModifierChainInspectorNode, ModifierInspectorRecord},
+    renderer::{RecordedRenderScene, RenderOp},
+};
 
 /// Logs the current layout tree through the logger with indentation showing hierarchy.
 pub fn log_layout_tree(layout: &LayoutTree) {

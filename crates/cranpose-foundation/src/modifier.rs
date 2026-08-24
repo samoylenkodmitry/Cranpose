@@ -5,18 +5,17 @@
 //! contexts as well as a lightweight chain container that reconciles nodes
 //! across updates.
 
-use std::any::{type_name, Any, TypeId};
-use std::cell::{Cell, RefCell};
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::ops::{BitOr, BitOrAssign};
-use std::rc::Rc;
+use std::{
+    any::{type_name, Any, TypeId},
+    cell::{Cell, RefCell},
+    fmt,
+    hash::{Hash, Hasher},
+    ops::{BitOr, BitOrAssign},
+    rc::Rc,
+};
 
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::hash::default;
-
-pub use cranpose_ui_graphics::DrawScope;
-pub use cranpose_ui_graphics::Size;
+use cranpose_core::{collections::map::HashMap, hash::default};
+pub use cranpose_ui_graphics::{DrawScope, Size};
 pub use cranpose_ui_layout::{Constraints, Measurable};
 
 use crate::nodes::input::types::PointerEvent;

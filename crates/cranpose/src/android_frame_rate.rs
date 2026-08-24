@@ -19,8 +19,7 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::c_void;
-use std::sync::OnceLock;
+use std::{ffi::c_void, sync::OnceLock};
 
 /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`: the rate is a UI hint,
 /// not fixed-source video content, so SurfaceFlinger may pick any suitable

@@ -1,6 +1,6 @@
-use crate::tests::test_composition;
-use crate::{location_key, Composition, MemoryApplier, MutableState};
 use cranpose_macros::composable;
+
+use crate::{location_key, tests::test_composition, Composition, MemoryApplier, MutableState};
 
 /// Simple recursive function that creates keyed groups similar to the desktop demo
 #[composable]

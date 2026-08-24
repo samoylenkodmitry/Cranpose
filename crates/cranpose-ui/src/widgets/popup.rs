@@ -26,11 +26,11 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use crate::modifier::Modifier;
-use crate::{composable, PointerInputScope};
 use cranpose_core::{
     mutableStateOf, remember, staticCompositionLocalOf, CompositionLocalProvider, MutableState,
     SideEffect, StaticCompositionLocal,
@@ -39,6 +39,7 @@ use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::box_widget::{Box, BoxSpec};
+use crate::{composable, modifier::Modifier, PointerInputScope};
 
 /// One registered popup: a stable id, its absolute top-left position (logical
 /// px, in [`PopupHost`] space, i.e. window coordinates) and its content.
@@ -445,9 +446,10 @@ fn popup_impl(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_foundation::PointerEvent;
+
     use super::*;
     use crate::modifier::collect_slices_from_modifier;
-    use cranpose_foundation::PointerEvent;
 
     #[test]
     fn non_dismissable_exit_frame_has_no_modal_scrim_callback() {

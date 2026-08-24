@@ -1,13 +1,13 @@
 //! Browser accessibility bridge for the canvas renderer.
 
-use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use std::cell::RefCell;
-use std::rc::Rc;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
+
+use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};
 
 /// Transparent DOM nodes mirroring the semantic controls painted on canvas.
 pub(crate) struct WebAccessibilityBridge {

@@ -1,9 +1,10 @@
 #![allow(private_interfaces)]
 
-#[allow(unused_imports)] // Used in tests
-use cranpose_foundation::InvalidationKind;
+use std::{any::type_name_of_val, cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
+#[allow(unused_imports)] // Used in tests
+use cranpose_foundation::InvalidationKind;
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierInvalidation, ModifierNodeChain, ModifierNodeContext,
     NodeCapabilities,
@@ -18,9 +19,6 @@ use crate::modifier_nodes::{
     AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
     PaddingNode, SizeNode, WeightNode,
 };
-use std::any::type_name_of_val;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Snapshot of a modifier node inside a reconciled chain for debugging & inspector tooling.
 #[derive(Clone, Debug, PartialEq)]
@@ -373,8 +371,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::modifier::Color;
-    use crate::modifier_nodes::PaddingNode;
+    use crate::{modifier::Color, modifier_nodes::PaddingNode};
 
     #[test]
     fn attaches_padding_node_and_invalidates_layout() {

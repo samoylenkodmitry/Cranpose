@@ -1,7 +1,5 @@
 //! Multiplatform service abstractions used by Cranpose applications.
 
-#![deny(unsafe_code)]
-
 #[cfg(test)]
 use cranpose_core::{location_key, Composition, MemoryApplier};
 
@@ -82,15 +80,15 @@ pub use camera::{
     FrameFormat,
 };
 pub use content::{
-    clear_platform_content_resolver, collect_stream, drain_reader, folder_files, resolve_content,
-    set_platform_content_resolver, write_all, BytesContent, Content, ContentChannel, ContentEntry,
-    ContentError, ContentFolder, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata,
-    ContentReader, ContentReaderRef, ContentResolver, ContentResolverRef, ContentSink,
-    ContentSinkRef, ContentStream, ContentStreamRef, ReadyFolder, DEFAULT_CHUNK_LEN,
+    clear_platform_content_resolver, collect_stream, drain_reader, folder_files, percent_decode,
+    percent_decode_lossy, resolve_content, set_platform_content_resolver, write_all, BytesContent,
+    Content, ContentChannel, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
+    ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef,
+    ContentResolver, ContentResolverRef, ContentSink, ContentSinkRef, ContentStream,
+    ContentStreamRef, ReadyFolder, DEFAULT_CHUNK_LEN,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use content::{file_content, file_folder, FileContent, FileFolder, FileSink};
-pub use content::{percent_decode, percent_decode_lossy};
 pub use device_info::{
     clear_platform_device_info, device_info, release_free_memory, set_platform_device_info,
     DeviceInfo, DeviceInfoRef,

@@ -1,7 +1,10 @@
-use crate::gesture_constants::MAX_FLING_VELOCITY;
-use crate::nodes::input::{PointerEvent, PointerEventKind, PointerId};
-use crate::VelocityTracker1D;
 use cranpose_ui_graphics::Point;
+
+use crate::{
+    gesture_constants::MAX_FLING_VELOCITY,
+    nodes::input::{PointerEvent, PointerEventKind, PointerId},
+    VelocityTracker1D,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FlingGestureEvent {

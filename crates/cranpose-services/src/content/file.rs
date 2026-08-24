@@ -4,17 +4,20 @@
 //! iOS security-scoped picker, bundled asset installs, writable folders — hands
 //! back these types rather than re-implementing chunked reads.
 
+use std::{
+    cell::RefCell,
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    rc::Rc,
+    time::UNIX_EPOCH,
+};
+
 use super::{
     Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
     ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink, ContentSinkRef,
     DEFAULT_CHUNK_LEN,
 };
-use std::cell::RefCell;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::time::UNIX_EPOCH;
 
 fn io_error(path: &Path, error: std::io::Error) -> ContentError {
     match error.kind() {

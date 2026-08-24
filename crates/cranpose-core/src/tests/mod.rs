@@ -1,18 +1,26 @@
-use super::*;
-use crate as cranpose_core;
-use crate::slot::ActiveGroupId;
-use crate::snapshot_v2::take_mutable_snapshot;
-#[cfg(test)]
-use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
-use crate::state::{MutationPolicy, SnapshotMutableState};
-use crate::SnapshotStateObserver;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cranpose_macros::composable;
 use smallvec::SmallVec;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+
+use super::*;
+use crate as cranpose_core;
+#[cfg(test)]
+use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
+use crate::{
+    slot::ActiveGroupId,
+    snapshot_v2::take_mutable_snapshot,
+    state::{MutationPolicy, SnapshotMutableState},
+    SnapshotStateObserver,
+};
 
 /// Reset the snapshot runtime for tests to ensure clean state.
 /// This matches the pattern used in integration_tests.rs.

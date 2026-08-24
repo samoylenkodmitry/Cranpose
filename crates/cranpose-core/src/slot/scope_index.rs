@@ -1,8 +1,9 @@
+use std::mem;
+
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{ActiveGroupId, AnchorRegistry, GroupRecord, SlotTable};
 use crate::{collections::map::HashMap, AnchorId, ScopeId};
-use std::mem;
 
 #[derive(Default)]
 pub(crate) struct ScopeIndex {

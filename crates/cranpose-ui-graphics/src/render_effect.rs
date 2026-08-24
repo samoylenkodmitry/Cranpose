@@ -3,8 +3,9 @@
 //! Matches the Jetpack Compose `RenderEffect` API with extensions for custom
 //! WGSL shaders (`RuntimeShader`).
 
-use crate::LayerShape;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+use crate::LayerShape;
 
 const RUNTIME_SHADER_INLINE_UNIFORMS: usize = 16;
 

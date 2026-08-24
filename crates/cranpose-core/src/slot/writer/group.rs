@@ -1,8 +1,10 @@
-use super::super::{
-    ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
-    GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
+use super::{
+    super::{
+        ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, GroupKey, GroupKeySeed,
+        GroupStart, GroupStartKind, SlotTable, SlotWriteSession,
+    },
+    SlotWriteSessionState,
 };
-use super::SlotWriteSessionState;
 use crate::{AnchorId, ScopeId};
 
 enum ActiveChildResolution {

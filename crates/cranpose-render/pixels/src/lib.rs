@@ -1,15 +1,14 @@
-#![deny(unsafe_code)]
-
 mod draw;
 mod pipeline;
 pub mod scene;
 pub mod style;
 
-use cranpose_render_common::text_measure::{CachedFontTextMeasurer, SoftwareTextResources};
-use cranpose_render_common::{RenderScene, Renderer};
+use cranpose_render_common::{
+    text_measure::{CachedFontTextMeasurer, SoftwareTextResources},
+    RenderScene, Renderer,
+};
 use cranpose_ui::LayoutTree;
 use cranpose_ui_graphics::Size;
-
 pub use draw::draw_scene;
 pub use scene::{HitRegion, Scene};
 

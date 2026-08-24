@@ -1,22 +1,25 @@
-use std::fmt;
-use std::mem::size_of;
-use std::rc::Rc;
+use std::{fmt, mem::size_of, rc::Rc};
 
 use cranpose_foundation::{ModifierNodeChain, NodeCapabilities, PointerEvent};
-use cranpose_ui_graphics::{ColorFilter, GraphicsLayer, RenderEffect, RoundedCornerShape};
+use cranpose_ui_graphics::{
+    ColorFilter, EdgeInsets, GraphicsLayer, RenderEffect, RoundedCornerShape,
+};
 
 use super::{ModifierChainHandle, Point};
-use crate::draw::DrawCommand;
-use crate::modifier::scroll::{MotionContextAnimatedNode, TranslatedContentContextNode};
-use crate::modifier::Modifier;
-use crate::modifier_nodes::{
-    BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
-    PaddingNode, WindowRectReporterNode,
+use crate::{
+    draw::DrawCommand,
+    modifier::{
+        scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
+        Modifier,
+    },
+    modifier_nodes::{
+        BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
+        PaddingNode, WindowRectReporterNode,
+    },
+    text::{TextLayoutOptions, TextStyle},
+    text_field_modifier_node::{TextFieldModifierNode, TextPanResolver},
+    text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle},
 };
-use crate::text::{TextLayoutOptions, TextStyle};
-use crate::text_field_modifier_node::{TextFieldModifierNode, TextPanResolver};
-use crate::text_modifier_node::{TextModifierNode, TextPreparedLayoutHandle};
-use cranpose_ui_graphics::EdgeInsets;
 
 /// Snapshot of modifier node slices that impact draw and pointer subsystems.
 #[derive(Default)]
@@ -594,8 +597,9 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
     // Convert background + shape into a draw command
     if let Some(color) = background_color {
         let draw_cmd = Rc::new(move |scope: &mut cranpose_ui_graphics::DrawScopeDefault| {
-            use crate::modifier::Brush;
             use cranpose_ui_graphics::{CornerRadii, DrawScope as _};
+
+            use crate::modifier::Brush;
 
             let size = scope.size();
             let brush = Brush::solid(color);

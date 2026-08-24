@@ -1,5 +1,7 @@
-use super::super::{DetachedSubtree, SlotPassMode, SlotTable};
-use super::frames::{GroupFrame, RootFrame};
+use super::{
+    super::{DetachedSubtree, SlotPassMode, SlotTable},
+    frames::{GroupFrame, RootFrame},
+};
 use crate::{collections::map::HashMap, AnchorId};
 
 #[derive(Default)]

@@ -16,7 +16,6 @@
 //! });
 //! ```
 
-#![deny(unsafe_code)]
 #![allow(non_snake_case)]
 
 pub mod dynamics;
@@ -40,16 +39,18 @@ pub use widgets::*;
 
 /// Everything an app needs to build Liquid UI.
 pub mod prelude {
-    pub use crate::dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose};
-    pub use crate::icons;
-    pub use crate::material::{
-        Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
-        LiquidShape,
+    pub use crate::{
+        dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose},
+        icons,
+        material::{
+            Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
+            LiquidShape,
+        },
+        motion::{liquid_press_scale, LiquidMotion},
+        theme::{
+            liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec,
+            LiquidTypography, SchemeMode,
+        },
+        widgets::*,
     };
-    pub use crate::motion::{liquid_press_scale, LiquidMotion};
-    pub use crate::theme::{
-        liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec,
-        LiquidTypography, SchemeMode,
-    };
-    pub use crate::widgets::*;
 }

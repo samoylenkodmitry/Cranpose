@@ -1,10 +1,10 @@
-use crate::composer_context;
-use crate::state::{MutationPolicy, OwnedMutableState};
-use crate::{Composer, LocalKey, RuntimeHandle};
-use std::any::Any;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
+
+use crate::{
+    composer_context,
+    state::{MutationPolicy, OwnedMutableState},
+    Composer, LocalKey, RuntimeHandle,
+};
 
 pub struct ProvidedValue {
     key: LocalKey,
