@@ -123,6 +123,23 @@ delivered twice plays its cue twice. Whether input beyond back is doubled is
 unverified and is the first thing to measure, because it decides whether this
 is one fault or two.
 
+**Injected gestures do not reproduce it, so the double dispatch is not
+confirmed.** Driving `adb shell input swipe` from the leading edge on a Pixel
+Watch 3 against `v1.3.3`: from the title screen one swipe leaves the
+application, focus moving to `com.google.android.wearable.sysui`; from
+gameplay one swipe pauses and one more resumes, which is one `on_back` each.
+Two dispatches per gesture would pause and resume in a single swipe and land
+back on gameplay, and that is not what happens. So either the platform
+delivers a real finger down both paths in a way the injected event does not,
+or the cause is something else entirely and the two handlers are a latent
+hazard rather than this bug.
+
+Do not "fix" this by deleting a handler on the reading alone. Both paths reach
+`on_back`, so removing the wrong one removes back everywhere, and the reading
+is exactly what the injected test contradicts. The next real-finger occurrence
+is worth more than more code review: `adb logcat` while it happens, or a
+counter on `on_back` surfaced on screen, settles it in one go.
+
 **This was hidden until `0.1.99` fixed something else.** Before that,
 `SwipeToDismissBox` left its content off screen after firing, so the second
 `on_back` resumed a game nobody could see and the symptom was a blank screen.
