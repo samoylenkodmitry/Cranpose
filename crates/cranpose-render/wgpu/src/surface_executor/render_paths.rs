@@ -58,6 +58,25 @@ fn layer_render_diag_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LAYER_RENDER_DIAG").is_some())
 }
 
+/// Counts a layer-cache miss, and under `CRANPOSE_LAYER_CACHE_DIAG` names the
+/// key that missed and the path that probed it.
+///
+/// A miss on a key nothing ever stores is indistinguishable from a miss under
+/// eviction pressure in the counters alone, which is how issue #478 stayed
+/// hidden. Every miss goes through here so the key is always recoverable.
+fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
+    backend: &mut B,
+    site: &str,
+    key: &LayerRasterCacheKey,
+    width: u32,
+    height: u32,
+) {
+    if crate::layer_surface_cache::cache_diag_enabled() {
+        log::warn!("[layer-cache-diag] miss site={site} key={key:?}");
+    }
+    backend.record_layer_cache_miss(key, width, height);
+}
+
 fn direct_scene_range_cache_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE").is_none())
@@ -2618,9 +2637,16 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
         activates_nested_capture
             && effective_requirements.contains(SurfaceRequirement::MotionStableCapture),
     );
+    let supported_isolation_effect = child
+        .isolation
+        .as_ref()
+        .and_then(|params| params.effect.as_ref())
+        .filter(|effect| backend.is_render_effect_supported(effect));
     let cache_candidate = child_layer_raster_cache_candidate(
         child,
         target_scale,
+        effective_requirements,
+        supported_isolation_effect,
         backdrop_underlay.is_some(),
         backdrop_underlay_color,
         allow_runtime_cache,
@@ -2647,7 +2673,7 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
             });
         }
         let (width, height) = cache_key.pixel_size();
-        backend.record_layer_cache_miss(width, height);
+        record_layer_cache_miss(backend, "child-candidate", &cache_key, width, height);
         return render_layer_surface_uncached(
             backend,
             child,
@@ -2692,6 +2718,8 @@ pub(crate) fn render_layer_surface<B: SurfaceExecutionBackend>(
 fn child_layer_raster_cache_candidate(
     child: &ChildLayerComposite,
     root_scale: f32,
+    effective_requirements: SurfaceRequirementSet,
+    supported_isolation_effect: Option<&RenderEffect>,
     has_backdrop_underlay: bool,
     backdrop_underlay_color: Option<u32>,
     allow_runtime_cache: bool,
@@ -2699,6 +2727,55 @@ fn child_layer_raster_cache_candidate(
     max_texture_dim: u32,
 ) -> Option<(LayerRasterCacheKey, Rect)> {
     let surface_requirements = child.surface_requirements;
+    // A RuntimeShader produces different output every frame from uniforms no
+    // content hash carries, so nothing can invalidate a texture it was
+    // rastered into. Caching the shader's own layer would only fill the LRU
+    // with stale entries; caching an ANCESTOR of one freezes the effect
+    // outright, because the ancestor stays a hit forever and replays whatever
+    // frame it first rastered. The whole subtree is therefore uncacheable.
+    if surface_requirements.contains_runtime_shader {
+        return None;
+    }
+
+    // The candidate must be the key the render path will STORE, or the lookup
+    // mints a miss every frame against a key that never exists. A layer the
+    // render path serves out of the source-content cache never stores a
+    // full-surface entry, so its candidate has to be that same source-content
+    // key — or nothing, where no key is nameable from here.
+    if let Some(source) = layer_source_cache_entry(
+        child,
+        effective_requirements,
+        has_backdrop_underlay,
+        allow_runtime_cache,
+    ) {
+        match supported_isolation_effect {
+            None => {
+                // No collected hash means only the render path can name the
+                // key, so there is nothing here worth probing for.
+                let content_hash = source.collected_content_hash?;
+                let logical_rect = logical_rect_override.unwrap_or(child.logical_rect);
+                let pixel_size = surface_target_size(logical_rect, root_scale, max_texture_dim);
+                if offscreen_byte_size(pixel_size.0, pixel_size.1) > MAX_LAYER_SURFACE_CACHE_BYTES {
+                    return None;
+                }
+                return Some((
+                    source.key(content_hash, logical_rect, pixel_size, root_scale),
+                    logical_rect,
+                ));
+            }
+            Some(effect) if can_materialize_cached_effect(effect, child.backdrop.as_ref()) => {
+                // The render path materializes the effect over the cached
+                // source and stores the result under the full-surface key:
+                // fall through to the full-surface candidate.
+            }
+            Some(_) => {
+                // The effect re-applies over the cached source every frame,
+                // so no post-effect surface is ever stored under any key.
+                return None;
+            }
+        }
+    }
+
     let runtime_cache_is_safe = allow_runtime_cache
         && surface_requirements
             .surface_requirements
@@ -2714,18 +2791,12 @@ fn child_layer_raster_cache_candidate(
     if external_backdrop_input && backdrop_underlay_color.is_none() {
         return None;
     }
-    // A RuntimeShader produces different output every frame from uniforms no
-    // content hash carries, so nothing can invalidate a texture it was
-    // rastered into. Caching the shader's own layer would only fill the LRU
-    // with stale entries; caching an ANCESTOR of one freezes the effect
-    // outright, because the ancestor stays a hit forever and replays whatever
-    // frame it first rastered. The whole subtree is therefore uncacheable.
-    if surface_requirements.contains_runtime_shader {
-        return None;
-    }
 
     let logical_rect = logical_rect_override.unwrap_or(child.logical_rect);
     let pixel_size = surface_target_size(logical_rect, root_scale, max_texture_dim);
+    if offscreen_byte_size(pixel_size.0, pixel_size.1) > MAX_LAYER_SURFACE_CACHE_BYTES {
+        return None;
+    }
     let content_hash = if external_backdrop_input {
         let mut hasher = FxHasher::default();
         0xF1A7_C010u64.hash(&mut hasher);
@@ -2819,16 +2890,50 @@ fn materialize_render_effect_to_target<B: SurfaceExecutionBackend>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn layer_source_cache_key(
+/// What the source-content cache holds for a layer, if anything.
+///
+/// The retained lookup and the render path have to answer this identically:
+/// the key one probes is the key the other stores under, and a probe against a
+/// key nothing ever writes mints a miss every frame forever. Both read the
+/// answer from [`layer_source_cache_entry`] so the two cannot drift apart.
+struct LayerSourceCacheEntry {
+    stable_id: Option<NodeId>,
+    /// The content hash the key carries, when collection already settled it.
+    ///
+    /// `None` for a motion-stable capture. Collection snapshots that hash into
+    /// `motion_source_content_hash` only when its own recomputation of the
+    /// effective requirements agrees with the render body's, and the retained
+    /// lookup recomputes them from a context that legitimately differs. The
+    /// render path resolves the hash there, alongside the capture rect it
+    /// resolves for the same reason; a caller working from a collection-time
+    /// estimate cannot name the resulting key at all.
+    collected_content_hash: Option<u64>,
+}
+
+impl LayerSourceCacheEntry {
+    fn key(
+        &self,
+        content_hash: u64,
+        rect: Rect,
+        pixel_size: (u32, u32),
+        scale: f32,
+    ) -> LayerRasterCacheKey {
+        LayerRasterCacheKey::source_content(
+            self.stable_id,
+            content_hash,
+            rect,
+            pixel_size,
+            ScaleBucket::from_scale(scale),
+        )
+    }
+}
+
+fn layer_source_cache_entry(
     child: &ChildLayerComposite,
     effective_requirements: SurfaceRequirementSet,
-    surface_rect: Rect,
-    pixel_size: (u32, u32),
-    target_scale: f32,
     has_backdrop_underlay: bool,
     allow_runtime_cache: bool,
-) -> Option<LayerRasterCacheKey> {
+) -> Option<LayerSourceCacheEntry> {
     let runtime_shader_source = child.effect_contains_runtime_shader;
     let motion_stable_source =
         effective_requirements.contains(SurfaceRequirement::MotionStableCapture);
@@ -2845,21 +2950,34 @@ fn layer_source_cache_key(
         return None;
     }
 
-    let content_hash = if motion_stable_source {
+    Some(LayerSourceCacheEntry {
+        stable_id: child.node_id,
+        collected_content_hash: (!motion_stable_source).then_some(child.target_content_hash),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn layer_source_cache_key(
+    child: &ChildLayerComposite,
+    effective_requirements: SurfaceRequirementSet,
+    surface_rect: Rect,
+    pixel_size: (u32, u32),
+    target_scale: f32,
+    has_backdrop_underlay: bool,
+    allow_runtime_cache: bool,
+) -> Option<LayerRasterCacheKey> {
+    let source = layer_source_cache_entry(
+        child,
+        effective_requirements,
+        has_backdrop_underlay,
+        allow_runtime_cache,
+    )?;
+    let content_hash = source.collected_content_hash.unwrap_or_else(|| {
         child
             .motion_source_content_hash
             .expect("motion-stable source snapshots its motion content hash at collection")
-    } else {
-        child.target_content_hash
-    };
-
-    Some(LayerRasterCacheKey::source_content(
-        child.node_id,
-        content_hash,
-        surface_rect,
-        pixel_size,
-        ScaleBucket::from_scale(target_scale),
-    ))
+    });
+    Some(source.key(content_hash, surface_rect, pixel_size, target_scale))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -4029,7 +4147,13 @@ fn cached_direct_scene_range_surface<B: SurfaceExecutionBackend>(
                 target_height,
             );
         }
-        backend.record_layer_cache_miss(target_width, target_height);
+        record_layer_cache_miss(
+            backend,
+            "scene-range",
+            &cache_key,
+            target_width,
+            target_height,
+        );
         let target = backend.acquire_retained_surface(target_width, target_height);
         let window_scene = build_scene_window(
             SceneWindowSource {
@@ -4931,15 +5055,26 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             &child_layers,
             backdrop_underlay.is_some(),
         );
-        let source_cache_key = layer_source_cache_key(
-            child,
-            effective_requirements,
-            surface_rect,
-            (width, height),
-            target_scale,
-            source_uses_external_backdrop,
-            allow_runtime_cache,
-        );
+        // A source-kind candidate arrives from the retained lookup that just
+        // missed on it. It is authoritative: the entry has to be stored under
+        // the key the next frame's lookup probes, not under a recomputed key
+        // whose rect or scale the deep path may have adjusted since. Probing
+        // it again here could only repeat the miss it arrived from.
+        let candidate_source_key = cache_candidate
+            .take_if(|(key, _)| key.is_source_content())
+            .map(|(key, _)| key);
+        let source_probe_missed_upstream = candidate_source_key.is_some();
+        let source_cache_key = candidate_source_key.or_else(|| {
+            layer_source_cache_key(
+                child,
+                effective_requirements,
+                surface_rect,
+                (width, height),
+                target_scale,
+                source_uses_external_backdrop,
+                allow_runtime_cache,
+            )
+        });
         if layer_render_diag_enabled() {
             log::warn!(
                 "[layer-render-diag] node={:?} size={}x{} scale={:.3} rect=({:.1},{:.1},{:.1},{:.1}) requirements={:?} cache_candidate={} backdrop_underlay={} external_backdrop_input={}",
@@ -4958,10 +5093,17 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             );
         }
         let mut target = if let Some(cache_key) = source_cache_key {
-            if let Some((cached_target, _)) = backend.cached_layer_surface(&cache_key) {
+            let cached = if source_probe_missed_upstream {
+                None
+            } else {
+                backend.cached_layer_surface(&cache_key)
+            };
+            if let Some((cached_target, _)) = cached {
                 LayerSurfaceTexture::Cached(cached_target)
             } else {
-                backend.record_layer_cache_miss(width, height);
+                if !source_probe_missed_upstream {
+                    record_layer_cache_miss(backend, "source-content", &cache_key, width, height);
+                }
                 let rendered = render_layer_source_uncached(
                     backend,
                     &local_scene,
@@ -5485,7 +5627,13 @@ fn prepare_cached_backdrop_layer_composite<B: SurfaceExecutionBackend>(
     {
         LayerSurfaceTexture::Cached(cached_target)
     } else {
-        backend.record_layer_cache_miss(backdrop_width, backdrop_height);
+        record_layer_cache_miss(
+            backend,
+            "backdrop",
+            &cache_key,
+            backdrop_width,
+            backdrop_height,
+        );
         let snapshot = backend.acquire_frame_surface(backdrop_width, backdrop_height);
         let copied_snapshot = copy_plan.is_some_and(|plan| {
             backend.copy_texture_region_to_target(target, plan.source_origin, &snapshot, plan.size)

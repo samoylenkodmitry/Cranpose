@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
+use cranpose_render_common::raster_cache::LayerRasterCacheKey;
 use cranpose_ui_graphics::Rect;
 
 use crate::{
@@ -398,6 +399,16 @@ pub(crate) struct FrameStats {
     top_isolated_layers: RefCell<[Option<IsolatedLayerStat>; TOP_ISOLATED_LAYER_LIMIT]>,
     top_isolated_layer_count: Cell<usize>,
     shadow_shape_cache_miss_log_count: Cell<u32>,
+    /// Keys the layer cache was probed for and did not hold, this frame.
+    ///
+    /// A miss is only ever worth paying once: the render that follows it
+    /// stores the surface under the key that missed, so the next frame hits.
+    /// A miss on a key the render path never stores under is a miss that
+    /// repeats forever, and the counters alone cannot tell the two apart --
+    /// which is how issue #478 survived. `LayerSurfaceCache::finish_frame`
+    /// checks this list against what it actually stored.
+    #[cfg(debug_assertions)]
+    missed_layer_cache_keys: RefCell<Vec<LayerRasterCacheKey>>,
 }
 
 impl FrameStats {
@@ -495,7 +506,13 @@ impl FrameStats {
         );
     }
 
-    pub fn record_layer_cache_miss(&self, width: u32, height: u32) {
+    #[cfg_attr(
+        not(debug_assertions),
+        expect(unused_variables, reason = "the key is only tracked in debug builds")
+    )]
+    pub fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
+        #[cfg(debug_assertions)]
+        self.missed_layer_cache_keys.borrow_mut().push(*key);
         self.layer_cache_misses
             .set(self.layer_cache_misses.get().saturating_add(1));
         self.layer_cache_miss_pixels.set(
@@ -503,6 +520,15 @@ impl FrameStats {
                 .get()
                 .saturating_add((width as u64) * (height as u64)),
         );
+    }
+
+    /// Hands over the keys that missed this frame, leaving the list empty.
+    ///
+    /// Only [`crate::layer_surface_cache::LayerSurfaceCache`] can judge them:
+    /// it is the side that knows which keys were stored against those misses.
+    #[cfg(debug_assertions)]
+    pub fn take_missed_layer_cache_keys(&self) -> Vec<LayerRasterCacheKey> {
+        self.missed_layer_cache_keys.take()
     }
 
     pub fn record_layer_cache_eviction(&self) {
@@ -853,6 +879,21 @@ fn shadow_cache_diagnostics_enabled() -> bool {
 mod tests {
     use super::*;
 
+    fn test_layer_cache_key() -> LayerRasterCacheKey {
+        LayerRasterCacheKey::source_content(
+            None,
+            0,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 5.0,
+                height: 6.0,
+            },
+            (5, 6),
+            cranpose_render_common::raster_cache::ScaleBucket::from_scale(1.0),
+        )
+    }
+
     #[test]
     fn layer_cache_counters_accumulate_and_reset() {
         let stats = FrameStats::default();
@@ -871,7 +912,7 @@ mod tests {
         stats.offscreen_pool_bytes.set(2048);
         stats.record_layer_cache_hit(10, 20);
         stats.record_layer_cache_hit(3, 4);
-        stats.record_layer_cache_miss(5, 6);
+        stats.record_layer_cache_miss(&test_layer_cache_key(), 5, 6);
         stats.record_layer_cache_eviction();
         stats.record_shadow_shape_cache_hit(8, 9);
         stats.record_shadow_shape_cache_miss(10, 11);

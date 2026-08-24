@@ -22,6 +22,15 @@ pub(crate) const MAX_SCENE_RANGE_CACHE_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 pub(crate) const MAX_SCENE_RANGE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
 const RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY: usize = 256;
 
+/// Env-gated cache-key diagnostics (`CRANPOSE_LAYER_CACHE_DIAG=1`): logs every
+/// miss with the key that missed, and every insert with the key it landed
+/// under, so a cache that misses without eviction pressure names the field
+/// that varied — or shows that the two key spaces never met.
+pub(crate) fn cache_diag_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_LAYER_CACHE_DIAG").is_some())
+}
+
 /// Takes out the values no other holder still references, and keeps the rest
 /// for a later call.
 fn take_unshared<T>(pending: &mut Vec<Rc<T>>) -> Vec<T> {
@@ -55,6 +64,10 @@ pub(crate) struct LayerSurfaceCache {
     /// of twenty-six unused targets. The sizes repeat exactly, so the pool
     /// serves every one of them once the surfaces come back.
     recycled: Vec<Rc<OffscreenTarget>>,
+    /// Keys stored this frame, checked at `finish_frame` against the keys the
+    /// render paths were probed for and missed.
+    #[cfg(debug_assertions)]
+    inserted_this_frame: HashSet<LayerRasterCacheKey>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -81,6 +94,8 @@ impl LayerSurfaceCache {
             scene_range_bytes: 0,
             seen_this_frame: HashSet::new(),
             recycled: Vec::new(),
+            #[cfg(debug_assertions)]
+            inserted_this_frame: HashSet::new(),
         }
     }
 
@@ -121,6 +136,9 @@ impl LayerSurfaceCache {
         logical_rect: Rect,
         frame_stats: &FrameStats,
     ) -> Rc<OffscreenTarget> {
+        #[cfg(debug_assertions)]
+        self.inserted_this_frame.insert(key);
+
         if key.is_scene_range() {
             return self.insert_scene_range(key, target, logical_rect, frame_stats);
         }
@@ -131,9 +149,18 @@ impl LayerSurfaceCache {
             let identity = key.identity().expect("stable cache key must have identity");
             if let Some(previous_key) = self.identity.insert(identity, key) {
                 if previous_key != key {
+                    if cache_diag_enabled() {
+                        log::warn!(
+                            "[layer-cache-diag] rekey {identity:?} prev={previous_key:?} new={key:?}"
+                        );
+                    }
                     self.remove(&previous_key);
                 }
+            } else if cache_diag_enabled() {
+                log::warn!("[layer-cache-diag] insert {identity:?} key={key:?}");
             }
+        } else if cache_diag_enabled() {
+            log::warn!("[layer-cache-diag] insert anonymous key={key:?}");
         }
 
         while self.bytes + byte_size > MAX_LAYER_SURFACE_CACHE_BYTES {
@@ -164,12 +191,47 @@ impl LayerSurfaceCache {
         cached_handle
     }
 
+    /// Fails the frame if the render paths were probed for a key that nothing
+    /// went on to store.
+    ///
+    /// A miss is a one-off cost by design: whatever missed gets rendered and
+    /// stored under the key that missed, so the next frame hits it. A miss on
+    /// a key no path ever stores under is a miss that repeats every frame for
+    /// the life of the layer, and in the counters it is indistinguishable from
+    /// honest eviction pressure. Issue #478 was exactly that -- the retained
+    /// lookup probed a full-surface key for every backdrop-carrying layer,
+    /// which is stored under a source-content key and never under the one
+    /// probed -- and it hid behind a plausible-looking hit rate for as long as
+    /// nothing compared the two sets. Every scene any test renders now does.
+    #[cfg(debug_assertions)]
+    fn assert_every_miss_was_stored(&self, frame_stats: &FrameStats) {
+        let missed = frame_stats.take_missed_layer_cache_keys();
+        let Some(unstored) = missed
+            .iter()
+            .find(|key| !self.inserted_this_frame.contains(key))
+        else {
+            return;
+        };
+        panic!(
+            "layer cache was probed for a key nothing stored: {unstored:?}\n\
+             a miss must be paid once, not every frame -- the probing path and \
+             the storing path have to name the surface the same way. Run with \
+             CRANPOSE_LAYER_CACHE_DIAG=1 to see which path probed it."
+        );
+    }
+
     pub(crate) fn finish_frame(&mut self, frame_stats: &FrameStats) {
+        #[cfg(debug_assertions)]
+        self.assert_every_miss_was_stored(frame_stats);
+
         self.seen_this_frame.clear();
         if self.seen_this_frame.capacity() > RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY {
             self.seen_this_frame
                 .shrink_to(RETAINED_LAYER_SEEN_THIS_FRAME_CAPACITY);
         }
+
+        #[cfg(debug_assertions)]
+        self.inserted_this_frame.clear();
 
         self.identity.retain(|_, key| self.entries.contains(key));
         frame_stats

@@ -8967,10 +8967,10 @@ impl<C: FrameCommandRecorder> SurfaceExecutionBackend for RecordingSurfaceBacken
         self.renderer.warning_state.warn_unsupported_effect_once();
     }
 
-    fn record_layer_cache_miss(&self, width: u32, height: u32) {
+    fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32) {
         self.renderer
             .frame_stats
-            .record_layer_cache_miss(width, height);
+            .record_layer_cache_miss(key, width, height);
     }
 
     fn record_isolated_layer_render(

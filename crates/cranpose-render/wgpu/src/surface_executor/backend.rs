@@ -337,7 +337,7 @@ pub(crate) trait SurfaceExecutionBackend {
     ) -> Result<(), String>;
     fn is_render_effect_supported(&self, effect: &RenderEffect) -> bool;
     fn warn_unsupported_effect_once(&self);
-    fn record_layer_cache_miss(&self, width: u32, height: u32);
+    fn record_layer_cache_miss(&self, key: &LayerRasterCacheKey, width: u32, height: u32);
     fn record_isolated_layer_render(
         &self,
         width: u32,

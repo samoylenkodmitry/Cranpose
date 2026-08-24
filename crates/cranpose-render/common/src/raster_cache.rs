@@ -165,6 +165,10 @@ impl LayerRasterCacheKey {
         self.kind == LayerRasterCacheKind::SceneRange
     }
 
+    pub fn is_source_content(self) -> bool {
+        self.kind == LayerRasterCacheKind::SourceContent
+    }
+
     pub fn identity(self) -> Option<LayerRasterCacheIdentity> {
         Some(LayerRasterCacheIdentity {
             stable_id: self.stable_id?,
