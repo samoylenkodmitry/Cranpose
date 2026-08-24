@@ -1564,8 +1564,12 @@ fn translated_backdrop_capture_preserves_local_picture_under_rigid_motion() {
         "translated backdrop base frame should isolate only the backdrop child under the readable composition root: {base_stats:?}"
     );
     assert!(
-        (1..=2).contains(&moved_stats.isolated_layer_renders),
+        moved_stats.isolated_layer_renders <= 2,
         "translated backdrop moved frame should reuse cached rigid content without adding extra isolated layers: {moved_stats:?}"
+    );
+    assert!(
+        moved_stats.layer_cache_hits >= 1,
+        "translated backdrop moved frame should serve the rigid content from the layer cache: {moved_stats:?}"
     );
 
     let base_normalized = normalize_translated_backdrop_region(&base_frame, base_translation);

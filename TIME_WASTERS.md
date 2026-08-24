@@ -1040,3 +1040,13 @@ parse failure stops the runner starting at all. Put the explanation in a file
 next to the runners instead — `/Volumes/files/actions-runners/README-caches.md`
 does this for the sccache and Gradle redirects.
 
+
+## `~/develop/projects/Cranpose` on samarch-1 is a synced mirror, not a repo
+
+Its `.git` is a worktree pointer file naming a macOS path
+(`/Users/s/develop/projects/Cranpose/.git/worktrees/Cranpose-wear`), so every
+git command there dies with `fatal: not a git repository: (null)`. To run
+anything from a branch on that host, rsync the tree into a scratch directory
+(exclude `target/` and `.git`) instead of trying to fetch or checkout there.
+`just` lives in `~/.cargo/bin`, which a non-interactive ssh PATH does not
+include.
