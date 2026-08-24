@@ -57,8 +57,13 @@ pub use bring_into_view::{
     local_bring_into_view_responder, scroll_delta_to_reveal, BringIntoViewResponder,
 };
 // Lazy list exports - single source from cranpose-foundation
+// `rememberLazyListState` belongs here with the state it builds: an app that
+// composes a `LazyColumn` against cranpose-ui had to reach into
+// cranpose-foundation for the one hook that makes its state, which is the
+// reaching-past this facade exists to prevent.
 pub use cranpose_foundation::lazy::{
-    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
+    rememberLazyListState, rememberLazyListStateWithPosition, LazyItems, LazyListItemInfo,
+    LazyListLayoutInfo, LazyListScope, LazyListState,
 };
 // The accessibility vocabulary an app writes against. It is declared in
 // cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
