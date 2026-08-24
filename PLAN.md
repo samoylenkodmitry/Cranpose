@@ -135,6 +135,52 @@ Fixed by `SwipeToDismissSpec::reset_after_dismiss`, off by default so row
 behaviour is unchanged, with `SwipeToDismissBox` opting in. CranOrbit picks it
 up at the next Cranpose release.
 
+## CranAmp plays no music since the framework-ownership work
+
+Reported from the device, not from a test: CranAmp stopped playing audio after
+the Cranpose refactorings that moved host, lifecycle and service contracts into
+the framework. The application is a music player, so this is the whole product.
+
+Not yet root-caused, and deliberately not guessed at. What has been checked:
+
+- `cranamp` `0.1.42` installs and runs on a Pixel 9 Pro. The process stays up,
+  the renderer works, and there is no panic or `AndroidRuntime` entry.
+- `cranpose_services::media` takes a platform player through
+  `set_platform_media_player`, and one is registered for every target CranAmp
+  ships: `cranpose_media::install()` on desktop, `web_media` on the web,
+  `android_media::register` on Android, `ios_media` on iOS. So the *absence of
+  an Android backend*, which is the obvious first suspicion, is not it.
+- The Android registration chain is intact on paper:
+  `android.rs:1821` calls `android_services::register`, which calls
+  `android_media::register(app)` at `android_services.rs:90`.
+- CranAmp's `android` feature is `["cranpose/android"]` and enables no media or
+  audio feature. That is what the framework documents — `media-desktop` says
+  "Android, iOS and the web use the platform's own media stack and need no
+  feature" — so it is consistent rather than obviously wrong.
+
+Where to look next, in order:
+
+- **Whether `android_media::register` still runs.** It takes an
+  `android_activity::AndroidApp`, and the same refactoring changed
+  `android_main!` so the entry point "no longer wants the `AndroidApp` at all".
+  A registration that is skipped, or that runs after the application first asks
+  to play, leaves `cranpose_services::media` with no player and every call a
+  silent no-op. Confirm by asserting a player is installed by the time the
+  first composition runs, not by reading the call chain — the chain reads fine.
+- **Whether the failure is playback or the file reaching playback.** Launching
+  CranAmp goes straight to `OPEN_DOCUMENT_TREE`. If the picked tree no longer
+  survives the services rework, there is nothing to decode and the audio stack
+  is innocent.
+- **Whether desktop is affected too.** Desktop takes a different backend
+  (`cranpose-media` behind `media-desktop`), so a failure on both narrows this
+  to the service layer above them, and a failure on Android alone narrows it to
+  the Android registration.
+
+A failing test comes first, and it belongs in the framework: "a target that
+registers a platform media player has one installed before the first
+composition" is a Cranpose invariant, and nothing currently asserts it. That is
+why CranAmp could lose its audio without a single test going red.
+
 ## Robot suite corner cases
 
 - **33 examples need an X11 session with `xdotool`** and are skipped everywhere
