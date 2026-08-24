@@ -1,0 +1,33 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!--
+3    Background execution: the foreground service Cranpose starts while an
+4    application holds a background-work lease, and the permissions Android
+5    requires to start it.
+6-->
+7<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+8    package="dev.cranpose.android.background" >
+9
+10    <uses-sdk android:minSdkVersion="24" />
+10-->INJECTED
+10-->INJECTED
+11
+12    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+12-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:8:5-77
+12-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:8:22-74
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:9:5-87
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:9:22-84
+14
+15    <application>
+15-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:11:5-16:19
+16        <service
+16-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:12:9-15:56
+17            android:name="dev.cranpose.android.CranposeBackgroundService"
+17-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:13:13-74
+18            android:exported="false"
+18-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:14:13-37
+19            android:foregroundServiceType="dataSync" />
+19-->/Users/s/develop/projects/Cranpose/android/cranpose-android-background/src/main/AndroidManifest.xml:15:13-53
+20    </application>
+21
+22</manifest>

@@ -1,0 +1,26 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:4:1-7:12
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:4:1-7:12
+	package
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:4:11-69
+uses-permission#android.permission.CAMERA
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:5:5-65
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:5:22-62
+uses-feature#android.hardware.camera.any
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:5-89
+	android:required
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:62-86
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:19-61
+uses-sdk
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml

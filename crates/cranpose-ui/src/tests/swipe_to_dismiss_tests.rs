@@ -300,6 +300,76 @@ fn release_past_threshold_animates_out_and_fires_on_dismiss_once() {
     assert_eq!(harness.dismiss_count.get(), 1);
 }
 
+/// A row that dismisses stays off screen, because its host is about to remove
+/// it. A NAVIGATION dismissal is the opposite case and must come back.
+///
+/// `SwipeToDismissBox` owns its state internally, so an application has no
+/// handle to call `SwipeDismissState::reset` on. Left off screen, a host that
+/// answers the gesture by staying composed -- backing out of a pause overlay
+/// resumes the game in the same root composable -- shows a blank screen that
+/// taps do not reach and further back gestures neither redraw nor leave. It
+/// takes a process restart, which is what CranOrbit did on a Pixel Watch 3.
+#[test]
+fn a_navigation_dismissal_returns_to_rest_after_notifying_the_host() {
+    let mut harness = Harness::new(200.0, 0.5);
+    harness.controller.reset_after_dismiss.set(true);
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 10.0));
+    harness.send(&move_to(140.0, 10.0)); // offset 130 >= threshold 100
+    harness.send(&up(140.0, 10.0));
+
+    harness.pump_frames(300);
+    assert_eq!(
+        harness.dismiss_count.get(),
+        1,
+        "the host is still told exactly once"
+    );
+    assert_eq!(
+        harness.offset(),
+        0.0,
+        "content that stays composed has to be back on screen"
+    );
+    assert!(
+        !harness.state().is_dismissed(),
+        "a host that stayed is not in a dismissed state"
+    );
+    assert!(!harness.revealed(), "nothing is revealed at rest");
+
+    // And the gesture still works afterwards, rather than being a one-shot.
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 10.0));
+    harness.send(&move_to(140.0, 10.0));
+    harness.send(&up(140.0, 10.0));
+    harness.pump_frames(300);
+    assert_eq!(
+        harness.dismiss_count.get(),
+        2,
+        "a second back gesture is heard, not swallowed"
+    );
+}
+
+/// The row default is unchanged: without the flag a dismissed row stays off
+/// screen so its host can remove it.
+#[test]
+fn a_row_dismissal_still_stays_off_screen_for_its_host_to_remove() {
+    let mut harness = Harness::new(200.0, 0.5);
+
+    harness.send(&down(10.0, 10.0));
+    harness.send(&move_to(30.0, 10.0));
+    harness.send(&move_to(140.0, 10.0));
+    harness.send(&up(140.0, 10.0));
+
+    harness.pump_frames(300);
+    assert_eq!(harness.dismiss_count.get(), 1);
+    assert!(
+        (harness.offset() - 200.0).abs() <= 0.5,
+        "row semantics keep the content off screen, got {}",
+        harness.offset()
+    );
+    assert!(harness.state().is_dismissed());
+}
+
 #[test]
 fn release_below_threshold_springs_back_without_dismissing() {
     let mut harness = Harness::new(200.0, 0.5);

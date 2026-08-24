@@ -1,0 +1,90 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.cranpose",
+    "module": "cranpose-android-camera",
+    "version": "0.1.95",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-camera-0.1.95.aar",
+          "url": "cranpose-android-camera-0.1.95.aar",
+          "size": 934,
+          "sha512": "4d8b4c1f0c1780ae87e4e940fe7a58455d9fc6f9a99c587099394dba7dc14430bd4f8cebe5bbe57d938d283581d403cebc724085608259deec20e85127d78af0",
+          "sha256": "5721d3555a81eeed52f6272208983a062ed8848c49449b14925d17c7917b69b8",
+          "sha1": "5571617c5eb382ee2c5552c3af21f14766f52c06",
+          "md5": "79d08cc860437d47a7d9057e1fc83fb7"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-camera-0.1.95.aar",
+          "url": "cranpose-android-camera-0.1.95.aar",
+          "size": 934,
+          "sha512": "4d8b4c1f0c1780ae87e4e940fe7a58455d9fc6f9a99c587099394dba7dc14430bd4f8cebe5bbe57d938d283581d403cebc724085608259deec20e85127d78af0",
+          "sha256": "5721d3555a81eeed52f6272208983a062ed8848c49449b14925d17c7917b69b8",
+          "sha1": "5571617c5eb382ee2c5552c3af21f14766f52c06",
+          "md5": "79d08cc860437d47a7d9057e1fc83fb7"
+        }
+      ]
+    }
+  ]
+}

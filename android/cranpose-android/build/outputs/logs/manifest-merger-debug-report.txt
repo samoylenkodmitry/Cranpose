@@ -1,0 +1,50 @@
+-- Merging decision tree log ---
+manifest
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:12:1-32:12
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:12:1-32:12
+	package
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml
+	xmlns:android
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:12:11-69
+uses-permission#android.permission.INTERNET
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:14:5-67
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:14:22-64
+application
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:16:5-31:19
+activity#dev.cranpose.android.CranposeActivity
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:17:9-30:20
+	android:label
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:20:13-45
+	android:exported
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:19:13-36
+	android:configChanges
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:22:13-147
+	android:theme
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:21:13-45
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:18:13-65
+meta-data#android.app.lib_name
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:23:13-25:54
+	android:value
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:25:17-51
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:24:17-52
+intent-filter#action:name:android.intent.action.MAIN+category:name:android.intent.category.LAUNCHER
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:26:13-29:29
+action#android.intent.action.MAIN
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:27:17-69
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:27:25-66
+category#android.intent.category.LAUNCHER
+ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:28:17-77
+	android:name
+		ADDED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml:28:27-74
+uses-sdk
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml
+INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from /Users/s/develop/projects/Cranpose/android/cranpose-android/src/main/AndroidManifest.xml

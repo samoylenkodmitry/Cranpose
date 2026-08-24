@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_answer_video_low.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_answer_video_low.png"
+    },
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_answer_video.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_answer_video.png"
+    },
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_answer_low.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_answer_low.png"
+    },
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_decline_low.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_decline_low.png"
+    },
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_decline.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_decline.png"
+    },
+    {
+        "merged": "dev.cranpose.android.cranpose-android-release-21:/drawable-ldpi-v4/ic_call_answer.png",
+        "source": "dev.cranpose.android.cranpose-android-core-1.13.0-7:/drawable-ldpi-v4/ic_call_answer.png"
+    }
+]

@@ -1,0 +1,14 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!-- In-app purchases through Google Play Billing. -->
+3<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+4    package="dev.cranpose.android.billing" >
+5
+6    <uses-sdk android:minSdkVersion="24" />
+6-->INJECTED
+6-->INJECTED
+7
+8    <uses-permission android:name="com.android.vending.BILLING" />
+8-->/Users/s/develop/projects/Cranpose/android/cranpose-android-billing/src/main/AndroidManifest.xml:4:5-67
+8-->/Users/s/develop/projects/Cranpose/android/cranpose-android-billing/src/main/AndroidManifest.xml:4:22-64
+9
+10</manifest>

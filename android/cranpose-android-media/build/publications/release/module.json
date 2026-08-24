@@ -1,0 +1,90 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.cranpose",
+    "module": "cranpose-android-media",
+    "version": "0.1.95",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-media-0.1.95.aar",
+          "url": "cranpose-android-media-0.1.95.aar",
+          "size": 1110,
+          "sha512": "81e8a7c765616bd86c21bc450fd2df61b482c466d853dcc079930feb0f033628454bef6e18e732dabdf03bb3912d034bcbeaa1c4cf9817279077423dedc59a51",
+          "sha256": "f1185ac13aa8d62693f45e5b22246928a605aa9183f158a2b921177edd4f09ce",
+          "sha1": "f3bd0fb4dfc99c70e57f132018254f102f0bc5c5",
+          "md5": "2811563c91d8d8f1ef18b6527c91993a"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-media-0.1.95.aar",
+          "url": "cranpose-android-media-0.1.95.aar",
+          "size": 1110,
+          "sha512": "81e8a7c765616bd86c21bc450fd2df61b482c466d853dcc079930feb0f033628454bef6e18e732dabdf03bb3912d034bcbeaa1c4cf9817279077423dedc59a51",
+          "sha256": "f1185ac13aa8d62693f45e5b22246928a605aa9183f158a2b921177edd4f09ce",
+          "sha1": "f3bd0fb4dfc99c70e57f132018254f102f0bc5c5",
+          "md5": "2811563c91d8d8f1ef18b6527c91993a"
+        }
+      ]
+    }
+  ]
+}

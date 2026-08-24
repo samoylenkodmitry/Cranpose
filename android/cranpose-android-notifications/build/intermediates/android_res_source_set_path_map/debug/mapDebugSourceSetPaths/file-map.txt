@@ -1,0 +1,9 @@
+dev.cranpose.android.notifications.cranpose-android-notifications-pngs-0 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/generated/res/pngs/debug
+dev.cranpose.android.notifications.cranpose-android-notifications-updated_navigation_xml-1 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/generated/updated_navigation_xml/debug
+dev.cranpose.android.notifications.cranpose-android-notifications-mergeDebugResources-2 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/intermediates/incremental/debug/mergeDebugResources/merged.dir
+dev.cranpose.android.notifications.cranpose-android-notifications-mergeDebugResources-3 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/intermediates/incremental/debug/mergeDebugResources/stripped.dir
+dev.cranpose.android.notifications.cranpose-android-notifications-debug-4 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/intermediates/merged_res/debug/mergeDebugResources
+dev.cranpose.android.notifications.cranpose-android-notifications-debug-5 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/build/intermediates/packaged_res/debug/packageDebugResources
+dev.cranpose.android.notifications.cranpose-android-notifications-debug-6 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/src/debug/res
+dev.cranpose.android.notifications.cranpose-android-notifications-main-7 /Users/s/develop/projects/Cranpose/android/cranpose-android-notifications/src/main/res
+gradleHome-0 /Users/s/.gradle

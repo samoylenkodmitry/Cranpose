@@ -1,0 +1,24 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!--
+3 The camera service. `required="false"` keeps the application installable
+4     on a device without a camera; the framework reports the capability.
+5-->
+6<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+7    package="dev.cranpose.android.camera" >
+8
+9    <uses-sdk android:minSdkVersion="24" />
+9-->INJECTED
+9-->INJECTED
+10
+11    <uses-permission android:name="android.permission.CAMERA" />
+11-->/Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:5:5-65
+11-->/Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:5:22-62
+12
+13    <uses-feature
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:5-89
+14        android:name="android.hardware.camera.any"
+14-->/Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:19-61
+15        android:required="false" />
+15-->/Users/s/develop/projects/Cranpose/android/cranpose-android-camera/src/main/AndroidManifest.xml:6:62-86
+16
+17</manifest>

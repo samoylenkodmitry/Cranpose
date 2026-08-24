@@ -1,0 +1,1 @@
+dev.cranpose.android.haptics

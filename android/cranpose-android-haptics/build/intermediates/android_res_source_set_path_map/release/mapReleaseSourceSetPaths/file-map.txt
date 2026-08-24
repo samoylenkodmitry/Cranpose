@@ -1,0 +1,9 @@
+dev.cranpose.android.haptics.cranpose-android-haptics-pngs-0 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/generated/res/pngs/release
+dev.cranpose.android.haptics.cranpose-android-haptics-updated_navigation_xml-1 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/generated/updated_navigation_xml/release
+dev.cranpose.android.haptics.cranpose-android-haptics-mergeReleaseResources-2 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/intermediates/incremental/release/mergeReleaseResources/merged.dir
+dev.cranpose.android.haptics.cranpose-android-haptics-mergeReleaseResources-3 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/intermediates/incremental/release/mergeReleaseResources/stripped.dir
+dev.cranpose.android.haptics.cranpose-android-haptics-release-4 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/intermediates/merged_res/release/mergeReleaseResources
+dev.cranpose.android.haptics.cranpose-android-haptics-release-5 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/build/intermediates/packaged_res/release/packageReleaseResources
+dev.cranpose.android.haptics.cranpose-android-haptics-main-6 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/src/main/res
+dev.cranpose.android.haptics.cranpose-android-haptics-release-7 /Users/s/develop/projects/Cranpose/android/cranpose-android-haptics/src/release/res
+gradleHome-0 /Users/s/.gradle

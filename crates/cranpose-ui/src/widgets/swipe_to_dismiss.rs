@@ -109,6 +109,20 @@ pub struct SwipeToDismissSpec {
     pub direction: SwipeDismissDirection,
     pub edge_width: Option<f32>,
     pub collapse_after_dismiss: bool,
+    /// Whether the content returns to rest once `on_dismiss` has fired
+    /// (default `false`).
+    ///
+    /// A dismissed ROW is about to be removed by its host, so it stays off
+    /// screen and the host drops it. A full-content NAVIGATION dismissal is
+    /// not that: the gesture means "go up one level", and the host may
+    /// legitimately answer by staying composed -- back out of a pause overlay
+    /// and the game underneath resumes in the same root composable. Left off
+    /// screen, that content never comes back, and since
+    /// [`SwipeToDismissBox`] owns its state internally the application has no
+    /// handle to call [`SwipeDismissState::reset`] on. The screen is then
+    /// blank, taps land on nothing, and further back gestures neither redraw
+    /// nor leave.
+    pub reset_after_dismiss: bool,
     pub enabled: bool,
 }
 
@@ -122,6 +136,7 @@ impl SwipeToDismissSpec {
             direction: SwipeDismissDirection::Both,
             edge_width: None,
             collapse_after_dismiss: true,
+            reset_after_dismiss: false,
             enabled: true,
         }
     }
@@ -164,6 +179,11 @@ impl SwipeToDismissSpec {
 
     pub fn from_edge(mut self, width: f32) -> Self {
         self.edge_width = Some(width.max(0.0));
+        self
+    }
+
+    pub fn with_reset_after_dismiss(mut self, reset: bool) -> Self {
+        self.reset_after_dismiss = reset;
         self
     }
 
@@ -292,6 +312,7 @@ struct SwipeToDismissController {
     direction: Cell<SwipeDismissDirection>,
     edge_width: Cell<Option<f32>>,
     collapse_after_dismiss: Cell<bool>,
+    reset_after_dismiss: Cell<bool>,
     enabled: Cell<bool>,
 }
 
@@ -316,6 +337,7 @@ impl SwipeToDismissController {
             direction: Cell::new(SwipeDismissDirection::Both),
             edge_width: Cell::new(None),
             collapse_after_dismiss: Cell::new(true),
+            reset_after_dismiss: Cell::new(false),
             enabled: Cell::new(true),
         })
     }
@@ -707,6 +729,18 @@ fn watch_settle(controller: &Rc<SwipeToDismissController>, dismissing: bool) {
                         if let Some(on_dismiss) = on_dismiss {
                             on_dismiss();
                         }
+                        // A navigation dismissal returns to rest AFTER the host
+                        // has been told. The host may answer by unmounting this
+                        // content, in which case the reset costs nothing, or by
+                        // staying composed -- backing out of a pause overlay
+                        // resumes the game in the same root composable -- in
+                        // which case leaving the content translated off screen
+                        // is a blank, unrecoverable screen. Ordered after the
+                        // callback so a host that reads the state during it
+                        // still observes the dismissal.
+                        if controller.reset_after_dismiss.get() {
+                            controller.reset_to_rest();
+                        }
                     }
                 } else {
                     watch_settle(&controller, dismissing);
@@ -815,6 +849,7 @@ where
     controller
         .collapse_after_dismiss
         .set(spec.collapse_after_dismiss);
+    controller.reset_after_dismiss.set(spec.reset_after_dismiss);
     controller.enabled.set(spec.enabled);
     *controller.on_dismiss.borrow_mut() = Some(Rc::new(on_dismiss));
 
@@ -934,7 +969,8 @@ where
             .with_threshold_fraction(0.35)
             .with_direction(SwipeDismissDirection::StartToEnd)
             .from_edge(32.0)
-            .with_collapse_after_dismiss(false),
+            .with_collapse_after_dismiss(false)
+            .with_reset_after_dismiss(true),
         on_dismiss,
         content,
     )
