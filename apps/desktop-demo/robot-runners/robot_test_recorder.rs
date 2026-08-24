@@ -9,9 +9,10 @@
 
 mod output_paths;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     let recording_path = output_paths::diagnostic_path("robot_recording_test.rs");

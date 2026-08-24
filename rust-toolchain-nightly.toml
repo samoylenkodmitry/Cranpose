@@ -1,0 +1,12 @@
+# The pinned nightly, used only where a stable toolchain cannot do the job:
+#
+#   * `cargo fmt`          -- rustfmt.toml sets unstable import options.
+#   * `cargo xtask dist-min` -- `-Zbuild-std` needs nightly cargo + rust-src.
+#
+# Nothing a downstream user of the `cranpose` crates builds requires nightly;
+# keep it that way. Read this file rather than hardcoding the date, so the pin
+# lives in exactly one place: `just rv-nightly` prints it.
+[toolchain]
+channel = "nightly-2026-08-23"
+profile = "minimal"
+components = ["rustfmt", "rust-src"]

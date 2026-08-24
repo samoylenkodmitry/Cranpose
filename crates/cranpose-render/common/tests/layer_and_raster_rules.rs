@@ -6,11 +6,13 @@
 //! layer's alpha, or two scales sharing one raster-cache bucket. They are
 //! cheap to state exactly, so they are stated exactly.
 
-use cranpose_render_common::image_compare::pixel_difference;
-use cranpose_render_common::layer_transform::apply_layer_affine_to_point;
-use cranpose_render_common::raster_cache::ScaleBucket;
-use cranpose_render_common::scene_builder::{set_verify_executor, verify_executor};
-use cranpose_render_common::style_shared::{resolve_layer_brush, ResolvedBrush};
+use cranpose_render_common::{
+    image_compare::pixel_difference,
+    layer_transform::apply_layer_affine_to_point,
+    raster_cache::ScaleBucket,
+    scene_builder::{set_verify_executor, verify_executor},
+    style_shared::{resolve_layer_brush, ResolvedBrush},
+};
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 
 fn bounds() -> Rect {

@@ -1,5 +1,5 @@
-use super::super::{GroupRecord, PayloadRecord, SlotTable};
 use super::{
+    super::{GroupRecord, PayloadRecord, SlotTable},
     groups::{SlotTreeChecks, SlotTreeView},
     PayloadAnchorRecord, SlotInvariantError,
 };
@@ -122,10 +122,13 @@ pub(super) fn validate_payload_anchor_registry(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::slot::{GroupKey, PayloadAnchor, PayloadKind};
-    use crate::AnchorId;
     use std::any::TypeId;
+
+    use super::*;
+    use crate::{
+        slot::{GroupKey, PayloadAnchor, PayloadKind},
+        AnchorId,
+    };
 
     fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
         let mut table = SlotTable::new();

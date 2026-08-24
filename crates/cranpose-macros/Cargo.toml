@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Procedural macros for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [lib]
 proc-macro = true
 

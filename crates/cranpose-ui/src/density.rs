@@ -20,9 +20,11 @@
 
 use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
 
-use crate::font_scale::FontScaleCurve;
-use crate::render_state::{current_density, current_font_scale_curve};
-use crate::round_scaling_list::round_to_px;
+use crate::{
+    font_scale::FontScaleCurve,
+    render_state::{current_density, current_font_scale_curve},
+    round_scaling_list::round_to_px,
+};
 
 /// The device pixel grid a layout measures against: how many device pixels
 /// a layout point is worth, and how the platform converts a text size.
@@ -233,9 +235,9 @@ mod tests {
     /// preview or a golden state its own grid without moving the whole shell.
     #[test]
     fn a_provided_density_reaches_the_content_and_ends_with_it() {
+        use std::{cell::Cell, rc::Rc};
+
         use cranpose_core::{location_key, Composition, MemoryApplier};
-        use std::cell::Cell;
-        use std::rc::Rc;
 
         let mut composition = Composition::new(MemoryApplier::new());
         let outer = Rc::new(Cell::new(0.0_f32));

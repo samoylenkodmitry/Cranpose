@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_in_semantics, find_text_exact};
 use desktop_app::test_screens::scroll_repro::ScrollReproScreen;
-use std::time::Duration;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
     for _ in 0..attempts {

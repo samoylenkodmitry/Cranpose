@@ -1,7 +1,7 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{location_key, Composition, CompositionLocalProvider, MemoryApplier};
 use cranpose_services::{local_uri_handler, UriHandler, UriHandlerError, UriHandlerRef};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 struct TestUriHandler;
 

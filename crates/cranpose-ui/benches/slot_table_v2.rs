@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Duration};
+
 use cranpose_core::{
     location_key, Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState,
     RecomposeOptions, RecomposeScope, SlotId, State, SubcomposeState,
@@ -13,11 +15,6 @@ use cranpose_ui::{
     LinearArrangement, Modifier, Size, Text, TextStyle,
 };
 use criterion::{criterion_group, criterion_main, Bencher, Criterion};
-use std::cell::Cell;
-use std::hint::black_box;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::Duration;
 
 const KEYED_REVERSE_SIZES: [usize; 5] = [16, 64, 256, 1_024, 4_096];
 const KEYED_ROTATE_ITEMS: usize = 1_024;

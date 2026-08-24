@@ -7,15 +7,18 @@
 //!
 //! Height pattern: index % 5 -> 0=48, 1=56, 2=64, 3=72, 4=80
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
-    Text,
+use cranpose_ui::{
+    widgets::{
+        Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
+        RowSpec, Text,
+    },
+    Alignment, Color, Modifier, Size, TextStyle,
 };
-use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

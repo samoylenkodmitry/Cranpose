@@ -235,8 +235,9 @@ impl TouchPointerRouter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use winit::event::MouseButton;
+
+    use super::*;
 
     fn finger(raw: usize) -> FingerId {
         FingerId::from_raw(raw)

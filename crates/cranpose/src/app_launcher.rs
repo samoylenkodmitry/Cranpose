@@ -3,16 +3,20 @@
 //! This module provides the `AppLauncher` API that allows apps to configure
 //! and launch on multiple platforms without knowing platform-specific details.
 
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-use cranpose_app_shell::FramePacingMode;
-use cranpose_render_common::font_source::{
-    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
-};
-use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
-use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
 use std::path::Path;
 #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
 use std::path::PathBuf;
+
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+use cranpose_app_shell::FramePacingMode;
+use cranpose_render_common::{
+    font_source::{
+        FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR,
+        DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+    },
+    software_text_raster::SoftwareTextFontSet,
+};
+use cranpose_ui::text::{FontFamily, FontStyle, FontWeight};
 #[cfg(all(
     feature = "renderer-wgpu",
     any(feature = "desktop-shell", all(feature = "ios", target_os = "ios"))
@@ -311,7 +315,11 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// use cranpose::AppLauncher;
 ///
 /// // Desktop
-/// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
+/// #[cfg(all(
+///     feature = "desktop-shell",
+///     feature = "renderer-wgpu",
+///     not(target_os = "android")
+/// ))]
 /// fn main() {
 ///     AppLauncher::new()
 ///         .with_title("My App")
@@ -325,15 +333,17 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 /// #[cfg(all(feature = "android", target_os = "android"))]
 /// #[no_mangle]
 /// fn android_main(app: android_activity::AndroidApp) {
-///     AppLauncher::new()
-///         .with_title("My App")
-///         .run(app, || {
-///             // Your composable UI here
-///         });
+///     AppLauncher::new().with_title("My App").run(app, || {
+///         // Your composable UI here
+///     });
 /// }
 ///
 /// #[cfg(not(any(
-///     all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")),
+///     all(
+///         feature = "desktop-shell",
+///         feature = "renderer-wgpu",
+///         not(target_os = "android")
+///     ),
 ///     all(feature = "android", target_os = "android")
 /// )))]
 /// fn main() {}
@@ -411,8 +421,7 @@ impl AppLauncher {
     /// static DUMMY_FONT: &[u8] = &[];
     /// static FONTS: &[&[u8]] = &[DUMMY_FONT];
     ///
-    /// AppLauncher::new()
-    ///     .with_fonts(FONTS);
+    /// AppLauncher::new().with_fonts(FONTS);
     /// ```
     pub fn with_fonts(mut self, fonts: &'static [&'static [u8]]) -> Self {
         self.settings.fonts = Some(fonts);
@@ -432,8 +441,10 @@ impl AppLauncher {
     /// # Example
     ///
     /// ```no_run
-    /// use cranpose::AppLauncher;
-    /// use cranpose::text::{FontFamily, FontFile, FontWeight};
+    /// use cranpose::{
+    ///     text::{FontFamily, FontFile, FontWeight},
+    ///     AppLauncher,
+    /// };
     ///
     /// let roboto = FontFamily::file_backed(vec![
     ///     FontFile::new("/system/fonts/Roboto-Regular.ttf"),
@@ -456,12 +467,14 @@ impl AppLauncher {
     /// Use this for fonts that are not files on disk — an archive entry, a
     /// download cache, or an asset `cranpose-assets` resolved out of a desktop
     /// bundle (its `load_bytes` returns exactly what this wants). For an APK
-    /// asset use [`AppLauncher::with_android_asset_font`] instead: APK entries
+    /// asset use `AppLauncher::with_android_asset_font` instead: APK entries
     /// are not filesystem paths, so a path resolver cannot reach them.
     ///
     /// ```no_run
-    /// use cranpose::AppLauncher;
-    /// use cranpose::text::{FontFamily, FontStyle, FontWeight};
+    /// use cranpose::{
+    ///     text::{FontFamily, FontStyle, FontWeight},
+    ///     AppLauncher,
+    /// };
     ///
     /// # fn load(bytes: Vec<u8>) {
     /// let launcher = AppLauncher::new().with_font_face_bytes(
@@ -498,8 +511,10 @@ impl AppLauncher {
     /// ```no_run
     /// # #[cfg(target_os = "android")]
     /// # fn main(app: android_activity::AndroidApp) {
-    /// use cranpose::AppLauncher;
-    /// use cranpose::text::{FontFamily, FontStyle, FontWeight};
+    /// use cranpose::{
+    ///     text::{FontFamily, FontStyle, FontWeight},
+    ///     AppLauncher,
+    /// };
     ///
     /// let launcher = AppLauncher::new().with_android_asset_font(
     ///     &app,
@@ -666,23 +681,27 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(
+    ///     feature = "desktop-shell",
+    ///     feature = "renderer-wgpu",
+    ///     not(target_os = "android")
+    /// ))]
     /// {
-    /// let launcher = AppLauncher::new()
-    ///     .with_title("Robot Test")
-    ///     .with_size(800, 600)
-    ///     .with_headless(true);
+    ///     let launcher = AppLauncher::new()
+    ///         .with_title("Robot Test")
+    ///         .with_size(800, 600)
+    ///         .with_headless(true);
     ///
-    /// #[cfg(feature = "robot")]
-    /// let launcher = launcher.with_test_driver(|robot| {
-    ///     robot.wait_for_idle().unwrap();
-    ///     robot.click(100.0, 100.0).unwrap();
-    ///     robot.exit().unwrap();
-    /// });
+    ///     #[cfg(feature = "robot")]
+    ///     let launcher = launcher.with_test_driver(|robot| {
+    ///         robot.wait_for_idle().unwrap();
+    ///         robot.click(100.0, 100.0).unwrap();
+    ///         robot.exit().unwrap();
+    ///     });
     ///
-    /// launcher.run(|| {
-    ///     // Your composable UI here
-    /// });
+    ///     launcher.run(|| {
+    ///         // Your composable UI here
+    ///     });
     /// }
     /// ```
     pub fn with_headless(mut self, headless: bool) -> Self {
@@ -701,14 +720,18 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(
+    ///     feature = "desktop-shell",
+    ///     feature = "renderer-wgpu",
+    ///     not(target_os = "android")
+    /// ))]
     /// {
-    /// AppLauncher::new()
-    ///     .with_title("My App")
-    ///     .with_fps_counter(true)
-    ///     .run(|| {
-    ///         // Your composable UI here
-    ///     });
+    ///     AppLauncher::new()
+    ///         .with_title("My App")
+    ///         .with_fps_counter(true)
+    ///         .run(|| {
+    ///             // Your composable UI here
+    ///         });
     /// }
     /// ```
     #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
@@ -767,14 +790,18 @@ impl AppLauncher {
     /// ```no_run
     /// use cranpose::AppLauncher;
     ///
-    /// #[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu", not(target_os = "android")))]
+    /// #[cfg(all(
+    ///     feature = "desktop-shell",
+    ///     feature = "renderer-wgpu",
+    ///     not(target_os = "android")
+    /// ))]
     /// {
-    /// AppLauncher::new()
-    ///     .with_title("My App")
-    ///     .with_fps_counter(true)
-    ///     .run(|| {
-    ///         // Your composable UI here
-    ///     });
+    ///     AppLauncher::new()
+    ///         .with_title("My App")
+    ///         .with_fps_counter(true)
+    ///         .run(|| {
+    ///             // Your composable UI here
+    ///         });
     /// }
     /// ```
     #[cfg(not(all(feature = "desktop-shell", feature = "renderer-wgpu")))]
@@ -1031,8 +1058,7 @@ mod tests {
 
     #[test]
     fn a_font_registration_closure_is_run_against_the_launchers_own_registry() {
-        use std::cell::Cell;
-        use std::rc::Rc;
+        use std::{cell::Cell, rc::Rc};
 
         let ran = Rc::new(Cell::new(false));
         let flag = Rc::clone(&ran);

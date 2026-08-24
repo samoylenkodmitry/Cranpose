@@ -7,20 +7,26 @@
 //! slot, fails the first time somebody composes it — and until somebody does,
 //! it is a component the library claims to have.
 
-use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
-use cranpose_foundation::text::TextFieldState;
-use cranpose_ui::text::AnnotatedString;
-use cranpose_ui::widgets::animated_visibility::{EnterTransition, ExitTransition};
-use cranpose_ui::widgets::dialog::{DialogSpec, DismissReason};
-use cranpose_ui::widgets::icon::{IconButtonSpec, IconSpec};
-use cranpose_ui::widgets::lazy_list::{LazyColumnSpec, LazyRowSpec};
-use cranpose_ui::widgets::scaffold::ScaffoldSpec;
-use cranpose_ui::widgets::slider::SliderSpec;
-use cranpose_ui::widgets::text_selection_menu::TextMenuItem;
-use cranpose_ui::{measure_layout, run_test_composition};
-use cranpose_ui::{Modifier, TextStyle};
-use std::cell::Cell;
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
+
+use cranpose_foundation::{
+    lazy::{rememberLazyListState, LazyListScope},
+    text::TextFieldState,
+};
+use cranpose_ui::{
+    measure_layout, run_test_composition,
+    text::AnnotatedString,
+    widgets::{
+        animated_visibility::{EnterTransition, ExitTransition},
+        dialog::{DialogSpec, DismissReason},
+        icon::{IconButtonSpec, IconSpec},
+        lazy_list::{LazyColumnSpec, LazyRowSpec},
+        scaffold::ScaffoldSpec,
+        slider::SliderSpec,
+        text_selection_menu::TextMenuItem,
+    },
+    Modifier, TextStyle,
+};
 
 /// One 24pt square, as a vector path an icon can parse.
 const ICON: &str = "M0 0 L24 0 L24 24 L0 24 Z";

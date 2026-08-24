@@ -22,17 +22,23 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # Release publication can move a tag onto the generated version-bump
           # commit. Resolve the selected ref at job start so queued deployments
           # do not reject that intentional move as a stale event SHA.
           ref: ${{ github.ref_name }}
 
-      - name: Install Rust (nightly for wasm-pack artifact output)
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          targets: wasm32-unknown-unknown
+      - name: Provision the pinned toolchain and the wasm target
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          # No nightly here. build-web.sh passes no -Z flags and does no
+          # build-std, and the wasm-build job proves the same script builds on
+          # the toolchain rust-toolchain.toml pins. Adding the target without
+          # `--toolchain` puts it on that pinned toolchain.
+          rustc --version
+          rustup target add wasm32-unknown-unknown
 
       - name: Install binaryen (wasm-opt) for size optimization
         run: |
@@ -80,7 +86,7 @@ jobs:
           "$(brew --prefix)/bin/gtar" --version
 
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           retention-days: 1
 
@@ -93,4 +99,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

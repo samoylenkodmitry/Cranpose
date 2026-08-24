@@ -4,12 +4,14 @@ use cranpose_ui_graphics::{
     BlendMode, ColorFilter, FxHasher, Point, Rect, RenderEffect, RenderHash,
 };
 
-use crate::graph::{
-    CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderNode,
+use crate::{
+    graph::{
+        CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+        RenderNode,
+    },
+    layer_composition::{layer_composite_params, local_content_layer_for},
+    raster_cache::LayerRasterCacheHashes,
 };
-use crate::layer_composition::{layer_composite_params, local_content_layer_for};
-use crate::raster_cache::LayerRasterCacheHashes;
 
 pub(crate) fn recompute_layer_raster_cache_hashes(layer: &mut LayerNode) {
     recompute_layer_raster_cache_hashes_inner(layer, false);

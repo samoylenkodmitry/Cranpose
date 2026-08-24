@@ -30,11 +30,14 @@
 //! pipeline, or a layer-per-row tree, that starts costing a multiple of a frame
 //! with no text in it.
 
+use std::{
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::find_button_exact_in_semantics;
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 /// Set by the driver thread, read by `main` after the loop has torn down.
 /// Exiting the process from the driver races the main thread's GPU teardown

@@ -4,13 +4,14 @@ mod output_paths;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     changed_pixel_count_in_region, find_button_in_semantics, find_text_by_prefix_in_semantics,
     find_text_in_semantics, scroll_text_into_view, ScrollConfig,
 };
 use desktop_app::app::{self, DemoTab};
-use std::time::Duration;
 use text_showcase_external_helpers::{capture_x11_window, find_window_id, focus_x11_window};
 use visual_contract_metrics::feature_stats_rgba;
 

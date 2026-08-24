@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "WGPU renderer backend for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [features]
 default = []
 # GL-class fallback backend (GLES/OpenGL) for native targets. Pulls naga's

@@ -12,8 +12,7 @@ pub(crate) fn dispatch_keyboard_input<R>(
     R::Error: std::fmt::Debug,
 {
     use cranpose_app_shell::{KeyEvent, KeyEventType};
-    use winit::event::ElementState;
-    use winit::keyboard::Key;
+    use winit::{event::ElementState, keyboard::Key};
 
     let event_type = match event.state {
         ElementState::Pressed => KeyEventType::KeyDown,

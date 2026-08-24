@@ -1,6 +1,6 @@
+use std::{hash::Hash, num::NonZeroUsize};
+
 use cranpose_core::collections::map::HashMap;
-use std::hash::Hash;
-use std::num::NonZeroUsize;
 
 /// One cached entry, and its neighbours in recency order.
 ///

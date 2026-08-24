@@ -4,8 +4,10 @@
 //! needs a file on disk during a test asks here, so there is one answer to
 //! where those files go rather than one per crate that drifts from the rest.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU32, Ordering},
+};
 
 /// A unique, empty directory under the workspace `target/test-output`.
 ///

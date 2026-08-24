@@ -7,16 +7,16 @@
 //! cargo run --package desktop-app --example robot_lazy_items_rc --features robot-app
 //! ```
 
+use std::{rc::Rc, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScopeExt, LazyListState};
 use cranpose_macros::composable;
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::widgets::*;
 use cranpose_ui::{
-    Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle, VerticalAlignment,
+    widgets::*, Color, ColumnSpec, LinearArrangement, Modifier, RowSpec, TextStyle,
+    VerticalAlignment,
 };
-use std::rc::Rc;
-use std::time::Duration;
 
 /// Test data struct to verify complex types work with Rc
 #[derive(Clone, Debug, PartialEq)]

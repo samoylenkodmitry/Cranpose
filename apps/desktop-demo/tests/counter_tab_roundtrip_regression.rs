@@ -1,15 +1,18 @@
 pub mod tab_switch_regression_support;
 
+use std::{rc::Rc, time::Duration};
+
 use cranpose_animation::{animateFloatAsState, tween, Easing};
 use cranpose_app_shell::AppShell;
 use cranpose_core::{location_key, MutableState};
 use cranpose_foundation::PointerEvent;
 use cranpose_macros::composable;
-use cranpose_render_common::graph::ProjectiveTransform;
-use cranpose_render_common::graph::{LayerNode, RenderNode};
-use cranpose_render_common::graph_scene::{ClickAction, HitGeometry, Scene};
-use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
-use cranpose_render_common::{RenderScene, Renderer};
+use cranpose_render_common::{
+    graph::{LayerNode, ProjectiveTransform, RenderNode},
+    graph_scene::{ClickAction, HitGeometry, Scene},
+    hit_graph::{collect_hits_from_graph, HitGraphSink},
+    RenderScene, Renderer,
+};
 use cranpose_ui::{
     Button, ButtonSpec, LayoutTree, Modifier, SemanticsAction, SemanticsNode, SemanticsRole, Size,
     Text, TextStyle,
@@ -19,8 +22,6 @@ use desktop_app::app::{
     combined_app, DemoTab, TEST_ACTIVE_TAB_STATE, TEST_COUNTER_APP_COUNTER_STATE,
     TEST_LAZY_LIST_STATE, TEST_RECURSIVE_LAYOUT_DEPTH_STATE,
 };
-use std::rc::Rc;
-use std::time::Duration;
 use tab_switch_regression_support::{active_tab_state, pump_shell_until_stable};
 
 #[derive(Default)]

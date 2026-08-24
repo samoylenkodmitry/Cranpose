@@ -8,14 +8,15 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-use std::cell::{Cell, RefCell};
-use std::marker::PhantomData;
-use std::rc::{Rc, Weak};
+use std::{
+    cell::{Cell, RefCell},
+    marker::PhantomData,
+    rc::{Rc, Weak},
+};
 
-use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{
-    with_current_composer, DisposableEffectResult, Owned, OwnedMutableState, RuntimeHandle,
-    SideEffect, State,
+    internal::FrameCallbackRegistration, with_current_composer, DisposableEffectResult, Owned,
+    OwnedMutableState, RuntimeHandle, SideEffect, State,
 };
 
 /// Trait for types that can be linearly interpolated.

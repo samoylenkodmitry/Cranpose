@@ -5,10 +5,11 @@ mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::app;
 use scroll_stability_external_helpers::{run_scroll_stability_capture, ScrollStabilityConfig};
-use std::time::Duration;
 use text_showcase_external_helpers::scroll_text_into_view_between;
 
 const WINDOW_WIDTH: u32 = 900;

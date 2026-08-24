@@ -7,12 +7,13 @@
 
 mod regression_robot_support;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
 };
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

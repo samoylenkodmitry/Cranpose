@@ -11,11 +11,13 @@
 //! response body is — without the bound, a slow reader and a fast server put the
 //! whole download in memory, which is the thing streaming exists to avoid.
 
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Condvar, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::{
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Condvar, Mutex},
+    task::{Context, Poll, Waker},
+};
 
 /// How many chunks may wait ahead of the consumer before the producer stops
 /// reading. Enough to keep a socket busy across one scheduling gap, and far

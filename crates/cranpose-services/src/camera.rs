@@ -21,10 +21,14 @@
 //! frames costs memory to hold and produces answers about a scene that has
 //! already moved.
 
-use crate::registry::ServiceRegistry;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
 use cranpose_core::{rememberEventStream, EventStream, State};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// How a frame's pixels are laid out.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

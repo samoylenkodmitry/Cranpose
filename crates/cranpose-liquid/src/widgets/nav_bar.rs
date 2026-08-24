@@ -2,16 +2,21 @@
 //! the inline bar as content scrolls under, while a progressive glass blur
 //! fades in behind the bar.
 
-use crate::material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape};
-use crate::theme::{liquid_colors, liquid_typography};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_macros::composable;
-use cranpose_ui::text::{SpanStyle, TextStyle};
-use cranpose_ui::widgets::{Box, BoxSpec, Row, RowSpec, Text};
-use cranpose_ui::{Modifier, ScrollState};
+use cranpose_ui::{
+    text::{SpanStyle, TextStyle},
+    widgets::{Box, BoxSpec, Row, RowSpec, Text},
+    Modifier, ScrollState,
+};
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use crate::{
+    material::{Glass, GlassDynamics, LiquidModifierExt, LiquidShape},
+    theme::{liquid_colors, liquid_typography},
+};
 
 /// Configuration for [`LiquidNavBar`].
 #[derive(Clone, Debug, PartialEq)]

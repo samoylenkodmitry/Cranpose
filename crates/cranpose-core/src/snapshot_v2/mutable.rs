@@ -1,10 +1,12 @@
 //! Mutable snapshot implementation.
 
+use std::{rc::Rc, sync::Arc};
+
 use super::*;
-use crate::collections::map::HashMap;
-use crate::state::{StateRecord, PREEXISTING_SNAPSHOT_ID};
-use std::rc::Rc;
-use std::sync::Arc;
+use crate::{
+    collections::map::HashMap,
+    state::{StateRecord, PREEXISTING_SNAPSHOT_ID},
+};
 
 pub(super) fn find_record_by_id(
     head: &Rc<StateRecord>,
@@ -554,10 +556,13 @@ impl MutableSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::snapshot_v2::runtime::TestRuntimeGuard;
-    use crate::state::{NeverEqual, SnapshotMutableState, StateObject};
     use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        snapshot_v2::runtime::TestRuntimeGuard,
+        state::{NeverEqual, SnapshotMutableState, StateObject},
+    };
 
     fn reset_runtime() -> TestRuntimeGuard {
         reset_runtime_for_tests()

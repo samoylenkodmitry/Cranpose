@@ -2,13 +2,16 @@
 
 #![allow(non_snake_case)]
 
-use crate::widgets::scopes::BoxWithConstraintsScope;
-use crate::widgets::{Box, BoxSpec, BoxWithConstraints};
-use crate::{composable, Modifier, MutableInteractionSource};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{rememberMutableStateOf, rememberUpdatedState, NodeId, State};
 use cranpose_foundation::{PointerEventKind, PointerId};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    widgets::{scopes::BoxWithConstraintsScope, Box, BoxSpec, BoxWithConstraints},
+    Modifier, MutableInteractionSource,
+};
 
 /// Main axis used by a [`Slider`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

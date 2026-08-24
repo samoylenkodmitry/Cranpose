@@ -114,10 +114,12 @@ pub(crate) fn apply_draw_commands(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::rc::Rc;
+
     use cranpose_ui::Brush;
     use cranpose_ui_graphics::{Color, TransformOrigin};
-    use std::rc::Rc;
+
+    use super::*;
 
     #[test]
     fn apply_layer_to_rect_rotates_around_center() {

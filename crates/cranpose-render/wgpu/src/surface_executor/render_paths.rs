@@ -1,50 +1,57 @@
-use super::backend::{LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend};
-use super::geometry::{
-    axis_aligned_quad_rect, canonicalized_anchored_scaled_quad, clamp_effect_surface_scale,
-    content_effect_pixel_rect, device_pixel_exact_surface_rect,
-    fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
-    quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
-    snap_dest_quad_to_stable_point, snap_motion_stable_dest_quad, surface_pixel_rect,
-    surface_target_size, target_quad, visible_layer_rect,
+use std::{
+    cell::RefCell,
+    hash::{Hash, Hasher},
 };
-use crate::effect_renderer::{
-    CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
-    ShaderCompositeBatchItem,
+
+use cranpose_core::{collections::map::HashMap, NodeId};
+use cranpose_render_common::{
+    geometry::union_rect,
+    graph::{quad_bounds, CachePolicy, ProjectiveTransform},
+    raster_cache::{LayerRasterCacheKey, ScaleBucket},
 };
-use crate::layer_events::{collect_effect_ranges, collect_layer_events, LayerEventKind};
-use crate::layer_surface_cache::{
-    MAX_LAYER_SURFACE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES,
-};
-use crate::normalized_scene::{
-    build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
-    motion_stable_capture_bounds_from_parts, resolved_child_surface_composite,
-    resolved_layer_surface_rect_from_parts, translate_quad, visible_draw_rect, ChildLayerComposite,
-    CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
-};
-use crate::offscreen::OffscreenTarget;
-use crate::render::{has_backdrop_layer_in_range, scissor_rect_for_rect};
-use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
-    SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
-};
-use crate::surface_plan::{
-    composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-    effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
-    layer_surface_target_scale, LayerSurfaceRenderOptions, LayerSurfaceRequest,
-    TranslatedContentAxes, TranslationRenderContext,
-};
-use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::NodeId;
-use cranpose_render_common::geometry::union_rect;
-use cranpose_render_common::graph::{quad_bounds, CachePolicy, ProjectiveTransform};
-use cranpose_render_common::raster_cache::{LayerRasterCacheKey, ScaleBucket};
 use cranpose_ui::text::LinkKey;
 use cranpose_ui_graphics::{
     BlendMode, Brush, Color, FxHasher, Point, Rect, RenderEffect, RenderHash, RuntimeShader,
 };
-use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
+
+use super::{
+    backend::{LayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend},
+    geometry::{
+        axis_aligned_quad_rect, canonicalized_anchored_scaled_quad, clamp_effect_surface_scale,
+        content_effect_pixel_rect, device_pixel_exact_surface_rect,
+        fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
+        quantize_motion_stable_target_scale, scaled_quad, snap_delta_for_anchor,
+        snap_dest_quad_to_stable_point, snap_motion_stable_dest_quad, surface_pixel_rect,
+        surface_target_size, target_quad, visible_layer_rect,
+    },
+};
+use crate::{
+    effect_renderer::{
+        CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
+        ShaderCompositeBatchItem,
+    },
+    layer_events::{collect_effect_ranges, collect_layer_events, LayerEventKind},
+    layer_surface_cache::{MAX_LAYER_SURFACE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES},
+    normalized_scene::{
+        build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
+        motion_stable_capture_bounds_from_parts, resolved_child_surface_composite,
+        resolved_layer_surface_rect_from_parts, translate_quad, visible_draw_rect,
+        ChildLayerComposite, CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
+    },
+    offscreen::OffscreenTarget,
+    render::{has_backdrop_layer_in_range, scissor_rect_for_rect},
+    scene::{
+        BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
+        SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
+    },
+    surface_plan::{
+        composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
+        effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
+        layer_surface_target_scale, LayerSurfaceRenderOptions, LayerSurfaceRequest,
+        TranslatedContentAxes, TranslationRenderContext,
+    },
+    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
+};
 
 fn layer_render_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -5982,6 +5989,22 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use cranpose_core::{collections::map::HashMap, NodeId};
+    use cranpose_render_common::graph::{
+        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderNode, TextPrimitiveNode,
+    };
+    use cranpose_ui::{
+        text::{AnnotatedString, TextStyle},
+        TextLayoutOptions,
+    };
+    use cranpose_ui_graphics::{
+        BlendMode, Brush, Color, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
+        RenderEffect, RuntimeShader,
+    };
+
     use super::{
         anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
         axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
@@ -5999,29 +6022,15 @@ mod tests {
         SceneBrush, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
         MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
     };
-    use crate::effect_renderer::CompositeSampleMode;
-    use crate::normalized_scene::TranslateBy;
-    use crate::scene::{
-        BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, ImageDraw, SnapAnchor,
+    use crate::{
+        effect_renderer::CompositeSampleMode,
+        normalized_scene::TranslateBy,
+        scene::{
+            BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, ImageDraw, SnapAnchor,
+        },
+        surface_plan::{layer_surface_requirements_cached, TranslationRenderContext},
+        surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
     };
-    use crate::surface_plan::layer_surface_requirements_cached;
-    use crate::surface_plan::TranslationRenderContext;
-    use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
-    use cranpose_core::collections::map::HashMap;
-    use cranpose_core::NodeId;
-    use cranpose_render_common::graph::{
-        DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
-        ProjectiveTransform, RenderNode, TextPrimitiveNode,
-    };
-    use cranpose_ui::text::{AnnotatedString, TextStyle};
-    use cranpose_ui::TextLayoutOptions;
-    use cranpose_ui_graphics::Point;
-    use cranpose_ui_graphics::Rect;
-    use cranpose_ui_graphics::{
-        BlendMode, Brush, Color, GraphicsLayer, ImageBitmap, ImageSampling, RenderEffect,
-        RuntimeShader,
-    };
-    use std::sync::Arc;
 
     #[test]
     fn a_rounded_card_covers_what_sits_clear_of_its_corners() {
@@ -6304,11 +6313,12 @@ mod tests {
     /// collection site does, with an empty source; tests that used to hand
     /// the borrowed node to the render path build their input through this.
     fn lower_test_layer(layer: &LayerNode) -> crate::normalized_scene::ChildLayerComposite {
+        use cranpose_render_common::layer_composition::effective_layer_isolation;
+
         use crate::surface_plan::{
             layer_contains_descendant_backdrop, layer_surface_scale,
             translated_content_axes_for_layer,
         };
-        use cranpose_render_common::layer_composition::effective_layer_isolation;
 
         let mut requirements_cache = HashMap::new();
         let surface_requirements =

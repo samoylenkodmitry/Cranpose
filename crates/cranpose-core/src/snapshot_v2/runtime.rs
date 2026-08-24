@@ -15,9 +15,9 @@
 //! Additional responsibilities such as pinning, double-index heaps, or
 //! observer dispatch will be translated in follow-up changes.
 
+use std::cell::{Cell, RefCell};
+
 use super::*;
-use std::cell::Cell;
-use std::cell::RefCell;
 
 /// Snapshot identifiers less than or equal to this value are considered
 /// pre-existing. This mirrors `Snapshot.PreexistingSnapshotId` in the

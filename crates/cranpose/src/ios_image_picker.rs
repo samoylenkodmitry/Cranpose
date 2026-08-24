@@ -10,24 +10,28 @@
 //! image is re-encoded to PNG bytes; the caller decodes it.
 #![allow(unsafe_code)]
 
+use std::{
+    cell::RefCell,
+    future::Future,
+    pin::Pin,
+    rc::Rc,
+    sync::Arc,
+    task::{Context, Poll, Waker},
+};
+
 use cranpose_services::{
     set_platform_image_picker, ImagePicker, ImagePickerError, ImageSource, PickerFuture,
 };
-use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    define_class, msg_send, rc::Retained, runtime::AnyObject, DefinedClass, MainThreadMarker,
+    MainThreadOnly,
+};
 use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol};
 use objc2_ui_kit::{
     UIImage, UIImagePickerController, UIImagePickerControllerDelegate,
     UIImagePickerControllerInfoKey, UIImagePickerControllerOriginalImage,
     UIImagePickerControllerSourceType, UINavigationControllerDelegate,
 };
-use std::cell::RefCell;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 
 /// Installs the iOS photo picker as the platform image picker.
 pub(crate) fn register() {

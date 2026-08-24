@@ -4,6 +4,8 @@
 //! inserts a draw-only consumer of `rememberInfiniteTransition`; screenshots
 //! must keep changing after the first painted frame.
 
+use std::time::{Duration, Instant};
+
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
@@ -16,7 +18,6 @@ use cranpose_ui::{
     Brush, Button, ButtonSpec, Color, Column, ColumnSpec, LinearArrangement, Modifier, Rect, Row,
     RowSpec, Text, TextStyle,
 };
-use std::time::{Duration, Instant};
 
 fn fail(robot: &Robot, message: &str) -> ! {
     println!("FAIL: {message}");

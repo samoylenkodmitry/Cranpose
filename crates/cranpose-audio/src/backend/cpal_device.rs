@@ -17,10 +17,13 @@
 //! is a deliberate trade: desktop has no always-on audio DSP to keep awake,
 //! and a timer thread to close the gap would cost more than it saves.
 
-use crate::backend::AudioSink;
-use crate::mixer::{Mixer, MixerSeed, RenderStatus};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_services::AudioError;
+
+use crate::{
+    backend::AudioSink,
+    mixer::{Mixer, MixerSeed, RenderStatus},
+};
 
 /// Scratch used when the device wants integer samples. Allocated once, before
 /// the stream starts, and reused for every callback.

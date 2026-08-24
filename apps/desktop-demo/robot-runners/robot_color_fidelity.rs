@@ -8,11 +8,14 @@
 //! Run with:
 //! `cargo run --package desktop-app --example robot_color_fidelity --features robot-app`
 
-use cranpose::widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Text};
-use cranpose::{AppLauncher, Brush, Color, CornerRadii, Modifier, Point, Size};
+use std::time::Duration;
+
+use cranpose::{
+    widgets::{Box, BoxSpec, Column, ColumnSpec, Row, RowSpec, Text},
+    AppLauncher, Brush, Color, CornerRadii, Modifier, Point, Size,
+};
 use cranpose_testing::sample_screenshot_pixel_logical;
 use cranpose_ui::text::{SpanStyle, TextStyle, TextUnit};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 600;
 const WINDOW_HEIGHT: u32 = 260;

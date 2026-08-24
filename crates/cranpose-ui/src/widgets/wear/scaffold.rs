@@ -13,13 +13,20 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::Modifier;
-use crate::widgets::wear::scaling_list::WearScalingListState;
-use crate::widgets::wear::scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec};
-use crate::widgets::{Box as CranposeBox, BoxSpec};
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Alignment;
+
+use crate::{
+    composable,
+    modifier::Modifier,
+    widgets::{
+        wear::{
+            scaling_list::WearScalingListState,
+            scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec},
+        },
+        Box as CranposeBox, BoxSpec,
+    },
+};
 
 /// How a [`ScreenScaffold`] is laid out.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]

@@ -7,15 +7,18 @@
 //! `cargo run -p desktop-app --example robot_light_menu --features desktop,robot-app`
 //! Screenshots land in `ROBOT_SHOT_DIR` (default `target/light-menu`).
 
-use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use std::{path::PathBuf, process::ExitCode, time::Duration};
+
+use cranpose::{
+    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, Size,
+};
 use cranpose_foundation::text::TextFieldState;
-use cranpose_ui::local_on_light_surface;
-use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
+use cranpose_ui::{
+    local_on_light_surface,
+    text::{AnnotatedString, TextStyle, TextUnit},
+};
 use image::RgbaImage;
-use std::path::PathBuf;
-use std::process::ExitCode;
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 460;
 const WINDOW_HEIGHT: u32 = 300;

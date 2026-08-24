@@ -12,8 +12,10 @@
 //! through [`Modifier::report_window_rect`]) and how to apply a scroll delta to
 //! its own scroll state.
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use cranpose_core::{compositionLocalOf, CompositionLocal};
 use cranpose_ui_graphics::Rect;

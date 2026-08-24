@@ -124,12 +124,13 @@ fn parse_present_mode(value: &str) -> Option<wgpu::PresentMode> {
 
 #[cfg(test)]
 mod tests {
+    use cranpose_app_shell::FramePacingMode;
+    use wgpu::{PresentMode, SurfaceCapabilities, TextureFormat};
+
     use super::{
         parse_present_mode, select_android_present_mode_for_request,
         select_present_mode_for_frame_pacing, select_present_mode_for_request,
     };
-    use cranpose_app_shell::FramePacingMode;
-    use wgpu::{PresentMode, SurfaceCapabilities, TextureFormat};
 
     fn caps(present_modes: &[PresentMode]) -> SurfaceCapabilities {
         SurfaceCapabilities {

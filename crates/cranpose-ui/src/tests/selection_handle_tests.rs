@@ -1,13 +1,16 @@
 //! Tests that a [`SelectionHandle`] renders its teardrop in the top-level
 //! overlay, anchored so its tip lands on the given text endpoint.
 
-use crate::layout::{LayoutEngine, LayoutTree};
-use crate::renderer::{HeadlessRenderer, RenderOp};
-use crate::text_selection::HandleKind;
-use crate::widgets::{PopupHost, SelectionHandle};
-use crate::Composition;
 use cranpose_core::{location_key, Key, MemoryApplier, NodeId};
 use cranpose_ui_graphics::{Color, DrawPrimitive, Point, Rect, Size};
+
+use crate::{
+    layout::{LayoutEngine, LayoutTree},
+    renderer::{HeadlessRenderer, RenderOp},
+    text_selection::HandleKind,
+    widgets::{PopupHost, SelectionHandle},
+    Composition,
+};
 
 fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();
@@ -130,20 +133,23 @@ fn selection_handle_renders_in_overlay_at_its_tip() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 mod long_press {
-    use crate::text_selection::HandleKind;
-    use crate::widgets::selection_handle::{
-        is_handle_long_press, selection_handle_pointer_input, HANDLE_LONG_PRESS_TIMEOUT_MS,
-    };
-    use crate::{collect_modifier_slices, Modifier};
+    use std::{cell::Cell, rc::Rc, sync::Arc};
+
     use cranpose_core::{DefaultScheduler, Runtime};
     use cranpose_foundation::{
         BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
         PointerEventKind,
     };
     use cranpose_ui_graphics::Point;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::sync::Arc;
+
+    use crate::{
+        collect_modifier_slices,
+        text_selection::HandleKind,
+        widgets::selection_handle::{
+            is_handle_long_press, selection_handle_pointer_input, HANDLE_LONG_PRESS_TIMEOUT_MS,
+        },
+        Modifier,
+    };
 
     fn point(x: f32, y: f32) -> Point {
         Point { x, y }
@@ -404,18 +410,19 @@ mod long_press {
 // modifier through the modifier-node reconciliation the way a recomposition does.
 // ─────────────────────────────────────────────────────────────────────────────
 mod kind_restart {
-    use crate::text_selection::HandleKind;
-    use crate::widgets::selection_handle::selection_handle_pointer_input;
-    use crate::{collect_modifier_slices, Modifier};
+    use std::{cell::Cell, rc::Rc, sync::Arc};
+
     use cranpose_core::{DefaultScheduler, Runtime};
     use cranpose_foundation::{
         BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
         PointerEventKind,
     };
     use cranpose_ui_graphics::Point;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::sync::Arc;
+
+    use crate::{
+        collect_modifier_slices, text_selection::HandleKind,
+        widgets::selection_handle::selection_handle_pointer_input, Modifier,
+    };
 
     fn down() -> PointerEvent {
         let p = Point { x: 100.0, y: 100.0 };

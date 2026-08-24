@@ -28,8 +28,9 @@
 //! so a Java side that learns to describe more of a product does not have to
 //! be decoded in lock step.
 
-use cranpose_services::purchases::{Product, PurchaseEvent, StorePhase, StoreState};
 use std::collections::{BTreeMap, BTreeSet};
+
+use cranpose_services::purchases::{Product, PurchaseEvent, StorePhase, StoreState};
 
 /// One-shot event codes, mirroring the constants in `CranposeBilling.java`.
 /// Both sides live in this repository and change together.

@@ -44,8 +44,10 @@
 //! module's only unsafe code, confined to the [`spare_fill`] helper the way
 //! `run_entry` confines its `Sync` proof.
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::OnceLock;
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    OnceLock,
+};
 
 use web_time::Instant;
 
@@ -441,9 +443,11 @@ pub(crate) fn stage_executor() -> &'static StageExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_ui_graphics::VerifyExecutor;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use cranpose_ui_graphics::VerifyExecutor;
+
+    use super::*;
 
     #[test]
     fn small_inputs_stay_serial_but_correct() {

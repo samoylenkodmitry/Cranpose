@@ -216,9 +216,8 @@ impl FromIterator<SurfaceRequirement> for SurfaceRequirementSet {
 
 #[cfg(test)]
 mod tests {
-    use crate::effect_renderer::CompositeSampleMode;
-
     use super::{SurfaceRequirement, SurfaceRequirementSet};
+    use crate::effect_renderer::CompositeSampleMode;
 
     #[test]
     fn labels_and_display_follow_requirement_order() {

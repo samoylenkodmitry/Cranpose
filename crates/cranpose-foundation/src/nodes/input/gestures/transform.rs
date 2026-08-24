@@ -16,8 +16,9 @@
 //! frame result: applying all `zoom` factors multiplicatively and all `pan`
 //! deltas additively reproduces the true gesture.
 
-use crate::nodes::input::{PointerEvent, PointerEventKind, PointerId};
 use cranpose_ui_graphics::Point;
+
+use crate::nodes::input::{PointerEvent, PointerEventKind, PointerId};
 
 /// Minimum mean pointer spread (in dp) for a zoom ratio to be trusted.
 /// Below this the fingers are effectively on top of each other and the

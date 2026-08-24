@@ -11,16 +11,21 @@
 
 #![allow(unsafe_code)]
 
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
+use std::sync::Arc;
+
 use cranpose_services::{
     publish_camera_frame, publish_camera_state, publish_camera_still, record_dropped_camera_frame,
     set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill,
     FlashMode, FrameFormat,
 };
-use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jint, jlong};
-use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
-use std::sync::Arc;
+use jni::{
+    jni_sig, jni_str,
+    objects::{JByteArray, JClass, JObject, JString, JValue},
+    sys::{jint, jlong},
+    EnvUnowned, Outcome,
+};
+
+use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 
 pub(crate) fn register(app: android_activity::AndroidApp) {
     set_platform_camera(Arc::new(AndroidCamera { app }));

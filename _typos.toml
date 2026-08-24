@@ -1,0 +1,35 @@
+# Spell-checking for prose and identifiers. It costs about a fifth of a second
+# on this repository, so it runs as a step inside the existing checks job rather
+# than as a job of its own.
+
+[files]
+extend-exclude = [
+  "target/**",
+  "**/build/**",
+  "**/pkg/**",
+  "**/node_modules/**",
+  "Cargo.lock",
+  # Captured third-party text used as robot fixtures. Its spelling is the
+  # upstream document's, and correcting it would break the comparison.
+  "apps/desktop-demo/robot-fixtures/**",
+  # Screenshot and recording scratch space, not source.
+  "example/**",
+  ".claude/**",
+]
+
+[default.extend-words]
+# Windows structured exception handling, not a transposition of "SHE".
+SEH = "SEH"
+# `ix`/`iy` name the inner x and y of an SVG arc in the progress indicator.
+iy = "iy"
+# Apple's Unique Device Identifier.
+UDID = "UDID"
+# The media world's own past tense, and the name of the HTML media event.
+seeked = "seeked"
+# Hyphenated prefix, as in "mis-anchored".
+mis = "mis"
+# Split out of "PNGs".
+PN = "PN"
+# Deliberate near-miss fixtures: a short string and bytes that are not "abc".
+Helo = "Helo"
+abd = "abd"

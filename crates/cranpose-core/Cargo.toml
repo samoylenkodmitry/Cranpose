@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Core runtime for a Jetpack Compose inspired UI framework in Rust"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 futures-task = "0.3"
 ahash = "0.8.12"

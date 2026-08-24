@@ -13,24 +13,25 @@ use cranpose_core::{
     Applier, ApplierHost, Composer, ConcreteApplierHost, MemoryApplier, Node, NodeError, NodeId,
     Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
-
-use self::core::Measurable;
-use self::core::Placeable;
-#[cfg(test)]
-use self::core::{HorizontalAlignment, VerticalAlignment};
-use crate::modifier::{
-    collect_semantics_from_modifier, DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
-    ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
-};
-
-use crate::subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode};
-use crate::widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState};
 use cranpose_foundation::{
     text::TextRange, CanvasSemanticsNode, InvalidationKind, ModifierNodeContext, NodeCapabilities,
     SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
+
+#[cfg(test)]
+use self::core::{HorizontalAlignment, VerticalAlignment};
+use self::core::{Measurable, Placeable};
+use crate::{
+    modifier::{
+        collect_semantics_from_modifier, DimensionConstraint, EdgeInsets, Modifier,
+        ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect,
+        ResolvedModifiers, Size,
+    },
+    subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
+    widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
+};
 
 /// Runtime context for modifier nodes during measurement.
 ///
@@ -1695,7 +1696,6 @@ impl LayoutBuilderState {
     /// their measure() methods through the retained coordinator chain.
     ///
     /// Always succeeds, measuring either directly or through retained layout modifier nodes.
-    ///
     fn measure_through_modifier_chain(
         state_rc: &Rc<RefCell<Self>>,
         node_id: NodeId,

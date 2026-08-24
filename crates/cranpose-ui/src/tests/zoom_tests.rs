@@ -1,13 +1,13 @@
-use crate::zoom::ZoomState;
-use crate::{collect_modifier_slices, Modifier};
+use std::{rc::Rc, sync::Arc};
+
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
     PointerEventKind,
 };
 use cranpose_ui_graphics::Point;
-use std::rc::Rc;
-use std::sync::Arc;
+
+use crate::{collect_modifier_slices, zoom::ZoomState, Modifier};
 
 fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));

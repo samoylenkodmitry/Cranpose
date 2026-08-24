@@ -1,6 +1,9 @@
-use crate::normalized_scene::effect_layer_in_range;
-use crate::scene::{BackdropLayer, EffectLayer};
 use std::ops::Range;
+
+use crate::{
+    normalized_scene::effect_layer_in_range,
+    scene::{BackdropLayer, EffectLayer},
+};
 
 #[derive(Clone, Copy)]
 pub(crate) enum LayerEventKind {

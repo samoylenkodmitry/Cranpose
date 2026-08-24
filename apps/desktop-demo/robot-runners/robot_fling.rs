@@ -12,11 +12,14 @@
 //! cargo run --package desktop-app --example robot_fling --features robot-app
 //! ```
 
-use cranpose::AppLauncher;
-use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
-use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
-use desktop_app::app;
 use std::time::Duration;
+
+use cranpose::AppLauncher;
+use cranpose_testing::{
+    find_bounds_by_text, find_button_in_semantics, find_in_semantics, find_text,
+    visible_bounds_in_viewport,
+};
+use desktop_app::app;
 
 fn main() {
     env_logger::init();

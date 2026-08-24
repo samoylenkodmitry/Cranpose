@@ -11,21 +11,27 @@
 
 #![cfg(feature = "embedded-default-font")]
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_foundation::lazy::LazyItems;
-use cranpose_render_common::graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode};
-use cranpose_render_common::graph_scene::{HitGeometry, Scene};
-use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
-use cranpose_render_common::scene_builder::build_graph_from_applier;
-use cranpose_render_common::{HitTestTarget, RenderScene};
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec,
-    WearTextStyle,
+use cranpose_render_common::{
+    graph::{LayerNode, PrimitiveNode, ProjectiveTransform, RenderNode},
+    graph_scene::{HitGeometry, Scene},
+    hit_graph::{collect_hits_from_graph, HitGraphSink},
+    scene_builder::build_graph_from_applier,
+    HitTestTarget, RenderScene,
 };
-use cranpose_ui::widgets::BoxSpec;
-use cranpose_ui::{Color, LayoutEngine, Modifier, Size, Text};
-use std::cell::RefCell;
-use std::rc::Rc;
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::{
+        wear::{
+            rememberWearScalingListState, WearColors, WearScalingLazyColumn,
+            WearScalingLazyColumnSpec, WearTextStyle,
+        },
+        BoxSpec,
+    },
+    Color, LayoutEngine, Modifier, Size, Text,
+};
 
 /// The watch these widgets are dimensioned for, in layout points.
 const WATCH: f32 = 454.0;

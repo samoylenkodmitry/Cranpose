@@ -1,15 +1,16 @@
 #![allow(non_snake_case)]
 
-use cranpose_ui::text::{
-    AnnotatedString, BaselineShift, FontFamily, FontStyle, FontSynthesis, FontWeight, Hyphens,
-    LineBreak, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, LocaleList,
-    ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
-    Shadow as TextShadow, SpanStyle, TextAlign, TextDecoration, TextDirection, TextDrawStyle,
-    TextGeometricTransform, TextIndent, TextMotion, TextOverflow, TextUnit,
-};
 use cranpose_ui::{
-    composable, BasicText, Box, BoxSpec, Brush, Color, Column, ColumnSpec, LinearArrangement,
-    Modifier, Point, Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
+    composable,
+    text::{
+        AnnotatedString, BaselineShift, FontFamily, FontStyle, FontSynthesis, FontWeight, Hyphens,
+        LineBreak, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
+        LocaleList, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
+        Shadow as TextShadow, SpanStyle, TextAlign, TextDecoration, TextDirection, TextDrawStyle,
+        TextGeometricTransform, TextIndent, TextMotion, TextOverflow, TextUnit,
+    },
+    BasicText, Box, BoxSpec, Brush, Color, Column, ColumnSpec, LinearArrangement, Modifier, Point,
+    Row, RowSpec, Size, Spacer, Text, TextStyle, VerticalAlignment,
 };
 
 const OVERFLOW_SAMPLE: &str =

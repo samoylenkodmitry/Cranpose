@@ -326,9 +326,10 @@ impl NestedMutableSnapshot {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::*;
     use crate::snapshot_v2::runtime::TestRuntimeGuard;
-    use std::rc::Rc;
 
     fn reset_runtime() -> TestRuntimeGuard {
         reset_runtime_for_tests()

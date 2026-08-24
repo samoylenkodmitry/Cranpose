@@ -11,9 +11,14 @@
 //! applies them via [`apply_pending_platform_signals`].
 #![allow(unsafe_code)]
 
-use crate::android_haptics_queue::{HapticCommand, HapticQueue};
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
-use crate::android_launch_args::decode_launch_arguments;
+use std::{
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
+        Arc, Mutex, OnceLock, PoisonError,
+    },
+};
+
 use cranpose_services::{
     publish_incoming_content, push_notification_deeplink, set_platform_app_updater,
     set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
@@ -25,12 +30,18 @@ use cranpose_services::{
     NotifyRequest, PackageDigest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent,
     ShareError, ShareSheet, StreamingAssetReader, ThermalState, UpdatePackage,
 };
-use jni::objects::{JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jboolean, jint, jlong};
-use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use jni::{
+    jni_sig, jni_str,
+    objects::{JByteArray, JClass, JObject, JString, JValue},
+    sys::{jboolean, jint, jlong},
+    EnvUnowned, Outcome,
+};
+
+use crate::{
+    android_haptics_queue::{HapticCommand, HapticQueue},
+    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+    android_launch_args::decode_launch_arguments,
+};
 
 // --- Cross-thread signal parking (UI thread → native loop) -------------------
 

@@ -5,6 +5,8 @@
 mod output_paths;
 mod perf_contract;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, changed_pixel_count, changed_pixel_count_in_region,
@@ -13,8 +15,6 @@ use cranpose_testing::{
 };
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
-use std::path::Path;
-use std::time::Duration;
 
 const EFFECT_SLIDER_WIDTH: f32 = 220.0;
 const EFFECT_SLIDER_TOUCH_OFFSET_Y: f32 = 9.0;

@@ -1,7 +1,8 @@
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_center;
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     println!("=== Robot Async Tab Bug Test ===");

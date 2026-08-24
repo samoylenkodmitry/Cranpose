@@ -9,10 +9,12 @@
 
 use std::path::PathBuf;
 
-use cranpose_render_common::font_source::SoftwareTextFontRegistry;
-use cranpose_render_common::software_text_raster::{
-    collect_solid_text_atlas_run, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-    SoftwareTextFontSet, SoftwareTextMeasurer,
+use cranpose_render_common::{
+    font_source::SoftwareTextFontRegistry,
+    software_text_raster::{
+        collect_solid_text_atlas_run, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
+        SoftwareTextFontSet, SoftwareTextMeasurer,
+    },
 };
 use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontFile, FontStyle, FontWeight, SpanStyle, TextMeasurer,

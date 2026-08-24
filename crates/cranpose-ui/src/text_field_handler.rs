@@ -4,14 +4,16 @@
 //! to enable O(1) keyboard and clipboard event dispatch to the focused text field,
 //! avoiding O(N) tree scans.
 
+use std::{cell::Cell, rc::Rc};
+
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui_graphics::Point;
-use std::cell::Cell;
-use std::rc::Rc;
 
-use crate::text::{measure_text, AnnotatedString, TextStyle};
-use crate::text_field_focus::ImeCaretGeometry;
-use crate::text_field_input::handle_key_event_impl;
+use crate::{
+    text::{measure_text, AnnotatedString, TextStyle},
+    text_field_focus::ImeCaretGeometry,
+    text_field_input::handle_key_event_impl,
+};
 
 /// Live window-space geometry the field's layout keeps fresh (shared `Rc<Cell>`s),
 /// plus the text style — enough to compute caret coordinates for coordinate-based
@@ -294,12 +296,15 @@ fn floor_char_boundary(text: &str, index: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
-    use crate::text_field_focus;
+    use std::{cell::RefCell, sync::Arc};
+
     use cranpose_core::{DefaultScheduler, Runtime};
-    use std::cell::RefCell;
-    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers},
+        text_field_focus,
+    };
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.
     /// TextFieldState uses MutableState, which requires an active runtime.

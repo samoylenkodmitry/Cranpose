@@ -19,20 +19,25 @@
 //!    This remains the path for hardware keyboards, and the whole-app
 //!    fallback when the Java IME helper is unavailable.
 
+use std::{
+    cell::{Cell, RefCell},
+    collections::{hash_map::Entry, HashMap},
+    rc::Rc,
+    sync::Arc,
+};
+
+use android_activity::{
+    input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState},
+    AndroidApp,
+};
+use cranpose_app_shell::{
+    ImeEditorState, KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
+};
+
 use crate::android_text_input::{
     hide_android_text_input, show_android_text_input, update_android_text_input_state,
     AndroidImeEventQueue,
 };
-use android_activity::input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState};
-use android_activity::AndroidApp;
-use cranpose_app_shell::{
-    ImeEditorState, KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
-};
-use std::cell::{Cell, RefCell};
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::Arc;
 
 /// Android `KeyEvent` action constants (`ACTION_DOWN` / `ACTION_UP`).
 const ANDROID_KEY_ACTION_DOWN: i32 = 0;

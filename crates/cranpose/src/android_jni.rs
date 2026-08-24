@@ -1,17 +1,19 @@
 //! Shared Android JNI helpers.
 #![allow(unsafe_code)]
 
-use crate::android_overlay_window::{
-    AndroidOverlayEventQueue, AndroidOverlayEventQueueHandle, AndroidOverlayPointerAction,
-    AndroidOverlayWindowEvent,
-};
+use std::sync::Arc;
+
 use jni::{
     objects::{JClass, JObject, JString},
     sys::{jfloat, jint, jlong},
     Env, EnvUnowned, JavaVM, Outcome,
 };
 use ndk::native_window::NativeWindow;
-use std::sync::Arc;
+
+use crate::android_overlay_window::{
+    AndroidOverlayEventQueue, AndroidOverlayEventQueueHandle, AndroidOverlayPointerAction,
+    AndroidOverlayWindowEvent,
+};
 
 pub(crate) fn with_android_activity_env<T, F>(
     app: &android_activity::AndroidApp,

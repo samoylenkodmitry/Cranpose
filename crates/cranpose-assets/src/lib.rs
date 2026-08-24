@@ -1,11 +1,11 @@
 //! Asset loading and management primitives for Cranpose.
 
-#![deny(unsafe_code)]
-
-use std::collections::HashMap;
-use std::fmt;
-use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{
+    collections::HashMap,
+    fmt,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
+};
 
 /// Error returned by [`AssetManager`] load operations.
 #[derive(Debug)]

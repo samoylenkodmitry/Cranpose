@@ -1,6 +1,8 @@
-use super::super::{GroupKey, GroupKeySeed};
-use super::key_state::FrameKeyState;
-use super::state::SlotWriteSessionState;
+use super::{
+    super::{GroupKey, GroupKeySeed},
+    key_state::FrameKeyState,
+    state::SlotWriteSessionState,
+};
 
 impl SlotWriteSessionState {
     fn current_keys(&mut self) -> &mut FrameKeyState {

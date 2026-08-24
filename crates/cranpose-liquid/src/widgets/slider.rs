@@ -3,18 +3,22 @@
 //! lens (the reference "seek" thumb liquifies under the finger and rides
 //! the drag); releasing lets the lens decay back into the white thumb.
 
-use crate::material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape};
+use std::{cell::Cell, rc::Rc};
+
 use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_foundation::{PointerEventKind, PointerId};
 use cranpose_macros::composable;
-use cranpose_ui::widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope};
-use cranpose_ui::{Modifier, Size};
+use cranpose_ui::{
+    widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope},
+    Modifier, Size,
+};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
-use std::cell::Cell;
-use std::rc::Rc;
 
-use crate::theme::liquid_colors;
+use crate::{
+    material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
+    theme::liquid_colors,
+};
 
 const TRACK_HEIGHT: f32 = 6.0;
 const THUMB_SIZE: f32 = 24.0;

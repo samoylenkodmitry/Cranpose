@@ -1,14 +1,11 @@
 //! Platform-neutral projection of Cranpose semantics into accessibility elements.
 
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::NodeId;
-use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole};
-use std::borrow::Cow;
+use std::{borrow::Cow, fmt::Debug};
 
 use cranpose_app_shell::AppShell;
+use cranpose_core::{collections::map::HashMap, NodeId};
 use cranpose_render_common::Renderer;
-use cranpose_ui::LayoutBox;
-use std::fmt::Debug;
+use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole};
 
 /// Logical bounds for a platform accessibility element.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -460,14 +457,15 @@ fn collect_descendant_labels<'a>(node: &'a SemanticsNode, labels: &mut Vec<&'a s
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{cell::RefCell, rc::Rc};
+
     use cranpose_core::NodeId;
     use cranpose_ui::{
         CanvasSemanticsNode, SemanticsAction, SemanticsCallback, SemanticsCustomAction,
         SemanticsNode, SemanticsRole, SemanticsWidgetRole,
     };
-    use std::cell::RefCell;
-    use std::rc::Rc;
+
+    use super::*;
 
     fn node(
         node_id: NodeId,

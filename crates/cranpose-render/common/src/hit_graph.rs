@@ -5,10 +5,11 @@ use cranpose_foundation::PointerEvent;
 use cranpose_ui::Point;
 use cranpose_ui_graphics::{Rect, RoundedCornerShape};
 
-use crate::graph::quad_bounds;
-use crate::graph::{LayerNode, ProjectiveTransform, RenderNode};
-use crate::graph_scene::{HitClip, HitGeometry};
-use crate::primitive_emit::resolve_clip;
+use crate::{
+    graph::{quad_bounds, LayerNode, ProjectiveTransform, RenderNode},
+    graph_scene::{HitClip, HitGeometry},
+    primitive_emit::resolve_clip,
+};
 
 pub trait HitGraphSink {
     fn push_hit(
@@ -137,8 +138,10 @@ fn collect_hits_from_graph_inner<S: HitGraphSink>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{CachePolicy, HitTestNode, IsolationReasons};
-    use crate::raster_cache::LayerRasterCacheHashes;
+    use crate::{
+        graph::{CachePolicy, HitTestNode, IsolationReasons},
+        raster_cache::LayerRasterCacheHashes,
+    };
 
     type RecordedHit = (
         NodeId,

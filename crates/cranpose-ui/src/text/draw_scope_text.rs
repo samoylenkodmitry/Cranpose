@@ -16,10 +16,12 @@ use cranpose_ui_graphics::{
     TextStyle as DrawTextStyle,
 };
 
-use super::font::{FontFamily, FontStyle, FontWeight};
-use super::line_box::LineBox;
-use super::style::{SpanStyle, TextStyle};
-use super::unit::TextUnit;
+use super::{
+    font::{FontFamily, FontStyle, FontWeight},
+    line_box::LineBox,
+    style::{SpanStyle, TextStyle},
+    unit::TextUnit,
+};
 
 /// Builds the [`TextStyle`] that describes a draw-scope text run.
 ///
@@ -29,7 +31,7 @@ use super::unit::TextUnit;
 /// scope has already resolved alignment into the primitive's rect.
 ///
 /// The policy has to come across. Without it every run drawn through a canvas
-/// takes [`line_box`](super::line_box)'s plain branch while a `Text` composable
+/// takes [`line_box`](fn@super::line_box)'s plain branch while a `Text` composable
 /// of the same style takes the AOSP one, and a screen that does both puts its
 /// two sets of rows a device pixel apart.
 pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
@@ -79,7 +81,7 @@ pub fn draw_style_line_box(style: &DrawTextStyle) -> Option<LineBox> {
 
 /// Measures draw-scope text against the app's fonts.
 ///
-/// Every call lands in [`super::measure::measure_resolved_text`], backed by the
+/// Every call lands in `super::measure::measure_resolved_text`, backed by the
 /// app context's metrics cache — so measuring an unchanged string every frame
 /// is a hash lookup, not a shaping pass.
 ///
@@ -141,8 +143,9 @@ impl DrawTextMeasurer for AppContextTextMeasurer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{FontWeight as DrawFontWeight, TextAlign, TextVerticalAlign};
+
+    use super::*;
 
     #[test]
     fn draw_style_maps_onto_span_attributes() {
@@ -181,8 +184,10 @@ mod tests {
         // took different line-box rules, so every drawn row landed a device
         // pixel off the composed rows beside it. Roboto at 16sp on a density-2
         // watch, in device pixels.
-        use crate::text::line_box::{line_box, FontExtent};
-        use crate::widgets::wear::wear_line_height_style;
+        use crate::{
+            text::line_box::{line_box, FontExtent},
+            widgets::wear::wear_line_height_style,
+        };
 
         let extent = FontExtent::new(32.0 * 1900.0 / 2048.0, 32.0 * 500.0 / 2048.0, 0.0);
         let drawn = DrawTextStyle::new(32.0)

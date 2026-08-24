@@ -9,33 +9,38 @@
 //! roots, non-direct root surfaces, and the dev overlay all become packet
 //! payloads here — the present backend never touches the retained graph.
 
-use crate::frame_packet::{
-    FramePacket, PacketRoot, RenderReturns, ReplayConfirmation, ReplayFrameOps, RootSurfacePacket,
-};
-use crate::normalized_scene::{
-    collect_layer_contents_reusing,
-    collect_layer_contents_with_translation_context_and_text_layout, lower_layer_node,
-};
-use crate::render::{
-    direct_root_child_underlays_are_supported, instant_ms, should_log_wgpu_render_stage,
-    RETAINED_LAYER_REQUIREMENTS_CAPACITY,
-};
-use crate::scene::{CompositorScene, Scene, SceneCapacityHint};
-use crate::surface_executor::{
-    layer_surface_translation_context, root_direct_scene_events_are_supported,
-};
-use crate::surface_plan::{
-    effective_surface_requirements, layer_surface_requirements_cached,
-    root_can_render_directly_cached, LayerSurfaceRequirements, TranslationRenderContext,
-};
-use crate::surface_requirements::SurfaceRequirement;
-use crate::TextSystemState;
-use cranpose_core::collections::map::HashMap;
-use cranpose_render_common::graph::{LayerNode, RenderGraph};
-use cranpose_render_common::software_text_raster::SoftwareTextFontSet;
-use cranpose_ui_graphics::Rect;
 use std::rc::Weak;
+
+use cranpose_core::collections::map::HashMap;
+use cranpose_render_common::{
+    graph::{LayerNode, RenderGraph},
+    software_text_raster::SoftwareTextFontSet,
+};
+use cranpose_ui_graphics::Rect;
 use web_time::Instant;
+
+use crate::{
+    frame_packet::{
+        FramePacket, PacketRoot, RenderReturns, ReplayConfirmation, ReplayFrameOps,
+        RootSurfacePacket,
+    },
+    normalized_scene::{
+        collect_layer_contents_reusing,
+        collect_layer_contents_with_translation_context_and_text_layout, lower_layer_node,
+    },
+    render::{
+        direct_root_child_underlays_are_supported, instant_ms, should_log_wgpu_render_stage,
+        RETAINED_LAYER_REQUIREMENTS_CAPACITY,
+    },
+    scene::{CompositorScene, Scene, SceneCapacityHint},
+    surface_executor::{layer_surface_translation_context, root_direct_scene_events_are_supported},
+    surface_plan::{
+        effective_surface_requirements, layer_surface_requirements_cached,
+        root_can_render_directly_cached, LayerSurfaceRequirements, TranslationRenderContext,
+    },
+    surface_requirements::SurfaceRequirement,
+    TextSystemState,
+};
 
 /// Direct scenes kept for recycling: one per packet that can be in flight
 /// (depth-one publishing allows one rendering and one waiting) plus the one
@@ -452,11 +457,11 @@ fn lower_root_surface_packet(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::test_support::layer_node;
-    use crate::WgpuTextSystem;
     use cranpose_render_common::graph::{ProjectiveTransform, RenderNode};
     use cranpose_ui_graphics::GraphicsLayer;
+
+    use super::*;
+    use crate::{test_support::layer_node, WgpuTextSystem};
 
     fn frontend() -> RendererFrontend {
         let text_system = WgpuTextSystem::from_fonts(&[]);

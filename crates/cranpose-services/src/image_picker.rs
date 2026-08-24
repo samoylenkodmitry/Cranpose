@@ -8,14 +8,15 @@
 //! behavior on desktop (a file dialog), the web (`<input accept="image/*">`),
 //! and Android (SAF), where a plain file picker already surfaces images.
 
-use crate::file_picker::{default_file_picker, FileFilter, FilePickerOptions, PickerFuture};
-use crate::registry::ServiceRegistry;
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{cell::RefCell, sync::Arc};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::sync::Arc;
+
+use crate::{
+    file_picker::{default_file_picker, FileFilter, FilePickerOptions, PickerFuture},
+    registry::ServiceRegistry,
+};
 
 /// Image extensions offered when the picker falls back to the file picker.
 pub const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "heic", "heif"];
@@ -128,8 +129,9 @@ pub fn ProvideImagePicker(content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::RwLock;
+
+    use super::*;
 
     struct FixedImagePicker {
         bytes: RwLock<Option<Vec<u8>>>,

@@ -4,20 +4,23 @@
 //! one font-backed measurer plus its fallback-metrics path for when no font
 //! is installed.
 
-use std::borrow::Borrow;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
-use std::sync::{Mutex, MutexGuard};
-
-use cranpose_ui::text_layout_result::TextLayoutResult;
-use cranpose_ui::{TextMeasurer, TextMetrics};
-
-use crate::bounded_lru_cache::BoundedLruCache;
-use crate::software_text_raster::{
-    cursor_x_for_offset_with_font, layout_text_with_font, measure_text_with_font,
-    text_offset_for_position_with_font, SoftwareTextFont, SoftwareTextFontSet,
+use std::{
+    borrow::Borrow,
+    hash::{Hash, Hasher},
+    rc::Rc,
+    sync::{Mutex, MutexGuard},
 };
-use crate::text_hyphenation::HyphenationDictionaryStore;
+
+use cranpose_ui::{text_layout_result::TextLayoutResult, TextMeasurer, TextMetrics};
+
+use crate::{
+    bounded_lru_cache::BoundedLruCache,
+    software_text_raster::{
+        cursor_x_for_offset_with_font, layout_text_with_font, measure_text_with_font,
+        text_offset_for_position_with_font, SoftwareTextFont, SoftwareTextFontSet,
+    },
+    text_hyphenation::HyphenationDictionaryStore,
+};
 
 /// Renderer-owned text resources: the resolved font used for software
 /// rasterization and measurement, if any.

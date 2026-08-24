@@ -1,3 +1,17 @@
+use std::{
+    any::TypeId,
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
+use cranpose_core::{Node, NodeId};
+use cranpose_foundation::{
+    InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
+};
+use cranpose_ui_layout::{Constraints, MeasurePolicy};
+
 #[cfg(test)]
 use crate::layout::LayoutRuntimeDebugStats;
 use crate::{
@@ -8,16 +22,6 @@ use crate::{
         Size,
     },
 };
-use cranpose_core::{Node, NodeId};
-use cranpose_foundation::{
-    InvalidationKind, ModifierInvalidation, NodeCapabilities, SemanticsConfiguration,
-};
-use cranpose_ui_layout::{Constraints, MeasurePolicy};
-use std::any::TypeId;
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 
 #[derive(Clone, Copy)]
 enum LayoutInvalidationDispatchDiag {
@@ -1240,10 +1244,12 @@ fn resolve_modifier_local_from_parent_chain(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::rc::Rc;
+
     use cranpose_ui_graphics::Size as GeometrySize;
     use cranpose_ui_layout::{Measurable, MeasureResult, MeasureScope};
-    use std::rc::Rc;
+
+    use super::*;
 
     #[derive(Default)]
     struct TestMeasurePolicy;

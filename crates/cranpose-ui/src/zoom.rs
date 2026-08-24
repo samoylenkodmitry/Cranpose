@@ -41,15 +41,21 @@
 //! anchoring is therefore exact for zoomable surfaces positioned at the
 //! window origin (the fullscreen viewer case) and approximate otherwise.
 
-use crate::modifier::{Modifier, PointerEventKind};
+use std::{
+    cell::{Cell, RefCell},
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_core::{MutableState, OwnedMutableState};
-use cranpose_foundation::nodes::input::gestures::{TransformGesture, TransformGestureEvent};
-use cranpose_foundation::DRAG_THRESHOLD;
+use cranpose_foundation::{
+    nodes::input::gestures::{TransformGesture, TransformGestureEvent},
+    DRAG_THRESHOLD,
+};
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
-use std::cell::{Cell, RefCell};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
 use web_time::Instant;
+
+use crate::modifier::{Modifier, PointerEventKind};
 
 /// Scale factors closer to 1.0 than this are treated as "not zoomed".
 const SCALE_EPSILON: f32 = 1e-3;

@@ -2,8 +2,9 @@ pub(crate) mod backend;
 mod geometry;
 mod render_paths;
 
-pub(crate) use backend::DevicePixelBounds;
-pub(crate) use backend::{CachedLayerSurface, LayerSurfaceTexture, SurfaceExecutionBackend};
+pub(crate) use backend::{
+    CachedLayerSurface, DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
+};
 pub(crate) use geometry::{
     axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
     canonicalized_scaled_rect, device_pixel_bounds_for_rect, offscreen_byte_size, scaled_quad,

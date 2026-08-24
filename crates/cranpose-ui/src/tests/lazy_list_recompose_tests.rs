@@ -1,15 +1,19 @@
-use super::*;
-use crate::text::{
-    AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextMeasurer, TextMetrics,
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
 };
-use crate::text_layout_result::TextLayoutResult;
+
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
 };
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeId};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope, LazyListState};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use super::*;
+use crate::{
+    text::{AnnotatedString, PreparedTextLayout, TextLayoutOptions, TextMeasurer, TextMetrics},
+    text_layout_result::TextLayoutResult,
+};
 
 thread_local! {
     static LAST_LAZY_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };

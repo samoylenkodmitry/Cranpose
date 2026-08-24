@@ -8,9 +8,10 @@
 //! cargo run --package desktop-app --example robot_interactive --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use desktop_app::app;
-use std::time::Duration;
 
 fn wait_for_content(robot: &Robot, expected: &str, attempts: usize, delay: Duration) -> bool {
     for _ in 0..attempts {

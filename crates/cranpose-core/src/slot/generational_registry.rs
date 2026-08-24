@@ -1,6 +1,7 @@
+use std::mem;
+
 use super::dense_id_map::DenseIdMap;
 use crate::collections::map::HashMap;
-use std::mem;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GenerationalSlot<S> {

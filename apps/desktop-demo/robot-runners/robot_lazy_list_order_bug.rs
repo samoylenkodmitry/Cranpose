@@ -15,10 +15,11 @@
 //! cargo run --package desktop-app --example robot_lazy_list_order_bug --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

@@ -8,13 +8,14 @@
 
 mod regression_robot_support;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{capture_screenshot, sample_screenshot_pixel_logical};
 use desktop_app::app;
 use regression_robot_support::{
     click_button, semantics_dump, spawn_timeout, wait_for_text, wait_for_text_prefix,
 };
-use std::time::Duration;
 
 fn counter_value(text: &str) -> Result<i32, String> {
     text.split(':')

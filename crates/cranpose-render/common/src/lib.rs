@@ -1,7 +1,5 @@
 //! Common rendering contracts shared between renderer backends.
 
-#![deny(unsafe_code)]
-
 pub mod bounded_lru_cache;
 pub mod dev_overlay;
 
@@ -32,13 +30,13 @@ pub mod style_shared;
 pub mod text_hyphenation;
 pub mod text_measure;
 
+use std::collections::HashSet;
+
 use cranpose_core::MemoryApplier;
 use cranpose_foundation::nodes::input::PointerEvent;
 use cranpose_ui::LayoutTree;
-use cranpose_ui_graphics::Size;
-use std::collections::HashSet;
-
 pub use cranpose_ui_graphics::Brush;
+use cranpose_ui_graphics::Size;
 
 /// Trait implemented by hit-test targets stored inside a [`RenderScene`].
 pub trait HitTestTarget {

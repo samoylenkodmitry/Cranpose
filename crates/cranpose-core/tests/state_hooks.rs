@@ -5,13 +5,13 @@
 //! can be checked by calling the function — it has to be composed, recomposed,
 //! and asked whether it is still the same state.
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{
     location_key, mutableStateList, mutableStateListOf, mutableStateMap, mutableStateMapOf,
     ownedMutableStateOf, remember, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
     rememberUpdatedState, try_mutableStateOf, Composition, MemoryApplier,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// Renders `content` `passes` times over one composition, as recomposition does.
 fn compose(passes: usize, mut content: impl FnMut()) {

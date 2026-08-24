@@ -2,11 +2,14 @@
 //! state, scrolls to the materials lab, exercises the tab-bar blob and the
 //! morphing menu, and writes numbered PNGs into `CRANPOSE_LIQUID_SHOT_DIR`.
 
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;

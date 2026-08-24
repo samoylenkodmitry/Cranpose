@@ -1,10 +1,14 @@
+use std::time::{Duration, Instant};
+
 use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
 };
-use cranpose_ui::widgets::{Column, ColumnSpec, Text};
-use cranpose_ui::{composable, Modifier, TextStyle};
-use std::time::{Duration, Instant};
+use cranpose_ui::{
+    composable,
+    widgets::{Column, ColumnSpec, Text},
+    Modifier, TextStyle,
+};
 
 const WARMUP: Duration = Duration::from_secs(3);
 const WINDOW: Duration = Duration::from_secs(10);

@@ -1,3 +1,5 @@
+use std::cell::RefCell;
+
 /// Snapshot pinning system to prevent premature garbage collection of state records.
 ///
 /// This module implements a pinning table that tracks which snapshot IDs need to remain
@@ -7,9 +9,10 @@
 /// Uses SnapshotDoubleIndexHeap for O(log N) pin/unpin and O(1) lowest queries.
 /// Based on Jetpack Compose's pinning mechanism (Snapshot.kt:714-722, 1954).
 use crate::snapshot_double_index_heap::SnapshotDoubleIndexHeap;
-use crate::snapshot_double_index_heap::SnapshotDoubleIndexHeapDebugStats;
-use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
-use std::cell::RefCell;
+use crate::{
+    snapshot_double_index_heap::SnapshotDoubleIndexHeapDebugStats,
+    snapshot_id_set::{SnapshotId, SnapshotIdSet},
+};
 
 /// A handle to a pinned snapshot. Dropping this handle releases the pin.
 ///

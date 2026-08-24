@@ -1,0 +1,17 @@
+# Import discipline. The point is diff noise: without a rule, every file grows
+# its own import shape and unrelated changes churn the same lines.
+#
+# These options are unstable, which is why formatting runs on the nightly pinned
+# in rust-toolchain-nightly.toml. Nothing a downstream user builds needs nightly.
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+reorder_modules = true
+
+# Deliberately not `imports_layout = "Vertical"`. It gives one item per line, so
+# adding an import touches one line instead of rewrapping a block -- but on this
+# workspace it was measured at +13,610 net lines against +1,836 for the rules
+# above, which already remove the per-file drift this file exists to remove.
+
+# Examples in doc comments are the docs. Keep them formatted like real code.
+format_code_in_doc_comments = true

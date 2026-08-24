@@ -1,14 +1,8 @@
 #![deny(unsafe_code)]
 
-#[cfg(any(
-    target_os = "android",
-    all(feature = "web", target_arch = "wasm32")
-))]
+#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod app;
-#[cfg(any(
-    target_os = "android",
-    all(feature = "web", target_arch = "wasm32")
-))]
+#[cfg(any(target_os = "android", all(feature = "web", target_arch = "wasm32")))]
 mod fonts;
 
 cranpose::android_main! {

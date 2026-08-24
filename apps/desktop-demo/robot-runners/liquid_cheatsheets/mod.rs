@@ -11,19 +11,24 @@ mod capture;
 #[path = "../text_showcase_external_helpers.rs"]
 mod x11_helpers;
 
+use std::{
+    fmt::Display,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use anyhow::{bail, Context, Result};
 use capture::{
     capture_x11_keyframes, capture_x11_static_keyframe, compose_comparison,
     save_exact_robot_keyframe_crops, ActualTiming, CaptureRequest, ComparisonGrid, Crop, Keyframe,
 };
-use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box, BoxSpec, Text};
-use cranpose::{AppLauncher, Color, Modifier, RobotTimelineAction, RobotTimelineStep, Size};
+use cranpose::{
+    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box, BoxSpec, Text},
+    AppLauncher, Color, Modifier, RobotTimelineAction, RobotTimelineStep, Size,
+};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
 use desktop_app::app;
-use std::fmt::Display;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 const LIQUID_WINDOW_SIZE: (f32, f32) = (900.0, 800.0);
 const TEXT_WINDOW_SIZE: (f32, f32) = (460.0, 340.0);

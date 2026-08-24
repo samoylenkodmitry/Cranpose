@@ -6,6 +6,11 @@
 //! transport the application never wired up, and a screen composed after the
 //! host was rebuilt learning what is playing without asking.
 
+use std::{
+    sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
+};
+
 use cranpose_services::{
     audio_focus, clear_platform_media_player, current_media_item, media_capabilities, media_volume,
     observe_audio_focus, observe_media_commands, observe_playback_progress, observe_playback_state,
@@ -15,8 +20,6 @@ use cranpose_services::{
     AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaPlayer,
     PlaybackProgress, PlaybackState, DUCKED_GAIN,
 };
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
 
 /// One media session exists per process, so these tests take turns with it.
 /// Without this they would each install a backend over the others' and read

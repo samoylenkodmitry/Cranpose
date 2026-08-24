@@ -6,14 +6,15 @@
 //! bindings, so it is reported as unsupported here; native platforms (desktop,
 //! Android, iOS) provide system-provider folder choosing.
 
+use std::{cell::RefCell, rc::Rc};
+
+use wasm_bindgen::JsCast;
+
 use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
 use crate::content::{
     BytesContent, ContentError, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata,
     ContentSink, ContentSinkRef,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
-use wasm_bindgen::JsCast;
 
 fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {
     let mut dialog = rfd::AsyncFileDialog::new();

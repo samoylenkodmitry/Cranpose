@@ -8,17 +8,17 @@
 //! renderer-neutral pieces are gathered in this module to avoid duplicating the
 //! protocol per shell.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::mpsc;
-use std::sync::Arc;
+use std::{
+    any::Any,
+    collections::HashMap,
+    sync::{mpsc, Arc},
+};
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
 use cranpose_render_common::Renderer;
-use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
-
 #[cfg(feature = "renderer-wgpu")]
 use cranpose_render_wgpu::{DebugCpuAllocationStats, RenderStatsSnapshot};
+use cranpose_ui::{SemanticsAction, SemanticsNode, SemanticsRole};
 
 /// Serializable semantic element combining semantics + geometry
 ///
@@ -1809,6 +1809,14 @@ pub(crate) fn subtree_contains_matching_text(
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
+    use cranpose_core::NodeId;
+    use cranpose_ui::{
+        LayoutBox, LayoutNodeData, LayoutNodeKind, Modifier, ModifierNodeSlices, Point, Rect,
+        ResolvedModifiers, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
+    };
+
     use super::{
         bounds_from_layout_box, find_button_in_semantics_tree, find_text_in_semantics_tree,
         panic_payload_message, robot_wait_for_idle_animation_loop_only,
@@ -1816,12 +1824,6 @@ mod tests {
         semantics_text_matches, subtree_contains_matching_text, HashMap, SemanticQueryResult,
         SemanticRect, SemanticTextMatchKind,
     };
-    use cranpose_core::NodeId;
-    use cranpose_ui::{
-        LayoutBox, LayoutNodeData, LayoutNodeKind, Modifier, ModifierNodeSlices, Point, Rect,
-        ResolvedModifiers, SemanticsAction, SemanticsCallback, SemanticsNode, SemanticsRole,
-    };
-    use std::rc::Rc;
 
     fn find_text_in_trees(
         sem_node: &SemanticsNode,

@@ -1,0 +1,101 @@
+name: build one
+
+# Reproduce a single example or platform build on demand, on a chosen runner,
+# without pushing a branch and waiting for the whole fleet. This is the workflow
+# to reach for when a bug report names a platform you do not have in front of
+# you.
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner"
+        required: true
+        type: choice
+        options:
+          - macOS
+          - Linux
+      target:
+        description: "What to build"
+        required: true
+        type: choice
+        options:
+          - desktop
+          - wasm
+          - android
+          - ios
+          - robot-example
+      example:
+        description: "Robot example name (only used when target is robot-example)"
+        required: false
+        type: string
+      run_it:
+        description: "Run the robot example instead of only building it"
+        required: false
+        type: boolean
+        default: true
+
+concurrency:
+  group: build-one-${{ github.ref }}-${{ inputs.runner }}-${{ inputs.target }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ inputs.target }} on ${{ inputs.runner }}
+    runs-on: >-
+      ${{ inputs.runner == 'macOS'
+          && fromJSON('["self-hosted", "macOS", "ARM64"]')
+          || fromJSON('["self-hosted", "Linux", "cranpose-heavy"]') }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Provision the pinned toolchain and just
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          rustc --version
+          command -v just >/dev/null || cargo install just --locked
+
+      - name: Desktop
+        if: inputs.target == 'desktop'
+        run: cargo build -p desktop-app
+
+      - name: Web
+        if: inputs.target == 'wasm'
+        run: |
+          rustup target add wasm32-unknown-unknown
+          command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
+          just web
+
+      - name: Android
+        if: inputs.target == 'android'
+        run: just android
+
+      - name: iOS
+        if: inputs.target == 'ios'
+        run: |
+          rustup target add aarch64-apple-ios-sim
+          just ios-sim
+
+      - name: Robot example
+        if: inputs.target == 'robot-example'
+        run: |
+          if [ -z "${{ inputs.example }}" ]; then
+            echo "target robot-example requires an example name" >&2
+            exit 1
+          fi
+          if [ "${{ inputs.run_it }}" = "true" ]; then
+            xvfb-run -a -s "-screen 0 1280x800x24" just robot-one '${{ inputs.example }}'
+          else
+            just robot-build
+          fi
+
+      - name: Upload robot artifacts
+        if: always() && inputs.target == 'robot-example'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: robot-${{ inputs.example }}
+          path: |
+            robot_test.log
+            robot_test_summary.txt
+          if-no-files-found: ignore

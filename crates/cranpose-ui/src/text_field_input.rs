@@ -5,9 +5,12 @@
 //!
 //! Having a single implementation prevents behavioral drift between the two paths.
 
-use crate::key_event::{KeyCode, KeyEvent};
-use crate::word_boundaries::{find_word_end, find_word_start};
 use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState, TextRange};
+
+use crate::{
+    key_event::{KeyCode, KeyEvent},
+    word_boundaries::{find_word_end, find_word_start},
+};
 
 /// Shared keyboard event handling implementation.
 ///

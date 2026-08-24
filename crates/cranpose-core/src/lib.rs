@@ -1,5 +1,4 @@
 #![doc = r"Core runtime pieces for the Cranpose experiment."]
-#![deny(unsafe_code)]
 
 pub extern crate self as cranpose_core;
 
@@ -216,18 +215,21 @@ pub fn in_applied_snapshot() -> bool {
     IN_APPLIED_SNAPSHOT.with(|c| c.get())
 }
 
+use std::{
+    any::{Any, TypeId},
+    cell::{Cell, Ref, RefCell, RefMut},
+    cmp::Reverse,
+    collections::BinaryHeap,
+    hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
+    rc::{Rc, Weak},
+};
+
 #[cfg(test)]
 pub use runtime::{TestRuntime, TestScheduler};
+use smallvec::SmallVec;
 
 use crate::collections::map::{HashMap, HashSet};
-use smallvec::SmallVec;
-use std::any::{Any, TypeId};
-use std::cell::{Cell, Ref, RefCell, RefMut};
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
-use std::hash::{Hash, Hasher};
-use std::ops::{Deref, DerefMut};
-use std::rc::{Rc, Weak};
 
 pub type Key = u64;
 pub type NodeId = usize;
@@ -932,8 +934,7 @@ pub enum Phase {
     Layout,
 }
 
-pub use composer_context::note_nested_slots_host;
-pub use composer_context::with_composer as with_current_composer;
+pub use composer_context::{note_nested_slots_host, with_composer as with_current_composer};
 
 #[allow(non_snake_case)]
 pub fn withCurrentComposer<R>(f: impl FnOnce(&Composer) -> R) -> R {

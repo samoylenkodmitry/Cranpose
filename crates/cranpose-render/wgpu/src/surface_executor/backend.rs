@@ -1,18 +1,21 @@
-use crate::effect_renderer::{
-    CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
-    ShaderCompositeBatchItem,
-};
-use crate::offscreen::OffscreenTarget;
-use crate::scene::{
-    BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw, ShadowDraw, TextDraw,
-};
-use crate::surface_requirements::SurfaceRequirementSet;
+use std::{ops::Range, rc::Rc};
+
 use cranpose_core::NodeId;
-use cranpose_render_common::graph::LayerNode;
-use cranpose_render_common::raster_cache::LayerRasterCacheKey;
+use cranpose_render_common::{graph::LayerNode, raster_cache::LayerRasterCacheKey};
 use cranpose_ui_graphics::{BlendMode, Brush, LayerShape, Rect, RenderEffect, RuntimeShader};
-use std::ops::Range;
-use std::rc::Rc;
+
+use crate::{
+    effect_renderer::{
+        CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
+        ShaderCompositeBatchItem,
+    },
+    offscreen::OffscreenTarget,
+    scene::{
+        BackdropLayer, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw, ShadowDraw,
+        TextDraw,
+    },
+    surface_requirements::SurfaceRequirementSet,
+};
 
 pub(crate) struct LayerSurface {
     pub(crate) target: LayerSurfaceTexture,
@@ -347,8 +350,9 @@ pub(crate) trait SurfaceExecutionBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::LayerSurfaceRoundedClip;
     use cranpose_ui_graphics::Rect;
+
+    use super::LayerSurfaceRoundedClip;
 
     #[test]
     fn rounded_clip_mask_maps_surface_subrect_to_destination_pixels() {

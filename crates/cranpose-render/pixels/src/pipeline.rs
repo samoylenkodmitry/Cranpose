@@ -1,30 +1,31 @@
 use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::graph::{
-    LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
-    RenderNode, TextPrimitiveNode,
+use cranpose_render_common::{
+    graph::{
+        LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
+        RenderNode, TextPrimitiveNode,
+    },
+    graph_scene::RenderDiagnostics,
+    hit_graph::{collect_hits_from_graph as collect_common_hits, HitGraphSink},
+    layer_composition::local_content_layer,
+    layer_shadow::layer_shadow_geometry,
+    layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
+    primitive_emit::{
+        draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
+        DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
+    },
+    Brush,
 };
-use cranpose_render_common::graph_scene::RenderDiagnostics;
-use cranpose_render_common::hit_graph::{
-    collect_hits_from_graph as collect_common_hits, HitGraphSink,
-};
-use cranpose_render_common::layer_composition::local_content_layer;
-use cranpose_render_common::layer_shadow::layer_shadow_geometry;
-use cranpose_render_common::layer_transform::{
-    apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale,
-};
-use cranpose_render_common::primitive_emit::{
-    draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
-    DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
-};
-use cranpose_render_common::Brush;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
-use cranpose_ui::text::{TextDecoration, TextStyle};
-use cranpose_ui::{measure_text, LayoutBox, TextLayoutOptions};
+use cranpose_ui::{
+    measure_text,
+    text::{TextDecoration, TextStyle},
+    LayoutBox, TextLayoutOptions,
+};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
 use cranpose_ui_graphics::{
@@ -32,9 +33,9 @@ use cranpose_ui_graphics::{
     RenderEffect, RoundedCornerShape,
 };
 
-use crate::scene::{ClickAction, RasterScene, Scene};
-use crate::style::{
-    apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii,
+use crate::{
+    scene::{ClickAction, RasterScene, Scene},
+    style::{apply_layer_to_brush, apply_layer_to_color, combine_layers, scale_corner_radii},
 };
 
 #[cfg(test)]
@@ -1380,14 +1381,17 @@ fn push_shadow_primitive(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_render_common::{
+        graph::{
+            CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry,
+            PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
+        },
+        raster_cache::LayerRasterCacheHashes,
+    };
+    use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
+
     use super::*;
     use crate::scene::RasterScene;
-    use cranpose_render_common::graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode,
-    };
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui_graphics::{CornerRadii, ImageBitmap, ImageSampling};
 
     fn with_test_app_context<R>(block: impl FnOnce() -> R) -> R {
         let app_context = cranpose_ui::AppContext::new();

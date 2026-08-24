@@ -29,9 +29,8 @@
 //! works in UTF-8 bytes, Java in UTF-16 code units.
 #![allow(unsafe_code)]
 
-use crate::android_jni::{
-    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
-};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
 use android_activity::AndroidAppWaker;
 use cranpose_app_shell::ImeEditorState;
 use jni::{
@@ -40,7 +39,10 @@ use jni::{
     sys::{jint, jlong},
     EnvUnowned, Outcome,
 };
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use crate::android_jni::{
+    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
+};
 
 const TEXT_INPUT_CLASS: &str = "dev/cranpose/android/CranposeTextInput";
 

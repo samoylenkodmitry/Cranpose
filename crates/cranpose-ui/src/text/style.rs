@@ -1,11 +1,6 @@
-use super::decoration::{Shadow, TextDecoration};
-use super::font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
-use super::paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent};
-use super::unit::TextUnit;
-use crate::modifier::{Brush, Color};
-use cranpose_ui_graphics::{FxHasher, RenderHash};
 use std::hash::{Hash, Hasher};
 
+use cranpose_ui_graphics::{FxHasher, RenderHash};
 /// The line-height policy lives with the drawing-side text types, because a
 /// [`DrawScope`](cranpose_ui_graphics::DrawScope) has to be able to name it too:
 /// a run drawn through a canvas and a `Text` composable on the same screen must
@@ -14,6 +9,14 @@ use std::hash::{Hash, Hasher};
 pub use cranpose_ui_graphics::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim,
 };
+
+use super::{
+    decoration::{Shadow, TextDecoration},
+    font::{FontFamily, FontStyle, FontSynthesis, FontWeight},
+    paragraph::{Hyphens, LineBreak, TextAlign, TextDirection, TextIndent},
+    unit::TextUnit,
+};
+use crate::modifier::{Brush, Color};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaselineShift(pub f32);
@@ -629,8 +632,10 @@ fn hash_paragraph_style<H: Hasher>(paragraph: &ParagraphStyle, state: &mut H) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::modifier::Brush;
-    use crate::text::{FontFamily, TextDirection};
+    use crate::{
+        modifier::Brush,
+        text::{FontFamily, TextDirection},
+    };
 
     #[test]
     fn baseline_shift_reports_specified() {

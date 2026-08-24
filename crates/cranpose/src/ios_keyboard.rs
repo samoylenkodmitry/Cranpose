@@ -14,10 +14,20 @@
 //! what makes swipe-the-spacebar cursor movement and selection work.
 #![allow(unsafe_code)]
 
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Mutex, OnceLock,
+    },
+};
+
 use cranpose_ui::text_input_session::{set_platform_text_input_handler, PlatformTextInputHandler};
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    define_class, msg_send, rc::Retained, runtime::ProtocolObject, DefinedClass, MainThreadMarker,
+    MainThreadOnly,
+};
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};
 use objc2_ui_kit::{
@@ -25,11 +35,6 @@ use objc2_ui_kit::{
     UITextInputTokenizer, UITextInputTraits, UITextLayoutDirection, UITextPosition, UITextRange,
     UITextSelectionRect, UITextStorageDirection, UIView,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Mutex;
-use std::sync::OnceLock;
 
 // --------------------------------------------------------------- text mirror
 

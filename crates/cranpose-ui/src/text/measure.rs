@@ -1,17 +1,21 @@
-use crate::text_layout_result::TextLayoutResult;
+use std::{
+    borrow::Cow,
+    cell::{Cell, RefCell},
+    collections::{hash_map::Entry, HashMap, VecDeque},
+    hash::Hash,
+    ops::Range,
+    rc::Rc,
+};
+
 use cranpose_core::NodeId;
-use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
-use std::collections::{hash_map::Entry, HashMap, VecDeque};
-use std::hash::Hash;
-use std::ops::Range;
-use std::rc::Rc;
 use web_time::Instant;
 
-use super::layout_options::{TextLayoutOptions, TextOverflow};
-use super::paragraph::{Hyphens, LineBreak};
-use super::style::TextStyle;
-use crate::font_scale::FontScaleCurve;
+use super::{
+    layout_options::{TextLayoutOptions, TextOverflow},
+    paragraph::{Hyphens, LineBreak},
+    style::TextStyle,
+};
+use crate::{font_scale::FontScaleCurve, text_layout_result::TextLayoutResult};
 
 const ELLIPSIS: &str = "\u{2026}";
 const DEFAULT_FONT_SIZE_SP: f32 = 14.0;
@@ -2299,10 +2303,13 @@ fn char_boundaries(text: &str) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::text::{Hyphens, LineBreak, ParagraphStyle, TextUnit};
-    use crate::text_layout_result::TextLayoutResult;
     use std::cell::Cell;
+
+    use super::*;
+    use crate::{
+        text::{Hyphens, LineBreak, ParagraphStyle, TextUnit},
+        text_layout_result::TextLayoutResult,
+    };
 
     #[test]
     fn text_layout_telemetry_env_flag_is_not_process_cached() {

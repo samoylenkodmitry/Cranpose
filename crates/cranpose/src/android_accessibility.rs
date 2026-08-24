@@ -1,9 +1,8 @@
 //! Android `AccessibilityNodeProvider` bridge for the native canvas surface.
 #![allow(unsafe_code)]
 
-use crate::accessibility::{self, AccessibilityElement};
-use crate::android_accessibility_wire::encode_elements;
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
+use std::sync::{Mutex, OnceLock};
+
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use jni::{
@@ -12,7 +11,12 @@ use jni::{
     sys::{jfloat, jint},
     EnvUnowned,
 };
-use std::sync::{Mutex, OnceLock};
+
+use crate::{
+    accessibility::{self, AccessibilityElement},
+    android_accessibility_wire::encode_elements,
+    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+};
 
 static ACTIVATIONS: OnceLock<Mutex<Vec<(f32, f32)>>> = OnceLock::new();
 static CUSTOM_ACTIONS: OnceLock<Mutex<Vec<(i32, usize)>>> = OnceLock::new();

@@ -1,22 +1,26 @@
-use crate::collections::map::{HashMap, HashSet};
-use crate::retention::{RetainKey, RetentionManager};
-use crate::slot::{FinishGroupResult, PayloadKind};
-use crate::slot::{GroupStart, GroupStartKind, ValueSlotId};
+use std::{
+    any::Any,
+    cell::{Cell, RefCell, RefMut},
+    hash::Hash,
+    marker::PhantomData,
+    rc::{Rc, Weak},
+};
+
+use smallvec::SmallVec;
+
 use crate::{
-    composer_context, empty_local_stack, explicit_group_key_seed, runtime, Applier, ApplierHost,
-    ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key, LocalKey,
-    LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
+    collections::map::{HashMap, HashSet},
+    composer_context, empty_local_stack, explicit_group_key_seed,
+    retention::{RetainKey, RetentionManager},
+    runtime,
+    slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, ValueSlotId},
+    Applier, ApplierHost, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key,
+    LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
     ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
     RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
     SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
     StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
-use smallvec::SmallVec;
-use std::any::Any;
-use std::cell::{Cell, RefCell, RefMut};
-use std::hash::Hash;
-use std::marker::PhantomData;
-use std::rc::{Rc, Weak};
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
     slot: ValueSlotId,

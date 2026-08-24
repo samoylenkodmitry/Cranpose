@@ -1,8 +1,12 @@
 //! Framework-owned application-host state and controls.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicU64, AtomicU8, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+};
 
 /// Platform directory roots for application-owned files.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -312,7 +316,7 @@ pub fn dispatch_lifecycle_state(to: LifecycleState) {
 
 // ---- Observable lifecycle ------------------------------------------------
 
-/// The [`CompositionLocal`] carrying the host's current lifecycle state.
+/// The `CompositionLocal` carrying the host's current lifecycle state.
 ///
 /// [`ProvideLifecycle`] installs it; descendants read it and recompose on every
 /// transition, so a screen can pause its own work without registering an

@@ -63,7 +63,7 @@
 //! term cancels and the anchored item's top is
 //! `round_to_px(viewport/2 - h/2 - offset)` — its own height and nothing else.
 //! From there the measure pass walks outward one item at a time, stacking full
-//! heights the way [`stack_into`] does, and stops when a slot can no longer
+//! heights the way `stack_into` does, and stops when a slot can no longer
 //! reach the viewport. A shrunken row is always **inside** its unscaled slot
 //! (above the centre line the bottom edge is pinned, below it the top edge is),
 //! so a slot that misses the viewport cannot draw a pixel, and the walk is
@@ -83,7 +83,7 @@
 //! fractional item indices rather than in pixels — see
 //! [`crate::round_scroll_indicator::scaling_list_geometry`] — so what it reads
 //! is the window this list already placed, plus the count, plus the blank at
-//! each end. [`IndicatorState`] is that reading, filled by the measure pass and
+//! each end. `IndicatorState` is that reading, filled by the measure pass and
 //! lent out by [`WearScalingListState::with_indicator_list`]. The height cache
 //! reaches it in one place only, the auto-centring spacers, and cannot carry an
 //! estimate into a pixel: a spacer counts only while the row at its own end of
@@ -91,35 +91,41 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::density::Density;
-use crate::fling_animation::FlingAnimation;
-use crate::modifier::{
-    GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin,
+use std::{
+    cell::{Cell, RefCell},
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
 };
-use crate::round_scaling_list::{
-    leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
-    CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+
+use cranpose_core::{
+    internal::FrameCallbackRegistration, remember, rememberMutableStateOf, MutableState, NodeId,
+    SlotId,
 };
-use crate::round_scroll_indicator::{
-    scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength,
+use cranpose_foundation::{
+    lazy::{LazyItems, LazyLayoutKey},
+    VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY,
 };
-use crate::subcompose_layout::{
-    MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
-    SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
-};
-use crate::widgets::Layout;
-use cranpose_core::internal::FrameCallbackRegistration;
-use cranpose_core::{remember, rememberMutableStateOf, MutableState, NodeId, SlotId};
-use cranpose_foundation::lazy::{LazyItems, LazyLayoutKey};
-use cranpose_foundation::{VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY};
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
     Constraints, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placement,
 };
-use std::cell::{Cell, RefCell};
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    density::Density,
+    fling_animation::FlingAnimation,
+    modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
+    round_scaling_list::{
+        leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
+        CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+    },
+    round_scroll_indicator::{scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength},
+    subcompose_layout::{
+        MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
+        SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+    },
+    widgets::Layout,
+};
 
 /// The channel one item's scale and alpha travel down.
 ///

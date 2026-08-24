@@ -6,10 +6,11 @@
 //! general pasteboard instead of the in-process fallback.
 #![allow(unsafe_code)]
 
+use std::rc::Rc;
+
 use cranpose_ui::clipboard_session::{set_platform_clipboard, PlatformClipboard};
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
-use std::rc::Rc;
 
 /// Installs the iOS pasteboard as the platform clipboard for the current
 /// app context. Must be called with the context entered.

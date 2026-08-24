@@ -19,15 +19,19 @@
 //! This follows the principle that `MeasurePolicy` is for child layout, while modifier nodes
 //! handle content rendering and measurement.
 
-use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
+use std::{
+    cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
 use cranpose_foundation::{
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, SemanticsConfiguration, SemanticsNode, Size,
 };
-use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+
+use crate::text::{AnnotatedString, TextLayoutOptions, TextStyle};
 
 /// Node that stores text content and handles measurement, drawing, and semantics.
 ///
@@ -382,13 +386,13 @@ impl ModifierNodeElement for TextModifierElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::text::TextUnit;
-    use crate::text_layout_result::TextLayoutResult;
+    use std::{collections::hash_map::DefaultHasher, sync::mpsc};
+
     use cranpose_core::NodeId;
     use cranpose_foundation::BasicModifierNodeContext;
-    use std::collections::hash_map::DefaultHasher;
-    use std::sync::mpsc;
+
+    use super::*;
+    use crate::{text::TextUnit, text_layout_result::TextLayoutResult};
 
     fn hash_of(element: &TextModifierElement) -> u64 {
         let mut hasher = DefaultHasher::new();

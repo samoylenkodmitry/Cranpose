@@ -1,14 +1,17 @@
-use cranpose::AppLauncher;
-use cranpose_services::audio::{
-    AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, VoiceId,
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+    Arc,
 };
-use cranpose_services::haptics::{HapticFeedback, Haptics};
-use cranpose_services::image_picker::{ImagePicker, ImagePickerError, ImageSource};
-use cranpose_services::network_status::{NetworkMonitor, NetworkStatus};
-use cranpose_services::notifier::{Notifier, NotifyRequest};
-use cranpose_services::purchases::{Product, PurchaseEvent, Purchases, StorePhase, StoreState};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+
+use cranpose::AppLauncher;
+use cranpose_services::{
+    audio::{AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, VoiceId},
+    haptics::{HapticFeedback, Haptics},
+    image_picker::{ImagePicker, ImagePickerError, ImageSource},
+    network_status::{NetworkMonitor, NetworkStatus},
+    notifier::{Notifier, NotifyRequest},
+    purchases::{Product, PurchaseEvent, Purchases, StorePhase, StoreState},
+};
 
 static AUDIO_CALLS: AtomicUsize = AtomicUsize::new(0);
 static HAPTIC_CALLS: AtomicUsize = AtomicUsize::new(0);

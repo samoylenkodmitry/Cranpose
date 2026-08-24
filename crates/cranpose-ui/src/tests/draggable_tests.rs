@@ -7,8 +7,8 @@
 //! modifier already consumed ends the gesture, and that a release places the
 //! control rather than flinging it onwards.
 
-use crate::draggable::DraggableState;
-use crate::{collect_modifier_slices, Modifier};
+use std::{cell::Cell, rc::Rc, sync::Arc};
+
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
@@ -16,9 +16,8 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::Point;
 use cranpose_ui_layout::Axis;
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
+
+use crate::{collect_modifier_slices, draggable::DraggableState, Modifier};
 
 fn with_test_runtime<T>(body: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));

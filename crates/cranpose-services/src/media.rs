@@ -30,16 +30,23 @@
 //! are latest-wins and bounded exactly like camera frames: a visualiser that
 //! falls behind draws the sound that is playing now and counts what it missed.
 
-use crate::background::{acquire_background_work, BackgroundWorkLease};
-use crate::host::LifecycleEvent;
-use crate::host::LifecycleState;
-use crate::registry::ServiceRegistry;
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cranpose_core::{rememberEventStream, EventStream, State};
 use parking_lot::Mutex;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+
+use crate::{
+    background::{acquire_background_work, BackgroundWorkLease},
+    host::{LifecycleEvent, LifecycleState},
+    registry::ServiceRegistry,
+};
 
 /// The gain applied while another app is being heard over this one.
 ///

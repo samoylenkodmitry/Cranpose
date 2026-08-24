@@ -1,9 +1,10 @@
+use smallvec::SmallVec;
+
 use super::super::GroupKey;
 use crate::{
     collections::map::{HashMap, HashSet},
     Key,
 };
-use smallvec::SmallVec;
 
 const INLINE_KEY_STATE_CAPACITY: usize = 8;
 

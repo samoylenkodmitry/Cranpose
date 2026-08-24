@@ -9,13 +9,14 @@
 //! cargo run --package desktop-app --example robot_progress_bar --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::find_button_in_semantics;
 use cranpose_ui::{
     Button, ButtonSpec, Column, ColumnSpec, Modifier, Size, Spacer, Text, TextStyle,
 };
 use desktop_app::app::{AnimationState, AsyncRuntimeTabContent, FrameStats};
-use std::time::Duration;
 
 const WINDOW_WIDTH: f32 = 900.0;
 const WINDOW_HEIGHT: f32 = 700.0;

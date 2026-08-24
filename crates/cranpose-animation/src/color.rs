@@ -9,9 +9,10 @@
 
 #![allow(non_snake_case)]
 
-use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};
 use cranpose_core::{with_current_composer, Owned, State};
 use cranpose_ui_graphics::Color;
+
+use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};
 
 impl Lerp for Color {
     /// Linearly interpolate each RGBA channel, including alpha.

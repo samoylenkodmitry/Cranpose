@@ -9,6 +9,12 @@ mod output_paths;
 mod perf_contract;
 mod text_showcase_external_helpers;
 
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_testing::{find_button_exact_in_semantics, find_text_in_semantics};
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
@@ -16,9 +22,6 @@ use external_x11_frame_telemetry::{
     clear_records, install_primary_frame_telemetry_logger, summarize_records, FrameTelemetryRecord,
 };
 use image::RgbaImage;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use text_showcase_external_helpers::{
     capture_x11_window, find_window_id, focus_x11_window, mouse_down_x11_button,
     mouse_up_x11_button, move_x11_mouse_in_window,

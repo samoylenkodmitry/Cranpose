@@ -6,13 +6,19 @@
 //! into a shared cell and picked up by the next sample, so applying a curve
 //! never blocks the audio thread or interrupts what is playing.
 
-use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
+use std::{
+    f32::consts::PI,
+    sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cranpose_services::{EqualizerBand, OCTAVE_BAND_CENTERS_HZ};
 use parking_lot::Mutex;
-use std::f32::consts::PI;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+
+use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 
 /// The centres this backend's filters sit on. The contract's own set, so a
 /// curve saved on a desktop means the same thing in a browser.

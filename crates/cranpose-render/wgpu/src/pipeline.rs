@@ -3,20 +3,19 @@
 use std::{ops::Range, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
-use cranpose_render_common::geometry::{expand_blurred_rect, union_rect};
-use cranpose_render_common::hit_graph::{
-    collect_hits_from_graph as collect_common_hits, HitGraphSink,
-};
-use cranpose_render_common::layer_shadow::layer_shadow_geometry;
-use cranpose_render_common::layer_transform::{apply_layer_to_rect, layer_uniform_scale};
 #[cfg(test)]
 use cranpose_render_common::primitive_emit::resolve_clip;
-use cranpose_render_common::primitive_emit::{
-    draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
-    ShapeDrawParams, TextDrawParams,
+use cranpose_render_common::{
+    geometry::{expand_blurred_rect, union_rect},
+    hit_graph::{collect_hits_from_graph as collect_common_hits, HitGraphSink},
+    layer_shadow::layer_shadow_geometry,
+    layer_transform::{apply_layer_to_rect, layer_uniform_scale},
+    primitive_emit::{
+        draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
+        ShapeDrawParams, TextDrawParams,
+    },
+    Brush, RenderScene,
 };
-use cranpose_render_common::Brush;
-use cranpose_render_common::RenderScene;
 #[cfg(test)]
 use cranpose_ui::layout_text;
 #[cfg(test)]
@@ -25,18 +24,22 @@ use cranpose_ui::measure_text;
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
 use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
-use cranpose_ui::text::{TextDecoration, TextDrawStyle, TextStyle};
-use cranpose_ui::text_layout_result::TextLayoutResult;
+use cranpose_ui::{
+    text::{TextDecoration, TextDrawStyle, TextStyle},
+    text_layout_result::TextLayoutResult,
+    LayoutBox, TextLayoutOptions,
+};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
-use cranpose_ui::{LayoutBox, TextLayoutOptions};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
     RoundedCornerShape, RuntimeShader, TileMode,
 };
 
-use crate::scene::{ClickAction, CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw};
-use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
+use crate::{
+    scene::{ClickAction, CompositorScene, DrawShape, Scene, ShadowDraw, TextDraw},
+    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
+};
 
 // Re-use style functions from a local copy
 mod style;
@@ -2297,13 +2300,14 @@ fn push_shadow_primitive(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
+    use cranpose_ui::{
+        text::TextMotion,
+        text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
+    };
+
     use super::*;
     use crate::scene::CompositorScene as Scene;
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui::text::TextMotion;
-    use cranpose_ui::text_layout_result::{
-        GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult,
-    };
 
     fn synthetic_text_layout(
         text: &str,

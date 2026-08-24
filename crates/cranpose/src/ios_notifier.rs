@@ -8,24 +8,28 @@
 //! deep-link payload reaches [`cranpose_services::push_notification_deeplink`].
 #![allow(unsafe_code)]
 
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    sync::{Arc, Mutex, OnceLock},
+};
+
 use block2::RcBlock;
 use cranpose_services::{
     push_notification_deeplink, set_platform_notifier, Notifier, NotifyRequest,
 };
-use objc2::rc::Retained;
-use objc2::runtime::{Bool, ProtocolObject};
-use objc2::{define_class, msg_send, MainThreadMarker, MainThreadOnly};
+use objc2::{
+    define_class, msg_send,
+    rc::Retained,
+    runtime::{Bool, ProtocolObject},
+    MainThreadMarker, MainThreadOnly,
+};
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
     UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
     UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
     UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 
 /// Maps a delivered notification's identifier to its deep-link payload, so a
 /// tap can recover it without touching the `userInfo` dictionary (whose objc2

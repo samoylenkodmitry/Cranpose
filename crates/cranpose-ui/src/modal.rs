@@ -6,9 +6,12 @@
 //! application shell asks the innermost one to close when the platform reports
 //! a back request. Nothing outside the framework registers or dispatches.
 
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_core::{compositionLocalOf, try_mutableStateOf, CompositionLocal, MutableState};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 
 struct ModalEntry {
     id: u64,

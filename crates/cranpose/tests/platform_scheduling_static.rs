@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn crate_source(path: &str) -> String {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -62,54 +61,87 @@ fn ci_architecture_budget_runs_required_gates() {
     let heavy_workflow = workspace_source(".github/workflows/heavy-selfhosted.yml");
     let release_workflow = workspace_source(".github/workflows/release.yml");
     let pages_workflow = workspace_source(".github/workflows/deploy-pages.yml");
+    let justfile = workspace_source("justfile");
 
     assert!(
         workflow.contains("architecture-budget:")
             && workflow.contains("name: architecture budgets (linux)"),
         "Rust CI should keep a dedicated architecture budget job"
     );
+
+    // The gates themselves live in the justfile, and CI invokes the recipe. That
+    // is the point of the justfile: a gate spelled in two places drifts, and this
+    // repository had nine such divergences before it existed. So assert the
+    // command in the justfile and the invocation in the workflow, never the
+    // command in the workflow.
+    for recipe in [
+        "run: just fmt-check",
+        "run: just typos",
+        "run: just versions",
+        "run: just test",
+        "run: just clippy",
+        "run: just doc",
+        "run: just budgets",
+        "run: just clippy-wasm",
+        "run: just web",
+    ] {
+        assert!(
+            workflow.contains(recipe),
+            "Rust CI should invoke `{recipe}` rather than spelling the gate inline"
+        );
+    }
     assert!(
-        workflow.contains("cargo build --workspace --no-default-features"),
-        "architecture budget job should prove the workspace builds with default features disabled"
+        workflow.contains("command -v just >/dev/null || cargo install just --locked"),
+        "every CI job that runs a recipe must provision `just` first"
+    );
+
+    assert!(
+        justfile.contains("cargo build --workspace --no-default-features"),
+        "the budgets recipe should prove the workspace builds with default features disabled"
     );
     assert!(
-        workflow.contains("cargo check --workspace --all-features"),
-        "architecture budget job should prove the all-features graph still type-checks"
+        justfile.contains("cargo check --workspace --all-features"),
+        "the budgets recipe should prove the all-features graph still type-checks"
     );
     assert!(
-        workflow.contains("cargo xtask dependency-budget --explain"),
-        "architecture budget job should print duplicate dependency owner details"
+        justfile.contains("cargo xtask dependency-budget --explain"),
+        "the budgets recipe should print duplicate dependency owner details"
     );
     assert!(
-        workflow.contains("cargo xtask dependency-budget --strict --explain")
-            && workflow
+        justfile.contains("cargo xtask dependency-budget --strict --explain")
+            && justfile
                 .contains("cargo xtask dependency-budget --strict --slice desktop-platform --explain")
-            && workflow.contains(
+            && justfile.contains(
                 "cargo xtask dependency-budget --strict --slice optional-features --explain"
             ),
-        "architecture budget job should enforce full strict zero duplicates and keep focused clean-slice diagnostics"
+        "the budgets recipe should enforce full strict zero duplicates and keep focused clean-slice diagnostics"
     );
     assert!(
-        workflow.contains("cargo xtask binary-size")
-            && workflow.contains("--package isolated-demo")
-            && workflow.contains("--bin isolated-demo")
-            && workflow.contains("--profile release-small")
-            && workflow.contains("--max-bytes 15728640"),
-        "architecture budget job should enforce the accessibility-enabled release-small binary size ceiling"
+        justfile.contains("cargo xtask binary-size")
+            && justfile.contains("--package isolated-demo")
+            && justfile.contains("--bin isolated-demo")
+            && justfile.contains("--profile release-small")
+            && justfile.contains("--max-bytes 15728640"),
+        "the budgets recipe should enforce the accessibility-enabled release-small binary size ceiling"
+    );
+    assert!(
+        justfile.contains("apps/desktop-demo/build-web.sh --release"),
+        "the web recipe must pass --release explicitly so the wasm-release profile and \
+         WASM size budget cannot depend on ambient CI defaults"
     );
     assert!(
         workflow.contains("wasm-build:")
             && workflow.contains("wasm-opt --version")
-            && workflow.contains("cargo install wasm-pack --version 0.13.1 --locked")
-            && workflow.contains("run: apps/desktop-demo/build-web.sh --release"),
-        "Rust CI should keep the web release build job wired through explicit build-web.sh --release so the wasm-release profile and WASM size budget cannot depend on ambient CI defaults"
+            && workflow.contains("cargo install wasm-pack --version 0.13.1 --locked"),
+        "Rust CI should keep the web release build job provisioned with a pinned wasm-pack"
     );
+
     assert!(
         pages_workflow.contains("Deploy to GitHub Pages")
             && pages_workflow.contains("Install binaryen (wasm-opt) for size optimization")
             && pages_workflow.contains("cargo install wasm-pack --version 0.13.1")
             && pages_workflow.contains("./build-web.sh --release")
-            && pages_workflow.contains("actions/upload-pages-artifact@v5"),
+            && pages_workflow.contains("actions/upload-pages-artifact@"),
         "GitHub Pages deployment must publish the same budgeted optimized WASM produced by build-web.sh --release"
     );
     assert!(
@@ -123,6 +155,65 @@ fn ci_architecture_budget_runs_required_gates() {
             && heavy_workflow.contains("test -f \"$ANDROID_NDK_HOME/source.properties\"")
             && release_workflow.contains("bash scripts/ci/install_android_ndk.sh 27.0.12077973"),
         "self-hosted Android CI and hosted release builds should provision and validate the pinned NDK"
+    );
+}
+
+/// Every GitHub Action is pinned to a commit, not to a movable tag.
+///
+/// A tag like `@v6` is a pointer its owner can repoint at any commit. These
+/// workflows run on persistent self-hosted machines that keep their workspaces
+/// and caches between runs, so a repointed tag executes with far more reach
+/// than it would on a throwaway cloud runner. The version stays in a trailing
+/// comment so the pin is still readable.
+#[test]
+fn workflow_actions_are_pinned_to_commit_shas() {
+    let mut unpinned = Vec::new();
+    let mut seen = 0usize;
+    for name in [
+        "rust.yml",
+        "heavy-selfhosted.yml",
+        "publish.yml",
+        "release.yml",
+        "deploy-pages.yml",
+        "build-one.yml",
+    ] {
+        let workflow = workspace_source(&format!(".github/workflows/{name}"));
+        for line in workflow.lines() {
+            let trimmed = line.trim();
+            let Some(reference) = trimmed
+                .strip_prefix("- uses:")
+                .or_else(|| trimmed.strip_prefix("uses:"))
+            else {
+                continue;
+            };
+            let reference = reference.trim();
+            seen += 1;
+            // Local composite actions are referenced by path, not by ref.
+            if reference.starts_with('.') {
+                continue;
+            }
+            let Some((_, git_ref)) = reference.split_once('@') else {
+                unpinned.push(format!("{name}: {reference} (no ref at all)"));
+                continue;
+            };
+            let git_ref = git_ref.split_whitespace().next().unwrap_or(git_ref);
+            let pinned = git_ref.len() == 40 && git_ref.chars().all(|c| c.is_ascii_hexdigit());
+            if !pinned {
+                unpinned.push(format!("{name}: {reference}"));
+            }
+        }
+    }
+
+    // A sweep that matches nothing passes for the wrong reason. This test was
+    // once deleted wholesale and its absence looked exactly like success, so
+    // pin the fact that it is still looking at something.
+    assert!(
+        seen >= 10,
+        "expected to inspect many action references, saw only {seen}: the parser has drifted"
+    );
+    assert!(
+        unpinned.is_empty(),
+        "every workflow action must be pinned to a 40-character commit SHA; found movable refs: {unpinned:?}"
     );
 }
 
@@ -1736,35 +1827,84 @@ fn workspace_sources_do_not_cfg_on_robot_app_feature() {
     );
 }
 
+/// Unsafe code is denied once, by the workspace, for every member.
+///
+/// This used to be thirty-one copies of `#![deny(unsafe_code)]`, one per crate
+/// root, so a new crate stayed unprotected until somebody remembered the line.
+/// Cargo applies `[workspace.lints]` instead, and the only thing a new crate
+/// carries is `[lints] workspace = true`. The FFI modules that genuinely need
+/// unsafe still opt in with a module-level `#![allow(unsafe_code)]`: a source
+/// attribute outranks a lint level Cargo passes on the command line.
 #[test]
-fn crate_roots_deny_unsafe_code() {
+fn every_workspace_member_inherits_the_unsafe_code_denial() {
     let cranpose_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_dir = cranpose_dir
         .parent()
         .and_then(Path::parent)
         .expect("cranpose crate should live under workspace crates directory");
-    let roots = workspace_crate_roots(workspace_dir);
+    let manifest = std::fs::read_to_string(workspace_dir.join("Cargo.toml"))
+        .expect("failed to read workspace manifest");
 
-    let missing = roots
+    assert!(
+        manifest.contains("[workspace.lints.rust]"),
+        "workspace manifest must declare a `[workspace.lints.rust]` table"
+    );
+    assert!(
+        manifest.contains("unsafe_code = \"deny\""),
+        "`[workspace.lints.rust]` must deny `unsafe_code`"
+    );
+
+    let members = workspace_members(&manifest);
+    assert!(
+        !members.is_empty(),
+        "workspace manifest declared no members"
+    );
+
+    let missing = members
         .iter()
-        .filter_map(|path| {
-            let relative = path
-                .strip_prefix(workspace_dir)
-                .expect("crate root should live under workspace");
-            let source = std::fs::read_to_string(path)
-                .unwrap_or_else(|err| panic!("failed to read {}: {err}", relative.display()));
-            (!source.contains("#![deny(unsafe_code)]")).then(|| relative.display().to_string())
+        .filter(|member| {
+            let path = workspace_dir.join(member).join("Cargo.toml");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+            !manifest_inherits_workspace_lints(&text)
         })
+        .cloned()
         .collect::<Vec<_>>();
 
     assert!(
-        !roots.is_empty(),
-        "workspace crate root discovery found no roots"
-    );
-    assert!(
         missing.is_empty(),
-        "crate roots must deny unsafe code; missing in {missing:?}"
+        "every workspace member must carry `[lints] workspace = true`; missing in {missing:?}"
     );
+}
+
+/// The member paths declared in the workspace manifest's `members` array.
+fn workspace_members(manifest: &str) -> Vec<String> {
+    let Some(rest) = manifest.split_once("members = [").map(|(_, rest)| rest) else {
+        return Vec::new();
+    };
+    let Some((list, _)) = rest.split_once(']') else {
+        return Vec::new();
+    };
+    list.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            let inner = trimmed.strip_prefix('"')?;
+            inner.split('"').next().map(str::to_owned)
+        })
+        .collect()
+}
+
+/// Whether a member manifest opts in to the workspace lint table.
+fn manifest_inherits_workspace_lints(manifest: &str) -> bool {
+    let Some(rest) = manifest.split_once("[lints]").map(|(_, rest)| rest) else {
+        return false;
+    };
+    rest.lines()
+        .take_while(|line| !line.trim_start().starts_with('['))
+        .any(|line| {
+            let normalised = line.split_whitespace().collect::<String>();
+            normalised == "workspace=true"
+        })
 }
 
 #[test]
@@ -1830,6 +1970,9 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
         if trimmed.starts_with("//") {
             return false;
         }
+        // `apps/isolated-demo` is its own workspace, so it cannot inherit
+        // `[workspace.lints]` and still carries the crate-root attribute. The
+        // attribute names the lint; it is not an FFI boundary.
         (trimmed.contains("unsafe") || trimmed.contains("#[no_mangle]"))
             && trimmed != "#![deny(unsafe_code)]"
     })
@@ -2115,18 +2258,6 @@ fn rust_sources(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn workspace_crate_roots(workspace_dir: &Path) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for source_root in ["crates", "apps", "xtask"] {
-        for path in rust_sources(&workspace_dir.join(source_root)) {
-            if is_crate_root_source(&path) {
-                roots.push(path);
-            }
-        }
-    }
-    roots
-}
-
 /// Every store backend has to announce news, not only wake the loop.
 ///
 /// `observe_store_news` exists because `take_event`/`store_state` are polling
@@ -2327,19 +2458,6 @@ fn the_browser_host_installs_a_platform_clipboard() {
         "the browser host must install a platform clipboard, or the in-tree selection \
          menu's Copy/Cut never leave the page"
     );
-}
-
-fn is_crate_root_source(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    if !matches!(file_name, "lib.rs" | "main.rs") {
-        return false;
-    }
-    path.parent()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        == Some("src")
 }
 
 fn collect_rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {

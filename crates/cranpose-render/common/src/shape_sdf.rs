@@ -160,9 +160,11 @@ pub fn arc_coverage(point: Point, arc: &ArcGeometry) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_ui_graphics::TAU;
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    use cranpose_ui_graphics::TAU;
+
+    use super::*;
 
     fn arc(inner: f32, outer: f32, start: f32, sweep: f32, cap: StrokeCap) -> ArcGeometry {
         ArcGeometry::new(Point::ZERO, inner, outer, start, sweep, cap)

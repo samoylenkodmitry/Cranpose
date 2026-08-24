@@ -5,9 +5,7 @@
 //!
 //! Based on JC's `LazyLayoutIntervalContent` pattern.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// Key type for lazy list items.
 ///
@@ -169,7 +167,7 @@ impl From<usize> for LazyItems {
 
 /// Receiver scope for lazy list content definition.
 ///
-/// Used by [`LazyColumn`] and [`LazyRow`] to define list items.
+/// Used by `LazyColumn` and `LazyRow` to define list items.
 /// Matches Jetpack Compose's `LazyListScope`.
 ///
 /// # Example
@@ -358,7 +356,7 @@ impl LazyListIntervalContent {
     /// item that was previously at the scroll position (identified by key).
     ///
     /// Uses cached HashMap for O(1) lookup when the list has <= 10000 items.
-    /// For larger lists, use [`get_index_by_key_in_range`] with a [`NearestRangeState`].
+    /// For larger lists, use `get_index_by_key_in_range` with a `NearestRangeState`.
     #[must_use]
     pub fn get_index_by_key(&self, key: LazyLayoutKey) -> Option<usize> {
         // Convert key to slot_id and use the cache
@@ -388,7 +386,7 @@ impl LazyListIntervalContent {
     ///
     /// Uses cached HashMap for O(1) lookup on large lists. For small lists (< 64 items),
     /// uses linear search to avoid HashMap allocation overhead.
-    /// For hot paths during scrolling, prefer [`get_index_by_slot_id_in_range`] first.
+    /// For hot paths during scrolling, prefer `get_index_by_slot_id_in_range` first.
     #[must_use]
     pub fn get_index_by_slot_id(&self, slot_id: u64) -> Option<usize> {
         // For small lists, linear search is faster than building/using the cache
@@ -525,9 +523,9 @@ impl LazyLayoutItemProvider for LazyListIntervalContent {
 ///
 /// | Method | Upfront Cost | Use Case |
 /// |--------|--------------|----------|
-/// | [`items_slice`] | O(n) copy | Convenience, small data |
-/// | [`items_slice_rc`] | O(1) | Data already in `Rc<[T]>` |
-/// | [`items_with_provider`] | O(1) | Lazy on-demand access |
+/// | `items_slice` | O(n) copy | Convenience, small data |
+/// | `items_slice_rc` | O(1) | Data already in `Rc<[T]>` |
+/// | `items_with_provider` | O(1) | Lazy on-demand access |
 pub trait LazyListScopeExt: LazyListScope {
     /// Adds items from a slice with an item-aware content closure.
     ///
@@ -541,9 +539,9 @@ pub trait LazyListScopeExt: LazyListScope {
     ///
     /// | Alternative | When to Use |
     /// |-------------|-------------|
-    /// | [`items_slice_rc`] | Data is already in `Rc<[T]>` - **zero copy** |
-    /// | [`items_vec`] | Data is in a `Vec<T>` you can give up ownership of - **efficient** |
-    /// | [`items_with_provider`] | Need lazy on-demand access - **zero copy** |
+    /// | `items_slice_rc` | Data is already in `Rc<[T]>` - **zero copy** |
+    /// | `items_vec` | Data is in a `Vec<T>` you can give up ownership of - **efficient** |
+    /// | `items_with_provider` | Need lazy on-demand access - **zero copy** |
     ///
     /// After the initial copy, the closure captures a reference-counted pointer,
     /// so subsequent Rc clones are O(1).
@@ -758,8 +756,9 @@ impl<T: LazyListScope + ?Sized> LazyListScopeExt for T {}
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::cell::Cell;
+
+    use super::*;
 
     #[test]
     fn key_overflow_warning_suppression_has_no_process_global_state() {

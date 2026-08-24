@@ -31,13 +31,19 @@
 //! cargo run --package desktop-app --example robot_liquid_tab_bar_pill_containment --features desktop,robot-app
 //! ```
 
-use cranpose::liquid::prelude::*;
-use cranpose::widgets::{Box as CBox, BoxSpec};
-use cranpose::{rememberMutableStateOf, AppLauncher, Color, Modifier, RobotScreenshot, Size};
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
+
+use cranpose::{
+    liquid::prelude::*,
+    rememberMutableStateOf,
+    widgets::{Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, RobotScreenshot, Size,
+};
 
 const WINDOW_WIDTH: u32 = 880;
 const WINDOW_HEIGHT: u32 = 260;

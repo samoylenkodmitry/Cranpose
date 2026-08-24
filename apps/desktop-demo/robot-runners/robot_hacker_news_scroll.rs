@@ -12,6 +12,8 @@
 
 pub mod hacker_news_robot_support;
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot};
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::local_http_client;
@@ -23,7 +25,6 @@ use hacker_news_robot_support::{
     semantics_bounds, visible_comment_numbers, visible_mock_story_numbers, wait_for_comments_data,
     wait_for_no_text, wait_for_text, Bounds, LONG_COMMENT_SUFFIX,
 };
-use std::time::Duration;
 
 fn required_bounds(robot: &Robot, label: &str) -> Bounds {
     semantics_bounds(robot, label)

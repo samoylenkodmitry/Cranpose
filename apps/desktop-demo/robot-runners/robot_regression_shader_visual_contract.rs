@@ -4,6 +4,8 @@ mod output_paths;
 mod text_showcase_external_helpers;
 mod visual_contract_metrics;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     crop_screenshot_logical, find_button_in_semantics, find_text_in_semantics,
@@ -11,8 +13,6 @@ use cranpose_testing::{
 };
 use desktop_app::app::{self, DemoTab, ShaderSection, StartupSelection};
 use image::RgbaImage;
-use std::path::Path;
-use std::time::Duration;
 use text_showcase_external_helpers::{
     capture_x11_window, find_window_id, focus_x11_window, move_x11_mouse_in_window,
 };

@@ -19,21 +19,28 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use crate::composable;
-use crate::modifier::{Color, Modifier};
-use crate::text::{measure_text, AnnotatedString, TextStyle, TextUnit};
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::popup::{local_popup_viewport, Popup};
-use crate::widgets::{Row, RowSpec, Text};
-use crate::PointerInputScope;
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{remember, with_current_composer, SideEffect};
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{
     liquid_menu_glass_effect, GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size,
+};
+
+use crate::{
+    composable,
+    modifier::{Color, Modifier},
+    text::{measure_text, AnnotatedString, TextStyle, TextUnit},
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        popup::{local_popup_viewport, Popup},
+        Row, RowSpec, Text,
+    },
+    PointerInputScope,
 };
 
 /// Capsule height (dp) — the measured 133 px @3x.
@@ -351,7 +358,7 @@ struct MenuMotion {
 /// * `center_x` — window-space x to center the capsule on (the selection /
 ///   caret center); clamped to the screen margin.
 /// * `line_top_y` — window-space top of the selection's first line; the
-///   capsule bottom rides [`MENU_GAP_ABOVE_LINE`] above it.
+///   capsule bottom rides `MENU_GAP_ABOVE_LINE` above it.
 /// * `visible` — false while a handle drag is in flight; the menu dissolves
 ///   and rematerializes per the measured timings (it stays mounted while
 ///   fading).
@@ -680,10 +687,11 @@ pub fn CaretActionMenu(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
     use cranpose_foundation::PointerEvent;
     use cranpose_ui_graphics::Point;
+
+    use super::*;
+    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
 
     /// Collects the button's live pointer-input handler. Returns the owning
     /// [`ModifierNodeSlices`] too: it keeps the attached node (and its running

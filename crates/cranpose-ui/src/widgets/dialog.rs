@@ -13,13 +13,16 @@
 
 #![allow(non_snake_case)]
 
-use super::box_widget::{Box, BoxSpec};
-use super::popup::{local_popup_viewport, PopupDismissable};
-use crate::safe_area::window_insets;
-use crate::{composable, Modifier, SemanticsWidgetRole};
+use std::rc::Rc;
+
 use cranpose_ui_graphics::{Color, Point, Rect, Size};
 use cranpose_ui_layout::Alignment;
-use std::rc::Rc;
+
+use super::{
+    box_widget::{Box, BoxSpec},
+    popup::{local_popup_viewport, PopupDismissable},
+};
+use crate::{composable, safe_area::window_insets, Modifier, SemanticsWidgetRole};
 
 /// Why a dialog is being asked to close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,9 +117,13 @@ pub(crate) fn dialog_bounds(viewport: Size, insets: cranpose_ui_graphics::EdgeIn
 /// # fn Content() {}
 /// # let open = true;
 /// if open {
-///     Dialog(DialogSpec::default(), |_reason| { /* close it */ }, || {
-///         Content();
-///     });
+///     Dialog(
+///         DialogSpec::default(),
+///         |_reason| { /* close it */ },
+///         || {
+///             Content();
+///         },
+///     );
 /// }
 /// ```
 #[composable]
@@ -272,19 +279,21 @@ mod tests {
     /// held must not be left "focused" with nothing there to receive input.
     #[test]
     fn a_dialog_traps_focus_inside_it_and_releases_it_on_close() {
-        use crate::layout::{LayoutBox, LayoutEngine, LayoutTree};
-        use crate::text::TextStyle;
-        use crate::text_field_focus::{focused_editor_state, has_focused_field};
-        use crate::widgets::basic_text_field::BasicTextField;
-        use crate::widgets::popup::PopupHost;
+        use std::cell::{Cell, RefCell};
+
         use cranpose_core::{
             location_key, mutableStateOf, remember, Composition, MemoryApplier, MutableState,
             NodeId,
         };
-        use cranpose_foundation::text::TextFieldState;
-        use cranpose_foundation::{PointerEvent, PointerEventKind};
+        use cranpose_foundation::{text::TextFieldState, PointerEvent, PointerEventKind};
         use cranpose_ui_graphics::Size;
-        use std::cell::{Cell, RefCell};
+
+        use crate::{
+            layout::{LayoutBox, LayoutEngine, LayoutTree},
+            text::TextStyle,
+            text_field_focus::{focused_editor_state, has_focused_field},
+            widgets::{basic_text_field::BasicTextField, popup::PopupHost},
+        };
 
         let _app_context = crate::render_state::app_context_test_scope();
         crate::modal::clear_modals();

@@ -16,14 +16,18 @@
 //! on every bare `Text`. [`WearColors::content`] is that colour, kept separate
 //! for exactly that reason.
 
-use crate::modifier::Color;
-use crate::text::paragraph::TextAlign;
-use crate::text::style::{
-    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle,
-    PlatformParagraphStyle, SpanStyle, TextStyle,
+use crate::{
+    modifier::Color,
+    text::{
+        paragraph::TextAlign,
+        style::{
+            LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle,
+            PlatformParagraphStyle, SpanStyle, TextStyle,
+        },
+        FontFamily, FontWeight, TextUnit,
+    },
+    widgets::wear::color_appearance::set_luminance,
 };
-use crate::text::{FontFamily, FontWeight, TextUnit};
-use crate::widgets::wear::color_appearance::set_luminance;
 
 /// The colour roles these widgets read.
 ///

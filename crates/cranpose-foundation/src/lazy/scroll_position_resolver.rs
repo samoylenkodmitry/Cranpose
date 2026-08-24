@@ -3,8 +3,10 @@
 //! This module handles scroll position calculation and offset normalization,
 //! including jump optimization for large scrolls.
 
-use super::lazy_list_measure::LazyListMeasureConfig;
-use super::lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState};
+use super::{
+    lazy_list_measure::LazyListMeasureConfig,
+    lazy_list_state::{LazyListMeasureStateSnapshot, LazyListState},
+};
 
 /// Resolves and normalizes scroll position for lazy list measurement.
 ///
@@ -185,10 +187,12 @@ impl<'a> ScrollPositionResolver<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::lazy_list_state::test_helpers::{
-        new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
+    use super::{
+        super::lazy_list_state::test_helpers::{
+            new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
+        },
+        *,
     };
-    use super::*;
 
     #[test]
     fn test_apply_pending_scroll_delta_from_default_state() {

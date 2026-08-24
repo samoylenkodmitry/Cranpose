@@ -3,8 +3,7 @@
 //! `remember` served a stale parsed icon when the accordion's "Sections" row
 //! took over the slot of a row that had cached a chevron path.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
 use cranpose_core::{rememberKeyed, MutableState};
 use cranpose_macros::composable;

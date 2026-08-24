@@ -1,7 +1,6 @@
 //! Shadow configuration models used by drop/inner shadow modifiers.
 
-use crate::Point;
-use crate::{BlendMode, Brush, Color, Dp};
+use crate::{BlendMode, Brush, Color, Dp, Point};
 
 /// Density-independent offset for shadows.
 #[derive(Clone, Copy, Debug, PartialEq)]

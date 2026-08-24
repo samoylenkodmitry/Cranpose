@@ -11,5 +11,8 @@ categories.workspace = true
 readme = "README.md"
 description = "Android platform adapter for Cranpose"
 
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-ui-graphics = { workspace = true }

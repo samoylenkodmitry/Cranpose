@@ -8,17 +8,23 @@
 //! thread.
 #![allow(unsafe_code)]
 
+use std::{
+    fs::File,
+    io::{Read, Write},
+    os::fd::FromRawFd,
+    sync::{Arc, OnceLock},
+};
+
 use android_activity::AndroidApp;
 use cranpose_services::{
     set_writable_folder_store_factory, FolderEntry, FolderError, FolderReader, FolderWriter,
     WritableFolderStore, WritableFolderStoreRef, DEFAULT_CHUNK_LEN,
 };
-use jni::objects::{JByteArray, JObject, JString, JValue};
-use jni::{jni_sig, jni_str, Env};
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::fd::FromRawFd;
-use std::sync::{Arc, OnceLock};
+use jni::{
+    jni_sig, jni_str,
+    objects::{JByteArray, JObject, JString, JValue},
+    Env,
+};
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();
 

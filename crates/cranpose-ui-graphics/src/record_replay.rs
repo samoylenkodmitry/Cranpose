@@ -19,10 +19,12 @@
 //! the game's own per-frame float noise, and a real content change is orders
 //! of magnitude larger.
 
-use crate::geometry::{
-    CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord, TapeRef,
+use crate::{
+    geometry::{
+        CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord, TapeRef,
+    },
+    Color, CornerRadii,
 };
-use crate::{Color, CornerRadii};
 
 /// Relative tolerance for similarity verification.
 const REL_EPS: f32 = 2e-3;
@@ -345,7 +347,7 @@ pub fn circle_anchor_transform_pinned(
 ///
 /// This is the semantically AUTHORITATIVE arc comparison. The serial
 /// per-pair path (probes, partition, alignment) calls it directly; the
-/// contiguous run loop runs [`match_arc_lanes`], its lane-shaped twin,
+/// contiguous run loop runs `match_arc_lanes`, its lane-shaped twin,
 /// which is pinned to this function verdict-for-verdict by the exhaustive
 /// `lane_kernel_equivalence` corpus — so the tolerance semantics cannot
 /// drift between them. The tolerance terms combine with `&`, not `&&`: each
@@ -387,7 +389,7 @@ pub fn match_arc(
 ///
 /// Like [`match_arc`], this is the semantically authoritative round-rect
 /// comparison, called directly by the serial per-pair path; the contiguous
-/// run loop runs [`match_round_rect_lanes`], its equivalence-pinned
+/// run loop runs `match_round_rect_lanes`, its equivalence-pinned
 /// lane-shaped twin. The tolerance terms combine with `&` because each is
 /// pure, so unconditional evaluation is result-identical (NaN included) and
 /// the all-match case stays branch-light.
@@ -687,7 +689,7 @@ pub struct CommandSegment {
     /// is a patched mirror, never rebuilt, so a record whose color returns
     /// EXACTLY to its capture value needs an explicit restore patch — pure
     /// diff-vs-snapshot emission would leave the mirror stale forever
-    /// (see [`merge_color_restores`]).
+    /// (see `merge_color_restores`).
     pub prev_recolors: Vec<u32>,
 }
 
@@ -2250,8 +2252,10 @@ mod tests {
         assert!(transforms_group(unpinned, false, anchor));
     }
 
-    use crate::geometry::{DrawScopeDefault, Size};
-    use crate::{Brush, DrawScope as _};
+    use crate::{
+        geometry::{DrawScopeDefault, Size},
+        Brush, DrawScope as _,
+    };
 
     /// Records one MEGA-shaped frame: `rings` rings of `per_ring` arcs, each
     /// ring rotated by its own step × `frame`, breathing scale applied to
@@ -3067,9 +3071,10 @@ mod tests {
 /// difference may hide).
 #[cfg(test)]
 mod lane_kernel_equivalence {
+    use std::f32::consts::TAU;
+
     use super::*;
     use crate::{Color, Stroke};
-    use std::f32::consts::TAU;
 
     /// Knife-edge margin around the exact threshold. Well below every
     /// tolerance in play (ABS_EPS is 2e-2), so a lane operand drifting by

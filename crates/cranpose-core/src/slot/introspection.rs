@@ -1,9 +1,10 @@
+use std::mem;
+
 use super::{
     GroupRecord, SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup,
     SlotDebugScope, SlotDebugSnapshot, SlotTable, SlotTableLocalDebugStats,
 };
 use crate::{Key, ScopeId};
-use std::mem;
 
 impl SlotTable {
     fn group_heap_bytes(&self) -> usize {

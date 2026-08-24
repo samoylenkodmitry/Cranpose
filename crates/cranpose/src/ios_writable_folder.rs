@@ -7,6 +7,14 @@
 //! auto-backups keep working across launches without re-prompting.
 #![allow(unsafe_code)]
 
+use std::{
+    fs::File,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::UNIX_EPOCH,
+};
+
 use cranpose_services::{
     set_writable_folder_store_factory, FilePickerError, FolderEntry, FolderError, FolderReader,
     FolderWriter, WritableFolderStore, WritableFolderStoreRef, DEFAULT_CHUNK_LEN,
@@ -15,11 +23,6 @@ use objc2::runtime::Bool;
 use objc2_foundation::{
     NSData, NSURLBookmarkCreationOptions, NSURLBookmarkResolutionOptions, NSURL,
 };
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
 
 /// Installs the iOS writable-folder store factory.
 pub(crate) fn register() {

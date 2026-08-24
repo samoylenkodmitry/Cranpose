@@ -13,16 +13,19 @@
 //! pointer, a borrowed graph node) fails the build here rather than at the
 //! future channel.
 
-use crate::normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource};
-use crate::scene::{
-    BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
-    ShadowDraw, TextDraw,
-};
-#[cfg(not(target_arch = "wasm32"))]
-use crate::scene::{ColorPatch, PendingFeedCapture};
 use cranpose_core::NodeId;
 use cranpose_render_common::graph::{DrawCommandId, ProjectiveTransform};
 use cranpose_ui_graphics::{GraphicsLayer, Rect, RenderEffect};
+
+#[cfg(not(target_arch = "wasm32"))]
+use crate::scene::{ColorPatch, PendingFeedCapture};
+use crate::{
+    normalized_scene::{ChildLayerComposite, CollectedLayer, LoweredChildSource},
+    scene::{
+        BackdropLayer, CompositorScene, DrawOp, DrawShape, EffectLayer, ImageDraw, RetainedDraw,
+        ShadowDraw, TextDraw,
+    },
+};
 
 /// One frame's replay plan, emitted by the producer-side planner
 /// ([`ShapeReplayState::take_frame_ops`](crate::shape_replay::ShapeReplayState))
@@ -56,7 +59,7 @@ pub(crate) type ReplayConfirmation = ((DrawCommandId, u32), u32);
 
 /// Why the present stage refused a packet without drawing it. Each reason
 /// names the expectation the packet no longer matches; the frame is not an
-/// error — its buffers travel back through [`RenderReturns`] for re-queue.
+/// error — its buffers travel back through `RenderReturns` for re-queue.
 /// `pub` (not `pub(crate)`) because the cancellation-protocol tests in
 /// `tests/` observe outcomes through `#[doc(hidden)]` hooks; the module is
 /// private, so the only public path is the hidden re-export in `lib.rs`.
@@ -205,7 +208,7 @@ pub(crate) struct FramePacket {
 
 /// Present-stage timestamps for one consumed packet, in nanoseconds on the
 /// clock the producer injected at runtime start (`0` = stage did not run or
-/// no clock was injected). Carried back in [`RenderReturns`] so the
+/// no clock was injected). Carried back in `RenderReturns` so the
 /// producer's frame telemetry keeps recording acquire/render/present phases
 /// after those stages move to the present thread. Plain integers so the
 /// packet types stay clock-library-free on every target.

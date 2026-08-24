@@ -1,13 +1,15 @@
 //! Geometric primitives: Point, Size, Rect, Insets, Path
 
-use crate::stroke::{arc_band, ArcGeometry, Stroke};
-use crate::typography::{
-    estimate_text_measurement, DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle,
-    TextVerticalAlign,
+use std::{ops::AddAssign, rc::Rc};
+
+use crate::{
+    stroke::{arc_band, ArcGeometry, Stroke},
+    typography::{
+        estimate_text_measurement, DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle,
+        TextVerticalAlign,
+    },
+    Brush, Color, ColorFilter, ImageBitmap, ImageSampling,
 };
-use crate::{Brush, Color, ColorFilter, ImageBitmap, ImageSampling};
-use std::ops::AddAssign;
-use std::rc::Rc;
 
 const VECTOR_PATH_MASK_CACHE_ENTRIES: usize = 96;
 const VECTOR_PATH_MASK_CACHE_BYTES: usize = 8 * 1024 * 1024;
@@ -522,7 +524,7 @@ pub enum DrawPrimitive {
     /// A circular band: a stroked arc, or a filled annular sector / pie wedge.
     ///
     /// Angles are radians, `0` = +X, increasing **clockwise** on screen (see
-    /// [`crate::stroke`] for the full convention).
+    /// `crate::stroke` for the full convention).
     ///
     /// * `stroke = Some(_)` — the band is `radius ± width/2`, its ends shaped
     ///   by the stroke cap. `inner_radius` is ignored.
@@ -593,9 +595,11 @@ pub struct TextPrimitive {
 /// collision costs one fresh copy, never the wrong text. The pool clears
 /// itself when full; a live scene re-warms within one frame.
 fn shared_text_str(text: &str) -> Rc<str> {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::hash::{Hash, Hasher};
+    use std::{
+        cell::RefCell,
+        collections::HashMap,
+        hash::{Hash, Hasher},
+    };
 
     const POOL_CAPACITY: usize = 256;
     thread_local! {
@@ -2982,8 +2986,9 @@ mod tests {
 
     // ── Stroke / arc lowering ───────────────────────────────────────────────
 
-    use crate::{StrokeCap, StrokeJoin};
     use std::f32::consts::{FRAC_PI_2, PI};
+
+    use crate::{StrokeCap, StrokeJoin};
 
     /// Arc bounds are conservative-approximate (fast endpoint trig plus a
     /// containment pad, see `stroke.rs`); geometry tests compare within that

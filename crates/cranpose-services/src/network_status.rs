@@ -5,8 +5,9 @@
 //! monitor via [`set_platform_network_monitor`] (iOS `NWPathMonitor`, Android
 //! `ConnectivityManager`, web `navigator.connection`).
 
-use crate::registry::{RecoveryGate, ServiceRegistry};
 use std::sync::{Arc, OnceLock};
+
+use crate::registry::{RecoveryGate, ServiceRegistry};
 
 /// A snapshot of the current network state.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -122,8 +123,9 @@ pub fn network_status() -> NetworkStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use super::*;
 
     #[test]
     fn default_is_online_unmetered_and_overridable() {

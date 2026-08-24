@@ -2,8 +2,10 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
-use cranpose_foundation::PointerButton;
+use cranpose_foundation::{
+    lazy::{rememberLazyListState, LazyListScope},
+    PointerButton,
+};
 use cranpose_ui::{
     composable, text::SpanStyle, Alignment, Box, BoxSpec, Brush, Color, Column, ColumnSpec,
     ContentScale, CornerRadii, GraphicsLayer, Image, ImageBitmap, LayerShape, LazyColumn,
@@ -2396,8 +2398,9 @@ fn DraggableOverlay(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     #[test]
     fn smooth_rect_blur_effect_chains_blur_and_mask() {

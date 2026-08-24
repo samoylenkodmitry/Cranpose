@@ -5,15 +5,21 @@
 //! bookkeeping (clip slots, voice ids) lives here so the mixer never has to
 //! search for a free identifier inside its real-time budget.
 
-use crate::backend::{self, AudioSink};
-use crate::mixer::{ClipData, Command, MixerSeed, BUS_COUNT, MAX_CLIPS};
-use crate::ring;
+use std::sync::{
+    atomic::{fence, AtomicBool, AtomicU32, Ordering},
+    Arc,
+};
+
 use cranpose_services::{
     AudioBus, AudioClip, AudioError, AudioPlayer, PlaybackParams, SoundId, VoiceId,
 };
 use parking_lot::Mutex;
-use std::sync::atomic::{fence, AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
+
+use crate::{
+    backend::{self, AudioSink},
+    mixer::{ClipData, Command, MixerSeed, BUS_COUNT, MAX_CLIPS},
+    ring,
+};
 
 /// How many commands can be in flight. The audio thread drains the whole queue
 /// every callback (a few milliseconds), so this is deep enough that a frame
@@ -36,7 +42,7 @@ type SinkOpener = Box<dyn Fn(MixerSeed) -> Result<Box<dyn AudioSink>, AudioError
 /// have its whole sound bank resident with the output device still shut.
 ///
 /// The device does not stay open either. When nothing has sounded for
-/// [`IDLE_GRACE_SECONDS`](crate::mixer::IDLE_GRACE_SECONDS) the mixer gives the
+/// `IDLE_GRACE_SECONDS` the mixer gives the
 /// stream up and the next [`play`](AudioPlayer::play) starts it again, so a
 /// silent screen costs nothing however it was reached.
 pub struct AudioEngine {
@@ -610,11 +616,15 @@ impl AudioPlayer for AudioEngine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc,
+    };
+
+    use parking_lot::Mutex;
+
     use super::*;
     use crate::mixer::{Mixer, RenderStatus, IDLE_GRACE_SECONDS, MAX_VOICES};
-    use parking_lot::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-    use std::sync::Arc;
 
     /// The device rate the rig's mixer runs at, and the burst size its
     /// callbacks arrive in. 128 frames at 48 kHz is a realistic AAudio burst.

@@ -5,12 +5,13 @@ mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::app::{self, DemoTab, TEST_ACTIVE_TAB_STATE};
 use scroll_stability_external_helpers::{
     prepare_internal_diagnostic, run_scroll_stability_capture, ScrollStabilityConfig,
 };
-use std::time::Duration;
 use text_showcase_external_helpers::{scroll_text_into_view, wait_for_text_showcase_heading};
 
 const WINDOW_WIDTH: u32 = 1200;

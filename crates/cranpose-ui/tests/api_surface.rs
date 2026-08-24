@@ -6,9 +6,12 @@
 //! threshold fraction, a scroll extent, a thumb offset — and a rule nobody
 //! checks is a rule that quietly changes.
 
-use cranpose_ui::text::{AnnotatedString, LinkAnnotation};
-use cranpose_ui::widgets::swipe_to_dismiss::{SwipeDismissDirection, SwipeToDismissSpec};
-use cranpose_ui::{run_test_composition, ParagraphStyle, ScrollMetrics, ScrollState};
+use cranpose_ui::{
+    run_test_composition,
+    text::{AnnotatedString, LinkAnnotation},
+    widgets::swipe_to_dismiss::{SwipeDismissDirection, SwipeToDismissSpec},
+    ParagraphStyle, ScrollMetrics, ScrollState,
+};
 
 #[test]
 fn scroll_metrics_add_the_viewport_to_what_is_left_to_travel() {

@@ -40,11 +40,12 @@ pub(crate) fn chained_panic_hook(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     };
+
+    use super::*;
 
     // `std::panic::set_hook`/`take_hook` mutate process-global state, so
     // tests that install a hook must not run concurrently with each other.

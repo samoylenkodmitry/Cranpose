@@ -1,5 +1,7 @@
-use std::cell::{Ref, RefCell, RefMut};
-use std::rc::Rc;
+use std::{
+    cell::{Ref, RefCell, RefMut},
+    rc::Rc,
+};
 
 /// Single-threaded owner for values remembered by the Composer.
 ///

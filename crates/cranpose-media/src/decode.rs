@@ -8,18 +8,21 @@
 //! sample by sample. That is what lets the equalizer and the analysis tap stay
 //! plain iterator adapters instead of each having to understand packets.
 
-use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
+use std::{fs::File, path::Path, time::Duration};
+
 use cranpose_services::MediaError;
-use std::fs::File;
-use std::path::Path;
-use std::time::Duration;
-use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
-use symphonia::core::codecs::CodecParameters;
-use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType};
-use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
-use symphonia::core::units::{Duration as TimeBaseUnits, Time, TimeBase};
+use symphonia::core::{
+    codecs::{
+        audio::{AudioDecoder, AudioDecoderOptions},
+        CodecParameters,
+    },
+    formats::{probe::Hint, FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
+    io::MediaSourceStream,
+    meta::MetadataOptions,
+    units::{Duration as TimeBaseUnits, Time, TimeBase},
+};
+
+use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
 
 /// One item, open and decoding.
 pub(crate) struct Decoder {
@@ -267,8 +270,9 @@ impl SampleSource for Decoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::num::NonZeroU32;
+
+    use super::*;
 
     fn one() -> NonZeroU32 {
         NonZeroU32::new(1).expect("one")

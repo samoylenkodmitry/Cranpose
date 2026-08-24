@@ -3,9 +3,9 @@
 //! [`LiquidModifierExt::glass_effect`] — the analogue of SwiftUI's
 //! `.glassEffect(_:in:)`.
 
-use crate::theme::LiquidColors;
-use cranpose_ui::current_density;
-use cranpose_ui::Modifier;
+use std::{cell::Cell, rc::Rc};
+
+use cranpose_ui::{current_density, Modifier};
 use cranpose_ui_graphics::{
     Color, GraphicsLayer, LayerShape, RenderEffect, RoundedCornerShape, RuntimeShader, TileMode,
     GLASS_ACTIVITY_UNIFORM, GLASS_BLUR_RADIUS_UNIFORM, GLASS_DISPERSION_UNIFORM,
@@ -14,8 +14,8 @@ use cranpose_ui_graphics::{
     GLASS_OPTICAL_ZOOM_UNIFORM, GLASS_REFRACTION_CURVE_UNIFORM, GLASS_RESTING_TINT_UNIFORM,
     GLASS_TRANSMISSION_REFRACTION_UNIFORM, LIQUID_GLASS_WGSL,
 };
-use std::cell::Cell;
-use std::rc::Rc;
+
+use crate::theme::LiquidColors;
 
 // The ambient light environment shared by every glass material. The
 // reference material's bevel arcs rotate with the device: platforms feed

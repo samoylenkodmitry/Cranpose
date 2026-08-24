@@ -6,8 +6,9 @@
 //! with is published like every other host's. That keeps one contract —
 //! [`cranpose_services::HostSurface`] — the same shape on every platform.
 
-use cranpose_services::{set_platform_host_surface, HostSurface, HostSurfaceSize, ResizeRefused};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use cranpose_services::{set_platform_host_surface, HostSurface, HostSurfaceSize, ResizeRefused};
 
 fn pending() -> &'static Mutex<Option<(f32, f32)>> {
     static SLOT: OnceLock<Mutex<Option<(f32, f32)>>> = OnceLock::new();

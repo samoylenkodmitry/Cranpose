@@ -6,10 +6,14 @@
 //! platform's installer: a digest computed four different ways is four chances
 //! to compute it wrongly, and one of them will be the one nobody tested.
 
-use crate::registry::ServiceRegistry;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
 use sha2::{Digest, Sha256};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// How a package's bytes are checked against what the release promised.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -565,8 +569,9 @@ pub fn set_app_update_status(status: AppUpdateStatus) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    use super::*;
 
     struct RecordingUpdater {
         checks: AtomicUsize,

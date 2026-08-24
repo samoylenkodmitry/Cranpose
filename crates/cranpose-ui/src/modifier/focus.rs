@@ -4,9 +4,11 @@
 //! focus system. Focus nodes participate in focus traversal, track focus state,
 //! and integrate with the modifier chain lifecycle.
 
-use std::cell::Cell;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::{
+    cell::Cell,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 use cranpose_foundation::{
     impl_focus_node, DelegatableNode, FocusNode, FocusState, ModifierNode, ModifierNodeContext,
@@ -206,8 +208,9 @@ impl ModifierNodeElement for FocusTargetElement {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_foundation::{BasicModifierNodeContext, ModifierNodeChain};
+
+    use super::*;
 
     #[test]
     fn focus_target_node_lifecycle() {

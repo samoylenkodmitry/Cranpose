@@ -2,8 +2,9 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
 use std::hash::Hash;
+
+use crate::composable;
 
 #[composable(no_skip)]
 pub fn ForEach<T, F>(items: &[T], mut row: F)

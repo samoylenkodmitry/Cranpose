@@ -27,8 +27,8 @@
 //!
 //! ## Every walk here reads the RETAINED tree, deliberately
 //!
-//! `compute_layout` returns a [`LayoutTree`] built from the `Placement`s a
-//! [`MeasurePolicy`](cranpose_ui_layout::MeasurePolicy) returned. The scene the
+//! `compute_layout` returns a `LayoutTree` built from the `Placement`s a
+//! `MeasurePolicy` returned. The scene the
 //! renderer is handed is not: [`build_graph_from_applier`] walks the retained
 //! node state and drops any node whose `is_placed` is false, and `is_placed` is
 //! set by `placeable.place(x, y)` — *not* by pushing a `Placement` into a vec.
@@ -41,15 +41,16 @@
 //! one of them loses is lost by all of them. A caller cannot be handed bounds
 //! for a control the renderer never drew.
 
-use std::collections::HashMap;
-use std::rc::Rc;
+use std::{collections::HashMap, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeError, NodeId};
 use cranpose_foundation::PointerEvent;
-use cranpose_render_common::graph::ProjectiveTransform;
-use cranpose_render_common::graph_scene::HitGeometry;
-use cranpose_render_common::hit_graph::{collect_hits_from_graph, HitGraphSink};
-use cranpose_render_common::scene_builder::build_graph_from_applier;
+use cranpose_render_common::{
+    graph::ProjectiveTransform,
+    graph_scene::HitGeometry,
+    hit_graph::{collect_hits_from_graph, HitGraphSink},
+    scene_builder::build_graph_from_applier,
+};
 use cranpose_ui::{
     build_layout_tree_from_applier, build_semantics_tree_from_applier, LayoutBox, LayoutEngine,
     Point, Rect, SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole, Size,

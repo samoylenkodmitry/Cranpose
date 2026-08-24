@@ -12,8 +12,7 @@
 //! use cranpose_services::app_info;
 //!
 //! // Prefer what the platform packaged; fall back to what was compiled in.
-//! let version = app_info::version_name()
-//!     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
+//! let version = app_info::version_name().unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string());
 //! ```
 //!
 //! The default implementation answers `None` for both: a desktop binary run
@@ -21,8 +20,7 @@
 //! give. Platform backends install a real one with
 //! [`set_platform_app_info`].
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 /// Reports the packaged identity of the running app.
 pub trait AppInfo {

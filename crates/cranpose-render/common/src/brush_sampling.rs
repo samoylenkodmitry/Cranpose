@@ -250,8 +250,9 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::Point;
+
+    use super::*;
 
     fn sample_rect() -> Rect {
         Rect {

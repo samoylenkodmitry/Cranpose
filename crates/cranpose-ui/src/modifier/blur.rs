@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
+use cranpose_ui_graphics::{BlurredEdgeTreatment, Dp, GraphicsLayer, LayerShape, RenderEffect};
+
 use super::{inspector_metadata, Modifier};
 use crate::modifier_nodes::LazyGraphicsLayerElement;
-use cranpose_ui_graphics::{BlurredEdgeTreatment, Dp, GraphicsLayer, LayerShape, RenderEffect};
-use std::rc::Rc;
 
 impl Modifier {
     /// Apply a Gaussian blur effect to this composable's rendered content.

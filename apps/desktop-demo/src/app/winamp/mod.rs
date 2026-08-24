@@ -21,7 +21,6 @@ use cranpose_ui::{
     ColumnSpec, Modifier, Point, PointerEventKind, PointerInputScope, Size, Text, TextStyle,
 };
 use cranpose_ui_graphics::{ImageBitmap, Rect};
-
 use skin::{load_skin, WinampSkin};
 use sprites::*;
 

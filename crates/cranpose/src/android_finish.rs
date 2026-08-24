@@ -17,8 +17,9 @@
 //! `MainEvent::Destroy`, which is the same path the system's own back takes, so
 //! an app-requested exit and a user-requested one leave through the same door.
 
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 use jni::{jni_sig, jni_str};
+
+use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 
 /// Asks the platform to finish the activity. Returns whether the call landed.
 ///

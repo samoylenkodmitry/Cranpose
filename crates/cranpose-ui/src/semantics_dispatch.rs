@@ -25,9 +25,9 @@
 //! arrives on the app's own thread at an arbitrary moment, and the tree may only
 //! be touched at a defined point in the frame.
 
+use std::{cell::RefCell, collections::HashSet};
+
 use cranpose_core::NodeId;
-use std::cell::RefCell;
-use std::collections::HashSet;
 
 /// Layout nodes whose semantics need re-collecting.
 struct SemanticsInvalidationManager {

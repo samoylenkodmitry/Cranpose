@@ -27,17 +27,23 @@ MEM_VALIDATE="${CRANPOSE_MEM_VALIDATE:-0}"
 PRESENT_MODE="${CRANPOSE_PRESENT_MODE:-immediate}"
 HEADLESS="${CRANPOSE_HEADLESS:-0}"
 WAIT_IDLE_AFTER_DRAG="${CRANPOSE_PERF_WAIT_IDLE_AFTER_DRAG:-0}"
+REPORT_ONLY=0
 TIMEOUT_SLACK_SECS="${CRANPOSE_PERF_TIMEOUT_SLACK_SECS:-60}"
 OUTPUT="${CRANPOSE_PERF_FPS_OUTPUT:-${XDG_CACHE_HOME:-$HOME/.cache}/cranpose/perf/fps_gate_report.txt}"
 PERF_SCENARIOS=()
 
 usage() {
     cat <<EOF
-Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--warmup SECS] [--min-fps FPS] [--max-p95-ms MS] [--max-50ms-stalls COUNT] [--output PATH] [--scenario NAME]
+Usage: $0 [--dev|--release|--profile NAME] [--example NAME] [--duration SECS] [--warmup SECS] [--min-fps FPS] [--max-p95-ms MS] [--max-50ms-stalls COUNT] [--output PATH] [--scenario NAME] [--report-only]
 
 Runs the robot performance harness and fails when any selected scenario is not above the FPS budget.
-Default budget: >120 FPS.
-Scenarios: lazy_list_scroll, text_heavy_scroll, markdown_scroll, markdown_viewer_scroll, markdown_default_viewer_scroll, backdrop_blur, opaque_scene
+Default budget: >120 FPS. Presents with vsync off (present_mode=immediate), so the
+numbers are what the renderer can reach rather than what the display accepts.
+
+--report-only drops the budgets and just measures. Use it to read a ceiling,
+not to gate: an unbudgeted number cannot fail, so it cannot protect anything.
+
+Scenarios: lazy_list_scroll, text_heavy_scroll, markdown_scroll, markdown_viewer_scroll, markdown_default_viewer_scroll, backdrop_blur, opaque_scene, glass_lazy_scroll
 EOF
 }
 
@@ -66,6 +72,10 @@ while [[ $# -gt 0 ]]; do
         --warmup)
             WARMUP_SECS="$2"
             shift 2
+            ;;
+        --report-only)
+            REPORT_ONLY=1
+            shift
             ;;
         --min-fps)
             MIN_FPS="$2"
@@ -122,6 +132,13 @@ fi
 
 OUTPUT_DIR="$(dirname "$OUTPUT")"
 mkdir -p "$OUTPUT_DIR"
+if [[ "$REPORT_ONLY" == "1" ]]; then
+    # No floor, no p95 ceiling, no stall ceiling: measure and print.
+    MIN_FPS="0"
+    MAX_P95_FRAME_MS="100000"
+    MAX_50MS_STALLS="1000000"
+fi
+
 OUTPUT_BASE="${OUTPUT%.*}"
 if [[ "$OUTPUT_BASE" == "$OUTPUT" ]]; then
     OUTPUT_BASE="${OUTPUT}_artifacts"
@@ -133,6 +150,7 @@ fi
     echo "example=$EXAMPLE"
     echo "duration_secs=$DURATION_SECS"
     echo "warmup_secs=$WARMUP_SECS"
+    echo "report_only=$REPORT_ONLY"
     echo "min_fps=$MIN_FPS"
     echo "max_p95_frame_ms=$MAX_P95_FRAME_MS"
     echo "max_50ms_stalls=$MAX_50MS_STALLS"

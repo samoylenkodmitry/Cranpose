@@ -1,8 +1,5 @@
-use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
-use crate::{
-    collect_modifier_slices, measure_layout, Column, ColumnSpec, LayoutEngine, LazyColumn,
-    LazyColumnSpec, Modifier, ScrollState, Size, Spacer,
-};
+use std::{cell::Cell, rc::Rc, sync::Arc};
+
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
     lazy::{rememberLazyListState, LazyListScope},
@@ -10,9 +7,13 @@ use cranpose_foundation::{
     PointerEventKind,
 };
 use cranpose_ui_graphics::Point;
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
+
+use crate::{
+    collect_modifier_slices, measure_layout,
+    scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey},
+    Column, ColumnSpec, LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, ScrollState, Size,
+    Spacer,
+};
 
 fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));

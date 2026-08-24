@@ -2,11 +2,16 @@
 //!
 //! Drives decay animation using the runtime's frame callback system.
 
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::{FloatDecayAnimationSpec, SplineBasedDecaySpec};
-use cranpose_core::internal::{FrameCallbackRegistration, FrameClock};
-use cranpose_core::RuntimeHandle;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use cranpose_core::{
+    internal::{FrameCallbackRegistration, FrameClock},
+    RuntimeHandle,
+};
 
 /// Minimum velocity (in px/sec) to trigger a fling animation.
 /// Below this, the scroll just stops immediately.
@@ -440,12 +445,11 @@ fn schedule_next_settle_frame<F, G>(
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc, sync::Arc};
+
+    use cranpose_core::{DefaultScheduler, Runtime};
+
     use super::*;
-    use cranpose_core::DefaultScheduler;
-    use cranpose_core::Runtime;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::sync::Arc;
 
     #[test]
     fn test_min_velocity_threshold() {

@@ -1,11 +1,12 @@
 //! Robot test for the Interactive Anim tab.
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, Robot, RobotScreenshot};
 use cranpose_testing::{
     changed_pixel_count_in_region, find_button_in_semantics, find_text_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn fail(robot: &Robot, message: &str) -> ! {
     println!("FATAL: {message}");

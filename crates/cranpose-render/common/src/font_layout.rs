@@ -108,8 +108,9 @@ pub(crate) fn pixel_bounds_from_outlined(outlined: &OutlinedGlyph) -> GlyphPixel
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ab_glyph::FontRef;
+
+    use super::*;
 
     fn test_font() -> FontRef<'static> {
         FontRef::try_from_slice(include_bytes!("../assets/NotoSansMerged.ttf")).expect("font")

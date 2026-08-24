@@ -1,11 +1,19 @@
-use crate::gpu_stats::FrameStats;
-use crate::offscreen::OffscreenTarget;
-use crate::surface_executor::{offscreen_byte_size, CachedLayerSurface};
-use cranpose_render_common::bounded_lru_cache::BoundedLruCache;
-use cranpose_render_common::raster_cache::{LayerRasterCacheIdentity, LayerRasterCacheKey};
+use std::{
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
+
+use cranpose_render_common::{
+    bounded_lru_cache::BoundedLruCache,
+    raster_cache::{LayerRasterCacheIdentity, LayerRasterCacheKey},
+};
 use cranpose_ui_graphics::Rect;
-use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+
+use crate::{
+    gpu_stats::FrameStats,
+    offscreen::OffscreenTarget,
+    surface_executor::{offscreen_byte_size, CachedLayerSurface},
+};
 
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
 pub(crate) const MAX_LAYER_SURFACE_CACHE_BYTES: u64 = 128 * 1024 * 1024;
@@ -261,9 +269,10 @@ impl Default for LayerSurfaceCache {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
     use super::{take_unshared, MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES};
     use crate::surface_executor::offscreen_byte_size;
-    use std::rc::Rc;
 
     /// A layer whose backdrop moves replaces its cache entry every frame. The
     /// surface it drops has to come back for the offscreen pool, or the

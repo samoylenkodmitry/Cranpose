@@ -1,7 +1,11 @@
-use super::rotary::RotaryScrollEvent;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_ui_graphics::Point;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use super::rotary::RotaryScrollEvent;
 
 pub type PointerId = u64;
 
@@ -230,7 +234,7 @@ pub struct PointerEvent {
     /// cannot yet report it instead of visibly doing nothing.
     pub modifiers: Option<Modifiers>,
     /// Tracks whether this event has been consumed by a handler.
-    /// Shared via Rc<Cell> so consumption can be tracked across copies.
+    /// Shared via `Rc<Cell>` so consumption can be tracked across copies.
     consumed: Rc<Cell<bool>>,
     deferred_post_dispatch: DeferredPostDispatch,
 }

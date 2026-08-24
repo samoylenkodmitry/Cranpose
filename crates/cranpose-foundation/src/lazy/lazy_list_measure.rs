@@ -4,14 +4,17 @@
 //! which items should be composed and measured based on the current scroll
 //! position and viewport size.
 
-use super::bounds_adjuster::BoundsAdjuster;
-use super::diagnostics;
-use super::item_measurer::{AlwaysMeasureBeyond, BeyondBoundsMeasurePolicy, ItemMeasurer};
-use super::lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem};
-use super::lazy_list_state::{LazyListLayoutInfo, LazyListState};
-use super::scroll_position_resolver::ScrollPositionResolver;
-use super::viewport::ViewportHandler;
 use std::collections::VecDeque;
+
+use super::{
+    bounds_adjuster::BoundsAdjuster,
+    diagnostics,
+    item_measurer::{AlwaysMeasureBeyond, BeyondBoundsMeasurePolicy, ItemMeasurer},
+    lazy_list_measured_item::{LazyListMeasureResult, LazyListMeasuredItem},
+    lazy_list_state::{LazyListLayoutInfo, LazyListState},
+    scroll_position_resolver::ScrollPositionResolver,
+    viewport::ViewportHandler,
+};
 
 /// Default estimated item size for scroll calculations.
 /// Used when no measured sizes are cached.
@@ -581,10 +584,12 @@ fn adaptive_scroll_beyond_bounds_item_count(
 
 #[cfg(test)]
 mod tests {
-    use super::super::lazy_list_state::test_helpers::{
-        new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
+    use super::{
+        super::lazy_list_state::test_helpers::{
+            new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime,
+        },
+        *,
     };
-    use super::*;
 
     fn create_test_item(index: usize, size: f32) -> LazyListMeasuredItem {
         LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)

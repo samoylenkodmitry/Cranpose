@@ -12,5 +12,8 @@ readme = "README.md"
 description = "StoreKit 2 in-app purchases for Cranpose (iOS/macOS)"
 build = "build.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-services = { workspace = true }

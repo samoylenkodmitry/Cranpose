@@ -1,13 +1,16 @@
-use crate::effect_renderer::CompositeSampleMode;
-use crate::offscreen::OffscreenTarget;
-use crate::scene::EffectLayer;
-use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
-use cranpose_render_common::graph::{
-    LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderNode,
+use cranpose_render_common::{
+    graph::{LayerNode, PrimitiveEntry, PrimitiveNode, ProjectiveTransform, RenderNode},
+    layer_composition::layer_requires_isolation,
+    layer_transform::layer_uniform_scale,
 };
-use cranpose_render_common::layer_composition::layer_requires_isolation;
-use cranpose_render_common::layer_transform::layer_uniform_scale;
 use cranpose_ui_graphics::{BlendMode, Brush, CompositingStrategy, Point, Rect, RenderEffect};
+
+use crate::{
+    effect_renderer::CompositeSampleMode,
+    offscreen::OffscreenTarget,
+    scene::EffectLayer,
+    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
+};
 
 const SURFACE_PLAN_AFFINE_TOLERANCE: f32 = 1e-4;
 
@@ -556,22 +559,26 @@ pub(crate) fn layer_surface_requirements_cached(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_render_common::{
+        graph::{
+            CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry,
+            PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderNode,
+        },
+        raster_cache::LayerRasterCacheHashes,
+    };
+    use cranpose_ui_graphics::{
+        BlendMode, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
+        RenderEffect,
+    };
+
     use super::{
         composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
         effect_layer_target_scale, effective_surface_requirements, layer_needs_rigid_snap,
         layer_surface_requirements, layer_surface_scale, layer_surface_target_scale,
     };
-    use crate::effect_renderer::CompositeSampleMode;
-    use crate::scene::EffectLayer;
-    use crate::surface_requirements::SurfaceRequirement;
-    use cranpose_render_common::graph::{
-        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderNode,
-    };
-    use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-    use cranpose_ui_graphics::{
-        BlendMode, DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
-        RenderEffect,
+    use crate::{
+        effect_renderer::CompositeSampleMode, scene::EffectLayer,
+        surface_requirements::SurfaceRequirement,
     };
 
     fn test_layer(local_bounds: Rect) -> LayerNode {
@@ -1116,9 +1123,10 @@ mod tests {
     /// pixel. Nothing moved in layout space, but every edge pixel did.
     #[test]
     fn an_animated_layer_scale_holds_its_surface_and_its_layout_rect() {
-        use crate::surface_executor::{device_pixel_exact_surface_rect, surface_target_size};
         use cranpose_render_common::layer_transform::layer_transform_to_parent;
         use cranpose_ui_graphics::TransformOrigin;
+
+        use crate::surface_executor::{device_pixel_exact_surface_rect, surface_target_size};
 
         const MAX_TEXTURE_DIM: u32 = 8192;
         const ROOT_SCALE: f32 = 1.0;
@@ -1248,9 +1256,10 @@ mod tests {
 
 #[cfg(test)]
 mod carried_plan_tests_support {
-    use super::{layer_surface_requirements, layer_surface_requirements_cached};
     use cranpose_core::collections::map::HashMap;
     use cranpose_render_common::graph::{LayerNode, RenderNode};
+
+    use super::{layer_surface_requirements, layer_surface_requirements_cached};
 
     pub(super) fn plan_whole_tree(
         layer: &LayerNode,
@@ -1290,19 +1299,20 @@ mod carried_plan_tests_support {
 
 #[cfg(test)]
 mod carried_plan_tests {
-    use super::carried_plan_tests_support::{
-        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
-    };
-    use cranpose_core::collections::map::HashMap;
-    use cranpose_core::NodeId;
+    use std::{cell::RefCell, rc::Rc};
+
+    use cranpose_core::{collections::map::HashMap, NodeId};
     use cranpose_render_common::scene_builder::{
         build_graph_from_applier, update_graph_from_applier_report_into,
     };
-    use cranpose_ui::text::TextStyle;
-    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text};
+    use cranpose_ui::{
+        text::TextStyle, Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text,
+    };
     use cranpose_ui_graphics::GraphicsLayer;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
 
     #[test]
     fn a_patched_scene_plans_the_surfaces_a_fresh_plan_finds() {
@@ -1416,19 +1426,18 @@ mod carried_plan_tests {
 
 #[cfg(test)]
 mod carried_plan_structure_tests {
-    use super::carried_plan_tests_support::{
-        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
-    };
-    use cranpose_core::collections::map::HashMap;
-    use cranpose_core::NodeId;
+    use std::{cell::RefCell, rc::Rc};
+
+    use cranpose_core::{collections::map::HashMap, NodeId};
     use cranpose_render_common::scene_builder::{
         build_graph_from_applier, update_graph_from_applier_report_into,
     };
-    use cranpose_ui::text::TextStyle;
-    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, Size, Text};
+    use cranpose_ui::{text::TextStyle, Column, ColumnSpec, LayoutEngine, Modifier, Size, Text};
     use cranpose_ui_graphics::GraphicsLayer;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+
+    use super::carried_plan_tests_support::{
+        assert_carried_plan_matches_fresh_plan, plan_whole_tree,
+    };
 
     #[test]
     fn a_row_that_leaves_the_list_leaves_the_plan_a_fresh_plan_finds() {

@@ -1,15 +1,22 @@
 //! End-to-end vertical selection-handle grab-offset contract.
 
-use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, RobotScreenshot, SemanticElement, Size};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+    time::Duration,
+};
+
+use cranpose::{
+    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, RobotScreenshot, SemanticElement, Size,
+};
 use cranpose_core::remember;
 use cranpose_foundation::text::TextFieldState;
-use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
-use cranpose_ui::text_selection::GRAB_DIRECT_FOLLOW_DISTANCE;
+use cranpose_ui::{
+    text::{AnnotatedString, TextStyle, TextUnit},
+    text_selection::GRAB_DIRECT_FOLLOW_DISTANCE,
+};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::time::Duration;
 
 const TEXT: &str = "alpha bravo alpha bravo alpha bravo alpha bravo";
 const FIELD_X: f32 = 42.0;

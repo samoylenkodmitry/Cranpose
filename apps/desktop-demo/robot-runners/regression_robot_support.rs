@@ -1,6 +1,7 @@
+use std::time::Duration;
+
 use cranpose::Robot;
 use cranpose_testing::{find_button_in_semantics, find_text_by_prefix_in_semantics};
-use std::time::Duration;
 
 pub(crate) fn spawn_timeout(seconds: u64, label: &'static str) {
     std::thread::spawn(move || {

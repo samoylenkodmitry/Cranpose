@@ -1,7 +1,8 @@
-use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
-use cranpose_foundation::lazy::rememberLazyListState;
-use cranpose_foundation::text::TextFieldState;
-use cranpose_foundation::SemanticsConfiguration;
+use std::rc::Rc;
+
+use cranpose_foundation::{
+    lazy::rememberLazyListState, text::TextFieldState, SemanticsConfiguration,
+};
 use cranpose_services::{local_http_client, local_uri_handler, HttpClientRef};
 use cranpose_ui::{
     composable,
@@ -14,7 +15,8 @@ use cranpose_ui::{
     VerticalAlignment,
 };
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use std::rc::Rc;
+
+use super::lazy_scrollbar::{LazyListWithScrollbar, LazyScrollbarStyle};
 
 // ---------------------------------------------------------------------------
 // Markdown → AnnotatedString block list
@@ -844,13 +846,14 @@ fn render_rule() {
 
 #[cfg(test)]
 mod tests {
+    use cranpose_ui::text::FontWeight;
+
     use super::*;
     use crate::app::lazy_scrollbar::{
         average_visible_item_size, compute_scrollbar_metrics, compute_scrollbar_model,
         scroll_target_for_fraction, stabilize_scrollbar_model_for_scrollable_content,
         LazyScrollbarModel,
     };
-    use cranpose_ui::text::FontWeight;
 
     #[test]
     fn default_url_points_to_leetcode_source_markdown() {

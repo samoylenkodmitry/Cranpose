@@ -3,8 +3,6 @@
 //! This renderer uses WGPU for cross-platform GPU support across
 //! desktop (Windows/Mac/Linux), web (WebGPU), and mobile Android.
 
-#![deny(unsafe_code)]
-
 #[cfg(not(target_arch = "wasm32"))]
 mod cost_tuner;
 mod display_clip;
@@ -41,28 +39,7 @@ mod surface_requirements;
 #[cfg(test)]
 mod test_support;
 
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use display_clip::pixel_is_visible as display_clip_pixel_is_visible;
-pub use display_clip::DisplayVisibleRegion;
-pub use frame_packet::PresentTimings;
-#[doc(hidden)]
-pub use frame_packet::{CancelReason, PresentOutcome};
-pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use pipeline::retained_feed_generation;
-pub use render::frames_presented;
-pub use scene::{ClickAction, HitRegion, Scene};
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::feed_live_stats as command_feed_live_stats;
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count_for_tests};
-#[doc(hidden)]
-#[cfg(not(target_arch = "wasm32"))]
-pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
+use std::{rc::Rc, sync::Arc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
@@ -74,17 +51,37 @@ use cranpose_render_common::{
 };
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Rect, Size};
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use display_clip::pixel_is_visible as display_clip_pixel_is_visible;
+pub use display_clip::DisplayVisibleRegion;
+pub use frame_packet::PresentTimings;
 use frame_packet::RenderReturns;
 #[cfg(not(target_arch = "wasm32"))]
 use frame_packet::ReplayConfirmation;
+#[doc(hidden)]
+pub use frame_packet::{CancelReason, PresentOutcome};
 use frontend::{DevOverlayCache, RendererFrontend};
+pub use gpu_stats::FrameStatsSnapshot as RenderStatsSnapshot;
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use pipeline::retained_feed_generation;
 #[cfg(not(target_arch = "wasm32"))]
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
+pub use render::frames_presented;
 use render::GpuRenderer;
-use std::rc::Rc;
-use std::sync::Arc;
+pub use scene::{ClickAction, HitRegion, Scene};
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::feed_live_stats as command_feed_live_stats;
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::{inject_feed_capture_for_tests, pending_feed_capture_count_for_tests};
+#[doc(hidden)]
+#[cfg(not(target_arch = "wasm32"))]
+pub use shape_replay::{planner_replay_queue_stats_for_tests, recycled_ops_capacities_for_tests};
 
 /// Convert an axis-aligned rectangle to four corner positions (TL, TR, BL, BR).
 pub(crate) fn rect_to_quad(rect: Rect) -> [[f32; 2]; 4] {
@@ -641,7 +638,7 @@ impl WgpuRenderer {
     /// Render the scene to a texture view.
     ///
     /// Producer first, present second: the frontend lowers the frame into a
-    /// [`frame_packet::FramePacket`] (direct root, root surface, and dev
+    /// `frame_packet::FramePacket` (direct root, root surface, and dev
     /// overlay alike), the GPU renderer consumes it, and the present
     /// stage's returns — the recycled scene and the replay ack — fold back
     /// into the frontend afterwards.
@@ -830,7 +827,7 @@ impl WgpuRenderer {
         }
     }
 
-    /// Threaded mode: fold every pending [`RenderReturns`] back into
+    /// Threaded mode: fold every pending `RenderReturns` back into
     /// producer state (scene recycling, replay ack, planner re-queue of
     /// cancelled plans) and free the publish credit. Returns how many were
     /// drained. No-op outside threaded mode.
@@ -878,7 +875,7 @@ impl WgpuRenderer {
 
     /// Threaded mode: install a (re)created surface on the present thread
     /// and wait for the acknowledgement. The caller must have bumped the
-    /// surface epoch first ([`note_surface_reconfigured`]
+    /// surface epoch first (`note_surface_reconfigured`
     /// [Self::note_surface_reconfigured]) when the message invalidates
     /// in-flight packets; the message carries the current epoch.
     #[cfg(not(target_arch = "wasm32"))]
@@ -1493,11 +1490,13 @@ impl Renderer for WgpuRenderer {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::pipeline::TextLayoutResolver;
+    use std::cell::Cell;
+
     use cranpose_render_common::graph::RenderNode;
     use cranpose_ui_graphics::GraphicsLayer;
-    use std::cell::Cell;
+
+    use super::*;
+    use crate::pipeline::TextLayoutResolver;
 
     static TEST_FONT: &[u8] =
         cranpose_render_common::software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES;

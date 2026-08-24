@@ -16,7 +16,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: stable
   RUSTC_WRAPPER: sccache
   SCCACHE_CACHE_SIZE: 40G
   CARGO_INCREMENTAL: "0"
@@ -29,7 +28,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -41,22 +40,29 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: just fmt-check
 
       - name: Check Cranpose package versions
-        run: python3 scripts/check_cranpose_versions.py
+        run: just versions
+
+      - name: Spell check
+        run: just typos
 
       - name: Run workspace tests
-        run: cargo test --profile ci --workspace
+        run: just test
 
       - name: Run workspace clippy
-        # `question_mark` is an opinionated style lint that newer clippy (1.97+)
-        # flags on pre-existing code; allow it so a floating-stable toolchain bump
-        # doesn't break the gate. Everything else stays `-D warnings`.
-        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::question_mark
+        run: just clippy
+
+      - name: Build documentation
+        # A broken intra-doc link is a broken published page.
+        run: just doc
 
   architecture-budget:
     name: architecture budgets (linux)
@@ -65,7 +71,7 @@ jobs:
     runs-on: [self-hosted, Linux, cranpose-heavy]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -77,49 +83,15 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
-      # The winit adapter cannot build featureless on Linux (winit itself
-      # requires a backend), so it is checked per-backend instead.
-      - name: Build workspace without default features
-        run: cargo build --workspace --no-default-features --exclude cranpose-platform-desktop-winit
-
-      - name: Check winit platform adapter per backend
-        run: |
-          cargo check -p cranpose-platform-desktop-winit --no-default-features --features x11
-          cargo check -p cranpose-platform-desktop-winit --no-default-features --features wayland
-
-      - name: Check cranpose facade without default features
-        run: cargo check -p cranpose --no-default-features
-
-      - name: Check app shell without default features
-        run: cargo check -p cranpose-app-shell --no-default-features
-
-      - name: Check testing utilities without default features
-        run: cargo check -p cranpose-testing --no-default-features
-
-      - name: Check workspace with all features
-        run: cargo check --workspace --all-features
-
-      - name: Check duplicate dependency budget
-        run: |
-          cargo xtask dependency-budget --explain
-          cargo xtask dependency-budget --strict --explain
-          cargo xtask dependency-budget --strict --slice desktop-platform --explain
-          cargo xtask dependency-budget --strict --slice optional-features --explain
-
-      - name: Check desktop binary size budget
-        # Desktop accessibility is part of the default facade and links the
-        # AccessKit platform adapter. Keep a measured 15 MiB ceiling for that
-        # supported baseline while still catching accidental dependency bloat.
-        run: >
-          cargo xtask binary-size
-          --manifest-path apps/isolated-demo/Cargo.toml
-          --package isolated-demo
-          --bin isolated-demo
-          --profile release-small
-          --patch-workspace-cranpose
-          --max-bytes 15728640
+      - name: Check architecture budgets
+        # Featureless and all-features builds, the per-backend winit checks, the
+        # duplicate-dependency budgets and the desktop binary-size ceiling.
+        run: just budgets
 
   feature-smoke:
     name: ${{ matrix.feature }} feature (mac)
@@ -131,7 +103,7 @@ jobs:
       matrix:
         feature: [std-hash, internal]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -143,6 +115,9 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
       - name: Run cranpose-core feature tests
@@ -154,7 +129,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -166,13 +141,13 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
       - name: Run deterministic slot-table model smoke
-        run: >
-          cargo test --profile ci
-          -p cranpose-core
-          deterministic_model_render_frames_match_slot_table
+        run: just test-property
 
   criterion-smoke:
     name: criterion smoke (mac)
@@ -180,7 +155,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -192,10 +167,13 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
 
       - name: Run slot-table Criterion smoke
-        run: cargo bench --package cranpose-ui --bench slot_table_v2 -- --test
+        run: just bench-smoke
 
   wasm-build:
     name: wasm build
@@ -208,7 +186,7 @@ jobs:
     runs-on: [self-hosted, cranpose-heavy]
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Provision PATH and sccache
         run: |
@@ -220,8 +198,11 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
+          # CI runs the same recipes a developer runs, so a gate cannot mean
+          # one thing locally and another thing here.
+          command -v just >/dev/null || cargo install just --locked
           sccache --start-server || true
-          rustup target add --toolchain stable wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown
           command -v wasm-pack >/dev/null || cargo install wasm-pack --version 0.13.1 --locked
           # wasm-pack fetches its own binaryen when the host has none, so a
           # missing system wasm-opt is reported rather than treated as fatal.
@@ -232,7 +213,7 @@ jobs:
         # not `Send + Sync` on the single-threaded wasm target compile fine but
         # pay for synchronisation the target cannot use. Only clippy catches
         # that, and only for the exact package/feature set the web demo ships.
-        run: cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
+        run: just clippy-wasm
 
       - name: Build web demo
-        run: apps/desktop-demo/build-web.sh --release
+        run: just web

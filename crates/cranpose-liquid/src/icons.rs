@@ -4,8 +4,10 @@
 
 use cranpose_core::rememberKeyed;
 use cranpose_macros::composable;
-use cranpose_ui::widgets::{Box, BoxSpec};
-use cranpose_ui::{Modifier, Size};
+use cranpose_ui::{
+    widgets::{Box, BoxSpec},
+    Modifier, Size,
+};
 use cranpose_ui_graphics::{Brush, Color, VectorPath};
 
 pub const CHEVRON_LEFT: &str = "M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z";

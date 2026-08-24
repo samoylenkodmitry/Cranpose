@@ -1,18 +1,22 @@
 use cranpose_core::NodeId;
-use cranpose_ui::text::{AnnotatedString, Shadow, SpanStyle, TextDecoration};
-use cranpose_ui::{TextLayoutOptions, TextStyle};
+use cranpose_ui::{
+    text::{AnnotatedString, Shadow, SpanStyle, TextDecoration},
+    TextLayoutOptions, TextStyle,
+};
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke,
 };
 
-use crate::graph::{
-    CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-    PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+use crate::{
+    graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    image_compare::{
+        image_difference_stats, normalize_rgba_region, pixel_difference, sample_pixel,
+    },
+    raster_cache::LayerRasterCacheHashes,
 };
-use crate::image_compare::{
-    image_difference_stats, normalize_rgba_region, pixel_difference, sample_pixel,
-};
-use crate::raster_cache::LayerRasterCacheHashes;
 
 const BACKGROUND_COLOR: Color = Color(18.0 / 255.0, 18.0 / 255.0, 24.0 / 255.0, 1.0);
 const FOREGROUND_COLOR: Color = Color::WHITE;
@@ -1026,8 +1030,9 @@ fn ink_y_range(pixels: &[u8], width: u32, height: u32, background: [u8; 4]) -> O
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::HashSet;
+
+    use super::*;
 
     #[test]
     fn shared_render_cases_have_unique_names() {

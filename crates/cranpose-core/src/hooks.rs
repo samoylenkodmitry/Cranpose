@@ -1,12 +1,13 @@
-use crate::composer_context;
-use crate::location_key;
-use crate::owned::Owned;
-use crate::runtime;
-use crate::state::{
-    DerivedState, MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State,
+use std::{hash::Hash, rc::Rc};
+
+use crate::{
+    composer_context, location_key,
+    owned::Owned,
+    runtime,
+    state::{
+        DerivedState, MutableState, OwnedMutableState, SnapshotStateList, SnapshotStateMap, State,
+    },
 };
-use std::hash::Hash;
-use std::rc::Rc;
 
 pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
     composer_context::with_composer(|composer| composer.remember(init))

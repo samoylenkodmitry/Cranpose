@@ -7,15 +7,14 @@
 //! backgrounds the app mid-scan. `UIApplication` is main-thread-only, so every
 //! call hops to the main queue.
 
+use std::sync::{Arc, Mutex, OnceLock};
+
 use block2::RcBlock;
 use cranpose_services::{set_platform_background_activity, BackgroundActivity};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2_foundation::NSString;
 use objc2_ui_kit::{UIApplication, UIApplicationState};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 
 /// The identifier of the currently-held background task (`None` = none held).
 /// Only touched on the main thread.

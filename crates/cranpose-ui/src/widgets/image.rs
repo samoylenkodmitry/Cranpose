@@ -3,19 +3,25 @@
 #![allow(non_snake_case)]
 #![allow(clippy::too_many_arguments)] // API matches Jetpack Compose Image signature.
 
-use crate::composable;
-use crate::layout::core::{Alignment, Measurable};
-use crate::modifier::{Modifier, Rect, Size};
-use crate::nine_patch::{nine_patch_quads, tile_quads, NinePatchInsets, PatchFill, PatchQuad};
-use crate::widgets::Layout;
+#[cfg(feature = "svg")]
+use std::sync::{Mutex, MutexGuard};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
+
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{ColorFilter, DrawScope, ImageBitmap, ImageSampling};
 use cranpose_ui_layout::{Constraints, MeasurePolicy, MeasureResult, MeasureScope, Placement};
-use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-#[cfg(feature = "svg")]
-use std::sync::{Mutex, MutexGuard};
 use thiserror::Error;
+
+use crate::{
+    composable,
+    layout::core::{Alignment, Measurable},
+    modifier::{Modifier, Rect, Size},
+    nine_patch::{nine_patch_quads, tile_quads, NinePatchInsets, PatchFill, PatchQuad},
+    widgets::Layout,
+};
 
 #[cfg(feature = "svg")]
 #[path = "image_svg.rs"]

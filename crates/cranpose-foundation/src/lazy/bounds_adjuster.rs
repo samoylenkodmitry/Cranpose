@@ -2,8 +2,9 @@
 //!
 //! This module handles clamping item offsets when scrolled past list bounds.
 
-use super::lazy_list_measure::LazyListMeasureConfig;
-use super::lazy_list_measured_item::LazyListMeasuredItem;
+use super::{
+    lazy_list_measure::LazyListMeasureConfig, lazy_list_measured_item::LazyListMeasuredItem,
+};
 
 /// Adjusts item offsets to clamp within scroll bounds.
 ///

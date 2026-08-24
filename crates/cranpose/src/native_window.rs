@@ -1,28 +1,31 @@
 //! Declarative native window support.
 
-use cranpose_core::MutableState;
-use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::cell::Cell;
-use std::cell::RefCell;
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
 #[cfg(all(
     feature = "desktop-shell",
     feature = "renderer-wgpu",
     not(target_arch = "wasm32")
 ))]
 use std::rc::Weak;
+use std::{
+    cell::RefCell,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
+
+use cranpose_core::MutableState;
+use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
 
 /// A stable identifier for a declarative operating-system window.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1617,8 +1620,9 @@ fn range_overlap_length(a_start: f32, a_end: f32, b_start: f32, b_end: f32) -> f
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Arc;
+
+    use super::*;
 
     fn test_window_state(
         width: f32,
@@ -2163,8 +2167,9 @@ mod tests {
     ))]
     #[test]
     fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
-        use cranpose_ui::{collect_slices_from_modifier, PointerEvent};
         use std::cell::Cell;
+
+        use cranpose_ui::{collect_slices_from_modifier, PointerEvent};
 
         let (_app_context, _app_context_scope) = test_app_context_scope();
         let started = Rc::new(Cell::new(0));

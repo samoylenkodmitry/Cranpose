@@ -13,20 +13,24 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::{cell::Cell, rc::Rc};
 
-use crate::composable;
-use crate::modifier::Modifier;
-use crate::text_selection::{
-    handle_path_data, HandleKind, HANDLE_DOT_LINE_OVERLAP, HANDLE_GRAB_SLOP, HANDLE_STEM_WIDTH,
-};
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::popup::Popup;
-use crate::PointerInputScope;
 use cranpose_core::remember;
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
+
+use crate::{
+    composable,
+    modifier::Modifier,
+    text_selection::{
+        handle_path_data, HandleKind, HANDLE_DOT_LINE_OVERLAP, HANDLE_GRAB_SLOP, HANDLE_STEM_WIDTH,
+    },
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        popup::Popup,
+    },
+    PointerInputScope,
+};
 
 /// How long (ms) the finger must rest on a handle — without moving beyond
 /// [`HANDLE_LONG_PRESS_SLOP_PX`] — before it counts as a long-press. Matches
@@ -173,6 +177,7 @@ struct GlideState {
 
 fn glide_clock_nanos() -> u64 {
     use std::sync::OnceLock;
+
     use web_time::Instant;
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     EPOCH.get_or_init(Instant::now).elapsed().as_nanos() as u64
@@ -194,7 +199,7 @@ fn glide_clock_nanos() -> u64 {
 ///   long-press timeout without dragging it, so the field can (re)open the
 ///   contextual menu even when the selection range has not changed.
 /// * `on_tap` — invoked when the finger lifts after a quick press that did not
-///   drag the handle beyond [`HANDLE_TAP_SLOP_PX`] (and was not a long-press),
+///   drag the handle beyond `HANDLE_TAP_SLOP_PX` (and was not a long-press),
 ///   so the collapsed cursor handle can open its action popup.
 #[allow(clippy::too_many_arguments)]
 #[composable]

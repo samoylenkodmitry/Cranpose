@@ -1,3 +1,5 @@
+use std::{cmp::Reverse, collections::BinaryHeap, mem};
+
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
@@ -7,7 +9,6 @@ use super::{
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
 use crate::{collections::map::HashMap, retention::RetentionManager, AnchorId};
-use std::{cmp::Reverse, collections::BinaryHeap, mem};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnchorState {

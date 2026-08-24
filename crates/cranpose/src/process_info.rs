@@ -16,9 +16,9 @@
 
 #![allow(unsafe_code)]
 
+use std::{rc::Rc, time::Duration};
+
 use cranpose_services::{device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef};
-use std::rc::Rc;
-use std::time::Duration;
 
 /// Installs the process readings over whatever device info is registered.
 ///
@@ -93,12 +93,12 @@ fn resident_memory_bytes() -> Option<u64> {
 /// the same kernel here, so they read it the same way.
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 fn darwin_resident_memory_bytes() -> Option<u64> {
-    use mach2::kern_return::KERN_SUCCESS;
-    use mach2::task::task_info;
-    use mach2::task_info::{
-        mach_task_basic_info, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT,
+    use mach2::{
+        kern_return::KERN_SUCCESS,
+        task::task_info,
+        task_info::{mach_task_basic_info, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT},
+        traps::mach_task_self,
     };
-    use mach2::traps::mach_task_self;
 
     let mut info = mach_task_basic_info::default();
     let mut count = MACH_TASK_BASIC_INFO_COUNT;
@@ -215,8 +215,9 @@ fn release_free_memory() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_services::clear_platform_device_info;
+
+    use super::*;
 
     struct Inner {
         total: Option<u64>,

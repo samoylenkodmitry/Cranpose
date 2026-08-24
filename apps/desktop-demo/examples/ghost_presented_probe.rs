@@ -4,9 +4,10 @@
 //! cannot see present-path artifacts). Prints STAGE markers; an external
 //! grabber (maim/import) snapshots the window at each pause.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
-use std::time::Duration;
 
 fn main() {
     let _ = env_logger::try_init();

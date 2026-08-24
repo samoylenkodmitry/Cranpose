@@ -9,11 +9,14 @@
 //! cargo run --package desktop-app --example robot_text_handle_cycle_stability --features robot-app
 //! ```
 
-use cranpose::widgets::{BasicTextField, Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, Robot, RobotScreenshot, Size};
+use std::time::Duration;
+
+use cranpose::{
+    widgets::{BasicTextField, Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, Robot, RobotScreenshot, Size,
+};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::TextStyle;
-use std::time::Duration;
 
 const CYCLES: usize = 30;
 const SWEEPS_PER_CYCLE: usize = 10;

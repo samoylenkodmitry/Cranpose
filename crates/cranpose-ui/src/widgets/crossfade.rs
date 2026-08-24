@@ -5,13 +5,19 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::{GraphicsLayer, Modifier};
-use crate::widgets::box_widget::{Box, BoxSpec};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
 use cranpose_animation::AnimationType;
 use cranpose_core::{remember, State};
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    modifier::{GraphicsLayer, Modifier},
+    widgets::box_widget::{Box, BoxSpec},
+};
 
 /// Alpha below which a fading-out content is considered fully transparent
 /// and can leave the composition.
@@ -46,7 +52,7 @@ struct CrossfadeStateInner<T> {
     content: RefCell<Option<CrossfadeContentFn<T>>>,
 }
 
-/// Shared, cheaply clonable holder for the in-flight crossfade contents.
+/// Shared, cheaply cloneable holder for the in-flight crossfade contents.
 struct CrossfadeStateHandle<T> {
     inner: Rc<CrossfadeStateInner<T>>,
 }

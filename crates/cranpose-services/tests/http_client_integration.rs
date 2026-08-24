@@ -1,11 +1,10 @@
+use std::{cell::RefCell, rc::Rc, sync::Arc};
+
 use cranpose_core::{location_key, Composition, CompositionLocalProvider, MemoryApplier};
 use cranpose_services::{
     local_http_client, BytesBody, HttpClient, HttpClientRef, HttpControl, HttpFuture, HttpRequest,
     HttpResponse,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
 
 struct TestHttpClient;
 

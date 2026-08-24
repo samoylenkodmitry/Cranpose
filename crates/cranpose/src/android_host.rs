@@ -1,11 +1,13 @@
 //! Android implementation of the framework host services.
 #![allow(unsafe_code)]
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
+use std::sync::Arc;
+
 use cranpose_services::{
     set_application_id, set_host_controller, HostController, PlatformDirectories,
 };
 use jni::{jni_sig, jni_str, EnvUnowned};
-use std::sync::Arc;
+
+use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 
 struct AndroidHost {
     app: android_activity::AndroidApp,

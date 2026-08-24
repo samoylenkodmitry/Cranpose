@@ -51,11 +51,10 @@ pub(crate) use table::SlotWriteSession;
 #[cfg(test)]
 pub(crate) use table::ValueSlotError;
 pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
-pub(crate) use types::NodeLifecycle;
 pub(crate) use types::{
     ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, FinishGroupResult, GroupKey,
-    GroupKeySeed, GroupStart, GroupStartKind, NodeSlotUpdate, PayloadAnchor, PayloadKind,
-    SlotPassMode, ValueSlotId,
+    GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle, NodeSlotUpdate, PayloadAnchor,
+    PayloadKind, SlotPassMode, ValueSlotId,
 };
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]

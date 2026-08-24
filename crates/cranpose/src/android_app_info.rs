@@ -10,10 +10,10 @@
 //! Read once at startup: the packaged identity of a running process cannot
 //! change, and a JNI round trip does not belong on any repeated path.
 
-use cranpose_services::app_info::{set_platform_app_info, AppInfo};
-use jni::objects::JString;
-use jni::{jni_sig, jni_str};
 use std::rc::Rc;
+
+use cranpose_services::app_info::{set_platform_app_info, AppInfo};
+use jni::{jni_sig, jni_str, objects::JString};
 
 struct AndroidAppInfo {
     version_name: Option<String>,

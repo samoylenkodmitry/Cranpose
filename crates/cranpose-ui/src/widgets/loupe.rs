@@ -24,18 +24,25 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use crate::composable;
-use crate::modifier::Modifier;
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::popup::Popup;
 use cranpose_animation::{spring, Animatable, AnimationSpec, AnimationType, Easing};
 use cranpose_core::{remember, with_current_composer};
 use cranpose_ui_graphics::{
     liquid_loupe_effect, GraphicsLayer, LayerShape, LiquidLoupeSpec, Point, Rect,
     RoundedCornerShape, Size,
+};
+
+use crate::{
+    composable,
+    modifier::Modifier,
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        popup::Popup,
+    },
 };
 
 /// Bubble size in dp (reference: 350×246 px @3x).

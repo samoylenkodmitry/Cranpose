@@ -1,8 +1,10 @@
-use super::super::{
-    checked_u32_delta, checked_usize_to_u32, try_checked_u32_delta, ActiveSubtreeRoot,
-    CheckedU32Delta, ChildCursor, GroupKey, GroupRecord,
+use super::{
+    super::{
+        checked_u32_delta, checked_usize_to_u32, try_checked_u32_delta, ActiveSubtreeRoot,
+        CheckedU32Delta, ChildCursor, GroupKey, GroupRecord,
+    },
+    SlotTable,
 };
-use super::SlotTable;
 use crate::AnchorId;
 
 impl SlotTable {

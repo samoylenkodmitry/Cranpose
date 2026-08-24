@@ -6,15 +6,18 @@
 //! BUG: Before fix, scroll_to_item would update data but not request a render,
 //! so the UI wouldn't update until the next user scroll/click.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row, RowSpec,
-    Text,
+use cranpose_ui::{
+    widgets::{
+        Box, BoxSpec, Button, ButtonSpec, Column, ColumnSpec, LazyColumn, LazyColumnSpec, Row,
+        RowSpec, Text,
+    },
+    Alignment, Color, Modifier, Size, TextStyle,
 };
-use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

@@ -1,7 +1,6 @@
 #![deny(missing_docs)]
-#![deny(unsafe_code)]
 
-//! StoreKit 2 backend for [`cranpose_services::purchases`].
+//! StoreKit 2 backend for [`cranpose_services::purchases`](mod@cranpose_services::purchases).
 //!
 //! StoreKit 2 has no Objective-C surface — `Product`, `Transaction` and the
 //! on-device JWS verification are Swift-only — so this crate compiles a small

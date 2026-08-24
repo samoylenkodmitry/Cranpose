@@ -6,19 +6,23 @@
 //! exposes, and unsupported operations return the service's error type instead
 //! of silently pretending.
 
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
 use cranpose_services::{
     set_platform_device_info, set_platform_haptics, set_platform_network_monitor,
     set_platform_notifier, set_platform_share_sheet, DeviceInfo, HapticEffect, HapticFeedback,
     HapticPattern, Haptics, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent,
     ShareError, ShareSheet,
 };
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 
 pub(crate) fn register() {
     set_platform_share_sheet(Rc::new(WebShareSheet));

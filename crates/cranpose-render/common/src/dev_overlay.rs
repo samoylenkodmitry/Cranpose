@@ -1,13 +1,16 @@
 //! Renderer-drawn dev overlay (fps counter): one shared graph builder so
 //! every backend draws the identical overlay without composition impact.
 
-use crate::graph::{
-    CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-    PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
-};
-use crate::raster_cache::LayerRasterCacheHashes;
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Size,
+};
+
+use crate::{
+    graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    raster_cache::LayerRasterCacheHashes,
 };
 
 /// Cache key for the last-built overlay; rebuilding only on change keeps the

@@ -19,18 +19,26 @@
 //! bridge calls back through, and nothing else.
 #![allow(unsafe_code)]
 
-use crate::android_jni::{
-    clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, MutexGuard},
 };
-use crate::android_purchase_wire::{decode_purchase_event, decode_store_snapshot};
-use crate::android_services::wake_native_loop;
+
 use cranpose_services::purchases::{set_platform_purchases, PurchaseEvent, Purchases, StoreState};
-use jni::objects::{JClass, JObject, JString, JValue};
-use jni::sys::jint;
-use jni::{jni_sig, jni_str, Env, EnvUnowned, Outcome};
-use std::collections::VecDeque;
-use std::sync::Arc;
-use std::sync::{Mutex, MutexGuard};
+use jni::{
+    jni_sig, jni_str,
+    objects::{JClass, JObject, JString, JValue},
+    sys::jint,
+    Env, EnvUnowned, Outcome,
+};
+
+use crate::{
+    android_jni::{
+        clear_pending_android_jni_exception, load_cranpose_java_class, with_android_activity_env,
+    },
+    android_purchase_wire::{decode_purchase_event, decode_store_snapshot},
+    android_services::wake_native_loop,
+};
 
 /// The Java bridge, in JNI slash notation. It lives in
 /// `crates/cranpose/android/java-billing`, a source directory an app adds

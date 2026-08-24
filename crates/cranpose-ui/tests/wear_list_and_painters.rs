@@ -7,11 +7,12 @@
 //! last measure pass saw. Those answers decide whether a "scroll to item" moves
 //! in the right direction, which is not something a screenshot shows.
 
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::run_test_composition;
-use cranpose_ui::widgets::image::Painter;
-use cranpose_ui::widgets::wear::scaling_list::rememberWearScalingListState;
-use cranpose_ui::TextOverflow;
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    run_test_composition,
+    widgets::{image::Painter, wear::scaling_list::rememberWearScalingListState},
+    TextOverflow,
+};
 use cranpose_ui_graphics::ImageBitmap;
 
 #[test]
@@ -151,12 +152,14 @@ fn a_scale_down_floor_that_cannot_be_drawn_at_is_normalised_away() {
 
 #[test]
 fn the_wear_widgets_compose_against_a_scaling_list_state() {
-    use cranpose_ui::measure_layout;
-    use cranpose_ui::widgets::wear::scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec};
-    use cranpose_ui::widgets::wear::switch_button::{
-        SwitchButtonNode, SwitchButtonSpec, SwitchColors, SwitchGraphic,
+    use cranpose_ui::{
+        measure_layout,
+        widgets::wear::{
+            scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec},
+            switch_button::{SwitchButtonNode, SwitchButtonSpec, SwitchColors, SwitchGraphic},
+        },
+        Modifier,
     };
-    use cranpose_ui::Modifier;
 
     let mut composition = run_test_composition(|| {
         let state = rememberWearScalingListState(CentreAnchor::default());
@@ -200,8 +203,10 @@ fn the_wear_widgets_compose_against_a_scaling_list_state() {
 
 #[test]
 fn a_wear_button_composes_its_label() {
-    use cranpose_ui::widgets::wear::button::{WearButton, WearButtonSpec};
-    use cranpose_ui::Modifier;
+    use cranpose_ui::{
+        widgets::wear::button::{WearButton, WearButtonSpec},
+        Modifier,
+    };
 
     run_test_composition(|| {
         WearButton(
@@ -216,8 +221,10 @@ fn a_wear_button_composes_its_label() {
 
 #[test]
 fn a_list_header_composes_its_label() {
-    use cranpose_ui::widgets::wear::list_header::{ListHeader, ListHeaderSpec};
-    use cranpose_ui::Modifier;
+    use cranpose_ui::{
+        widgets::wear::list_header::{ListHeader, ListHeaderSpec},
+        Modifier,
+    };
 
     run_test_composition(|| {
         ListHeader(Modifier::empty(), ListHeaderSpec::default(), "Settings");
@@ -226,10 +233,12 @@ fn a_list_header_composes_its_label() {
 
 #[test]
 fn a_screen_scaffold_composes_its_content() {
-    use cranpose_ui::widgets::wear::scaffold::{ScreenScaffold, ScreenScaffoldSpec};
-    use cranpose_ui::Modifier;
-    use std::cell::Cell;
-    use std::rc::Rc;
+    use std::{cell::Cell, rc::Rc};
+
+    use cranpose_ui::{
+        widgets::wear::scaffold::{ScreenScaffold, ScreenScaffoldSpec},
+        Modifier,
+    };
 
     let drawn = Rc::new(Cell::new(0usize));
     let counter = Rc::clone(&drawn);
@@ -252,9 +261,11 @@ fn a_screen_scaffold_composes_its_content() {
 
 #[test]
 fn a_switch_button_composes_without_a_secondary_label() {
-    use cranpose_ui::measure_layout;
-    use cranpose_ui::widgets::wear::switch_button::{SwitchButton, SwitchButtonSpec};
-    use cranpose_ui::Modifier;
+    use cranpose_ui::{
+        measure_layout,
+        widgets::wear::switch_button::{SwitchButton, SwitchButtonSpec},
+        Modifier,
+    };
 
     let mut composition = run_test_composition(|| {
         SwitchButton(
@@ -288,14 +299,16 @@ fn a_switch_button_composes_without_a_secondary_label() {
 
 #[test]
 fn a_wear_scaling_lazy_column_subcomposes_its_rows_during_measurement() {
-    use cranpose_ui::measure_layout;
-    use cranpose_ui::widgets::text::Text;
-    use cranpose_ui::widgets::wear::scaling_list::{
-        WearScalingLazyColumn, WearScalingLazyColumnSpec,
+    use std::{cell::Cell, rc::Rc};
+
+    use cranpose_ui::{
+        measure_layout,
+        widgets::{
+            text::Text,
+            wear::scaling_list::{WearScalingLazyColumn, WearScalingLazyColumnSpec},
+        },
+        Modifier, TextStyle,
     };
-    use cranpose_ui::{Modifier, TextStyle};
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     let composed_rows = Rc::new(Cell::new(0usize));
     let counter = Rc::clone(&composed_rows);

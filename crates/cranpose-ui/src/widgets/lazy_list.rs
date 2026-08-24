@@ -6,30 +6,34 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)] // Some public widget entry points are exercised by downstream apps.
 
-use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
-use std::rc::Rc;
-use web_time::Instant;
-
-use crate::composable;
-use crate::layout::MeasuredNode;
-use crate::modifier::{Modifier, Size};
-use crate::scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey};
-use crate::subcompose_layout::{
-    MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
-    SubcomposeMeasureScopeImpl,
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, VecDeque},
+    rc::Rc,
 };
+
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
     measure_lazy_list, measure_lazy_list_with_beyond_bounds_policy, LazyListIntervalContent,
     LazyListMeasureConfig, LazyListMeasureResult, LazyListMeasuredItem, LazyListState,
     SmallNodeVec, SmallOffsetVec,
 };
-use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
-use smallvec::SmallVec;
-
 // Re-export from foundation - single source of truth
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
+use cranpose_ui_layout::{Constraints, LinearArrangement, MeasureResult};
+use smallvec::SmallVec;
+use web_time::Instant;
+
+use crate::{
+    composable,
+    layout::MeasuredNode,
+    modifier::{Modifier, Size},
+    scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey},
+    subcompose_layout::{
+        MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
+        SubcomposeMeasureScopeImpl,
+    },
+};
 
 const EXPENSIVE_RETAINED_REUSABLE_SLOTS: usize = 128;
 const ACTIVE_SCROLL_UNCACHED_BEYOND_BOUNDS_FRONTIER: usize = 4;
@@ -1338,7 +1342,7 @@ fn LazyRowNode(
 /// A vertically scrolling list that only composes visible items.
 ///
 /// Matches Jetpack Compose's `LazyColumn` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements [`LazyListScope`] for defining items.
+/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
 ///
 /// # Example
 ///
@@ -1357,7 +1361,7 @@ fn LazyRowNode(
 /// });
 /// ```
 ///
-/// For convenience with slices, use the [`LazyListScopeExt`] extension methods:
+/// For convenience with slices, use the `LazyListScopeExt` extension methods:
 ///
 /// ```rust,ignore
 /// use cranpose_foundation::lazy::LazyListScopeExt;
@@ -1419,7 +1423,7 @@ where
 /// A horizontally scrolling list that only composes visible items.
 ///
 /// Matches Jetpack Compose's `LazyRow` API. The closure receives
-/// a [`LazyListIntervalContent`] which implements [`LazyListScope`] for defining items.
+/// a [`LazyListIntervalContent`] which implements `LazyListScope` for defining items.
 ///
 /// # Example
 ///
@@ -1447,8 +1451,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_core::{location_key, Composition, MemoryApplier};
+
+    use super::*;
 
     #[test]
     fn test_lazy_column_spec_default() {

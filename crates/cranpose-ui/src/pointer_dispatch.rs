@@ -5,9 +5,9 @@
 //! `AppShell::cached_hits` which caches hit targets on pointer DOWN
 //! and dispatches subsequent MOVE/UP events to the same cached nodes.
 
+use std::{cell::RefCell, collections::HashSet};
+
 use cranpose_core::NodeId;
-use std::cell::RefCell;
-use std::collections::HashSet;
 
 // ============================================================================
 // PointerDispatchManager - Invalidation tracking

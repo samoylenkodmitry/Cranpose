@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use cranpose::SemanticElement;
 use cranpose_services::{HttpClientRef, HttpError, StubHttpClient};
 use cranpose_testing::{
@@ -5,7 +7,6 @@ use cranpose_testing::{
     print_semantics_with_bounds,
 };
 use serde_json::json;
-use std::time::Duration;
 
 pub const MOCK_STORY_COUNT: usize = 60;
 pub const MOCK_COMMENT_COUNT: usize = 40;

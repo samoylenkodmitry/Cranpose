@@ -1,9 +1,7 @@
-use cranpose_core::compositionLocalOfWithPolicy;
-use cranpose_core::CompositionLocal;
-use cranpose_core::CompositionLocalProvider;
+use std::{cell::RefCell, rc::Rc};
+
+use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
 use cranpose_macros::composable;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(thiserror::Error, Debug)]
 pub enum UriHandlerError {
@@ -152,10 +150,12 @@ pub fn ProvideUriHandler(content: impl FnOnce()) {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+
+    use cranpose_core::CompositionLocalProvider;
+
     use super::*;
     use crate::run_test_composition;
-    use cranpose_core::CompositionLocalProvider;
-    use std::cell::RefCell;
 
     struct TestUriHandler;
 

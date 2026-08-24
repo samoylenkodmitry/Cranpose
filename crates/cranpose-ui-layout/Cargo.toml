@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Layout contracts & policies for Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-ui-graphics = { workspace = true }
 cranpose-core = { workspace = true }

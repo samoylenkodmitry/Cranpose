@@ -1,3 +1,5 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
 };
@@ -5,8 +7,6 @@ use cranpose_core::{
     location_key, with_current_composer, Composition, MemoryApplier, MutableState, Node, NodeError,
     SnapshotStateObserver, State,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 #[derive(Default)]
 struct DummyNode;

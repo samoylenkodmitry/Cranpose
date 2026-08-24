@@ -39,7 +39,8 @@ pub(crate) fn IsolatedDemoApp() {
                     Button(
                         Modifier::empty()
                             .padding(12.0)
-                            .background(Color::rgba(0.12, 0.16, 0.26, 1.0)), ButtonSpec::default(),
+                            .background(Color::rgba(0.12, 0.16, 0.26, 1.0)),
+                        ButtonSpec::default(),
                         {
                             let counter = counter;
                             move || counter.set(counter.get() + 1)
@@ -59,7 +60,8 @@ pub(crate) fn IsolatedDemoApp() {
                     Button(
                         Modifier::empty()
                             .padding(12.0)
-                            .background(Color::rgba(0.2, 0.2, 0.2, 1.0)), ButtonSpec::default(),
+                            .background(Color::rgba(0.2, 0.2, 0.2, 1.0)),
+                        ButtonSpec::default(),
                         {
                             let accent = accent;
                             move || accent.set(!accent.get())

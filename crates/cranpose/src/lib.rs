@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! High level utilities for running Cranpose applications with minimal boilerplate.
@@ -162,33 +161,29 @@ mod surface_format;
 ))]
 mod wgpu_surface;
 
-/// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
-pub use cranpose_services::*;
-/// Re-export the UI crate so applications can depend on a single crate.
-pub use cranpose_ui::*;
-
-/// Liquid UI — the first-party glass component library
-/// (`use cranpose::liquid::prelude::*;`).
-pub use cranpose_liquid as liquid;
-
 /// The real-time audio engine that backs `cranpose_services::audio`. Call
 /// [`install_audio`] once at startup; Android installs it automatically.
 #[cfg(feature = "audio")]
 pub use cranpose_audio::{install as install_audio, AudioEngine};
-
-/// The desktop media backend that backs `cranpose_services::media`. Installed
-/// automatically by the desktop shell; Android, iOS and the web install their
-/// own platform backend instead. [`uri_for_path`] builds the `file:` URI a
-/// [`cranpose_services::MediaItem`] takes from a path.
-#[cfg(feature = "media-desktop")]
-pub use cranpose_media::{path_from_uri, uri_for_path, DesktopMediaPlayer};
-
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
     delay, interval, launchBlocking, mutableStateOf, produceState, remember,
     rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
     rememberUpdatedState, CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
 };
+/// Liquid UI — the first-party glass component library
+/// (`use cranpose::liquid::prelude::*;`).
+pub use cranpose_liquid as liquid;
+/// The desktop media backend that backs `cranpose_services::media`. Installed
+/// automatically by the desktop shell; Android, iOS and the web install their
+/// own platform backend instead. [`uri_for_path`] builds the `file:` URI a
+/// [`cranpose_services::MediaItem`] takes from a path.
+#[cfg(feature = "media-desktop")]
+pub use cranpose_media::{path_from_uri, uri_for_path, DesktopMediaPlayer};
+/// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
+pub use cranpose_services::*;
+/// Re-export the UI crate so applications can depend on a single crate.
+pub use cranpose_ui::*;
 
 static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -357,8 +352,21 @@ pub use cranpose_core::{
 #[doc(hidden)]
 pub type RobotAppHook = dyn FnMut(String, String) -> Result<Option<String>, String>;
 
+/// Guides for using Cranpose, compiled with the crate so they cannot drift from
+/// it. Built only for documentation, so they cost a reader nothing at runtime.
+#[cfg(doc)]
+pub mod _docs;
+
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
+    pub use cranpose_core::{
+        delay, interval, mutableStateOf, produceState, remember, rememberCoroutineScope,
+        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
+        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
+    };
+    pub use cranpose_services::*;
+    pub use cranpose_ui::*;
+
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
         rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
@@ -369,13 +377,6 @@ pub mod prelude {
         WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode,
         WindowNode, WindowResizeDirection, WindowState,
     };
-    pub use cranpose_core::{
-        delay, interval, mutableStateOf, produceState, remember, rememberCoroutineScope,
-        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
-    };
-    pub use cranpose_services::*;
-    pub use cranpose_ui::*;
 }
 
 // Platform-specific runtime modules
@@ -572,6 +573,9 @@ mod web_drop;
 
 // Re-export the renderer-agnostic robot harness so applications and the
 // testing crate can drive either desktop shell through a single path.
+/// Development frame pacing and FPS statistics types.
+#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
+pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
 #[cfg(all(
     feature = "desktop-shell",
     feature = "robot",
@@ -580,10 +584,6 @@ mod web_drop;
 pub use robot::{
     Robot, RobotScreenshot, RobotTimelineAction, RobotTimelineStep, SemanticElement, SemanticRect,
 };
-
-/// Development frame pacing and FPS statistics types.
-#[cfg(all(feature = "desktop-shell", feature = "renderer-wgpu"))]
-pub use cranpose_app_shell::{DevOptions, FpsStats, FramePacingMode};
 
 /// A unique, empty directory under the workspace `target/test-output` for a
 /// test in this crate that needs real files. See

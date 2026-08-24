@@ -10,9 +10,10 @@
 //! cargo run --package desktop-app --example robot_lazy_perf_validation --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

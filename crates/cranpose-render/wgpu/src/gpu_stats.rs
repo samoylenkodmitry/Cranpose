@@ -3,12 +3,15 @@
 //! Counters are always collected so tests and perf harnesses can assert them.
 //! Setting `CRANPOSE_GPU_STATS=1` prints a summary line every 60 frames to stderr.
 
-use crate::frame_graph::FrameCommandStats;
-use crate::surface_requirements::{SurfaceRequirement, SurfaceRequirementSet};
 use std::cell::{Cell, RefCell};
 
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Rect;
+
+use crate::{
+    frame_graph::FrameCommandStats,
+    surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
+};
 
 const TOP_ISOLATED_LAYER_LIMIT: usize = 8;
 

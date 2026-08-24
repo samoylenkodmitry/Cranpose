@@ -1,9 +1,6 @@
-#![deny(unsafe_code)]
-
 use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::Point;
-use winit::dpi::PhysicalPosition;
-use winit::event::MouseScrollDelta;
+use winit::{dpi::PhysicalPosition, event::MouseScrollDelta};
 
 const LINE_SCROLL_DELTA_PIXELS: f32 = 40.0;
 

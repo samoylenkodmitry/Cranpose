@@ -9,26 +9,30 @@
 //! Cranpose point is a dp: the 454px display is 227 points across, and 175px is
 //! 87.5 points.
 
-use super::*;
-use crate::modifier::{ModifierNodeSlices, PointerEvent, PointerEventKind};
-use crate::round_scaling_list::{scale_and_alpha, CentreAnchor};
-use crate::round_scroll_indicator::{
-    decimal_first_item_index, decimal_last_item_index, indicator_geometry, IndicatorGeometry,
-    ThumbLength,
-};
-use crate::widgets::wear::{
-    indicator_for_scaling_list, ListHeader, ListHeaderSpec, ScreenScaffold, ScreenScaffoldSpec,
-    ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, SwitchColors, WearButton, WearButtonSpec,
-    WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState,
-    WearTextStyle,
-};
-use crate::widgets::Spacer;
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::NodeId;
-use cranpose_foundation::lazy::LazyItems;
-use cranpose_foundation::{PointerButton, PointerButtons};
+use cranpose_foundation::{lazy::LazyItems, PointerButton, PointerButtons};
 use cranpose_ui_graphics::Size as ViewportSize;
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use super::*;
+use crate::{
+    modifier::{ModifierNodeSlices, PointerEvent, PointerEventKind},
+    round_scaling_list::{scale_and_alpha, CentreAnchor},
+    round_scroll_indicator::{
+        decimal_first_item_index, decimal_last_item_index, indicator_geometry, IndicatorGeometry,
+        ThumbLength,
+    },
+    widgets::{
+        wear::{
+            indicator_for_scaling_list, ListHeader, ListHeaderSpec, ScreenScaffold,
+            ScreenScaffoldSpec, ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, SwitchColors,
+            WearButton, WearButtonSpec, WearColors, WearScalingLazyColumn,
+            WearScalingLazyColumnSpec, WearScalingListState, WearTextStyle,
+        },
+        Spacer,
+    },
+};
 
 /// Device pixels per layout point on the watch these numbers came from.
 const PX: f32 = 2.0;

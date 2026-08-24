@@ -7,6 +7,11 @@
 //! `None`, `Unsupported` — and this pins it for every service at once, so a
 //! backend added later cannot quietly become the thing that hides an absence.
 
+use std::{
+    sync::{Mutex, MutexGuard},
+    time::Duration,
+};
+
 use cranpose_services::{
     app_updates_supported, camera, camera_supported, check_for_app_update,
     clear_platform_app_updater, clear_platform_camera, clear_platform_host_surface,
@@ -16,8 +21,6 @@ use cranpose_services::{
     store_available, AppUpdateError, CameraError, GitHubReleaseUpdate, MediaCapabilities,
     MediaError, MediaItem, PackageDigest, ResizeRefused, UpdatePackage,
 };
-use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
 
 /// The services are one registry for the process, so tests that clear it take
 /// turns rather than clearing each other's backends mid-assertion.

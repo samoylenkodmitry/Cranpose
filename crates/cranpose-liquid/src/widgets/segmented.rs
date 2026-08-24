@@ -4,23 +4,25 @@
 //! it lifts the indicator into a magnifying glass lens that follows the finger
 //! across the segments (the reference control swipes, it doesn't just tap).
 
-use crate::material::{
-    Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape,
-};
-use crate::motion::LiquidMotion;
-use crate::theme::{liquid_colors, liquid_typography};
-use crate::widgets::content_scope::ScopeContent;
+use std::rc::Rc;
+
 use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
-use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text,
+use cranpose_ui::{
+    text::{FontWeight, SpanStyle, TextStyle},
+    widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text},
+    Modifier, PointerInputScope, SemanticsWidgetRole, Size,
 };
-use cranpose_ui::{Modifier, PointerInputScope, SemanticsWidgetRole, Size};
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
-use std::rc::Rc;
+
+use crate::{
+    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    motion::LiquidMotion,
+    theme::{liquid_colors, liquid_typography},
+    widgets::content_scope::ScopeContent,
+};
 
 /// Reference control height: the marker capsule crop is 130px at the
 /// recording's 2.89 px/dp = 45dp total, 41dp inside the track padding.

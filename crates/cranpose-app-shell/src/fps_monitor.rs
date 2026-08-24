@@ -1,6 +1,7 @@
 //! FPS monitoring for performance tracking.
 
 use std::collections::VecDeque;
+
 use web_time::Instant;
 
 const FRAME_HISTORY_SIZE: usize = 60;
@@ -339,8 +340,9 @@ pub struct FpsStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{nearest_rank_percentile, FpsMonitor, FpsTracker};
     use std::time::Duration;
+
+    use super::{nearest_rank_percentile, FpsMonitor, FpsTracker};
 
     #[test]
     fn monitors_do_not_share_recomposition_or_frame_counts() {

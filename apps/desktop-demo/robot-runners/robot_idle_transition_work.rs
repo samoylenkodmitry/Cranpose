@@ -1,3 +1,8 @@
+use std::{
+    sync::atomic::{AtomicUsize, Ordering},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use cranpose_animation::{
     infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
@@ -8,8 +13,6 @@ use cranpose_ui::{
     composable, Button, ButtonSpec, Column, ColumnSpec, LinearArrangement, Modifier, Text,
     TextStyle,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
 
 static ROOT_COMPOSITIONS: AtomicUsize = AtomicUsize::new(0);
 

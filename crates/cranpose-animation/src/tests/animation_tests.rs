@@ -1,11 +1,11 @@
-use super::*;
+use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
     location_key, with_current_composer, Composer, Composition, MemoryApplier, MutableState, Node,
     SnapshotStateObserver, State,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use super::*;
 
 #[derive(Default)]
 struct DummyNode;

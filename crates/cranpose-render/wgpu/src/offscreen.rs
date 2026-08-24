@@ -4,8 +4,9 @@
 //! attachment) and sampled from (as a texture binding). Used by blur and
 //! custom shader effects that need to capture a subtree's rendered output.
 
-use crate::gpu_stats::FrameStats;
 use std::cell::OnceCell;
+
+use crate::gpu_stats::FrameStats;
 
 pub(crate) const COMPOSITION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 

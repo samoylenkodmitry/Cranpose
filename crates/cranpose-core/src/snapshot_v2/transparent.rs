@@ -298,10 +298,13 @@ impl TransparentObserverSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::snapshot_v2::runtime::TestRuntimeGuard;
-    use crate::state::{ObjectId, StateObject, StateRecord, PREEXISTING_SNAPSHOT_ID};
     use std::rc::Rc;
+
+    use super::*;
+    use crate::{
+        snapshot_v2::runtime::TestRuntimeGuard,
+        state::{ObjectId, StateObject, StateRecord, PREEXISTING_SNAPSHOT_ID},
+    };
 
     fn reset_runtime() -> TestRuntimeGuard {
         reset_runtime_for_tests()

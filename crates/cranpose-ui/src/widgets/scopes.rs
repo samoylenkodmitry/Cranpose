@@ -1,8 +1,9 @@
 //! Scope traits and implementations for Box, Column, and Row
 
-use crate::modifier::Modifier;
 use cranpose_ui_graphics::Dp;
 use cranpose_ui_layout::{Alignment, Constraints, HorizontalAlignment, VerticalAlignment};
+
+use crate::modifier::Modifier;
 
 /// Marker trait matching Jetpack Compose's `BoxScope` API.
 ///
@@ -32,7 +33,7 @@ pub trait RowScope {
     fn weight(&self, weight: f32, fill: bool) -> Modifier;
 }
 
-/// Scope exposed to [`BoxWithConstraints`] content.
+/// Scope exposed to `BoxWithConstraints` content.
 pub trait BoxWithConstraintsScope: BoxScope {
     fn constraints(&self) -> Constraints;
     fn min_width(&self) -> Dp;

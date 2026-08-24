@@ -5,11 +5,15 @@
 
 #![allow(non_snake_case)]
 
-use crate::modifier::Modifier;
-use crate::text::{AnnotatedString, TextOverflow, TextStyle};
-use crate::widgets::BasicText;
-use cranpose_core::NodeId;
 use std::rc::Rc;
+
+use cranpose_core::NodeId;
+
+use crate::{
+    modifier::Modifier,
+    text::{AnnotatedString, TextOverflow, TextStyle},
+    widgets::BasicText,
+};
 
 #[doc(hidden)]
 pub trait IntoSharedAnnotatedString {
@@ -95,8 +99,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_core::{location_key, Composition, MemoryApplier};
+
+    use super::*;
 
     #[test]
     fn clickable_text_composes_without_panic() {

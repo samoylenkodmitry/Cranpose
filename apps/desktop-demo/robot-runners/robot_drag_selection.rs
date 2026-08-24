@@ -5,12 +5,15 @@
 //! cargo run --package desktop-app --example robot_drag_selection --features robot-app
 //! ```
 
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use cranpose::{AppLauncher, RobotScreenshot, SemanticElement};
 use cranpose_testing::{find_button, find_in_semantics, find_text};
 use desktop_app::app;
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 mod text_input_robot_helpers;
 

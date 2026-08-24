@@ -2,19 +2,21 @@
 
 #![allow(non_snake_case)]
 
-use super::nodes::LayoutNode;
-use super::scopes::BoxWithConstraintsScopeImpl;
-use crate::composable;
-use crate::modifier::Modifier;
-use crate::subcompose_layout::{
-    Constraints, MeasurePolicy as SubcomposeMeasurePolicy, MeasureResult, SubcomposeLayoutNode,
-    SubcomposeLayoutScope, SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
-};
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{NodeId, SlotId};
 use cranpose_ui_graphics::Size;
 use cranpose_ui_layout::{MeasurePolicy, Placement};
-use std::cell::RefCell;
-use std::rc::Rc;
+
+use super::{nodes::LayoutNode, scopes::BoxWithConstraintsScopeImpl};
+use crate::{
+    composable,
+    modifier::Modifier,
+    subcompose_layout::{
+        Constraints, MeasurePolicy as SubcomposeMeasurePolicy, MeasureResult, SubcomposeLayoutNode,
+        SubcomposeLayoutScope, SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
+    },
+};
 
 struct RetainedMeasurePolicy<P> {
     value: P,
@@ -178,9 +180,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use cranpose_core::{location_key, Composition, MemoryApplier, MutableState};
     use std::cell::Cell;
+
+    use cranpose_core::{location_key, Composition, MemoryApplier, MutableState};
+
+    use super::*;
 
     #[test]
     fn layout_recomposes_when_content_reads_state() {

@@ -1,7 +1,8 @@
+use std::path::PathBuf;
+
 use cranpose_services::{
     BytesBody, HttpClient, HttpControl, HttpFuture, HttpRequest, HttpResponse,
 };
-use std::path::PathBuf;
 
 pub(crate) struct MarkdownFixtureClient {
     body: String,

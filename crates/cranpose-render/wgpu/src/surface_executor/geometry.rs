@@ -1,9 +1,10 @@
-use crate::effect_renderer::CompositeSampleMode;
-use crate::offscreen::composition_bytes_per_pixel;
-use crate::scene::SnapAnchor;
-use crate::surface_plan::TranslatedContentAxes;
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_ui_graphics::{Point, Rect};
+
+use crate::{
+    effect_renderer::CompositeSampleMode, offscreen::composition_bytes_per_pixel,
+    scene::SnapAnchor, surface_plan::TranslatedContentAxes,
+};
 
 pub(crate) const MAX_EFFECT_LAYER_SURFACE_BYTES: u64 = 16 * 1024 * 1024;
 const QUAD_AXIS_ALIGNMENT_TOLERANCE: f32 = 1e-4;
@@ -500,6 +501,8 @@ pub(crate) fn quantize_motion_stable_target_scale(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_ui_graphics::Rect;
+
     use super::{
         axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
         canonicalized_scaled_rect, clamp_effect_surface_scale, composition_bytes_per_pixel,
@@ -509,10 +512,9 @@ mod tests {
         snap_motion_stable_dest_quad, surface_target_size,
         translation_stable_anchored_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
     };
-    use crate::effect_renderer::CompositeSampleMode;
-    use crate::rect_to_quad;
-    use crate::surface_plan::TranslatedContentAxes;
-    use cranpose_ui_graphics::Rect;
+    use crate::{
+        effect_renderer::CompositeSampleMode, rect_to_quad, surface_plan::TranslatedContentAxes,
+    };
 
     #[test]
     fn box4_motion_stable_dest_quad_snaps_axis_aligned_translation() {

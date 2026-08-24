@@ -5,11 +5,13 @@
 //! unique to the horizontal orientation — rendered items actually moving
 //! along the x axis (not y) when the list is scrolled.
 
-use super::*;
+use std::cell::RefCell;
+
 use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeId};
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
-use std::cell::RefCell;
+
+use super::*;
 
 thread_local! {
     static LAST_LAZY_ROW_STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) };

@@ -10,6 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 description = "Liquid UI — cranpose's first-party glass component library (iOS-26-style materials, spring motion)"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 cranpose-core = { workspace = true }
 cranpose-macros = { workspace = true }

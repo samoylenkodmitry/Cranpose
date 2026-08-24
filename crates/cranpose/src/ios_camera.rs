@@ -7,15 +7,23 @@
 //! poll it (matching the desktop/Android live viewfinder).
 #![allow(unsafe_code)]
 
+use std::{
+    sync::{mpsc, Arc, Mutex, OnceLock},
+    time::Duration,
+};
+
 use block2::RcBlock;
 use cranpose_services::{
     set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill,
     FlashMode, FrameFormat,
 };
 use dispatch2::{DispatchQueue, DispatchRetained};
-use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool, ProtocolObject};
-use objc2::{define_class, msg_send, AllocAnyThread};
+use objc2::{
+    define_class, msg_send,
+    rc::Retained,
+    runtime::{AnyObject, Bool, ProtocolObject},
+    AllocAnyThread,
+};
 use objc2_av_foundation::{
     AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice,
     AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput, AVCaptureDevicePosition,
@@ -39,11 +47,6 @@ use objc2_core_video::{
 use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,
 };
-use std::sync::mpsc;
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::time::Duration;
 
 /// `'BGRA'` — 32-bit BGRA, the pixel format we request from the video output.
 const PIXEL_FORMAT_32BGRA: u32 = 0x4247_5241;

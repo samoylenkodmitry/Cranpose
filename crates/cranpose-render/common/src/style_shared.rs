@@ -632,8 +632,9 @@ pub fn primitives_for_placement_verified(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui_graphics::{DrawScope, DrawScopeDefault, Rect};
+
+    use super::*;
 
     fn recorded_command(record: impl Fn(&mut dyn DrawScope) + 'static) -> DrawCommandFn {
         Rc::new(move |scope: &mut DrawScopeDefault| record(scope))

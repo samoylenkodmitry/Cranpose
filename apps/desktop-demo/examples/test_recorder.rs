@@ -8,9 +8,10 @@
 //! cargo run --package desktop-app --example test_recorder
 //! ```
 
+use std::path::PathBuf;
+
 use cranpose::AppLauncher;
 use desktop_app::app;
-use std::path::PathBuf;
 
 fn main() {
     let recording_path = PathBuf::from("absent_gradient_area_recording.rs");

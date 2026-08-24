@@ -5,13 +5,14 @@
 //! cargo run --package desktop-app --example robot_lazy_list_end_alignment --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
-    find_button_in_semantics, find_in_semantics, find_text_by_prefix_in_semantics, find_text_exact,
+    find_button_in_semantics, find_element_by_text_exact, find_in_semantics,
+    find_text_by_prefix_in_semantics, find_text_exact, print_semantics_with_bounds, union_bounds,
 };
-use cranpose_testing::{find_element_by_text_exact, print_semantics_with_bounds, union_bounds};
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

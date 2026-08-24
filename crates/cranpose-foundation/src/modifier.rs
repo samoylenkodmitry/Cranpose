@@ -5,18 +5,17 @@
 //! contexts as well as a lightweight chain container that reconciles nodes
 //! across updates.
 
-use std::any::{type_name, Any, TypeId};
-use std::cell::{Cell, RefCell};
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::ops::{BitOr, BitOrAssign};
-use std::rc::Rc;
+use std::{
+    any::{type_name, Any, TypeId},
+    cell::{Cell, RefCell},
+    fmt,
+    hash::{Hash, Hasher},
+    ops::{BitOr, BitOrAssign},
+    rc::Rc,
+};
 
-use cranpose_core::collections::map::HashMap;
-use cranpose_core::hash::default;
-
-pub use cranpose_ui_graphics::DrawScope;
-pub use cranpose_ui_graphics::Size;
+use cranpose_core::{collections::map::HashMap, hash::default};
+pub use cranpose_ui_graphics::{DrawScope, Size};
 pub use cranpose_ui_layout::{Constraints, Measurable};
 
 use crate::nodes::input::types::PointerEvent;
@@ -78,7 +77,7 @@ impl BasicModifierNodeContext {
     }
 
     /// Returns the ordered list of invalidation kinds that were requested
-    /// since the last call to [`clear_invalidations`]. Duplicate requests for
+    /// since the last call to `clear_invalidations`. Duplicate requests for
     /// the same kind are coalesced.
     pub fn invalidations(&self) -> &[ModifierInvalidation] {
         &self.invalidations
@@ -95,7 +94,7 @@ impl BasicModifierNodeContext {
     }
 
     /// Returns whether an update was requested since the last call to
-    /// [`take_update_requested`].
+    /// `take_update_requested`.
     pub fn update_requested(&self) -> bool {
         self.update_requested
     }
@@ -775,7 +774,7 @@ pub struct CanvasSemanticsNode {
     /// its own when only the state changed.
     pub state_description: Option<String>,
     /// Compose's `onClick(label = …)`. TalkBack reads it as "double tap to
-    /// <label>", so it is a verb phrase, not a repeat of the label.
+    /// `<label>`", so it is a verb phrase, not a repeat of the label.
     pub on_click_label: Option<String>,
     pub clickable: bool,
     /// Compose's `selected`, for `Role.RadioButton`/`Role.Tab`.

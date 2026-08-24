@@ -1,11 +1,11 @@
+use std::{hint::black_box, rc::Rc};
+
 use cranpose_core::{location_key, Composition, Key, MemoryApplier};
 use cranpose_ui::{
     composable, measure_layout, AppContext, Column, ColumnSpec, HeadlessRenderer,
     LayoutMeasurements, LayoutTree, Modifier, Row, RowSpec, Size, Text, TextStyle,
 };
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use std::hint::black_box;
-use std::rc::Rc;
 
 const SECTION_COUNT: usize = 4;
 const ROWS_PER_SECTION: usize = 64;

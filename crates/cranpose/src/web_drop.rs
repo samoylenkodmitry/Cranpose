@@ -19,10 +19,10 @@
 //! `BytesContent::new(ContentMetadata::named(name), bytes)` shape a picked
 //! file resolves through, by way of [`IncomingContent::content`].
 
-use cranpose_services::{publish_incoming_content, IncomingContent};
 use std::rc::Rc;
-use wasm_bindgen::closure::Closure;
-use wasm_bindgen::{JsCast, JsValue};
+
+use cranpose_services::{publish_incoming_content, IncomingContent};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{DragEvent, File, HtmlCanvasElement};
 

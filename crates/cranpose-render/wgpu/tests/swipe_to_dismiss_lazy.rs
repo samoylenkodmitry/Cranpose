@@ -2,10 +2,11 @@ mod support;
 
 use cranpose_core::location_key;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
-use cranpose_ui::text::{SpanStyle, TextUnit};
 use cranpose_ui::{
-    composable, Color, LayoutBox, LazyColumn, LazyColumnSpec, Modifier, SwipeToDismiss,
-    SwipeToDismissSpec, Text, TextStyle,
+    composable,
+    text::{SpanStyle, TextUnit},
+    Color, LayoutBox, LazyColumn, LazyColumnSpec, Modifier, SwipeToDismiss, SwipeToDismissSpec,
+    Text, TextStyle,
 };
 
 const FRAME_WIDTH: u32 = 320;

@@ -9,19 +9,23 @@
 
 #![allow(unsafe_code)]
 
-use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
+use std::{sync::Arc, time::Duration};
+
 use cranpose_services::{
     publish_audio_focus, publish_media_command, publish_media_samples, publish_playback_progress,
     publish_playback_state, set_platform_media_player, AudioFocus, EqualizerBand,
     EqualizerSettings, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata,
     MediaPlayer, MediaSamples, PlaybackProgress, PlaybackState,
 };
-use jni::objects::{JByteArray, JClass, JIntArray, JString, JValue};
-use jni::signature::MethodSignature;
-use jni::sys::{jfloat, jint, jlong};
-use jni::{jni_sig, jni_str, EnvUnowned, Outcome};
-use std::sync::Arc;
-use std::time::Duration;
+use jni::{
+    jni_sig, jni_str,
+    objects::{JByteArray, JClass, JIntArray, JString, JValue},
+    signature::MethodSignature,
+    sys::{jfloat, jint, jlong},
+    EnvUnowned, Outcome,
+};
+
+use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 
 /// State kinds; these mirror the constants on `CranposeMedia`.
 const STATE_LOADING: jint = 0;

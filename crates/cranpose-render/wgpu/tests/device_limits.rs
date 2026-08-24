@@ -14,11 +14,13 @@ mod shared_test_support;
 
 use std::sync::Arc;
 
-use cranpose_render_common::graph::{
-    DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
-    RenderGraph, RenderNode,
+use cranpose_render_common::{
+    graph::{
+        DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
+        RenderGraph, RenderNode,
+    },
+    Renderer,
 };
-use cranpose_render_common::Renderer;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::AppContext;
 use cranpose_ui_graphics::{Brush, Color, DrawPrimitive, GraphicsLayer, Rect};

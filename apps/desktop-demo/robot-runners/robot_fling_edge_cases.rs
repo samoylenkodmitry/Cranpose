@@ -13,11 +13,14 @@
 //! cargo run --package desktop-app --example robot_fling_edge_cases --features robot-app
 //! ```
 
-use cranpose::{AppLauncher, Robot};
-use cranpose_testing::{find_bounds_by_text, visible_bounds_in_viewport};
-use cranpose_testing::{find_button_in_semantics, find_in_semantics, find_text};
-use desktop_app::app;
 use std::time::Duration;
+
+use cranpose::{AppLauncher, Robot};
+use cranpose_testing::{
+    find_bounds_by_text, find_button_in_semantics, find_in_semantics, find_text,
+    visible_bounds_in_viewport,
+};
+use desktop_app::app;
 
 struct ListViewport {
     center_x: f32,

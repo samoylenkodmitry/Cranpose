@@ -35,8 +35,10 @@
 //! not merely quoted: rounding those same brackets gives 172 and would have
 //! drawn Kotlin's row a level light.
 
-use cranpose_render_common::layer_composition::{layer_composite_params, local_content_layer_for};
-use cranpose_render_common::style_shared::apply_layer_to_color;
+use cranpose_render_common::{
+    layer_composition::{layer_composite_params, local_content_layer_for},
+    style_shared::apply_layer_to_color,
+};
 use cranpose_ui_graphics::{Color, CompositingStrategy, GraphicsLayer};
 
 /// `surfaceContainer` = `mix(rail, background, 0.55)`. Green lands on an exact

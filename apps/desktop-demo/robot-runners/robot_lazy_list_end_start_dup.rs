@@ -5,13 +5,14 @@
 //! cargo run --package desktop-app --example robot_lazy_list_end_start_dup --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
-use cranpose_testing::find_button_in_semantics;
 use cranpose_testing::{
-    count_text_in_tree, find_element_by_text_exact, print_semantics_with_bounds,
+    count_text_in_tree, find_button_in_semantics, find_element_by_text_exact,
+    print_semantics_with_bounds,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn main() {
     env_logger::init();

@@ -24,11 +24,14 @@
 //! `navigator.clipboard` — this bridge declines both directions, and the
 //! session's in-process clipboard keeps copy and paste working inside the page.
 
+use std::{
+    cell::RefCell,
+    rc::{Rc, Weak},
+};
+
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::clipboard_session::PlatformClipboard;
-use std::cell::RefCell;
-use std::rc::{Rc, Weak};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 

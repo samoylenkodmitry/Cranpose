@@ -1,14 +1,18 @@
 mod support;
 
 use cranpose_core::NodeId;
-use cranpose_render_common::graph::{
-    CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
-    PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+use cranpose_render_common::{
+    graph::{
+        CachePolicy, DrawPrimitiveNode, IsolationReasons, LayerNode, PrimitiveEntry, PrimitiveNode,
+        PrimitivePhase, ProjectiveTransform, RenderGraph, RenderNode, TextPrimitiveNode,
+    },
+    raster_cache::LayerRasterCacheHashes,
+    Renderer,
 };
-use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
-use cranpose_render_common::Renderer;
-use cranpose_ui::text::{AnnotatedString, SpanStyle};
-use cranpose_ui::{TextLayoutOptions, TextStyle};
+use cranpose_ui::{
+    text::{AnnotatedString, SpanStyle},
+    TextLayoutOptions, TextStyle,
+};
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 
 fn test_layer(

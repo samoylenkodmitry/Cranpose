@@ -3,11 +3,11 @@
 //! Run with:
 //! cargo run --package desktop-app --example robot_fling_interrupt --features robot-app
 
-use cranpose::AppLauncher;
-use cranpose_testing::exit_with_timeout;
-use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use desktop_app::app;
 use std::time::Duration;
+
+use cranpose::AppLauncher;
+use cranpose_testing::{exit_with_timeout, find_button_in_semantics, find_text_in_semantics};
+use desktop_app::app;
 
 fn main() {
     println!("=== Robot Fling Interrupt Test ===\n");

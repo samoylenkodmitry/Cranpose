@@ -1,10 +1,10 @@
 //! Android floating overlay window bridge.
 
-use crate::{
-    android_host_window,
-    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    app_launcher::AndroidOverlayWindowOptions,
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex, MutexGuard},
 };
+
 use cranpose_ui::{Point, Size};
 use jni::{
     jni_sig, jni_str,
@@ -13,9 +13,11 @@ use jni::{
     Env,
 };
 use ndk::native_window::NativeWindow;
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex, MutexGuard},
+
+use crate::{
+    android_host_window,
+    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+    app_launcher::AndroidOverlayWindowOptions,
 };
 
 const OVERLAY_CLASS: &str = "dev/cranpose/android/CranposeOverlayWindow";

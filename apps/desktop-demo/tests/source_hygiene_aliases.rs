@@ -1,5 +1,4 @@
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 const CHECKED_FILES: &[&str] = &[
     "src/app.rs",
@@ -309,15 +308,23 @@ fn binary_size_budget_targets_minimal_isolated_app() {
         .and_then(std::path::Path::parent)
         .expect("desktop demo should live under workspace/apps")
         .to_path_buf();
+    // The gate moved into the justfile, which CI invokes as `just budgets`.
+    // Assert it where it now lives, and that CI still calls it.
     let workflow = fs::read_to_string(workspace_root.join(".github/workflows/rust.yml"))
         .expect("failed to read rust workflow");
+    let justfile =
+        fs::read_to_string(workspace_root.join("justfile")).expect("failed to read justfile");
 
     assert!(
-        workflow.contains("--package isolated-demo")
-            && workflow.contains("--bin isolated-demo")
-            && workflow.contains("--profile release-small")
-            && workflow.contains("--patch-workspace-cranpose")
-            && workflow.contains("--max-bytes 15728640"),
+        workflow.contains("run: just budgets"),
+        "CI must invoke the budgets recipe rather than spelling the gate inline"
+    );
+    assert!(
+        justfile.contains("--package isolated-demo")
+            && justfile.contains("--bin isolated-demo")
+            && justfile.contains("--profile release-small")
+            && justfile.contains("--patch-workspace-cranpose")
+            && justfile.contains("--max-bytes 15728640"),
         "release-small binary-size gate must measure the accessibility-enabled isolated app with local Cranpose patches before the release version is published"
     );
 }

@@ -8,10 +8,11 @@
 //! cargo run --package desktop-app --example robot_offset_test --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::{AppLauncher, SemanticElement};
 use cranpose_testing::{find_button_in_semantics, find_by_text_recursive, find_text_exact};
 use desktop_app::app;
-use std::time::Duration;
 
 fn wait_for_condition(
     description: &str,

@@ -1,11 +1,13 @@
-use super::*;
-use crate::modifier::{Brush, Color, Modifier};
-use crate::primitives::{Column, ColumnSpec, SubcomposeLayout, Text};
-use crate::text::TextStyle;
-use crate::{
-    layout::LayoutEngine, Composition, Placement, SubcomposeLayoutScope, SubcomposeMeasureScope,
-};
 use cranpose_core::{location_key, MemoryApplier, SlotId};
+
+use super::*;
+use crate::{
+    layout::LayoutEngine,
+    modifier::{Brush, Color, Modifier},
+    primitives::{Column, ColumnSpec, SubcomposeLayout, Text},
+    text::TextStyle,
+    Composition, Placement, SubcomposeLayoutScope, SubcomposeMeasureScope,
+};
 
 fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();

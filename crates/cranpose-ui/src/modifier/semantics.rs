@@ -1,7 +1,9 @@
-use std::cell::Cell;
-use std::fmt;
-use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::{
+    cell::Cell,
+    fmt,
+    hash::{Hash, Hasher},
+    rc::Rc,
+};
 
 use cranpose_core::NodeId;
 use cranpose_foundation::{

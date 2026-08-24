@@ -1,25 +1,28 @@
 // StateRecord uses Rc with Cell for single-threaded shared ownership in the snapshot system.
 #![allow(clippy::arc_with_non_send_sync)]
 
-use crate::collections::map::{HashMap, HashSet};
-use crate::debug_trace::debug_record_scope_invalidation;
-use std::any::Any;
-use std::cell::{Cell, RefCell};
-use std::fmt;
-use std::hash::Hash;
-use std::marker::PhantomData;
-use std::ops::Deref;
-use std::rc::{Rc, Weak as RcWeak};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
-
-use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
-use crate::snapshot_pinning::lowest_pinned_snapshot;
-use crate::snapshot_v2::{
-    advance_global_snapshot, allocate_record_id, current_snapshot, AnySnapshot, GlobalSnapshot,
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    fmt,
+    hash::Hash,
+    marker::PhantomData,
+    ops::Deref,
+    rc::{Rc, Weak as RcWeak},
+    sync::{Arc, Mutex, MutexGuard, Weak},
 };
+
 use crate::{
-    runtime, with_current_composer_opt, RecomposeScope, RecomposeScopeInner, RuntimeHandle,
-    ScopeId, StateId,
+    collections::map::{HashMap, HashSet},
+    debug_trace::debug_record_scope_invalidation,
+    runtime,
+    snapshot_id_set::{SnapshotId, SnapshotIdSet},
+    snapshot_pinning::lowest_pinned_snapshot,
+    snapshot_v2::{
+        advance_global_snapshot, allocate_record_id, current_snapshot, AnySnapshot, GlobalSnapshot,
+    },
+    with_current_composer_opt, RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId,
+    StateId,
 };
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;
@@ -163,7 +166,6 @@ impl StateRecord {
     /// This is used during record reuse to copy valid data from a readable record
     /// into a reused record, and during cleanup to preserve data in records being
     /// marked as INVALID_SNAPSHOT.
-    ///
     pub(crate) fn assign_value<T: Any + Clone>(
         &self,
         source: &StateRecord,

@@ -1,10 +1,9 @@
-#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 //! The desktop media backend behind [`cranpose_services::media`].
 //!
-//! `cranpose-services` defines the Compose-shaped API — [`MediaPlayer`], the
-//! observable [`PlaybackState`], the audio-focus policy, the media-session
+//! `cranpose-services` defines the Compose-shaped API — `MediaPlayer`, the
+//! observable `PlaybackState`, the audio-focus policy, the media-session
 //! commands — and ships nothing that makes sound. On Android, iOS and the web
 //! the platform already has a media stack and the `cranpose` crate registers a
 //! backend for it. On desktop there is no such stack, so this crate is it:
@@ -55,13 +54,12 @@ mod sink;
 #[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
 mod source;
 
-#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
-pub use desktop::DesktopMediaPlayer;
-
 /// The `file:` URI helpers the media contract owns, re-exported so an
 /// application that installs this backend does not have to name two crates to
 /// build an item from a path.
 pub use cranpose_services::media::{path_from_uri, uri_for_path};
+#[cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))]
+pub use desktop::DesktopMediaPlayer;
 
 /// Whether this build has a desktop media backend compiled in.
 ///

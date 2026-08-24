@@ -7,15 +7,19 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::layout::policies::EmptyMeasurePolicy;
-use crate::modifier::Modifier;
-use crate::text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle};
-use crate::text_modifier_node::TextModifierElement;
-use crate::widgets::Layout;
+use std::rc::Rc;
+
 use cranpose_core::{MutableState, NodeId, State};
 use cranpose_foundation::modifier_element;
-use std::rc::Rc;
+
+use crate::{
+    composable,
+    layout::policies::EmptyMeasurePolicy,
+    modifier::Modifier,
+    text::{TextLayoutOptions, TextOptions, TextOverflow, TextStyle},
+    text_modifier_node::TextModifierElement,
+    widgets::Layout,
+};
 
 #[derive(Clone)]
 pub struct DynamicTextSource(Rc<dyn Fn() -> Rc<crate::text::AnnotatedString>>);
@@ -231,11 +235,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::Cell, rc::Rc};
+
+    use cranpose_core::{location_key, Composition, MemoryApplier};
+
     use super::*;
     use crate::run_test_composition;
-    use cranpose_core::{location_key, Composition, MemoryApplier};
-    use std::cell::Cell;
-    use std::rc::Rc;
 
     #[test]
     fn basic_text_creates_node() {

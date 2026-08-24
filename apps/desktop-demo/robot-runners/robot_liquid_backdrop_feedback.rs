@@ -8,11 +8,14 @@
 //! once the droplet face materializes over the pill, later frames of the
 //! UNCHANGED scene must not brighten.
 
+use std::{
+    process::ExitCode,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
+
 use cranpose::AppLauncher;
 use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
-use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;

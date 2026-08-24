@@ -3,21 +3,24 @@
 //! This module ties together the offscreen pool, blur pipeline, and shader
 //! pipeline cache to apply `RenderEffect`s to subtree-rendered textures.
 
-use crate::frame_graph::{
-    FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, UploadAllocatorId,
-    UploadAllocatorSpec,
-};
-use crate::offscreen::{OffscreenPool, OffscreenTarget};
-use crate::shader_cache::{RuntimeShaderPipelineMode, ShaderPipelineCache};
-use crate::shaders;
+use std::cell::Cell;
+
 use cranpose_ui_graphics::{
     BlendMode, RenderEffect, RuntimeShader, TileMode, ROUNDED_ALPHA_MASK_WGSL,
 };
 
-use crate::display_clip;
-use crate::gpu_stats::FrameStats;
-use crate::lazy_resource::{LazyGpuResource, PassPipeline};
-use std::cell::Cell;
+use crate::{
+    display_clip,
+    frame_graph::{
+        FrameCommandRecorder, FrameCommandStats, FrameTextureDescriptor, UploadAllocatorId,
+        UploadAllocatorSpec,
+    },
+    gpu_stats::FrameStats,
+    lazy_resource::{LazyGpuResource, PassPipeline},
+    offscreen::{OffscreenPool, OffscreenTarget},
+    shader_cache::{RuntimeShaderPipelineMode, ShaderPipelineCache},
+    shaders,
+};
 
 pub(crate) fn blur_scratch_size(
     radius_x: f32,

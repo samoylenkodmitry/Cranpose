@@ -1,9 +1,12 @@
 //! Winamp skin loader for classic `.wsz` archives.
 
+use std::{
+    collections::HashMap,
+    io::{Cursor, Read},
+};
+
 use anyhow::{Context, Result};
 use cranpose_ui::ImageBitmap;
-use std::collections::HashMap;
-use std::io::{Cursor, Read};
 
 /// Decoded sprite sheets loaded from a Winamp classic skin.
 #[derive(Clone, PartialEq)]

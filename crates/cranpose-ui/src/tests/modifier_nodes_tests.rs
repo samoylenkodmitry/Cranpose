@@ -1,15 +1,19 @@
-use super::*;
-use crate::modifier::{
-    collect_modifier_slices, collect_slices_from_modifier, Modifier, PointerInputScope,
+use std::{
+    cell::{Cell, RefCell},
+    future::pending,
+    rc::Rc,
 };
+
 use cranpose_foundation::{
     modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
     PointerButtons, PointerEvent, PointerEventKind,
 };
 use cranpose_ui_layout::Placeable;
-use std::cell::{Cell, RefCell};
-use std::future::pending;
-use std::rc::Rc;
+
+use super::*;
+use crate::modifier::{
+    collect_modifier_slices, collect_slices_from_modifier, Modifier, PointerInputScope,
+};
 
 #[test]
 fn pointer_input_ids_do_not_use_process_global_counters() {
@@ -926,8 +930,7 @@ fn pointer_input_scope_size_is_filled_by_the_layout_pass() {
 #[test]
 fn pointer_input_handlers_survive_temporary_chain_drop() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     // Track received events
     let received_events = Rc::new(RefCell::new(Vec::new()));
@@ -995,8 +998,7 @@ fn pointer_input_handlers_survive_temporary_chain_drop() {
 #[test]
 fn multiple_temporary_chains_dont_interfere() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::{cell::RefCell, rc::Rc};
 
     let events1 = Rc::new(RefCell::new(Vec::new()));
     let events2 = Rc::new(RefCell::new(Vec::new()));
@@ -1076,11 +1078,12 @@ fn multiple_temporary_chains_dont_interfere() {
 #[test]
 fn custom_layout_modifier_works_through_retained_chain() {
     let _app_context = crate::render_state::app_context_test_scope();
+    use std::hash::{Hash, Hasher};
+
     use cranpose_foundation::{
         DelegatableNode, LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext,
         ModifierNodeElement, NodeCapabilities, NodeState,
     };
-    use std::hash::{Hash, Hasher};
 
     // Define a custom layout modifier that adds extra width
     #[derive(Debug)]
@@ -1215,8 +1218,9 @@ fn custom_layout_modifier_works_through_retained_chain() {
 #[test]
 fn draw_command_updates_on_closure_change() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use crate::draw::DrawCommand;
     use cranpose_ui_graphics::Size;
+
+    use crate::draw::DrawCommand;
 
     let mut chain = ModifierNodeChain::new();
     let mut context = BasicModifierNodeContext::new();
@@ -1273,11 +1277,12 @@ fn draw_command_updates_on_closure_change() {
 #[test]
 fn stateful_measure_uses_live_retained_node_state() {
     let _app_context = crate::render_state::app_context_test_scope();
+    use std::hash::{Hash, Hasher};
+
     use cranpose_foundation::{
         Constraints, DelegatableNode, LayoutModifierNode, Measurable, ModifierNode,
         ModifierNodeContext, ModifierNodeElement, NodeCapabilities, NodeState, Size,
     };
-    use std::hash::{Hash, Hasher};
 
     /// A layout modifier node that counts how many times it has been measured.
     #[derive(Debug)]

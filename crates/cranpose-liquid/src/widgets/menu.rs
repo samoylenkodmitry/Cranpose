@@ -1,27 +1,29 @@
 //! A popup menu that morphs out of its anchor: the glass bubble springs from
 //! the anchor corner while its items fade in (the WWDC "Show" menu).
 
-use crate::material::{
-    Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape,
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
 };
-use crate::theme::{liquid_colors, liquid_typography};
-use crate::widgets::content_scope::ScopeContent;
+
 use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, MutableState, SideEffect};
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
-use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};
-use cranpose_ui::widgets::{
-    Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text,
-};
-use cranpose_ui::SemanticsWidgetRole;
 use cranpose_ui::{
-    rememberMutableInteractionSource, Modifier, PointerEventKind, PointerInputScope,
-    PressInteractionPress, Size,
+    rememberMutableInteractionSource,
+    text::{FontWeight, SpanStyle, TextStyle, TextUnit},
+    widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
+    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsWidgetRole,
+    Size,
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect, RenderEffect};
 use cranpose_ui_layout::VerticalAlignment;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+
+use crate::{
+    material::{Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, LiquidShape},
+    theme::{liquid_colors, liquid_typography},
+    widgets::content_scope::ScopeContent,
+};
 
 /// One menu entry.
 #[derive(Clone, Debug, PartialEq)]

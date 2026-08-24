@@ -12,10 +12,11 @@
 //! cargo run --package desktop-app --example robot_increment_bug --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_by_prefix_in_semantics;
 use desktop_app::app;
-use std::time::Duration;
 
 fn fail(robot: &cranpose::Robot, message: &str) -> ! {
     let _ = robot;

@@ -2,12 +2,11 @@
 
 #![allow(non_snake_case)]
 
-use super::layout::Layout;
-use crate::composable;
-use crate::layout::policies::BoxMeasurePolicy;
-use crate::modifier::Modifier;
 use cranpose_core::NodeId;
 use cranpose_ui_layout::Alignment;
+
+use super::layout::Layout;
+use crate::{composable, layout::policies::BoxMeasurePolicy, modifier::Modifier};
 
 /// Specification for Box layout behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]

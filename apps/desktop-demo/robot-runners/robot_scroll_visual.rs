@@ -8,12 +8,13 @@
 //! cargo run --package desktop-app --example robot_scroll_visual --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     exit_with_timeout, find_button_in_semantics, find_text_by_prefix_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn parse_first_index(text: &str) -> Option<usize> {
     let (_, value) = text.split_once(':')?;

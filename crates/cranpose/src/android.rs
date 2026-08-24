@@ -3,25 +3,6 @@
 //! This module provides the Android event loop implementation with proper
 //! lifecycle management, input handling, and rendering coordination.
 
-use crate::{
-    android_host_window,
-    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    android_keyboard::{self, is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
-    android_overlay_window,
-    android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
-    android_text_input::{self, AndroidImeEvent},
-    app_launcher::{AndroidOverlayWindowOptions, AppSettings},
-    wgpu_surface::surface_present_required,
-    wgpu_surface::{current_surface_texture, SurfaceFrame},
-};
-use cranpose_app_shell::{
-    default_root_key, AppShell, KeyEvent, PlatformFrameDriver, PointerSource,
-};
-use cranpose_platform_android::AndroidPlatform;
-use cranpose_render_wgpu::{PresentOutcome, PublishOutcome, WgpuRenderer};
-use cranpose_ui::{Point, Size};
-use ndk::native_window::NativeWindow;
-use std::time::{Duration, Instant};
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
@@ -31,6 +12,26 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::{Duration, Instant},
+};
+
+use cranpose_app_shell::{
+    default_root_key, AppShell, KeyEvent, PlatformFrameDriver, PointerSource,
+};
+use cranpose_platform_android::AndroidPlatform;
+use cranpose_render_wgpu::{PresentOutcome, PublishOutcome, WgpuRenderer};
+use cranpose_ui::{Point, Size};
+use ndk::native_window::NativeWindow;
+
+use crate::{
+    android_host_window,
+    android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
+    android_keyboard::{self, is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
+    android_overlay_window,
+    android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
+    android_text_input::{self, AndroidImeEvent},
+    app_launcher::{AndroidOverlayWindowOptions, AppSettings},
+    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
 };
 
 /// GPU resources for the current Android surface and its reusable WGPU device.
@@ -117,8 +118,9 @@ fn android_pointer_source(
     pointer: &android_activity::input::Pointer<'_>,
     event_source: android_activity::input::Source,
 ) -> PointerSource {
-    use crate::android_input::{resolve_pointer_source, AndroidSourceKind, AndroidToolKind};
     use android_activity::input::{Source, ToolType};
+
+    use crate::android_input::{resolve_pointer_source, AndroidSourceKind, AndroidToolKind};
 
     let tool = match pointer.tool_type() {
         ToolType::Finger => AndroidToolKind::Finger,

@@ -15,22 +15,22 @@
 //! only way for content to draw above *everything* and escape *any* ancestor
 //! clip is to be composed as a last-order sibling directly under an unclipped
 //! root. [`PopupHost`] provides exactly that root: it wraps the whole app in an
-//! unclipped, viewport-filling [`Box`] and renders every registered popup as a
+//! unclipped, viewport-filling `Box` and renders every registered popup as a
 //! trailing child, positioned absolutely at its anchor.
 //!
 //! [`Popup`] itself emits **no node at its call site**. Instead it registers
 //! its `(position, content)` into a [`PopupRegistry`] carried down the tree by
-//! a [`CompositionLocal`]; the enclosing [`PopupHost`] reads that registry and
+//! a `CompositionLocal`; the enclosing [`PopupHost`] reads that registry and
 //! composes the content at the root. Registration/teardown is reactive:
 //! adding, removing, or moving a popup invalidates the host so it recomposes.
 
 #![allow(non_snake_case)]
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
-use crate::modifier::Modifier;
-use crate::{composable, PointerInputScope};
 use cranpose_core::{
     mutableStateOf, remember, staticCompositionLocalOf, CompositionLocalProvider, MutableState,
     SideEffect, StaticCompositionLocal,
@@ -39,6 +39,7 @@ use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::box_widget::{Box, BoxSpec};
+use crate::{composable, modifier::Modifier, PointerInputScope};
 
 /// One registered popup: a stable id, its absolute top-left position (logical
 /// px, in [`PopupHost`] space, i.e. window coordinates) and its content.
@@ -215,7 +216,7 @@ pub fn local_popup_viewport() -> StaticCompositionLocal<Rc<Cell<cranpose_ui_grap
 /// Wrap an application's root content in a single `PopupHost` so that any
 /// [`Popup`] composed anywhere inside `content` renders in the overlay, above
 /// everything and clipped only by the viewport. The host itself is an
-/// unclipped, viewport-filling [`Box`]; the app content is its first child and
+/// unclipped, viewport-filling `Box`; the app content is its first child and
 /// each registered popup is a trailing child (drawn last, hit-tested first).
 #[composable]
 pub fn PopupHost<F>(content: F)
@@ -445,9 +446,10 @@ fn popup_impl(
 
 #[cfg(test)]
 mod tests {
+    use cranpose_foundation::PointerEvent;
+
     use super::*;
     use crate::modifier::collect_slices_from_modifier;
-    use cranpose_foundation::PointerEvent;
 
     #[test]
     fn non_dismissable_exit_frame_has_no_modal_scrim_callback() {

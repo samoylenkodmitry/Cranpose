@@ -6,13 +6,14 @@
 //! 3. Tap the `Async Runtime` tab.
 //! 4. Verify the async progress leaves `0%`.
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     exit_with_timeout, find_button_in_semantics, find_text_by_prefix_in_semantics,
     find_text_in_semantics,
 };
 use desktop_app::app;
-use std::time::Duration;
 
 fn click_button(robot: &cranpose::Robot, label: &str) {
     let Some((x, y, w, h)) = find_button_in_semantics(robot, label) else {

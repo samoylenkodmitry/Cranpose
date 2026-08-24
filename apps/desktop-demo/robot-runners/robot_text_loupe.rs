@@ -10,18 +10,23 @@
 //!
 //! Screenshots land in `ROBOT_SHOT_DIR` (default `target/text-loupe`).
 
-use cranpose::widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec};
-use cranpose::{AppLauncher, Color, Modifier, Size};
+use std::{
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+    time::Duration,
+};
+
+use cranpose::{
+    widgets::{BasicTextFieldOptions, BasicTextFieldWithOptions, Box as CBox, BoxSpec},
+    AppLauncher, Color, Modifier, Size,
+};
 use cranpose_foundation::text::TextFieldState;
 use cranpose_ui::text::{AnnotatedString, TextStyle, TextUnit};
 use image::RgbaImage;
-use std::path::{Path, PathBuf};
-use std::process::ExitCode;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
-use std::time::Duration;
 
 const WINDOW_WIDTH: u32 = 460;
 const WINDOW_HEIGHT: u32 = 340;

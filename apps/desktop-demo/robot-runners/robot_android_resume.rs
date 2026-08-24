@@ -1,8 +1,8 @@
+use std::{cell::RefCell, path::Path};
+
 use cranpose::AppLauncher;
 use cranpose_core::{rememberMutableStateOf, MutableState};
 use cranpose_ui::{composable, Column, ColumnSpec, LinearArrangement, Modifier, Text, TextStyle};
-use std::cell::RefCell;
-use std::path::Path;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ResumeState {

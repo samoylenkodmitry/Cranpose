@@ -4,8 +4,9 @@
 //! references to state objects, automatically removing dead references and providing
 //! efficient add/remove operations via binary search.
 
-use crate::state::StateObject;
 use std::sync::{Arc, Weak};
+
+use crate::state::StateObject;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct SnapshotWeakSetDebugStats {
@@ -154,12 +155,13 @@ impl Default for SnapshotWeakSet {
 #[cfg(test)]
 #[allow(clippy::arc_with_non_send_sync)]
 mod tests {
+    use std::{cell::Cell, rc::Rc, sync::RwLock};
+
     use super::*;
-    use crate::snapshot_id_set::{SnapshotId, SnapshotIdSet};
-    use crate::state::ObjectId;
-    use std::cell::Cell;
-    use std::rc::Rc;
-    use std::sync::RwLock;
+    use crate::{
+        snapshot_id_set::{SnapshotId, SnapshotIdSet},
+        state::ObjectId,
+    };
 
     // Mock StateObject for testing
     struct MockState {

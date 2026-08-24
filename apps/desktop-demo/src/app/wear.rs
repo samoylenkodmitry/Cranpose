@@ -16,17 +16,20 @@
 //! several hundred glyphs a frame. Comparing the two under the demo's pacing
 //! modes is the whole point of keeping it.
 
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose::LazyItems;
 use cranpose_core::{remember, LaunchedEffectAsync};
-use cranpose_ui::round_scaling_list::CentreAnchor;
-use cranpose_ui::widgets::wear::{
-    rememberWearScalingListState, ListHeader, ListHeaderSpec, ScreenScaffold, ScreenScaffoldSpec,
-    ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, WearButton, WearButtonSpec, WearColors,
-    WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState, WearTextStyle,
+use cranpose_ui::{
+    round_scaling_list::CentreAnchor,
+    widgets::wear::{
+        rememberWearScalingListState, ListHeader, ListHeaderSpec, ScreenScaffold,
+        ScreenScaffoldSpec, ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, WearButton,
+        WearButtonSpec, WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec,
+        WearScalingListState, WearTextStyle,
+    },
+    Alignment, Box as CranposeBox, BoxSpec, Color, Modifier, Size, Text,
 };
-use cranpose_ui::{Alignment, Box as CranposeBox, BoxSpec, Color, Modifier, Size, Text};
-use std::cell::RefCell;
-use std::rc::Rc;
 
 /// The display the screen is laid out for, in layout points.
 const WATCH: f32 = 454.0;

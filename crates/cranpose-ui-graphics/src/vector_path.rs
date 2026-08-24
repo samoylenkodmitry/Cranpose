@@ -12,8 +12,9 @@
 //! (`DrawScope::draw_vector_path`); the one-shot
 //! `DrawScope::draw_svg_path(d, brush)` convenience re-parses each call.
 
-use crate::geometry::{Point, Rect};
 use thiserror::Error;
+
+use crate::geometry::{Point, Rect};
 
 /// Maximum recursion depth for adaptive curve flattening.
 const MAX_FLATTEN_DEPTH: u32 = 12;

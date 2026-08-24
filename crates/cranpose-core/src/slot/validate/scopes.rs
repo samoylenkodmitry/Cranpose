@@ -1,5 +1,7 @@
-use super::super::{GroupRecord, SlotTable};
-use super::SlotInvariantError;
+use super::{
+    super::{GroupRecord, SlotTable},
+    SlotInvariantError,
+};
 
 pub(super) fn validate_scope_index_count(table: &SlotTable) -> Result<(), SlotInvariantError> {
     let scope_count = table

@@ -16,7 +16,7 @@
 //! every other platform they come from the process environment, which the
 //! framework never mutates. So each one is read once and cached.
 //!
-//! Use [`env_flag!`] for presence switches and [`env_threshold_ms!`] for the
+//! Use `env_flag!` for presence switches and `env_threshold_ms!` for the
 //! millisecond thresholds. Both expand to a `OnceLock` owned by the call site,
 //! which costs an acquire load once warm.
 

@@ -14,6 +14,12 @@
 
 mod output_paths;
 
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
+
 use cranpose::AppLauncher;
 use cranpose_testing::{
     capture_screenshot, find_button_in_semantics, find_in_semantics, find_text_exact,
@@ -22,9 +28,6 @@ use cranpose_testing::{
 use cranpose_ui::Point;
 use desktop_app::app;
 use image::{ImageBuffer, RgbaImage};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 800;

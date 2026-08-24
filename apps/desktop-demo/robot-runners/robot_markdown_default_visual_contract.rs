@@ -5,6 +5,8 @@ mod output_paths;
 mod perf_contract;
 mod text_showcase_external_helpers;
 
+use std::{path::Path, sync::Arc, time::Duration};
+
 use cranpose::AppLauncher;
 use cranpose_core::CompositionLocalProvider;
 use cranpose_services::{local_http_client, HttpClientRef};
@@ -12,9 +14,6 @@ use cranpose_testing::{find_button_exact_in_semantics, find_in_semantics, find_t
 use desktop_app::app;
 use image::RgbaImage;
 use markdown_fixture_client::MarkdownFixtureClient;
-use std::path::Path;
-use std::sync::Arc;
-use std::time::Duration;
 use text_showcase_external_helpers::{capture_x11_window, find_window_id};
 
 const WINDOW_WIDTH: u32 = 1080;

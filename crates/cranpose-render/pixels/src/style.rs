@@ -220,12 +220,13 @@ pub(crate) fn point_in_resolved_rounded_rect(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose_ui::Brush;
     use cranpose_ui_graphics::{
         Color, ColorFilter, CompositingStrategy, LayerShape, RenderEffect, RoundedCornerShape,
         TransformOrigin,
     };
+
+    use super::*;
 
     #[test]
     fn combine_layers_clears_effects_without_new_layer() {

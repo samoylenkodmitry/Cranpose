@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_testing::find_text_in_semantics;
-use cranpose_ui::widgets::{Box, BoxSpec};
-use cranpose_ui::widgets::{LazyColumn, LazyColumnSpec};
-use cranpose_ui::{Alignment, Color, Modifier, Size, TextStyle};
-use std::time::Duration;
+use cranpose_ui::{
+    widgets::{Box, BoxSpec, LazyColumn, LazyColumnSpec},
+    Alignment, Color, Modifier, Size, TextStyle,
+};
 
 fn main() {
     env_logger::init();

@@ -1,6 +1,7 @@
+use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
+
 use super::*;
 use crate::app::AsyncRuntimeEngine;
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeError};
 
 mod conditional_text_test;
 
@@ -471,8 +472,9 @@ fn startup_selection_keeps_shader_section_for_shaders_tab() {
 /// middle rather than stacked at the origin.
 #[test]
 fn the_wear_tab_lays_out_a_watch_screen_of_real_widgets() {
-    use crate::app::wear::wear_tab;
     use cranpose_ui::{measure_layout, run_test_composition};
+
+    use crate::app::wear::wear_tab;
 
     let mut composition = run_test_composition(|| {
         cranpose_ui::set_density(2.0);

@@ -6,8 +6,9 @@
 //! host does with its canvas. One contract —
 //! [`cranpose_services::HostSurface`] — the same shape on every platform.
 
-use cranpose_services::{set_platform_host_surface, HostSurface, ResizeRefused};
 use std::sync::{Arc, Mutex, OnceLock};
+
+use cranpose_services::{set_platform_host_surface, HostSurface, ResizeRefused};
 
 /// Wakes the event loop so a request made from an idle application is acted on
 /// without waiting for the next frame something else caused.

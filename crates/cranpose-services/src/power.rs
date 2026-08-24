@@ -7,10 +7,14 @@
 //! value or [`PowerReading::Unsupported`], and the whole state is observable so
 //! a screen reacts to thermal pressure instead of sampling it.
 
-use crate::registry::ServiceRegistry;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
 use cranpose_core::{rememberEventStream, State};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// The operating system's thermal-pressure level.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

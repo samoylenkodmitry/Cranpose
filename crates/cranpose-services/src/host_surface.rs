@@ -7,10 +7,14 @@
 //! different size — reads observable state here instead of reaching for a
 //! platform API and a resize callback of its own.
 
-use crate::registry::ServiceRegistry;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
+};
+
 use cranpose_core::{rememberEventStream, State};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::registry::ServiceRegistry;
 
 /// The size of the host surface, in logical pixels, with the scale the host
 /// renders it at.

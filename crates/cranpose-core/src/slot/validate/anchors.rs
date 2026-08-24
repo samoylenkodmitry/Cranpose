@@ -1,5 +1,7 @@
-use super::super::{AnchorState, GroupKey, GroupRecord, SlotTable};
-use super::SlotInvariantError;
+use super::{
+    super::{AnchorState, GroupKey, GroupRecord, SlotTable},
+    SlotInvariantError,
+};
 use crate::{collections::map::HashSet, AnchorId};
 
 pub(super) fn validate_active_group_anchor(

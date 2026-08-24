@@ -786,7 +786,7 @@ where
     /// Routing mirrors Compose's `RotaryInputModifierNode` contract:
     ///
     /// 1. Resolve the target chain. When a focus target is registered
-    ///    ([`cranpose_ui::focus_dispatch::active_focus_target`]) and still
+    ///    (`cranpose_ui::focus_dispatch::active_focus_target`) and still
     ///    exists in the current scene, its capture path is used, so rotary goes
     ///    to the focused node exactly as on Wear OS. Cranpose does not yet wire
     ///    focus automatically, so in practice this falls back to the chain

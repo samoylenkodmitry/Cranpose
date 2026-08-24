@@ -1,10 +1,10 @@
+use std::{cell::RefCell, rc::Rc};
+
 use cranpose_core::{location_key, Composition, MemoryApplier};
 use cranpose_services::{
     clear_platform_launch_args, isDebuggable, launch_args, local_launch_args,
     set_platform_launch_args, LaunchArgValue, LaunchArgs, ProvideLaunchArgs,
 };
-use std::cell::RefCell;
-use std::rc::Rc;
 
 fn run_test_composition(build: impl FnMut()) {
     let mut composition = Composition::new(MemoryApplier::new());

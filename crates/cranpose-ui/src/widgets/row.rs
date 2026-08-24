@@ -2,12 +2,11 @@
 
 #![allow(non_snake_case)]
 
-use super::layout::Layout;
-use crate::composable;
-use crate::layout::policies::FlexMeasurePolicy;
-use crate::modifier::Modifier;
 use cranpose_core::NodeId;
 use cranpose_ui_layout::{LinearArrangement, VerticalAlignment};
+
+use super::layout::Layout;
+use crate::{composable, layout::policies::FlexMeasurePolicy, modifier::Modifier};
 
 /// Specification for Row layout behavior.
 #[derive(Clone, Copy, Debug, PartialEq)]

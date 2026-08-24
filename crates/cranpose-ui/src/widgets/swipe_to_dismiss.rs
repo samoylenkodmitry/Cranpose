@@ -21,22 +21,30 @@
 
 #![allow(non_snake_case)]
 
-use crate::composable;
-use crate::modifier::{GraphicsLayer, Modifier, PointerEvent, PointerEventKind};
-use crate::subcompose_layout::{Constraints, SubcomposeLayoutScope, SubcomposeMeasureScope};
-use crate::widgets::box_widget::{Box, BoxSpec};
-use crate::widgets::layout::{BoxWithConstraints, SubcomposeLayout};
-use crate::widgets::scopes::BoxWithConstraintsScope;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+};
+
 use cranpose_animation::{spring, Animatable, AnimationType, Spring};
-use cranpose_core::internal::FrameCallbackRegistration;
 use cranpose_core::{
-    with_current_composer, NodeId, Owned, OwnedMutableState, RuntimeHandle, SlotId,
+    internal::FrameCallbackRegistration, with_current_composer, NodeId, Owned, OwnedMutableState,
+    RuntimeHandle, SlotId,
 };
 use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_layout::Placement;
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::{
+    composable,
+    modifier::{GraphicsLayer, Modifier, PointerEvent, PointerEventKind},
+    subcompose_layout::{Constraints, SubcomposeLayoutScope, SubcomposeMeasureScope},
+    widgets::{
+        box_widget::{Box, BoxSpec},
+        layout::{BoxWithConstraints, SubcomposeLayout},
+        scopes::BoxWithConstraintsScope,
+    },
+};
 
 /// Offset (logical px) within which a dismiss animation counts as settled.
 const DISMISS_SETTLE_EPSILON: f32 = 0.5;

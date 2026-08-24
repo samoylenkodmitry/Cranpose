@@ -1,12 +1,17 @@
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::Path;
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
+
 use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal};
 #[cfg(all(target_arch = "wasm32", feature = "web-http"))]
 use futures_util::{stream, StreamExt};
-use std::future::Future;
-#[cfg(not(target_arch = "wasm32"))]
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HttpError {
@@ -254,7 +259,7 @@ impl HttpBody for EmptyBody {
     }
 }
 
-/// A body already in memory, handed out in [`CHUNK_LEN`]-sized pieces.
+/// A body already in memory, handed out in `CHUNK_LEN`-sized pieces.
 ///
 /// For a backend that has the bytes already — a cache, a bundled asset, a test
 /// double — so it satisfies the same chunked contract as one still on the wire
@@ -1166,13 +1171,14 @@ pub fn local_http_client() -> CompositionLocal<HttpClientRef> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::run_test_composition;
-    use cranpose_core::CompositionLocalProvider;
-    use std::cell::RefCell;
-    use std::rc::Rc;
     #[cfg(not(target_arch = "wasm32"))]
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{cell::RefCell, rc::Rc};
+
+    use cranpose_core::CompositionLocalProvider;
+
+    use super::*;
+    use crate::run_test_composition;
 
     #[test]
     fn a_response_carries_what_a_resumed_download_needs_to_know() {
@@ -1574,8 +1580,10 @@ mod tests {
         delay: std::time::Duration,
         supports_range: bool,
     ) -> Option<(String, thread::JoinHandle<()>)> {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
 
         let listener = match TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -1821,8 +1829,10 @@ mod tests {
     #[cfg(all(not(target_arch = "wasm32"), feature = "http-native"))]
     #[test]
     fn default_http_client_fetches_text_from_local_server() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
 
         let listener = match TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,

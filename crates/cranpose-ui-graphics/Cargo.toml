@@ -11,6 +11,13 @@ categories.workspace = true
 readme = "README.md"
 description = "Pure math/data for drawing & units in Cranpose"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
 [dependencies]
 thiserror = "2.0.18"
 

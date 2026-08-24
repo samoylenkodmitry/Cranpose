@@ -1,9 +1,10 @@
-use super::SvgPainterError;
-use crate::modifier::Size;
 use tiny_skia::{
     FillRule, LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Rect as SkiaRect, Stroke,
     Transform,
 };
+
+use super::SvgPainterError;
+use crate::modifier::Size;
 
 #[derive(Debug)]
 pub(super) struct SvgDocument {

@@ -3,12 +3,12 @@
 //! across Android and iOS.
 #![allow(unsafe_code)]
 
+use std::cell::RefCell;
+
 use cranpose_services::push_back_request;
-use objc2::rc::Retained;
-use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, rc::Retained, sel, MainThreadMarker, MainThreadOnly};
 use objc2_foundation::{NSObject, NSObjectProtocol};
 use objc2_ui_kit::{UIGestureRecognizerState, UIRectEdge, UIScreenEdgePanGestureRecognizer};
-use std::cell::RefCell;
 
 define_class!(
     #[unsafe(super(NSObject))]

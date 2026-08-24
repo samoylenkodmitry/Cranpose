@@ -10,24 +10,32 @@
 //! winit starts `UIApplicationMain` from [`EventLoop::run_app`], so the iOS app
 //! binary needs no Objective-C entry point.
 
-use crate::app_launcher::{AppSettings, LaunchError};
-use crate::wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame};
-use crate::winit_pointer::{
-    is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use crate::winit_touch::{TouchLeave, TouchPointerRouter, TouchRoute};
+
 use cranpose_app_shell::{default_root_key, AppShell};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::{
+    application::ApplicationHandler,
+    event::{ElementState, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
+    window::{Window, WindowAttributes, WindowId},
+};
+
+use crate::{
+    app_launcher::{AppSettings, LaunchError},
+    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    winit_pointer::{
+        is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
+    },
+    winit_touch::{TouchLeave, TouchPointerRouter, TouchRoute},
+};
 
 /// GPU resources tied to the live surface.
 struct GpuResources {

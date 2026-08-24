@@ -1,7 +1,4 @@
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
-use cranpose_macros::composable;
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 #[cfg(all(
     not(target_arch = "wasm32"),
     not(target_os = "android"),
@@ -9,6 +6,9 @@ use std::cell::RefCell;
     feature = "system-theme"
 ))]
 use std::process::Command;
+
+use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_macros::composable;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SystemTheme {
@@ -271,11 +271,12 @@ pub fn isSystemInDarkTheme() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use cranpose_core::CompositionLocalProvider;
+
     use super::*;
     use crate::run_test_composition;
-    use cranpose_core::CompositionLocalProvider;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     #[test]
     fn default_system_theme_returns_supported_variant() {

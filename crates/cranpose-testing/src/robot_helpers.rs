@@ -3,12 +3,18 @@
 //! These helpers work with `cranpose::SemanticElement` to find and interact
 //! with UI elements during robot testing.
 
-use crate::robot_assertions::{Bounds, SemanticElementLike};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
 use cranpose::SemanticElement;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+
+use crate::robot_assertions::{Bounds, SemanticElementLike};
 
 // Implement SemanticElementLike for cranpose::SemanticElement
 // This allows using the generic assertion helpers from robot_assertions
@@ -1461,8 +1467,9 @@ pub fn set_slider_fraction(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use cranpose::{RobotScreenshot, SemanticRect};
+
+    use super::*;
 
     fn semantic_element(
         role: &str,

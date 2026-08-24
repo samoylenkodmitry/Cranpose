@@ -1,7 +1,9 @@
+use std::rc::Rc;
+
+use cranpose_ui_graphics::{DrawScope, DrawScopeDefault};
+
 use super::{DrawCacheBuilder, DrawCommand, Modifier};
 use crate::modifier_nodes::DrawCommandElement;
-use cranpose_ui_graphics::{DrawScope, DrawScopeDefault};
-use std::rc::Rc;
 
 impl Modifier {
     /// Draw around content.

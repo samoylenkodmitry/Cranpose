@@ -7,10 +7,10 @@
 //! foreground service). No default: [`background_activity`] returns `None` where
 //! unsupported, and the app simply runs only while foregrounded.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, OnceLock,
+};
 
 /// Marks periods of important work so the platform grants background running
 /// time. Implementations are `Send + Sync` (the app toggles activity from its
@@ -96,8 +96,9 @@ pub fn background_active() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
 
     #[test]
     fn registration_round_trips() {

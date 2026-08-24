@@ -10,6 +10,8 @@ mod output_paths;
 mod scroll_stability_external_helpers;
 mod text_showcase_external_helpers;
 
+use std::{path::Path, time::Duration};
+
 use cranpose::AppLauncher;
 use desktop_app::app::{
     self, DemoTab, LIQUID_SCROLL_VIEWPORT_TAG, TEST_ACTIVE_TAB_STATE, TEST_LIQUID_SCROLL_STATE,
@@ -19,8 +21,6 @@ use scroll_stability_external_helpers::{
     run_scroll_stability_capture_with_app_hook, semantics_bounds_for_exact_text,
     ExactScrollStepConfig, ScrollStabilityConfig,
 };
-use std::path::Path;
-use std::time::Duration;
 use text_showcase_external_helpers::scroll_text_into_view_between;
 
 const WINDOW_WIDTH: u32 = 800;

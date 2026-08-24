@@ -1,17 +1,23 @@
 // Complex types are inherent to the observer pattern with nested callbacks and state tracking
 #![allow(clippy::type_complexity)]
 
-use crate::collections::map::{HashMap, HashSet};
-use crate::hash::default as default_hash;
-use crate::snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId};
-use crate::state::StateObject;
-use crate::{RecomposeScope, RecomposeScopeInner, ScopeId};
+use std::{
+    any::{Any, TypeId},
+    cell::{Cell, RefCell},
+    hash::{Hash, Hasher},
+    rc::{Rc, Weak},
+    sync::Arc,
+};
+
 use smallvec::SmallVec;
-use std::any::{Any, TypeId};
-use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
-use std::rc::{Rc, Weak};
-use std::sync::Arc;
+
+use crate::{
+    collections::map::{HashMap, HashSet},
+    hash::default as default_hash,
+    snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId},
+    state::StateObject,
+    RecomposeScope, RecomposeScopeInner, ScopeId,
+};
 
 /// Executes a callback once changes are delivered.
 type Executor = dyn Fn(Box<dyn FnOnce() + 'static>) + 'static;
@@ -827,11 +833,13 @@ impl ScopeStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::snapshot_v2::take_mutable_snapshot;
-    use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
-    use crate::state::{NeverEqual, SnapshotMutableState};
     use std::cell::Cell;
+
+    use super::*;
+    use crate::{
+        snapshot_v2::{reset_runtime_for_tests, take_mutable_snapshot, TestRuntimeGuard},
+        state::{NeverEqual, SnapshotMutableState},
+    };
 
     fn reset_runtime() -> TestRuntimeGuard {
         reset_runtime_for_tests()

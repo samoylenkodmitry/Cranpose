@@ -1,23 +1,27 @@
-use crate::collections::map::HashMap;
-use crate::collections::map::HashSet;
-use crate::state::{MutationPolicy, NeverEqual};
-use crate::MutableStateInner;
-use std::any::Any;
-use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
-use std::future::Future;
-use std::pin::Pin;
-use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc};
-use std::task::{Context, Poll, Waker};
-use std::thread::ThreadId;
-use std::thread_local;
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    rc::{Rc, Weak},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc, Arc,
+    },
+    task::{Context, Poll, Waker},
+    thread::ThreadId,
+    thread_local,
+};
 
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
-use crate::platform::{RuntimeScheduler, SchedulerRef};
-use crate::{Applier, Command, FrameCallbackId, NodeError, RecomposeScopeInner, ScopeId};
+use crate::{
+    collections::map::{HashMap, HashSet},
+    platform::{RuntimeScheduler, SchedulerRef},
+    state::{MutationPolicy, NeverEqual},
+    Applier, Command, FrameCallbackId, MutableStateInner, NodeError, RecomposeScopeInner, ScopeId,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FrameCallbackKind {

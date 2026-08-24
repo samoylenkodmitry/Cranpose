@@ -13,7 +13,7 @@
 //!
 //! The pieces, in dependency order:
 //!
-//! - [`density`] — the integral-layout grid everything else rounds against;
+//! - `density` — the integral-layout grid everything else rounds against;
 //! - [`color_appearance`] — `setLuminance`, the CAM16 round trip Wear derives
 //!   its scroll-indicator colours with;
 //! - [`theme`] — colour roles and the four Wear type-scale entries;

@@ -13,11 +13,11 @@
 //! cargo run --package desktop-app --example robot_tab_selection --features robot-app
 //! ```
 
+use std::time::Duration;
+
 use cranpose::AppLauncher;
 use cranpose_testing::{find_button_in_semantics, find_text_in_semantics};
-use desktop_app::app;
-use desktop_app::app::DemoTab;
-use std::time::Duration;
+use desktop_app::{app, app::DemoTab};
 
 fn read_active_tab() -> Option<DemoTab> {
     app::TEST_ACTIVE_TAB_STATE.with(|cell| cell.borrow().as_ref().map(|state| state.get()))

@@ -1,8 +1,9 @@
-use cranpose_ui::text::{Hyphens, TextUnit};
-use cranpose_ui::text_layout_result::TextLayoutResult;
 use cranpose_ui::{
-    prepare_text_layout, set_text_measurer, AppContext, ParagraphStyle, SpanStyle,
-    TextLayoutOptions, TextMeasurer, TextMetrics, TextOverflow, TextStyle,
+    prepare_text_layout, set_text_measurer,
+    text::{Hyphens, TextUnit},
+    text_layout_result::TextLayoutResult,
+    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextMeasurer, TextMetrics,
+    TextOverflow, TextStyle,
 };
 
 struct ContractMeasurer;

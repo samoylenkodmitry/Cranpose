@@ -6,11 +6,17 @@
 //! before any screen is listening waits in the framework's own backlog and is
 //! handed to the first collector.
 
-use crate::content::{resolve_content, BytesContent, ContentHandle, ContentMetadata};
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex, OnceLock,
+    },
+};
+
 use cranpose_core::{rememberEventStream, EventStream};
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+
+use crate::content::{resolve_content, BytesContent, ContentHandle, ContentMetadata};
 
 /// Where the bytes of an incoming item live.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -212,8 +218,9 @@ pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    use super::*;
 
     fn drain_test_state() {
         clear_incoming_content();

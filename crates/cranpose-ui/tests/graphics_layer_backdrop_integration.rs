@@ -1,10 +1,9 @@
+use std::{cell::Cell, rc::Rc, sync::Arc};
+
 use cranpose_ui::{
     collect_slices_from_modifier, AppContext, Color, ColorFilter, GraphicsLayer, LayerShape,
     Modifier, RenderEffect, RoundedCornerShape, TransformOrigin,
 };
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
 
 #[test]
 fn backdrop_effect_is_visible_in_modifier_slices() {

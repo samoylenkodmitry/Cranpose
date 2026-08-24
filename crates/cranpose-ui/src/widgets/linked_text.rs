@@ -5,11 +5,15 @@
 
 #![allow(non_snake_case)]
 
-use crate::modifier::Modifier;
-use crate::text::{AnnotatedString, LinkAnnotation, TextStyle};
-use crate::widgets::ClickableText;
-use cranpose_core::NodeId;
 use std::rc::Rc;
+
+use cranpose_core::NodeId;
+
+use crate::{
+    modifier::Modifier,
+    text::{AnnotatedString, LinkAnnotation, TextStyle},
+    widgets::ClickableText,
+};
 
 /// Renders an [`AnnotatedString`] and automatically dispatches link clicks:
 ///

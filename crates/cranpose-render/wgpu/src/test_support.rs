@@ -1,7 +1,7 @@
-use cranpose_render_common::graph::{
-    CachePolicy, IsolationReasons, LayerNode, ProjectiveTransform, RenderNode,
+use cranpose_render_common::{
+    graph::{CachePolicy, IsolationReasons, LayerNode, ProjectiveTransform, RenderNode},
+    raster_cache::LayerRasterCacheHashes,
 };
-use cranpose_render_common::raster_cache::LayerRasterCacheHashes;
 use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
 
 pub fn layer_node(

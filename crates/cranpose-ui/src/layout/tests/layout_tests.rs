@@ -1,15 +1,20 @@
-use super::*;
-use crate::layout::policies::{BoxMeasurePolicy, LeafMeasurePolicy};
-use crate::modifier::{Color, Modifier, Size};
-use crate::subcompose_layout::SubcomposeLayoutScope;
-use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
-use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
 
-use super::core::{Alignment, Measurable};
+use cranpose_core::{Applier, ConcreteApplierHost, MemoryApplier, Node};
+use cranpose_ui_layout::{MeasurePolicy, MeasureResult, MeasureScope, Placement};
+
+use super::{
+    core::{Alignment, Measurable},
+    *,
+};
+use crate::{
+    layout::policies::{BoxMeasurePolicy, LeafMeasurePolicy},
+    modifier::{Color, Modifier, Size},
+    subcompose_layout::SubcomposeLayoutScope,
+};
 
 fn measure_layout(
     applier: &mut MemoryApplier,
@@ -2178,8 +2183,7 @@ fn semantics_tree_derives_roles_from_configuration() -> Result<(), NodeError> {
 #[test]
 fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
-    use std::cell::Cell;
-    use std::rc::Rc as StdRc;
+    use std::{cell::Cell, rc::Rc as StdRc};
 
     fn arena_modifier(state: StdRc<Cell<bool>>) -> Modifier {
         Modifier::empty().semantics(move |config| {
@@ -2236,10 +2240,10 @@ fn re_recording_semantics_reopens_the_snapshot() -> Result<(), NodeError> {
 #[test]
 fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
+    use std::{cell::Cell, rc::Rc as StdRc};
+
     use cranpose_foundation::{CanvasSemanticsNode, SemanticsCustomAction, SemanticsWidgetRole};
     use cranpose_ui_graphics::Rect;
-    use std::cell::Cell;
-    use std::rc::Rc as StdRc;
 
     let paused = StdRc::new(Cell::new(false));
     let toggled = StdRc::new(Cell::new(false));

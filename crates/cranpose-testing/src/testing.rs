@@ -1,18 +1,18 @@
-use cranpose_core::{
-    location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
-    ROOT_RENDER_REPLAY_LIMIT,
-};
-use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests, AppContext};
-
-#[cfg(test)]
-use cranpose_core::{
-    pop_parent, push_parent, with_current_composer, with_node_mut, MutableState, Node,
-};
 #[cfg(test)]
 use std::cell::Cell;
 #[cfg(test)]
 use std::rc::Rc;
 use std::rc::Rc as StdRc;
+
+use cranpose_core::{
+    location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
+    ROOT_RENDER_REPLAY_LIMIT,
+};
+#[cfg(test)]
+use cranpose_core::{
+    pop_parent, push_parent, with_current_composer, with_node_mut, MutableState, Node,
+};
+use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests, AppContext};
 
 /// Headless harness for exercising compositions in tests.
 ///

@@ -2,10 +2,14 @@
 //!
 //! This module handles measuring visible items and beyond-bounds buffer items.
 
-use super::lazy_list_measure::{LazyListMeasureConfig, DEFAULT_ITEM_SIZE_ESTIMATE};
-use super::lazy_list_measured_item::LazyListMeasuredItem;
 use std::collections::VecDeque;
+
 use web_time::{Duration, Instant};
+
+use super::{
+    lazy_list_measure::{LazyListMeasureConfig, DEFAULT_ITEM_SIZE_ESTIMATE},
+    lazy_list_measured_item::LazyListMeasuredItem,
+};
 
 /// Maximum items to measure per pass as a safety limit.
 ///
@@ -487,8 +491,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::collections::VecDeque;
+
+    use super::*;
 
     fn create_test_item(index: usize, size: f32) -> LazyListMeasuredItem {
         LazyListMeasuredItem::new(index, index as u64, None, size, 100.0)

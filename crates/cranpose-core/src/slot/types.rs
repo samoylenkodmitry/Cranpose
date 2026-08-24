@@ -1,8 +1,10 @@
+use std::{
+    any::{Any, TypeId},
+    mem,
+};
+
 use super::{checked_usize_to_u32, DeferredDrop, GroupRecord};
-use crate::collections::map::HashSet;
-use crate::{AnchorId, Key, NodeId, ScopeId};
-use std::any::{Any, TypeId};
-use std::mem;
+use crate::{collections::map::HashSet, AnchorId, Key, NodeId, ScopeId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SlotPassMode {

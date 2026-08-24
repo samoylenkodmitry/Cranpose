@@ -28,12 +28,18 @@
 //! ([`ShapeReplayState::apply_ack`]). Both directions swap-recycle their
 //! buffers, so the protocol adds no per-frame allocation.
 
-use crate::frame_packet::{ReplayAck, ReplayConfirmation, ReplayFrameOps};
-use crate::scene::{ColorPatch, PendingFeedCapture, SimilarityTransform};
+use std::{
+    cell::RefCell,
+    hash::{Hash, Hasher},
+};
+
 use cranpose_render_common::graph::DrawCommandId;
 use cranpose_ui_graphics::{FxHasher, GraphicsLayer, Point, Rect};
-use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
+
+use crate::{
+    frame_packet::{ReplayAck, ReplayConfirmation, ReplayFrameOps},
+    scene::{ColorPatch, PendingFeedCapture, SimilarityTransform},
+};
 
 /// Retained ops per frame are capped by the transform buffer's slot count;
 /// spans past the cap emit dynamically for the frame. Mirrors the
