@@ -158,28 +158,49 @@ Not yet root-caused, and deliberately not guessed at. What has been checked:
   "Android, iOS and the web use the platform's own media stack and need no
   feature" — so it is consistent rather than obviously wrong.
 
+The likeliest cause is not the audio stack at all: **importing a folder**.
+`0.1.41` played music and `0.1.42` does not, and the change to how files are
+picked sits exactly on that boundary — `2442646` "Pick files through keyed
+launchers, not the picker trait", which rewrote playlist import, export and
+skin picking off `local_file_picker().current()` and onto composed launchers
+because a pick on Android can outlive the process. A player that imports
+nothing plays nothing, and the symptom is the same from the outside.
+
 Where to look next, in order:
 
+- **Whether the folder walk starts and what it yields.** This is one `adb
+  logcat` away and needs no build. `consume_folder_stream` logs to
+  `cranamp::picker`: `folder stream started (append=…)` when the walk begins,
+  `skipped non-audio entry: …` per rejected file, and `Scanning N tracks…` per
+  batch. Nothing at all means the launcher never delivered a stream — the
+  grant, not the audio. `skipped` lines naming real music files mean the walk
+  works and the filter is wrong.
+- **`is_audio_name` requires an extension on the display name.** It lowercases
+  the provider's name and tests `ends_with(".mp3")` and friends, so a provider
+  that reports display names without extensions drops *every* track in
+  silence. The code says as much in a comment about WebDAV shares. A SAF
+  provider whose naming changed under the new launcher would look exactly like
+  broken audio.
 - **Whether `android_media::register` still runs.** It takes an
   `android_activity::AndroidApp`, and the same refactoring changed
   `android_main!` so the entry point "no longer wants the `AndroidApp` at all".
-  A registration that is skipped, or that runs after the application first asks
-  to play, leaves `cranpose_services::media` with no player and every call a
-  silent no-op. Confirm by asserting a player is installed by the time the
-  first composition runs, not by reading the call chain — the chain reads fine.
-- **Whether the failure is playback or the file reaching playback.** Launching
-  CranAmp goes straight to `OPEN_DOCUMENT_TREE`. If the picked tree no longer
-  survives the services rework, there is nothing to decode and the audio stack
-  is innocent.
-- **Whether desktop is affected too.** Desktop takes a different backend
-  (`cranpose-media` behind `media-desktop`), so a failure on both narrows this
-  to the service layer above them, and a failure on Android alone narrows it to
-  the Android registration.
+  A registration skipped, or run after the application first asks to play,
+  leaves `cranpose_services::media` with no player and every call a silent
+  no-op. Confirm by asserting a player is installed by the time the first
+  composition runs — the call chain reads fine, so reading it again proves
+  nothing.
+- **The sync path decodes differently now, but only the sync path.**
+  `src/sync/mod.rs:447` is the one caller of `percent_decode` left in CranAmp,
+  and the shared strict decoder returns `None` where the deleted local copy
+  substituted, falling back to the raw percent-encoded path. That can only
+  affect tracks reached over sync, not a local folder pick.
 
-A failing test comes first, and it belongs in the framework: "a target that
+A failing test comes first, and two are missing at different levels. In
+CranAmp: a folder pick yielding known file names produces the expected tracks,
+which pins both the walk and `is_audio_name`. In Cranpose: a target that
 registers a platform media player has one installed before the first
-composition" is a Cranpose invariant, and nothing currently asserts it. That is
-why CranAmp could lose its audio without a single test going red.
+composition. Neither exists, which is how a music player could stop playing
+music without a single test going red.
 
 ## Robot suite corner cases
 
