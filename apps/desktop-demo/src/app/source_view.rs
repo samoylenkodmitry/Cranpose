@@ -10,7 +10,7 @@
 
 use cranpose::LazyItems;
 use cranpose_core::{rememberMutableStateOf, MutableState};
-use cranpose_foundation::lazy::rememberLazyListState;
+use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
 use cranpose_services::local_http_client;
 use cranpose_ui::{
     composable,
@@ -19,7 +19,7 @@ use cranpose_ui::{
     TextStyle,
 };
 
-use super::super::DemoTab;
+use super::DemoTab;
 
 const REPOSITORY: &str = "https://raw.githubusercontent.com/samoylenkodmitry/cranpose";
 

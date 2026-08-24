@@ -96,13 +96,17 @@ test-property-stress frames="10000":
 # A broken intra-doc link is a broken published page. `--all-features` so the
 # feature-gated APIs are covered here too, not just the default set.
 
-# Build the docs, denying every rustdoc warning.
+# The demo apps are excluded: `desktop-app` and `desktop-app-platform` both
+# build a lib called `desktop_app`, so rustdoc writes them to the same path and
+# refuses. They are demos, not published API, so the gate loses nothing.
+
+# Build the docs for the published crates, denying every rustdoc warning.
 doc:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features --exclude desktop-app --exclude desktop-app-platform --exclude xtask
 
 # Open the docs locally.
 doc-open:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features --open
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace --all-features --exclude desktop-app --exclude desktop-app-platform --exclude xtask --open
 
 # --- architecture budgets --------------------------------------------------
 
