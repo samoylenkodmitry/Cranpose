@@ -22,6 +22,8 @@
 //!         },
 //!     );
 //! }
+//!
+//! fn main() {}
 //! ```
 //!
 //! A `Modifier` is an ordered chain and the order is the meaning:
@@ -56,6 +58,8 @@
 //!         },
 //!     );
 //! }
+//!
+//! fn main() {}
 //! ```
 //!
 //! Give `LazyItems::content_type` a real grouping when items differ

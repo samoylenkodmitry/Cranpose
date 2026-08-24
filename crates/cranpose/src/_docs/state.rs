@@ -25,6 +25,8 @@
 //!         },
 //!     );
 //! }
+//!
+//! fn main() {}
 //! ```
 //!
 //! State handles are `Copy`. Move them into closures directly; cloning them is

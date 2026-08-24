@@ -42,7 +42,7 @@ type SinkOpener = Box<dyn Fn(MixerSeed) -> Result<Box<dyn AudioSink>, AudioError
 /// have its whole sound bank resident with the output device still shut.
 ///
 /// The device does not stay open either. When nothing has sounded for
-/// [`IDLE_GRACE_SECONDS`](crate::mixer::IDLE_GRACE_SECONDS) the mixer gives the
+/// `IDLE_GRACE_SECONDS` the mixer gives the
 /// stream up and the next [`play`](AudioPlayer::play) starts it again, so a
 /// silent screen costs nothing however it was reached.
 pub struct AudioEngine {
