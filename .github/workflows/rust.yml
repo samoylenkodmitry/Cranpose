@@ -33,6 +33,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
@@ -63,6 +69,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
@@ -123,6 +135,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
@@ -140,6 +158,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
@@ -160,6 +184,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
@@ -182,6 +212,12 @@ jobs:
 
       - name: Provision PATH and sccache
         run: |
+          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
+          # and the `cargo install` on the next line runs in THIS one -- so on
+          # a self-hosted runner whose service PATH does not already carry
+          # `~/.cargo/bin` the step dies with `cargo: command not found` and
+          # exit 127, having "provisioned" a PATH it never used itself.
+          export PATH="$HOME/.cargo/bin:$PATH"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
           sccache --start-server || true
