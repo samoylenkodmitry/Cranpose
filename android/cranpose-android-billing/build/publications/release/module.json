@@ -1,0 +1,104 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.cranpose",
+    "module": "cranpose-android-billing",
+    "version": "0.1.95",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "com.android.billingclient",
+          "module": "billing",
+          "version": {
+            "requires": "9.1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-billing-0.1.95.aar",
+          "url": "cranpose-android-billing-0.1.95.aar",
+          "size": 11247,
+          "sha512": "23ce41a9c0f09e2cfd0eba3c25c77f8c11d121e89b2ac42b8c353bb8febda30f4b73ddfa14175d77e2632206f3cd0470b1b7e3f69271662717538da1ce5d4184",
+          "sha256": "1a18999965264042ff546aa4cf95a532291f8cde25f66eb4b5e5ef59c47049c7",
+          "sha1": "27ea84f8cd62be5e326713f9931dde2b44590e1a",
+          "md5": "039ebe14fee026bab0aeba979eda0383"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "com.android.billingclient",
+          "module": "billing",
+          "version": {
+            "requires": "9.1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-billing-0.1.95.aar",
+          "url": "cranpose-android-billing-0.1.95.aar",
+          "size": 11247,
+          "sha512": "23ce41a9c0f09e2cfd0eba3c25c77f8c11d121e89b2ac42b8c353bb8febda30f4b73ddfa14175d77e2632206f3cd0470b1b7e3f69271662717538da1ce5d4184",
+          "sha256": "1a18999965264042ff546aa4cf95a532291f8cde25f66eb4b5e5ef59c47049c7",
+          "sha1": "27ea84f8cd62be5e326713f9931dde2b44590e1a",
+          "md5": "039ebe14fee026bab0aeba979eda0383"
+        }
+      ]
+    }
+  ]
+}

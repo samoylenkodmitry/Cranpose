@@ -1,0 +1,103 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.cranpose",
+    "module": "cranpose-android",
+    "version": "0.1.95",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-0.1.95.aar",
+          "url": "cranpose-android-0.1.95.aar",
+          "size": 86247,
+          "sha512": "3a485169f281cb64a07f5ffb98bde29808e3cb2907e5fd68622aa0d0f334f72c763396beb75b66471213b4218b31ca6eed2e6f3c958b7bc10ad8e46568ff177f",
+          "sha256": "928e98cd5c9a40a73f6fc71f9a1937629a15835f5f4db1faabf5665b3cca8b72",
+          "sha1": "a31d569830322895ac8793d9c00227dca006fafa",
+          "md5": "b8237ee21c840f3975fab1762a3e25fa"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "androidx.appcompat",
+          "module": "appcompat",
+          "version": {
+            "requires": "1.7.1"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-0.1.95.aar",
+          "url": "cranpose-android-0.1.95.aar",
+          "size": 86247,
+          "sha512": "3a485169f281cb64a07f5ffb98bde29808e3cb2907e5fd68622aa0d0f334f72c763396beb75b66471213b4218b31ca6eed2e6f3c958b7bc10ad8e46568ff177f",
+          "sha256": "928e98cd5c9a40a73f6fc71f9a1937629a15835f5f4db1faabf5665b3cca8b72",
+          "sha1": "a31d569830322895ac8793d9c00227dca006fafa",
+          "md5": "b8237ee21c840f3975fab1762a3e25fa"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "cranpose-android-0.1.95-sources.jar",
+          "url": "cranpose-android-0.1.95-sources.jar",
+          "size": 49819,
+          "sha512": "9fa48ad029226e2550a6d009e456afb9f142d9e4c5a60fb5b07eee66f0344f9393f152d35a71adf719464fd4799d1e684ffbf7a2360b1035874c27212e1a551d",
+          "sha256": "c291b64f6a6b85143dda58c77e6fdfb6e3f60dac2b670ec5d4c3d883ba8728ce",
+          "sha1": "86ae869d7e950055a13dcaaf808d10fc427be1dd",
+          "md5": "622fe4843d4273a8447af8ba181419a7"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+ The camera service. `required="false"` keeps the application installable
+     on a device without a camera; the framework reports the capability.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.cranpose.android.camera" >
+
+    <uses-sdk android:minSdkVersion="24" />
+
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+
+</manifest>

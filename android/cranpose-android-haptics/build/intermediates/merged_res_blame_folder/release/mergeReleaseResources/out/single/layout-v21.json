@@ -1,0 +1,18 @@
+[
+    {
+        "merged": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/layout-v21/notification_action.xml",
+        "source": "dev.cranpose.android.haptics.cranpose-android-haptics-core-1.13.0-14:/layout-v21/notification_action.xml"
+    },
+    {
+        "merged": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/layout-v21/notification_template_custom_big.xml",
+        "source": "dev.cranpose.android.haptics.cranpose-android-haptics-core-1.13.0-14:/layout-v21/notification_template_custom_big.xml"
+    },
+    {
+        "merged": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/layout-v21/notification_action_tombstone.xml",
+        "source": "dev.cranpose.android.haptics.cranpose-android-haptics-core-1.13.0-14:/layout-v21/notification_action_tombstone.xml"
+    },
+    {
+        "merged": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/layout-v21/notification_template_icon_group.xml",
+        "source": "dev.cranpose.android.haptics.cranpose-android-haptics-core-1.13.0-14:/layout-v21/notification_template_icon_group.xml"
+    }
+]

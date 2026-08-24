@@ -1,0 +1,34 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!--
+3    Media playback: the foreground service that keeps an item playing with the
+4    app off screen, and the permissions Android requires to start it. Analysis
+5    samples for a visualiser need RECORD_AUDIO, which an application that draws
+6    one asks for itself — the framework reports the capability either way.
+7-->
+8<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+9    package="dev.cranpose.android.media" >
+10
+11    <uses-sdk android:minSdkVersion="24" />
+11-->INJECTED
+11-->INJECTED
+12
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:9:5-77
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:9:22-74
+14    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+14-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:10:5-92
+14-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:10:22-89
+15
+16    <application>
+16-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:12:5-17:19
+17        <service
+17-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:13:9-16:61
+18            android:name="dev.cranpose.android.CranposeMediaService"
+18-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:14:13-69
+19            android:exported="false"
+19-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:15:13-37
+20            android:foregroundServiceType="mediaPlayback" />
+20-->/Users/s/develop/projects/Cranpose/android/cranpose-android-media/src/main/AndroidManifest.xml:16:13-58
+21    </application>
+22
+23</manifest>

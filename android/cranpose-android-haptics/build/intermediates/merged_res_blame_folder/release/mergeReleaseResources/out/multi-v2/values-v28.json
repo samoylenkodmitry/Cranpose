@@ -1,0 +1,36 @@
+{
+    "logs": [
+        {
+            "outputFile": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/values-v28/values-v28.xml",
+            "map": [
+                {
+                    "source": "/Users/s/.gradle/caches/9.5.1/transforms/2c6ff6eed362a3e97fd05306dd6dfb68/transformed/appcompat-1.7.1/res/values-v28/values-v28.xml",
+                    "from": {
+                        "startLines": "2,3,4,8",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,130,217,397",
+                        "endLines": "2,3,7,11",
+                        "endColumns": "74,86,12,12",
+                        "endOffsets": "125,212,392,584"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "dev.cranpose.android.haptics.cranpose-android-haptics-mergeReleaseResources-19:/values-v28/values-v28.xml",
+            "map": [
+                {
+                    "source": "/Users/s/.gradle/caches/9.5.1/transforms/2c6ff6eed362a3e97fd05306dd6dfb68/transformed/appcompat-1.7.1/res/values-v28/values-v28.xml",
+                    "from": {
+                        "startLines": "2,3,4,8",
+                        "startColumns": "4,4,4,4",
+                        "startOffsets": "55,130,217,397",
+                        "endLines": "2,3,7,11",
+                        "endColumns": "74,86,12,12",
+                        "endOffsets": "125,212,392,584"
+                    }
+                }
+            ]
+        }
+    ]
+}

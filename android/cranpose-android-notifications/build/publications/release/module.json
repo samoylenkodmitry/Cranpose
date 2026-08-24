@@ -1,0 +1,90 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "dev.cranpose",
+    "module": "cranpose-android-notifications",
+    "version": "0.1.95",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "9.5.1"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-notifications-0.1.95.aar",
+          "url": "cranpose-android-notifications-0.1.95.aar",
+          "size": 920,
+          "sha512": "cc406334329db9fb5c3c2a438f59d21fcfd8dd83c0df52f52308807598cc52fa39d7269caccedf4b1c832d6792f74c88cca6caa1e8cde26f449068f1c2ea3ffd",
+          "sha256": "228ae3bf57f319637b72debac2e4a9f2494e16f1074f371d7d47feb4edfc1359",
+          "sha1": "ad2931cf7caf99a064fa6e218461a4bf744e2ddb",
+          "md5": "26038d0c6b70c154304402a178feeaa3"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "dev.cranpose",
+          "module": "cranpose-android",
+          "version": {
+            "requires": "0.1.95"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "cranpose-android-notifications-0.1.95.aar",
+          "url": "cranpose-android-notifications-0.1.95.aar",
+          "size": 920,
+          "sha512": "cc406334329db9fb5c3c2a438f59d21fcfd8dd83c0df52f52308807598cc52fa39d7269caccedf4b1c832d6792f74c88cca6caa1e8cde26f449068f1c2ea3ffd",
+          "sha256": "228ae3bf57f319637b72debac2e4a9f2494e16f1074f371d7d47feb4edfc1359",
+          "sha1": "ad2931cf7caf99a064fa6e218461a4bf744e2ddb",
+          "md5": "26038d0c6b70c154304402a178feeaa3"
+        }
+      ]
+    }
+  ]
+}

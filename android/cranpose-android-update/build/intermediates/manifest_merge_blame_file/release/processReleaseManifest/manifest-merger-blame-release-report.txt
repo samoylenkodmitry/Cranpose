@@ -1,0 +1,19 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<!--
+3 `cranpose_services::install_app_update` hands the downloaded package to
+4     `PackageInstaller`, and Android refuses a session from an application that
+5     has not declared it may install packages. The user still confirms the
+6     install itself; without the permission the confirmation never appears.
+7-->
+8<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+9    package="dev.cranpose.android.update" >
+10
+11    <uses-sdk android:minSdkVersion="24" />
+11-->INJECTED
+11-->INJECTED
+12
+13    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-update/src/main/AndroidManifest.xml:7:5-83
+13-->/Users/s/develop/projects/Cranpose/android/cranpose-android-update/src/main/AndroidManifest.xml:7:22-80
+14
+15</manifest>

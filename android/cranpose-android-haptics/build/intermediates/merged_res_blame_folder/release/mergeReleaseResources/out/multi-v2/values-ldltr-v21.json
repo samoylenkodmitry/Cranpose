@@ -1,0 +1,34 @@
+{
+    "logs": [
+        {
+            "outputFile": "dev.cranpose.android.haptics.cranpose-android-haptics-mergeReleaseResources-19:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "/Users/s/.gradle/caches/9.5.1/transforms/2c6ff6eed362a3e97fd05306dd6dfb68/transformed/appcompat-1.7.1/res/values-ldltr-v21/values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        },
+        {
+            "outputFile": "dev.cranpose.android.haptics.cranpose-android-haptics-release-21:/values-ldltr-v21/values-ldltr-v21.xml",
+            "map": [
+                {
+                    "source": "/Users/s/.gradle/caches/9.5.1/transforms/2c6ff6eed362a3e97fd05306dd6dfb68/transformed/appcompat-1.7.1/res/values-ldltr-v21/values-ldltr-v21.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "112",
+                        "endOffsets": "163"
+                    }
+                }
+            ]
+        }
+    ]
+}
