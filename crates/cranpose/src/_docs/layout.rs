@@ -6,6 +6,10 @@
 //! ```no_run
 //! #![allow(non_snake_case)]
 //! use cranpose::prelude::*;
+//! # use cranpose::{
+//! #     debug_label_current_scope, location_key, with_current_composer, CallbackHolder,
+//! #     Composer, ParamState, ReturnSlot,
+//! # };
 //!
 //! #[composable]
 //! fn Card() {
@@ -38,6 +42,10 @@
 //! ```no_run
 //! #![allow(non_snake_case)]
 //! use cranpose::prelude::*;
+//! # use cranpose::{
+//! #     debug_label_current_scope, location_key, with_current_composer, CallbackHolder,
+//! #     Composer, ParamState, ReturnSlot,
+//! # };
 //!
 //! #[composable]
 //! fn Rows(count: usize) {
