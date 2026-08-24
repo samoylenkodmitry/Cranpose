@@ -9,10 +9,10 @@ is acceptable.
 
 ## Gaps in the framework
 
-### Public API test coverage: 364 of 3400 functions
+### Public API test coverage: 356 of 3408 functions
 
-`python3 scripts/public_api_test_coverage.py` reports **3036/3400 (89.3%)**.
-Treat the 364 as a map of where a change is unguarded, not as a backlog of 364
+`python3 scripts/public_api_test_coverage.py` reports **3052/3408 (89.6%)**.
+Treat the 356 as a map of where a change is unguarded, not as a backlog of 356
 tests to write — a test written to raise the number tests the implementation it
 was written against. Tests here are added the other way round: each pins a
 defect found first, or covers a new module's own decisions, which is where a
@@ -57,28 +57,6 @@ Found by installing releases onto real devices, not by reading the pipeline.
   secrets are an App Store *distribution* certificate and profile, so no CI job
   can produce a device-installable build. The artifact is named and documented
   for what it is rather than carrying a signing step that could only fail.
-- **The published CranOrbit release carries only an `.aab`**, which `adb`
-  cannot install. The release workflow attaches the universal APK beside the
-  bundle, but no tag has been pushed since that landed, so `v1.3.1` is
-  unchanged. Two separate faults kept a tag from producing one: the build ran
-  on a hosted runner that exhausted its disk restoring a cargo cache holding a
-  three-target `target/` directory, and it resolves a Gradle plugin that was
-  published to `mavenLocal()` and nowhere else.
-
-## Duplication left in the applications
-
-`percent_decode` is now one pair in `cranpose_services::content` —
-`percent_decode` (strict, refuses what it cannot decode exactly) and
-`percent_decode_lossy` (substitutes, for text that is only displayed). The two
-behaviours were both already in use and both wanted, which is why five diverging
-copies went unnoticed.
-
-Three copies remain in CranScan (`app/src/services.rs`, `crates/core/src/qr.rs`)
-and CranAmp (`src/sync/mod.rs`), plus CranAmp's two private `hex_value` helpers.
-They can only be removed once those applications move to a release carrying the
-shared pair; the changes are written and pinned to it. CranAmp's two private
-`hex_value` helpers are not part of this: they back an unrelated tab-safe hex
-codec, not percent-decoding.
 
 ## Robot suite corner cases
 
@@ -97,8 +75,16 @@ codec, not percent-decoding.
 
 ## Infrastructure
 
-One Linux machine serves every `[self-hosted, Linux, cranpose-heavy]` job. Two
-of those genuinely cannot move: the X11 robot suite needs a real X server, and
-the binary-size budget is pinned against Linux codegen. The wasm job no longer
-sits behind them. If Linux queueing keeps hurting, the remaining lever is a
-second Linux runner, not more relabelling.
+One Linux machine serves every `[self-hosted, Linux, cranpose-heavy]` job, now
+through two runners on that host rather than one. Two of those jobs genuinely
+cannot move: the X11 robot suite needs a real X server, and the binary-size
+budget is pinned against Linux codegen. The wasm job no longer sits behind
+them. The second runner does not double the machine, so the robot suites take
+a host-level `flock` against each other — two X11 suites sharing one display
+interfere, and a suite competing with itself for the CPU produces exactly the
+timing failures the suite is meant to catch.
+
+The applications are still on one Linux runner each, and it shows: cranscan's
+release sat queued behind its own `main` CI on `samarch-1-cranscan` while the
+tag was already pushed. The lever there is the same one, applied per
+repository.
