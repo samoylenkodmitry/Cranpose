@@ -953,3 +953,50 @@ The host is shared: samarch-1 serves a runner per repository, so another
 project's build competes with the robot suite, and it carries services of its
 own. During the failure it had 20GB paged out with 55GB of RAM free, and the
 suite's one memory-bound test degraded twice as much as the suite average.
+
+## macOS codesign "unable to build chain" means the intermediate is missing (2026-08-24)
+
+`codesign` on a self-hosted macOS runner failing with
+
+```
+Warning: unable to build chain to self-signed root for signer "Developer ID Application: ..."
+Cranamp.app: errSecInternalComponent
+```
+
+means what it says, and the fastest way to lose an hour is to decide it does
+not. A `.p12` exported from Keychain Access carries the **leaf and its private
+key**, not the intermediate that links the leaf to Apple Root CA. codesign
+builds the chain from the keychains it searches, so on a host with no Apple CA
+in any of them there is nothing to build it from.
+
+- **Check for the intermediate before theorising.** One command, over ssh, no
+  build:
+  `security find-certificate -c "Developer ID Certification Authority" ~/Library/Keychains/login.keychain-db`
+  Finding it *only* in `/System/Library/Keychains/SystemRootCertificates.keychain`
+  is the failure: that is the anchor store, not a searched keychain.
+- **`security find-identity -v` is not evidence the chain works.** It listed
+  the identity as valid on the host that could not sign, so a guard built on
+  it passes and the failure lands later, inside codesign, looking like a bad
+  key.
+- **Fix it in the job, not on the host.** Fetch
+  `https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer` and
+  `security import` it into the ephemeral signing keychain, pinned by SHA-256 —
+  this installs a CA into the keychain used for signing, so an unpinned
+  download is a real hole. A host fixed by hand regresses the next time the
+  machine is rebuilt.
+
+**A pass/fail alternation across releases is not automatically leaked state.**
+This one alternated cleanly — v0.1.37 passed, .38 failed, .39 passed, .40
+failed, .41 passed, .42 failed — and that pattern sent an hour into a leaked
+keychain search-list entry, which was genuinely present and genuinely worth
+cleaning up but was not the cause. Rerunning the identical commit from a clean
+search list failed identically, which is the check that should have come
+first: **confirm a suspected cause by removing it and re-running, before
+writing the fix.**
+
+**`ssh <host> '...'` runs the remote user's login shell, which on macOS is
+zsh, and zsh does not word-split unquoted expansions.** `security
+list-keychains -s $keep` there passes one argument with a leading space
+instead of a list, and `security` resolves it as a relative path — which
+corrupts the search list you were trying to repair. Wrap remote scripts in
+`bash -lc "..."`, or pass each path as its own quoted argument.
