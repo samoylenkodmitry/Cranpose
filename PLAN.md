@@ -58,6 +58,83 @@ Found by installing releases onto real devices, not by reading the pipeline.
   can produce a device-installable build. The artifact is named and documented
   for what it is rather than carrying a signing step that could only fail.
 
+## CranOrbit on the watch: two faults in the shipped build
+
+Found by installing `v1.3.2` on a Pixel Watch 3 and playing it, which is the
+only way either of these surfaces. Both are CranOrbit's, not the framework's,
+but they are here because nothing else tracks them and because the second one
+is not yet proven to stop at the application boundary.
+
+### The radial menu was replaced by a scrolling list
+
+CranOrbit selected levels and modes from a radial menu -- the shape the game
+itself is built on, and the reason a round display suits it. The shipped build
+presents a vertical `WearScalingLazyColumn` of pill chips instead: `ORBIT
+BREAKER` over `CAMPAIGN`/`DAILY`, then `CHAPTER 2` over `IGNITION`, then
+`LEVEL 1` over `FIRST LIGHT`. Three taps down a scrolling list to start a
+level, on a 408x408 screen.
+
+The radial model was not deleted, only disconnected. `app/src/app_state.rs`
+still builds a `RadialSpec` (line 628) and `composed_screen` still asks for one
+-- `ComposedScreen::Menu` is constructed with `Some(state.radial_spec())` at
+`app/src/ui/composed.rs:324` -- and then `app/src/ui/composed.rs:350` renders
+that spec through `WearScalingLazyColumn`. A radial specification is being fed
+to a linear list widget. There is no radial renderer left in the tree.
+
+`composed_screen` routes *every* screen that is not `Playing` or `Tutorial` to
+`ComposedScreen::Menu`, so one list widget now serves settings, credits, level
+select and mode select alike. That is the actual error: the flat Wear list is
+right for **settings**, where a scrolling column of rows is what the platform
+expects, and wrong for level and mode selection, which is what the radial menu
+existed for. Restoring it means a radial renderer for `Menu` and a separate
+list path for the settings-shaped screens, not a flag on one widget.
+
+### Backing out of the pause overlay wedges the app
+
+Reproduced on the Pixel Watch 3 against `v1.3.2`, with the display confirmed
+awake -- a dozing watch screenshots black and will otherwise be mistaken for
+this:
+
+1. Start a level and play. The arena draws.
+2. Back-gesture once. `PAUSED / LEVEL 1 SCORE 0 / RESUME` appears, which is
+   correct.
+3. Back-gesture again. The screen goes to a flat `#121116`.
+
+`#121116` is the application's own background, not the device's black, so the
+renderer is running and painting an empty scene rather than having stopped.
+Everything else agrees: the process stays alive, the activity keeps window
+focus, `[android-frame-rate]` keeps voting 60 Hz, and
+`cranpose_render_wgpu::render: [segment-encode]` keeps reporting work after the
+screen goes blank. No panic and no `AndroidRuntime` entry.
+
+Nothing on the device recovers it. A tap does nothing. Further back gestures
+neither redraw nor leave -- the application still consumes back, so the user is
+trapped in a blank screen with no way out but the system app switcher. Force
+stopping and relaunching *does* recover, returning to `RESUME / LEVEL 1 FIRST
+LIGHT / CONTINUE`, so the wedge is in-memory screen state and not the save
+file.
+
+The cause is `SwipeToDismissBox`, and it is the framework's, not CranOrbit's.
+After the gesture completes the widget leaves its content translated off screen
+and fires `on_dismiss`, because that is what a dismissed *row* wants: its host
+is about to remove it. A full-content *navigation* dismissal is the opposite
+case -- back means "go up one level", and the host may answer by staying
+composed, which is exactly what backing out of a pause overlay does. The
+content then never returns, and since `SwipeToDismissBox` owns its controller
+internally the application has no state handle to reset it with. The gesture
+stays consumed, which is why back could not escape either.
+
+Two things are worth keeping from how this was found. CranOrbit's state
+machine was tested first and was correct -- `Playing -> back -> Paused -> back`
+returns a drawable `Playing` -- which is what moved the search up a layer
+rather than deeper into the application. And the offset the regression test
+reports without the fix, a full content width, is the blank screen stated as a
+number.
+
+Fixed by `SwipeToDismissSpec::reset_after_dismiss`, off by default so row
+behaviour is unchanged, with `SwipeToDismissBox` opting in. CranOrbit picks it
+up at the next Cranpose release.
+
 ## Robot suite corner cases
 
 - **33 examples need an X11 session with `xdotool`** and are skipped everywhere
