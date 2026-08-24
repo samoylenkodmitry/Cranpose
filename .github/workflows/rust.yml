@@ -26,7 +26,9 @@ jobs:
     name: fmt + tests + clippy (mac)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 45
+    # Carries what were four separate mac jobs. The fleet has one online macOS
+    # runner, so those never ran in parallel anyway -- they queued.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
@@ -64,6 +66,15 @@ jobs:
         # A broken intra-doc link is a broken published page.
         run: just doc
 
+      - name: Run cranpose-core feature permutations
+        run: just test-features
+
+      - name: Run the deterministic slot-table model check
+        run: just test-property
+
+      - name: Run the slot-table Criterion smoke
+        run: just bench-smoke
+
   architecture-budget:
     name: architecture budgets (linux)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -92,88 +103,6 @@ jobs:
         # Featureless and all-features builds, the per-backend winit checks, the
         # duplicate-dependency budgets and the desktop binary-size ceiling.
         run: just budgets
-
-  feature-smoke:
-    name: ${{ matrix.feature }} feature (mac)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        feature: [std-hash, internal]
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Provision PATH and sccache
-        run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          sccache --start-server || true
-
-      - name: Run cranpose-core feature tests
-        run: cargo test --profile ci -p cranpose-core --features ${{ matrix.feature }}
-
-  property-smoke:
-    name: property smoke (mac)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Provision PATH and sccache
-        run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          sccache --start-server || true
-
-      - name: Run deterministic slot-table model smoke
-        run: just test-property
-
-  criterion-smoke:
-    name: criterion smoke (mac)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, macOS, ARM64]
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Provision PATH and sccache
-        run: |
-          # Both, and in this order. `GITHUB_PATH` only reaches LATER steps,
-          # and the `cargo install` on the next line runs in THIS one -- so on
-          # a self-hosted runner whose service PATH does not already carry
-          # `~/.cargo/bin` the step dies with `cargo: command not found` and
-          # exit 127, having "provisioned" a PATH it never used itself.
-          export PATH="$HOME/.cargo/bin:$PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          command -v sccache >/dev/null || RUSTC_WRAPPER= cargo install sccache --locked
-          # CI runs the same recipes a developer runs, so a gate cannot mean
-          # one thing locally and another thing here.
-          command -v just >/dev/null || cargo install just --locked
-          sccache --start-server || true
-
-      - name: Run slot-table Criterion smoke
-        run: just bench-smoke
 
   wasm-build:
     name: wasm build
