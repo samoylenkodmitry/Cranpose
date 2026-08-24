@@ -9,10 +9,10 @@ is acceptable.
 
 ## Gaps in the framework
 
-### Public API test coverage: 356 of 3408 functions
+### Public API test coverage: 357 of 3409 functions
 
-`python3 scripts/public_api_test_coverage.py` reports **3052/3408 (89.6%)**.
-Treat the 356 as a map of where a change is unguarded, not as a backlog of 356
+`python3 scripts/public_api_test_coverage.py` reports **3052/3409 (89.5%)**.
+Treat the 357 as a map of where a change is unguarded, not as a backlog of 357
 tests to write — a test written to raise the number tests the implementation it
 was written against. Tests here are added the other way round: each pins a
 defect found first, or covers a new module's own decisions, which is where a
@@ -40,23 +40,23 @@ These are deliberate. They are here so nobody rediscovers them as bugs.
 - **`cranpose-services/http-native` is not forwarded through the `cranpose`
   umbrella.** Doing so would need one feature per target, which Cargo cannot
   express, so the opt-in stays where applications already write it.
+- **A device-installable iOS build is made locally, not by CI.** The release
+  carries an App Store-signed `.ipa`, which TestFlight takes and a device
+  refuses directly, and `cranscan-*-ios-unsigned.ipa`, which is ad-hoc signed
+  with no embedded profile and which a device also refuses. The repository's
+  only iOS secrets are an App Store *distribution* certificate and profile, so
+  no CI job can sign for a particular device — that needs a development profile
+  carrying that device's UDID, which is per-device and belongs on the machine
+  that has it. Both routes to a phone work and both are outside CI: TestFlight
+  from the release upload, or re-signing the `.ipa` locally against an
+  Xcode-managed development profile and installing it with `devicectl`. The
+  artifacts are named for what they are rather than carrying a signing step
+  that could only fail.
 - **The unused-API deletion rule stops at the Compose-shaped surface.**
   `rememberSaveable`, `ProvideLifecycle`, `rememberLifecycleState`,
   `DurableSaveEffect` and `interval` have no caller and are kept. What makes
   them API is that an application written against Compose expects them to
   exist, not that one of ours has reached for one yet.
-
-## Release artifacts that cannot be installed
-
-Found by installing releases onto real devices, not by reading the pipeline.
-
-- **The iOS release IPA still needs re-signing, and now says so.**
-  `cranscan-*-ios-unsigned.ipa` is ad-hoc signed with no embedded provisioning
-  profile, so a device refuses it; installing means re-signing against a
-  development profile carrying that device's UDID. The repository's only iOS
-  secrets are an App Store *distribution* certificate and profile, so no CI job
-  can produce a device-installable build. The artifact is named and documented
-  for what it is rather than carrying a signing step that could only fail.
 
 ## CranOrbit on the watch
 
