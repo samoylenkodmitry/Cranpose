@@ -47,6 +47,26 @@
 - if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone
 - not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
 - for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
+- confirm a suspected cause by REMOVING it and re-running, before writing the
+  fix. three wrong fixes for one macOS signing failure came from reasoning
+  about an error message instead of testing what it claimed.
+- for a UI bug that reproduces on a device, write the state-machine test FIRST.
+  If it passes, the fault is above `AppState` and reading more of `AppState` is
+  wasted time. That test passed twice for bugs that turned out to live in the
+  layer above -- a widget holding content off screen, and a pointer claim
+  surviving a screen change.
+- an existing test is a design decision. If a "fix" makes one fail, the
+  behaviour was deliberate: read the test before changing the code.
+- device testing on the Pixel Watch over adb: the watch dozes between commands
+  and silently drops injected input, and a dozing screen captures as a ~1.6KB
+  black PNG that looks exactly like a frozen app. Send `input keyevent
+  KEYCODE_WAKEUP` before every step and check `dumpsys power | grep
+  mWakefulness` before believing a screenshot. The rotary crown is
+  `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also
+  take taps on the screen edge.
+- `gh` has more than one account here and the active one flips. When a repo
+  starts 404ing or a rerun says "must have admin rights", run
+  `gh auth switch --user samoylenkodmitry` rather than believing the error.
 - should never workaround bugs instead of fixing the root issue
 - gates live in the justfile and CI calls the same recipes; change a gate there, never inline in a workflow
 - frame-rate numbers measured under xvfb are software presentation, not the GPU (26 fps against 67 on the same scene); measure fps on a real display
