@@ -58,6 +58,83 @@ Found by installing releases onto real devices, not by reading the pipeline.
   can produce a device-installable build. The artifact is named and documented
   for what it is rather than carrying a signing step that could only fail.
 
+## CranOrbit on the watch: two faults in the shipped build
+
+Found by installing `v1.3.2` on a Pixel Watch 3 and playing it, which is the
+only way either of these surfaces. Both are CranOrbit's, not the framework's,
+but they are here because nothing else tracks them and because the second one
+is not yet proven to stop at the application boundary.
+
+### The radial menu was replaced by a scrolling list
+
+CranOrbit selected levels and modes from a radial menu -- the shape the game
+itself is built on, and the reason a round display suits it. The shipped build
+presents a vertical `WearScalingLazyColumn` of pill chips instead: `ORBIT
+BREAKER` over `CAMPAIGN`/`DAILY`, then `CHAPTER 2` over `IGNITION`, then
+`LEVEL 1` over `FIRST LIGHT`. Three taps down a scrolling list to start a
+level, on a 408x408 screen.
+
+The radial model was not deleted, only disconnected. `app/src/app_state.rs`
+still builds a `RadialSpec` (line 628) and `composed_screen` still asks for one
+-- `ComposedScreen::Menu` is constructed with `Some(state.radial_spec())` at
+`app/src/ui/composed.rs:324` -- and then `app/src/ui/composed.rs:350` renders
+that spec through `WearScalingLazyColumn`. A radial specification is being fed
+to a linear list widget. There is no radial renderer left in the tree.
+
+`composed_screen` routes *every* screen that is not `Playing` or `Tutorial` to
+`ComposedScreen::Menu`, so one list widget now serves settings, credits, level
+select and mode select alike. That is the actual error: the flat Wear list is
+right for **settings**, where a scrolling column of rows is what the platform
+expects, and wrong for level and mode selection, which is what the radial menu
+existed for. Restoring it means a radial renderer for `Menu` and a separate
+list path for the settings-shaped screens, not a flag on one widget.
+
+### Backing out of the pause overlay wedges the app
+
+Reproduced on the Pixel Watch 3 against `v1.3.2`, with the display confirmed
+awake -- a dozing watch screenshots black and will otherwise be mistaken for
+this:
+
+1. Start a level and play. The arena draws.
+2. Back-gesture once. `PAUSED / LEVEL 1 SCORE 0 / RESUME` appears, which is
+   correct.
+3. Back-gesture again. The screen goes to a flat `#121116`.
+
+`#121116` is the application's own background, not the device's black, so the
+renderer is running and painting an empty scene rather than having stopped.
+Everything else agrees: the process stays alive, the activity keeps window
+focus, `[android-frame-rate]` keeps voting 60 Hz, and
+`cranpose_render_wgpu::render: [segment-encode]` keeps reporting work after the
+screen goes blank. No panic and no `AndroidRuntime` entry.
+
+Nothing on the device recovers it. A tap does nothing. Further back gestures
+neither redraw nor leave -- the application still consumes back, so the user is
+trapped in a blank screen with no way out but the system app switcher. Force
+stopping and relaunching *does* recover, returning to `RESUME / LEVEL 1 FIRST
+LIGHT / CONTINUE`, so the wedge is in-memory screen state and not the save
+file.
+
+Ranked by what the evidence supports:
+
+- **A screen state that composes to nothing.** `composed_screen` returns `None`
+  only for `Screen::Playing` and `Screen::Tutorial`, leaving the arena renderer
+  to draw. If the second back leaves `screen` at `Playing` while the session
+  behind it is gone, the arena has nothing to draw and back stays swallowed by
+  the in-game handler. This fits every observation and is the first thing to
+  test.
+- **A back handler that consumes without transitioning.** The pause overlay's
+  handler may pop its own state and return handled without advancing to a
+  screen, which would explain back being eaten afterwards.
+- **A framework fault** is not excluded and is why this is written here. If the
+  application's state is provably a drawable screen at the moment the display
+  is blank, the fault is in composition or presentation and belongs to
+  Cranpose.
+
+A failing test comes before a fix either way: the state machine can be driven
+headlessly, so `Playing -> back -> paused -> back` should be pinned in
+CranOrbit's own tests, and if the framework turns out to be at fault, in the
+robot suite as well.
+
 ## Robot suite corner cases
 
 - **33 examples need an X11 session with `xdotool`** and are skipped everywhere
