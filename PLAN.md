@@ -135,6 +135,73 @@ Fixed by `SwipeToDismissSpec::reset_after_dismiss`, off by default so row
 behaviour is unchanged, with `SwipeToDismissBox` opting in. CranOrbit picks it
 up at the next Cranpose release.
 
+## CranAmp plays no music since the framework-ownership work
+
+Reported from the device, not from a test: CranAmp stopped playing audio after
+the Cranpose refactorings that moved host, lifecycle and service contracts into
+the framework. The application is a music player, so this is the whole product.
+
+Not yet root-caused, and deliberately not guessed at. What has been checked:
+
+- `cranamp` `0.1.42` installs and runs on a Pixel 9 Pro. The process stays up,
+  the renderer works, and there is no panic or `AndroidRuntime` entry.
+- `cranpose_services::media` takes a platform player through
+  `set_platform_media_player`, and one is registered for every target CranAmp
+  ships: `cranpose_media::install()` on desktop, `web_media` on the web,
+  `android_media::register` on Android, `ios_media` on iOS. So the *absence of
+  an Android backend*, which is the obvious first suspicion, is not it.
+- The Android registration chain is intact on paper:
+  `android.rs:1821` calls `android_services::register`, which calls
+  `android_media::register(app)` at `android_services.rs:90`.
+- CranAmp's `android` feature is `["cranpose/android"]` and enables no media or
+  audio feature. That is what the framework documents — `media-desktop` says
+  "Android, iOS and the web use the platform's own media stack and need no
+  feature" — so it is consistent rather than obviously wrong.
+
+The likeliest cause is not the audio stack at all: **importing a folder**.
+`0.1.41` played music and `0.1.42` does not, and the change to how files are
+picked sits exactly on that boundary — `2442646` "Pick files through keyed
+launchers, not the picker trait", which rewrote playlist import, export and
+skin picking off `local_file_picker().current()` and onto composed launchers
+because a pick on Android can outlive the process. A player that imports
+nothing plays nothing, and the symptom is the same from the outside.
+
+Where to look next, in order:
+
+- **Whether the folder walk starts and what it yields.** This is one `adb
+  logcat` away and needs no build. `consume_folder_stream` logs to
+  `cranamp::picker`: `folder stream started (append=…)` when the walk begins,
+  `skipped non-audio entry: …` per rejected file, and `Scanning N tracks…` per
+  batch. Nothing at all means the launcher never delivered a stream — the
+  grant, not the audio. `skipped` lines naming real music files mean the walk
+  works and the filter is wrong.
+- **`is_audio_name` requires an extension on the display name.** It lowercases
+  the provider's name and tests `ends_with(".mp3")` and friends, so a provider
+  that reports display names without extensions drops *every* track in
+  silence. The code says as much in a comment about WebDAV shares. A SAF
+  provider whose naming changed under the new launcher would look exactly like
+  broken audio.
+- **Whether `android_media::register` still runs.** It takes an
+  `android_activity::AndroidApp`, and the same refactoring changed
+  `android_main!` so the entry point "no longer wants the `AndroidApp` at all".
+  A registration skipped, or run after the application first asks to play,
+  leaves `cranpose_services::media` with no player and every call a silent
+  no-op. Confirm by asserting a player is installed by the time the first
+  composition runs — the call chain reads fine, so reading it again proves
+  nothing.
+- **The sync path decodes differently now, but only the sync path.**
+  `src/sync/mod.rs:447` is the one caller of `percent_decode` left in CranAmp,
+  and the shared strict decoder returns `None` where the deleted local copy
+  substituted, falling back to the raw percent-encoded path. That can only
+  affect tracks reached over sync, not a local folder pick.
+
+A failing test comes first, and two are missing at different levels. In
+CranAmp: a folder pick yielding known file names produces the expected tracks,
+which pins both the walk and `is_audio_name`. In Cranpose: a target that
+registers a platform media player has one installed before the first
+composition. Neither exists, which is how a music player could stop playing
+music without a single test going red.
+
 ## Robot suite corner cases
 
 - **33 examples need an X11 session with `xdotool`** and are skipped everywhere
