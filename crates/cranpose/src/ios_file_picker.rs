@@ -37,7 +37,7 @@ use objc2_ui_kit::{
     UIApplication, UIDocumentPickerDelegate, UIDocumentPickerViewController, UIViewController,
     UIWindowScene,
 };
-use objc2_uniform_type_identifiers::{UTType, UTTypeFolder, UTTypeItem};
+use objc2_uniform_type_identifiers::{UTType, UTTypeDirectory, UTTypeItem};
 
 /// Installs the iOS chooser as the platform file picker.
 pub(crate) fn register() {
@@ -245,10 +245,26 @@ fn present(
 
 fn present_open(kind: Kind, multiple: bool) -> PickerFuture<PickResult> {
     present(move |mtm| {
-        // SAFETY: `UTTypeItem`/`UTTypeFolder` are immutable framework constants.
+        // `public.directory`, not `public.folder`. The picker enables a
+        // provider only if it can vend something conforming to the type asked
+        // for, and Apple defines these as
+        //
+        //     public.folder     a user-browsable directory (i.e. not a
+        //                       package); conforms to public.directory
+        //     public.directory  a file system directory (includes packages
+        //                       AND folders); conforms to public.item
+        //
+        // so `public.folder` is the narrow one, and asking for it disables
+        // every provider whose directories are not typed as that exact kind.
+        // What this picker is for is a directory to walk, which is what
+        // `public.directory` means; a folder conforms to it, so nothing that
+        // matched before stops matching.
+        //
+        // SAFETY: `UTTypeItem`/`UTTypeDirectory` are immutable framework
+        // constants.
         let ty: &UTType = match kind {
             Kind::File => unsafe { UTTypeItem },
-            Kind::Folder => unsafe { UTTypeFolder },
+            Kind::Folder => unsafe { UTTypeDirectory },
         };
         let picker = UIDocumentPickerViewController::initForOpeningContentTypes(
             UIDocumentPickerViewController::alloc(mtm),
