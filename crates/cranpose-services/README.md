@@ -232,17 +232,22 @@ app off screen; a host being destroyed stops it.
 
 | Platform | Backend | Streams | Session | Analysis | Equalizer |
 | --- | --- | --- | --- | --- | --- |
-| Desktop | `cranpose-media` (`rodio`/`symphonia`) | local files | — | yes | 10 octave bands |
-| Android | `MediaPlayer`, `AudioManager`, `MediaSession` | local and network | yes | with `RECORD_AUDIO` | the device's own `audiofx.Equalizer` bands |
+| Desktop | `cranpose-media` (`symphonia`, cpal) | local files | — | yes | 10 octave bands |
+| Android | `cranpose-media` (`symphonia`, AAudio) plus `AudioManager` and `MediaSession` | local files and provider documents, including ones a provider streams | yes | yes | 10 octave bands |
 | iOS | `AVAudioPlayer`, `AVAudioSession`, MediaPlayer | local files | yes | — | — |
 | Web | `<audio>`, Media Session API, Web Audio | local and network | where the browser has it | yes | 10 octave bands |
 
-Desktop is the only target that needs a crate and a feature:
-`cranpose-media`, enabled through Cranpose's `media-desktop` feature and
-installed by the desktop shell. Android, iOS and the web register their
-platform backend with the rest of their services. Android applications add
+Desktop and Android decode with the same crate, `cranpose-media`, enabled
+through Cranpose's `media` feature. Android's own `MediaPlayer` is not in that
+path and cannot be: it plays a file, and a document provider whose bytes come
+off a network hands back a pipe, which it refuses. An in-process decoder needs
+only bytes, so what plays on Android is what `symphonia` reads — and a stream
+that cannot seek is spooled to the application's cache as it arrives. Java keeps
+the half of the stack only it has, the audio-focus broker and the lock screen.
+The desktop shell installs the backend itself; Android installs it wrapped in
+that session, along with the rest of its services. Android applications add
 `services.add("media")` to the Gradle plugin's configuration so the manifest
-carries the playback service.
+carries the playback service. iOS and the web register their platform backend.
 
 ## Device and process information
 

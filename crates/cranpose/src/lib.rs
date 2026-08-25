@@ -28,7 +28,7 @@ mod android_accessibility_wire;
 mod android_app_info;
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android_camera;
-#[cfg(all(feature = "android", target_os = "android"))]
+#[cfg(all(feature = "android", feature = "media", target_os = "android"))]
 mod android_media;
 // `android_main!` expands to nothing off Android, so the macro itself is always
 // compiled: an application writes the invocation once and every target accepts
@@ -174,12 +174,13 @@ pub use cranpose_core::{
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
 pub use cranpose_liquid as liquid;
-/// The desktop media backend that backs `cranpose_services::media`. Installed
-/// automatically by the desktop shell; Android, iOS and the web install their
-/// own platform backend instead. [`uri_for_path`] builds the `file:` URI a
+/// The in-process media backend that backs `cranpose_services::media`.
+/// Installed automatically by the desktop shell and, wrapped in the platform
+/// media session, by the Android one; iOS and the web install their own
+/// platform backend instead. [`uri_for_path`] builds the `file:` URI a
 /// [`cranpose_services::MediaItem`] takes from a path.
-#[cfg(feature = "media-desktop")]
-pub use cranpose_media::{path_from_uri, uri_for_path, DesktopMediaPlayer};
+#[cfg(feature = "media")]
+pub use cranpose_media::{path_from_uri, uri_for_path, SoftwareMediaPlayer};
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
 /// Re-export the UI crate so applications can depend on a single crate.

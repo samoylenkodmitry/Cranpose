@@ -162,72 +162,64 @@ state at one call site, not a quirk of this application. Nothing in the widget
 or its documentation points at it, and the failure is quiet — a wrong starting
 offset reads as a rendering glitch rather than as shared state.
 
-## CranAmp plays no music since the framework-ownership work
+## CranAmp's network library: fixed, and what it cost
 
-Reported from the device, not from a test: CranAmp stopped playing audio after
-the Cranpose refactorings that moved host, lifecycle and service contracts into
-the framework. The application is a music player, so this is the whole product.
+Reported from the device: `0.1.41` played the user's music over a Round Sync
+mount and `0.1.42` did not. Root-caused, fixed, and verified on a Pixel 9 Pro —
+a 416 MB album image off the mount now starts in seconds, seeks, stops and
+starts again.
 
-Not yet root-caused, and deliberately not guessed at. What has been checked:
+The cause was a capability the framework dropped without noticing. `0.1.41`
+decoded in process: symphonia read the container and rodio opened the output
+device, and Android's own media stack was never in the path. `0.1.42` replaced
+that with a JNI `MediaPlayer` backend — and `MediaPlayer` plays a *file*. A
+document provider whose bytes come off a network has nothing to seek in and
+returns a pipe; `setDataSource` takes that descriptor, fails inside with
+`setDataSourceFD failed`, and leaves an item that loads and never plays. An
+in-process decoder needs no file, only bytes.
 
-- `cranamp` `0.1.42` installs and runs on a Pixel 9 Pro. The process stays up,
-  the renderer works, and there is no panic or `AndroidRuntime` entry.
-- `cranpose_services::media` takes a platform player through
-  `set_platform_media_player`, and one is registered for every target CranAmp
-  ships: `cranpose_media::install()` on desktop, `web_media` on the web,
-  `android_media::register` on Android, `ios_media` on iOS. So the *absence of
-  an Android backend*, which is the obvious first suspicion, is not it.
-- The Android registration chain is intact on paper:
-  `android.rs:1821` calls `android_services::register`, which calls
-  `android_media::register(app)` at `android_services.rs:90`.
-- CranAmp's `android` feature is `["cranpose/android"]` and enables no media or
-  audio feature. That is what the framework documents — `media-desktop` says
-  "Android, iOS and the web use the platform's own media stack and need no
-  feature" — so it is consistent rather than obviously wrong.
+So the decoder came back, through the refactored API rather than around it:
 
-The likeliest cause is not the audio stack at all: **importing a folder**.
-`0.1.41` played music and `0.1.42` does not, and the change to how files are
-picked sits exactly on that boundary — `2442646` "Pick files through keyed
-launchers, not the picker trait", which rewrote playlist import, export and
-skin picking off `local_file_picker().current()` and onto composed launchers
-because a pick on Android can outlive the process. A player that imports
-nothing plays nothing, and the symptom is the same from the outside.
+- `cranpose-audio`'s device is now renderer-agnostic (`backend::Renderer`), so
+  the one AAudio backend serves the mixer and the media decoder alike instead of
+  `cranpose-media` carrying a second, cpal-only device that could not exist on
+  Android.
+- `cranpose-media` builds for Android and opens its stream through that device.
+- `cranpose_services::open_media_source` is how a decoder asks the platform for
+  a URI it cannot open itself; Android answers with the provider's descriptor.
+- A stream that cannot seek is spooled to the application's cache as it
+  arrives — `0.1.41`'s trick, with the two flaws it had fixed: a wait now gives
+  up if nothing arrives at all, and the sink can cancel one, so a provider that
+  stops talking fails the item instead of freezing the app.
+- Android's `MediaPlayer`, `Visualizer` and `Equalizer` are gone from
+  `CranposeMedia.java`. What is left is the half only Java has: audio focus and
+  the `MediaSession` behind the lock screen.
 
-Where to look next, in order:
+One thing is deliberately withheld from the decoder: the spool never reports a
+`byte_len`, though it knows one. A decoder told how long a stream is treats it
+as random-access and reads the tail while probing, and the tail of a spool is
+what arrives last. Publishing the length turned a track that started in two
+seconds into one that never started at all — confirmed by removing it and
+re-running, both ways.
 
-- **Whether the folder walk starts and what it yields.** This is one `adb
-  logcat` away and needs no build. `consume_folder_stream` logs to
-  `cranamp::picker`: `folder stream started (append=…)` when the walk begins,
-  `skipped non-audio entry: …` per rejected file, and `Scanning N tracks…` per
-  batch. Nothing at all means the launcher never delivered a stream — the
-  grant, not the audio. `skipped` lines naming real music files mean the walk
-  works and the filter is wrong.
-- **`is_audio_name` requires an extension on the display name.** It lowercases
-  the provider's name and tests `ends_with(".mp3")` and friends, so a provider
-  that reports display names without extensions drops *every* track in
-  silence. The code says as much in a comment about WebDAV shares. A SAF
-  provider whose naming changed under the new launcher would look exactly like
-  broken audio.
-- **Whether `android_media::register` still runs.** It takes an
-  `android_activity::AndroidApp`, and the same refactoring changed
-  `android_main!` so the entry point "no longer wants the `AndroidApp` at all".
-  A registration skipped, or run after the application first asks to play,
-  leaves `cranpose_services::media` with no player and every call a silent
-  no-op. Confirm by asserting a player is installed by the time the first
-  composition runs — the call chain reads fine, so reading it again proves
-  nothing.
-- **The sync path decodes differently now, but only the sync path.**
-  `src/sync/mod.rs:447` is the one caller of `percent_decode` left in CranAmp,
-  and the shared strict decoder returns `None` where the deleted local copy
-  substituted, falling back to the raw percent-encoded path. That can only
-  affect tracks reached over sync, not a local folder pick.
+### Still open
 
-A failing test comes first, and two are missing at different levels. In
-CranAmp: a folder pick yielding known file names produces the expected tracks,
-which pins both the walk and `is_audio_name`. In Cranpose: a target that
-registers a platform media player has one installed before the first
-composition. Neither exists, which is how a music player could stop playing
-music without a single test going red.
+- **The playlist does not survive an upgrade.** Every install during this work
+  came up with an empty playlist. Separate from playback, and CranAmp's own.
+- **Duration is blank for a streamed document.** `probe_duration` refuses to
+  spool a whole track to answer how long it is, so a playlist of two hundred
+  network tracks does not download the library to fill in its labels. The length
+  appears when the item is opened. `0.1.41` did the same.
+- **A stalled provider leaves its downloader thread blocked in `read`.** The
+  spool's readers give up and the item fails, but the thread that was reading
+  the pipe stays in the kernel until the provider closes it. One thread per
+  stalled stream, and nothing else waits on it.
+- **No test covers a folder pick end to end.** In CranAmp: a folder pick
+  yielding known file names produces the expected tracks, which would pin both
+  the walk and `is_audio_name`. In Cranpose: a target that registers a platform
+  media player has one installed before the first composition. Neither exists,
+  which is how a music player could stop playing music without a single test
+  going red.
 
 ## Robot suite corner cases
 

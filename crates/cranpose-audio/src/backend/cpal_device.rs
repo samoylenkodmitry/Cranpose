@@ -1,7 +1,7 @@
 //! The desktop output device: `cpal` (CoreAudio, WASAPI, ALSA).
 //!
 //! This exists so a developer on macOS, Windows or Linux hears the same mix the
-//! device will produce. It shares the mixer with the Android backend, so the
+//! device will produce. It shares the renderer with the Android backend, so the
 //! only thing that differs between the two is how the callback arrives.
 //!
 //! Linux builds link ALSA, which needs `libasound2-dev` (or the distribution's
@@ -10,7 +10,7 @@
 //!
 //! One thing does differ, and it is worth stating rather than hiding: a cpal
 //! data callback returns nothing, so unlike AAudio it cannot give the device
-//! up from the inside. The mixer still publishes that it has gone idle, and
+//! up from the inside. The renderer still publishes that it has gone idle, and
 //! the engine pauses the stream from the UI thread on its next call — which
 //! means a desktop app that plays a sound and then never touches the engine
 //! again keeps its stream open a while longer than an Android one would. That
@@ -21,15 +21,15 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cranpose_services::AudioError;
 
 use crate::{
-    backend::AudioSink,
-    mixer::{Mixer, MixerSeed, RenderStatus},
+    backend::{AudioSink, Renderer},
+    mixer::RenderStatus,
 };
 
 /// Scratch used when the device wants integer samples. Allocated once, before
 /// the stream starts, and reused for every callback.
 const SCRATCH_SAMPLES: usize = 8192;
 
-pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
+pub(crate) fn open(mut renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or_else(|| {
         AudioError::Backend("the system reports no default audio output device".to_string())
@@ -41,7 +41,9 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
     let config: cpal::StreamConfig = supported.into();
     let channels = usize::from(config.channels).max(1);
     let sample_rate = config.sample_rate as f32;
-    let mut mixer = Mixer::new(seed, sample_rate, channels);
+    // cpal negotiates before the stream exists, so the renderer starts on the
+    // real format rather than correcting an assumption in its first callback.
+    renderer.set_device_format(sample_rate, channels);
 
     let error_callback = |error| log::warn!("cranpose audio stream error: {error}");
 
@@ -52,7 +54,7 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
             // published it for the engine, and this callback has no way to stop
             // its own stream. See the module comment.
             move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                let _ = mixer.render(data);
+                let _ = renderer.render(data);
             },
             error_callback,
             None,
@@ -62,10 +64,13 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
             device.build_output_stream(
                 config,
                 move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let _ =
-                        render_into_integer(&mut mixer, &mut scratch, data, channels, |sample| {
-                            (sample * f32::from(i16::MAX)) as i16
-                        });
+                    let _ = render_into_integer(
+                        &mut *renderer,
+                        &mut scratch,
+                        data,
+                        channels,
+                        |sample| (sample * f32::from(i16::MAX)) as i16,
+                    );
                 },
                 error_callback,
                 None,
@@ -93,9 +98,9 @@ fn unwritable_sample_format(format: cpal::SampleFormat) -> AudioError {
 /// frames, so no allocation happens inside the callback.
 ///
 /// The verdict of the last chunk is the one that counts: an earlier chunk that
-/// still had a voice in it is precisely what stops the mixer going idle.
+/// still had a voice in it is precisely what stops the renderer going idle.
 fn render_into_integer<T>(
-    mixer: &mut Mixer,
+    renderer: &mut dyn Renderer,
     scratch: &mut [f32],
     data: &mut [T],
     channels: usize,
@@ -109,7 +114,7 @@ fn render_into_integer<T>(
     let mut offset = 0;
     while offset < data.len() {
         let take = (data.len() - offset).min(chunk);
-        status = mixer.render(&mut scratch[..take]);
+        status = renderer.render(&mut scratch[..take]);
         for index in 0..take {
             data[offset + index] = convert(scratch[index]);
         }

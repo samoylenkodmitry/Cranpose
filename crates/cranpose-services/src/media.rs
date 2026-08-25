@@ -31,6 +31,7 @@
 //! falls behind draws the sound that is playing now and counts what it missed.
 
 use std::{
+    fs::File,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -1299,6 +1300,75 @@ fn non_empty_path(text: &str) -> Option<PathBuf> {
     Some(PathBuf::from(text))
 }
 
+// -- Opening a URI for the in-process decoder --------------------------------
+
+/// A media stream the platform opened, and what it knows about it.
+#[derive(Debug)]
+pub struct MediaSourceHandle {
+    /// The descriptor to read. Seekable for a real file; a pipe for a provider
+    /// that streams.
+    pub stream: File,
+    /// How long the whole thing is, when the platform knows.
+    ///
+    /// A provider that streams cannot answer `stat` — that is what makes its
+    /// descriptor a pipe — but it listed a size for the document all the same,
+    /// and a decoder that knows the length can seek by it instead of waiting
+    /// for the stream to end to find out where the end is.
+    pub len: Option<u64>,
+}
+
+/// Opens a media URI the decoder cannot open for itself.
+///
+/// A `file:` URI is a path and needs nobody, which is why
+/// [`open_media_source`] answers those without asking. A `content://` document
+/// belongs to an Android provider and only the platform layer can ask that
+/// provider for a descriptor, so the platform layer registers this and the
+/// decode thread calls it.
+///
+/// A descriptor rather than a reader because that is what both sides really
+/// have: a real file is seekable, a provider that streams hands back a pipe,
+/// and the decoder tells them apart by trying to seek.
+pub trait MediaSourceOpener: Send + Sync {
+    /// Opens `uri` for reading.
+    fn open(&self, uri: &str) -> std::io::Result<MediaSourceHandle>;
+}
+
+/// Shared handle to the platform media source opener.
+pub type MediaSourceOpenerRef = Arc<dyn MediaSourceOpener>;
+
+static PLATFORM_MEDIA_SOURCE: ServiceRegistry<dyn MediaSourceOpener> = ServiceRegistry::new();
+
+/// Installs the platform media source opener, replacing any previous one.
+pub fn set_platform_media_source_opener(opener: MediaSourceOpenerRef) {
+    PLATFORM_MEDIA_SOURCE.set(opener);
+}
+
+/// Removes the platform media source opener.
+pub fn clear_platform_media_source_opener() {
+    PLATFORM_MEDIA_SOURCE.clear();
+}
+
+/// Opens `uri` for decoding.
+///
+/// `file:` URIs and bare paths are opened here. Anything else is the platform's
+/// to answer, and a platform that registered no opener gets
+/// [`ErrorKind::Unsupported`](std::io::ErrorKind::Unsupported) rather than a
+/// guess.
+pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
+    if let Some(path) = path_from_uri(uri) {
+        let stream = File::open(path)?;
+        let len = stream.metadata().ok().map(|metadata| metadata.len());
+        return Ok(MediaSourceHandle { stream, len });
+    }
+    match PLATFORM_MEDIA_SOURCE.get() {
+        Some(opener) => opener.open(uri),
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!("no platform opener for {uri}"),
+        )),
+    }
+}
+
 // -- Composables -------------------------------------------------------------
 
 /// What the player is doing, observed for as long as this call stays in the
@@ -2052,6 +2122,51 @@ mod tests {
     fn metadata_with_nothing_in_it_is_metadata_a_lock_screen_can_skip() {
         assert!(MediaMetadata::default().is_empty());
         assert!(!MediaMetadata::titled("Track").is_empty());
+    }
+
+    /// Who answers for a URI: a path is opened here, and anything else is the
+    /// platform's. One test rather than three, because the opener is a process
+    /// -wide registry and three would race each other clearing it.
+    #[test]
+    fn a_path_opens_here_and_everything_else_is_the_platforms() {
+        struct Opener;
+        impl MediaSourceOpener for Opener {
+            fn open(&self, uri: &str) -> std::io::Result<MediaSourceHandle> {
+                let path = crate::test_scratch_dir("media-source-opener").join("document.bin");
+                std::fs::write(&path, uri.as_bytes())?;
+                // A streaming provider knows the length it listed even though
+                // its descriptor cannot be stat-ed, which is the case this
+                // handle exists to carry.
+                Ok(MediaSourceHandle {
+                    stream: File::open(path)?,
+                    len: Some(uri.len() as u64),
+                })
+            }
+        }
+        fn read(handle: MediaSourceHandle) -> String {
+            let mut text = String::new();
+            std::io::Read::read_to_string(&mut { handle.stream }, &mut text).expect("read");
+            text
+        }
+
+        clear_platform_media_source_opener();
+        let path = crate::test_scratch_dir("media-source").join("track.bin");
+        std::fs::write(&path, b"bytes").expect("write the fixture");
+        // A file is a file on every target that has a filesystem, so no
+        // platform has to be asked about one.
+        let file = open_media_source(&uri_for_path(&path)).expect("the file");
+        assert_eq!(file.len, Some(5), "a real file states its length");
+        assert_eq!(read(file), "bytes");
+        // A document URI on a platform that registered nothing says so rather
+        // than guessing at a path.
+        let error = open_media_source("content://provider/document/7").expect_err("no opener");
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+
+        set_platform_media_source_opener(Arc::new(Opener));
+        let opened = open_media_source("content://provider/document/7").expect("the opener");
+        clear_platform_media_source_opener();
+        assert_eq!(opened.len, Some(29));
+        assert_eq!(read(opened), "content://provider/document/7");
     }
 
     #[test]

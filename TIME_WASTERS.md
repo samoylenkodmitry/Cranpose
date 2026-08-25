@@ -1050,3 +1050,35 @@ anything from a branch on that host, rsync the tree into a scratch directory
 (exclude `target/` and `.git`) instead of trying to fetch or checkout there.
 `just` lives in `~/.cargo/bin`, which a non-interactive ssh PATH does not
 include.
+
+## Rebase onto `origin/main` before diagnosing a robot failure (2026-08-25)
+
+Four robot examples failed locally and on two open PRs' CI:
+`robot_click_drag`, `robot_increment_bug`, `robot_regression_fused_viewport_contract`,
+`robot_scroll_decoration_invariance`. They also failed on a stashed clean tree,
+which reads as "main is red" and is worth an investigation in its own right.
+
+They were not. Local `main` was three commits behind, and `6938e880` — "Stop the
+source toggle displacing every tab, and anchor the underline check" (#487) — is
+exactly their fix. The displaced tabs pushed the demo's `Increment` button to
+`y=617.4` in an 800x600 window, so the robot clicked below the viewport and the
+counter never moved; the underline drift was the same PR's other half. Rebasing
+turned all four green.
+
+`git fetch origin main && git log --oneline origin/main -3` costs seconds and
+tells you whether the failure you are about to chase is already fixed. A stashed
+clean tree only proves the failure is not in your working changes — it says
+nothing about whether your base is current.
+
+## A cloud document provider caches a dead RC port (2026-08-25)
+
+Round Sync's SAF documents provider talks to an rclone RC daemon on a random
+localhost port and remembers the port for the life of its process. After the
+daemon restarts, every folder listing fails with
+`ConnectException: Failed to connect to localhost/127.0.0.1:<old port>` while
+Round Sync's *own* file browser works, because that half starts a fresh daemon.
+
+Opening Round Sync does not repair the provider — its cached port is still the
+dead one. `adb shell am force-stop de.felixnuesse.extract` and then re-open the
+picker, which starts provider and daemon together. Worth knowing before reading
+this as a fault in whatever app is doing the picking.

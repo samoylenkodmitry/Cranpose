@@ -1,4 +1,4 @@
-//! The desktop media player's transport.
+//! The in-process media player's transport.
 //!
 //! One item at a time, one output device, opened when an item is and released
 //! when playback stops. [`Sink`] owns the device and the decode thread; this
@@ -22,7 +22,7 @@ use cranpose_services::{
 use parking_lot::Mutex;
 
 use crate::{
-    analysis::AnalysisTap, decode::Decoder, equalizer::EqualizerTap, path_from_uri, sink::Sink,
+    analysis::AnalysisTap, decode::Decoder, equalizer::EqualizerTap, sink::Sink,
     source::SampleSource,
 };
 
@@ -56,18 +56,18 @@ struct Shared {
     generation: AtomicU64,
 }
 
-/// Plays media through the desktop output device.
+/// Plays media through the platform output device, decoding in process.
 ///
 /// Installed by [`install`](crate::install); applications drive it through
 /// [`cranpose_services::media`] rather than holding it.
-pub struct DesktopMediaPlayer {
+pub struct SoftwareMediaPlayer {
     shared: Arc<Shared>,
 }
 
-impl DesktopMediaPlayer {
+impl SoftwareMediaPlayer {
     /// Creates a player. No device is opened until an item is.
-    pub fn new() -> DesktopMediaPlayer {
-        DesktopMediaPlayer {
+    pub fn new() -> SoftwareMediaPlayer {
+        SoftwareMediaPlayer {
             shared: Arc::new(Shared {
                 active: Mutex::new(None),
                 item: Mutex::new(None),
@@ -82,18 +82,16 @@ impl DesktopMediaPlayer {
     }
 }
 
-impl Default for DesktopMediaPlayer {
-    fn default() -> DesktopMediaPlayer {
-        DesktopMediaPlayer::new()
+impl Default for SoftwareMediaPlayer {
+    fn default() -> SoftwareMediaPlayer {
+        SoftwareMediaPlayer::new()
     }
 }
 
 impl Shared {
     /// Opens `item` on a fresh device, paused at its start.
     fn open(self: &Arc<Self>, item: &MediaItem) -> Result<Option<Duration>, MediaError> {
-        let path = path_from_uri(&item.uri)
-            .ok_or_else(|| MediaError::UnsupportedSource(item.uri.clone()))?;
-        let decoder = Decoder::open(&path)?;
+        let (decoder, spool) = Decoder::open(&item.uri)?;
         let duration = decoder.total_duration().or(item.metadata.duration);
         // The equalizer runs first and the tap reads its output, so a
         // visualiser draws the signal that reaches the device rather than the
@@ -101,7 +99,7 @@ impl Shared {
         let source: Box<dyn SampleSource> =
             Box::new(self.analysis.wrap(self.equalizer.wrap(decoder)));
 
-        let sink = Sink::open(source, *self.volume.lock(), *self.speed.lock())?;
+        let sink = Sink::open(source, spool, *self.volume.lock(), *self.speed.lock())?;
 
         *self.active.lock() = Some(Active { sink, duration });
         self.start_progress_thread();
@@ -219,14 +217,15 @@ fn progress_at(position: Duration, duration: Option<Duration>) -> PlaybackProgre
     }
 }
 
-impl MediaPlayer for DesktopMediaPlayer {
+impl MediaPlayer for SoftwareMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
         MediaCapabilities {
             seeking: true,
             speed: true,
             looping: true,
             analysis: true,
-            // A desktop has no lock screen to put an item on.
+            // Nothing here draws a lock screen. On a platform that has one,
+            // the platform backend wraps this and reports `session: true`.
             session: false,
             equalizer: true,
             probing: true,
@@ -318,7 +317,7 @@ impl MediaPlayer for DesktopMediaPlayer {
     fn probe_duration(&self, item: &MediaItem) -> Option<Duration> {
         // The decoder reads the container's header; no output device is opened,
         // so probing a playlist costs nothing but the file reads.
-        Decoder::probe_duration(&path_from_uri(&item.uri)?).or(item.metadata.duration)
+        Decoder::probe_duration(&item.uri).or(item.metadata.duration)
     }
 
     fn set_analysis_enabled(&self, enabled: bool) -> bool {
@@ -337,7 +336,7 @@ mod tests {
     /// a machine with speakers.
     #[test]
     fn playing_before_anything_is_opened_reports_that_nothing_is_loaded() {
-        let player = DesktopMediaPlayer::new();
+        let player = SoftwareMediaPlayer::new();
 
         assert_eq!(player.play(), Err(MediaError::NothingLoaded));
         assert_eq!(
@@ -348,7 +347,7 @@ mod tests {
 
     #[test]
     fn a_uri_this_backend_cannot_read_is_refused_before_a_device_is_opened() {
-        let player = DesktopMediaPlayer::new();
+        let player = SoftwareMediaPlayer::new();
 
         assert_eq!(
             player.prepare(&MediaItem::new("https://host/stream.mp3")),
@@ -366,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_file_that_is_not_there_says_so_rather_than_failing_silently() {
-        let player = DesktopMediaPlayer::new();
+        let player = SoftwareMediaPlayer::new();
 
         let error = player
             .prepare(&MediaItem::new("file:///nowhere/missing.mp3"))
@@ -376,8 +375,8 @@ mod tests {
     }
 
     #[test]
-    fn the_backend_reports_what_a_desktop_can_actually_do() {
-        let capabilities = DesktopMediaPlayer::new().capabilities();
+    fn the_backend_reports_what_it_can_actually_do() {
+        let capabilities = SoftwareMediaPlayer::new().capabilities();
 
         assert!(capabilities.seeking);
         assert!(capabilities.speed);
@@ -389,7 +388,7 @@ mod tests {
 
     #[test]
     fn volume_and_speed_are_remembered_for_the_next_item() {
-        let player = DesktopMediaPlayer::new();
+        let player = SoftwareMediaPlayer::new();
 
         player.set_volume(4.0);
         assert_eq!(*player.shared.volume.lock(), 1.0);
@@ -404,7 +403,7 @@ mod tests {
 
     #[test]
     fn analysis_is_off_until_it_is_asked_for() {
-        let player = DesktopMediaPlayer::new();
+        let player = SoftwareMediaPlayer::new();
         assert!(!player.shared.analysis.is_enabled());
 
         assert!(player.set_analysis_enabled(true));

@@ -131,7 +131,7 @@ A list that only composes what is on screen uses `LazyColumn` with
 | `cranpose-liquid` | Glass component library: iOS-26-style materials, spring motion |
 | `cranpose-services` | HTTP, clipboard, share, notifications, file picker, haptics, purchases, camera, theme |
 | `cranpose-audio` | Real-time audio (AAudio on Android/Wear OS, cpal on desktop) |
-| `cranpose-media` | Desktop media playback backing `cranpose_services::media` (rodio/symphonia) |
+| `cranpose-media` | In-process media playback backing `cranpose_services::media` (symphonia, on the audio engine's device) |
 | `cranpose-storekit` | StoreKit 2 in-app purchases (iOS/macOS) |
 | `cranpose-testing` | The robot harness that drives real windows in tests |
 

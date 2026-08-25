@@ -7,8 +7,13 @@
 //! A packet decodes into many frames, so the decoded block is held and drained
 //! sample by sample. That is what lets the equalizer and the analysis tap stay
 //! plain iterator adapters instead of each having to understand packets.
+//!
+//! What is decoded is a URI, not a path. A local file is opened here; anything
+//! else — an Android `content://` document above all — is opened by the
+//! platform through [`cranpose_services::open_media_source`], and a stream that
+//! turns out not to seek is put behind [`Spool`] first.
 
-use std::{fs::File, path::Path, time::Duration};
+use std::{io::Seek, path::Path, time::Duration};
 
 use cranpose_services::MediaError;
 use symphonia::core::{
@@ -17,12 +22,20 @@ use symphonia::core::{
         CodecParameters,
     },
     formats::{probe::Hint, FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
-    io::MediaSourceStream,
+    io::{MediaSource, MediaSourceStream},
     meta::MetadataOptions,
     units::{Duration as TimeBaseUnits, Time, TimeBase},
 };
 
-use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};
+use crate::{
+    source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError},
+    spool::{Spool, SpoolCancel},
+};
+
+/// Where a spooled stream is written. Under the application's own cache
+/// directory, so the platform reclaims it if the process dies without cleaning
+/// up and nothing here has to invent a path.
+const SPOOL_DIRECTORY: &str = "cranpose-media-spool";
 
 /// One item, open and decoding.
 pub(crate) struct Decoder {
@@ -48,17 +61,31 @@ pub(crate) struct Decoder {
 }
 
 impl Decoder {
-    /// Opens `path` and prepares its first audio track.
+    /// Opens `uri` and prepares its first audio track.
     ///
     /// Nothing is decoded here beyond what the probe needs, so opening an item
-    /// costs the container's header rather than its audio.
-    pub(crate) fn open(path: &Path) -> Result<Decoder, MediaError> {
-        let file = File::open(path)
-            .map_err(|error| MediaError::Failed(format!("{}: {error}", path.display())))?;
-        let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    /// costs the container's header rather than its audio — which for a
+    /// streamed document means the first few kilobytes, not the track.
+    /// Returns the handle that stops the spool as well as the decoder: an item
+    /// being ended must not wait on a decode thread that is waiting on a
+    /// provider which stopped talking.
+    pub(crate) fn open(uri: &str) -> Result<(Decoder, SpoolCancel), MediaError> {
+        let (media, cancel) = open_media(uri)?;
+        Ok((Decoder::from_media(media, uri)?, cancel))
+    }
+
+    fn from_media(media: Box<dyn MediaSource>, uri: &str) -> Result<Decoder, MediaError> {
+        let stream = MediaSourceStream::new(media, Default::default());
 
         let mut hint = Hint::new();
-        if let Some(extension) = path.extension().and_then(|extension| extension.to_str()) {
+        // Only a real path carries a usable extension. A `content://` document
+        // is named by the provider, so let the probe read the container instead
+        // of hinting it wrong.
+        if let Some(extension) = cranpose_services::path_from_uri(uri)
+            .as_deref()
+            .and_then(Path::extension)
+            .and_then(|extension| extension.to_str())
+        {
             hint.with_extension(extension);
         }
 
@@ -69,7 +96,7 @@ impl Decoder {
                 FormatOptions::default(),
                 MetadataOptions::default(),
             )
-            .map_err(|error| MediaError::Failed(format!("{}: {error}", path.display())))?;
+            .map_err(|error| MediaError::Failed(format!("{uri}: {error}")))?;
 
         Decoder::from_format(format)
     }
@@ -123,8 +150,18 @@ impl Decoder {
     ///
     /// Probing a playlist costs the header of each file and no audio at all,
     /// which is what lets a long list show its times before anything plays.
-    pub(crate) fn probe_duration(path: &Path) -> Option<Duration> {
-        Decoder::open(path).ok()?.total_duration()
+    pub(crate) fn probe_duration(uri: &str) -> Option<Duration> {
+        // Only a path is probed. Anything the platform has to open on our
+        // behalf may be a document a provider fetches over a network, where
+        // opening the descriptor is itself the expensive part -- and a playlist
+        // asking two hundred of them how long they are would spend a connection
+        // per label. Those report no duration until they are opened to be
+        // played, which is what `MediaCapabilities::probing` allows for.
+        let path = cranpose_services::path_from_uri(uri)?;
+        let file = std::fs::File::open(path).ok()?;
+        Decoder::from_media(Box::new(file), uri)
+            .ok()?
+            .total_duration()
     }
 
     /// Decodes packets until one yields samples, or the container ends.
@@ -268,6 +305,49 @@ impl SampleSource for Decoder {
     }
 }
 
+/// Opens `uri` as something the decoder can read out of order.
+///
+/// A real file seeks, so it is decoded in place. A provider that streams hands
+/// back a pipe instead, and [`seeks`] is the question that tells the two apart:
+/// a pipe goes behind [`Spool`], which is what makes it seekable. Without that
+/// the probe reads the header, cannot go back for the audio, and the item
+/// "loads" but never plays.
+fn open_media(uri: &str) -> Result<(Box<dyn MediaSource>, SpoolCancel), MediaError> {
+    let handle = cranpose_services::open_media_source(uri).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Unsupported {
+            MediaError::UnsupportedSource(uri.to_owned())
+        } else {
+            MediaError::Failed(format!("{uri}: {error}"))
+        }
+    })?;
+    let mut file = handle.stream;
+    if seeks(&mut file) {
+        return Ok((Box::new(file), SpoolCancel::default()));
+    }
+    log::debug!(
+        "cranpose-media: {uri} does not seek; spooling {} bytes",
+        handle
+            .len
+            .map(|len| len.to_string())
+            .unwrap_or_else(|| "an unstated number of".to_owned())
+    );
+    let (spool, cancel) = Spool::start(Box::new(file), &spool_directory()?, handle.len)
+        .map_err(|error| MediaError::Failed(format!("{uri}: no spool: {error}")))?;
+    Ok((Box::new(spool), cancel))
+}
+
+/// Whether the descriptor can be read out of order. A pipe answers `ESPIPE`,
+/// which is the whole distinction between a file and a stream.
+fn seeks(file: &mut std::fs::File) -> bool {
+    file.stream_position().is_ok()
+}
+
+fn spool_directory() -> Result<std::path::PathBuf, MediaError> {
+    let directories = cranpose_services::application_directories()
+        .map_err(|error| MediaError::Failed(format!("no cache directory: {error}")))?;
+    Ok(directories.cache.join(SPOOL_DIRECTORY))
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -331,6 +411,11 @@ mod tests {
             write_wav(&path, channels, rate, frames);
             Fixture(path)
         }
+
+        /// What the decoder is actually given: an item's URI.
+        fn uri(&self) -> String {
+            cranpose_services::uri_for_path(&self.0)
+        }
     }
 
     impl Drop for Fixture {
@@ -342,7 +427,7 @@ mod tests {
     #[test]
     fn a_wav_decodes_to_the_shape_its_header_states() {
         let fixture = Fixture::wav("shape", 2, 8_000, 800);
-        let decoder = Decoder::open(&fixture.0).expect("open");
+        let (decoder, _cancel) = Decoder::open(&fixture.uri()).expect("open");
         assert_eq!(decoder.channels().get(), 2);
         assert_eq!(decoder.sample_rate().get(), 8_000);
         assert_eq!(decoder.total_duration(), Some(Duration::from_millis(100)));
@@ -352,7 +437,7 @@ mod tests {
     fn every_frame_comes_back_interleaved_and_in_order() {
         let frames = 64;
         let fixture = Fixture::wav("order", 2, 8_000, frames);
-        let decoder = Decoder::open(&fixture.0).expect("open");
+        let (decoder, _cancel) = Decoder::open(&fixture.uri()).expect("open");
         let samples: Vec<f32> = decoder.collect();
         assert_eq!(samples.len(), frames as usize * 2);
         // 16-bit PCM arrives scaled into -1.0..1.0, so compare the ratios
@@ -371,7 +456,7 @@ mod tests {
     fn seeking_moves_where_the_next_samples_come_from() {
         let rate = 8_000;
         let fixture = Fixture::wav("seek", 1, rate, rate);
-        let mut decoder = Decoder::open(&fixture.0).expect("open");
+        let (mut decoder, _cancel) = Decoder::open(&fixture.uri()).expect("open");
         decoder
             .try_seek(Duration::from_millis(500))
             .expect("this wav can seek");
@@ -387,7 +472,7 @@ mod tests {
     fn probing_reads_the_duration_without_decoding_the_audio() {
         let fixture = Fixture::wav("probe", 1, 44_100, 44_100);
         assert_eq!(
-            Decoder::probe_duration(&fixture.0),
+            Decoder::probe_duration(&fixture.uri()),
             Some(Duration::from_secs(1))
         );
     }
@@ -436,11 +521,29 @@ mod tests {
         );
     }
 
+    /// A document URI is not probed at all: opening one may cost a network
+    /// connection, and a playlist asks about every entry it holds.
+    #[test]
+    fn a_document_uri_reports_no_duration_without_being_opened() {
+        assert_eq!(Decoder::probe_duration("content://example/track"), None);
+    }
+
+    /// A URI no platform can open is refused as unsupported rather than as a
+    /// failure, which is what tells an application it picked the wrong source
+    /// instead of that the source is broken.
+    #[test]
+    fn a_uri_with_no_platform_opener_is_unsupported() {
+        assert!(matches!(
+            Decoder::open("content://example/track").map(|opened| opened.0),
+            Err(MediaError::UnsupportedSource(uri)) if uri == "content://example/track"
+        ));
+    }
+
     #[test]
     fn opening_something_that_is_not_media_fails_rather_than_panicking() {
         let path = scratch("not-audio").join("not-audio.bin");
         std::fs::write(&path, b"this is not a container").expect("write");
-        let opened = Decoder::open(&path);
+        let opened = Decoder::open(&cranpose_services::uri_for_path(&path)).map(|opened| opened.0);
         let _ = std::fs::remove_file(&path);
         assert!(opened.is_err());
     }
@@ -449,7 +552,7 @@ mod tests {
     fn probing_something_that_is_not_media_reports_no_duration() {
         let path = scratch("not-audio-probe").join("not-audio-probe.bin");
         std::fs::write(&path, b"this is not a container either").expect("write");
-        let duration = Decoder::probe_duration(&path);
+        let duration = Decoder::probe_duration(&cranpose_services::uri_for_path(&path));
         let _ = std::fs::remove_file(&path);
         assert_eq!(duration, None);
     }

@@ -5937,7 +5937,7 @@ pub fn try_run(
 
     // The media backend, on the same terms as every other platform: installed
     // by the shell, opening no device until an item is opened.
-    #[cfg(feature = "media-desktop")]
+    #[cfg(feature = "media")]
     cranpose_media::install();
 
     // Heat and battery, so an application that paces itself by them paces

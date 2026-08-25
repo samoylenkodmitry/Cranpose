@@ -1054,7 +1054,6 @@ dependencies = [
 name = "cranpose-media"
 version = "0.1.99"
 dependencies = [
- "cpal",
  "cranpose-audio",
  "cranpose-core",
  "cranpose-services",

@@ -2716,11 +2716,23 @@ fn the_camera_service_is_published_to_rather_than_polled() {
 /// Every media backend the framework ships, so a contract test covers all of
 /// them rather than whichever one was written last.
 const MEDIA_BACKENDS: [&str; 4] = [
-    "crates/cranpose-media/src/desktop.rs",
-    "crates/cranpose/src/android_media.rs",
+    "crates/cranpose-media/src/player.rs",
+    ANDROID_MEDIA_BACKEND,
     "crates/cranpose/src/ios_media.rs",
     "crates/cranpose/src/web_media.rs",
 ];
+
+/// The backends that carry the transport themselves. Android's is not one of
+/// them: it is the in-process player wearing the platform's session, so it
+/// delegates the answers these give directly. See
+/// [`the_android_media_backend_wraps_the_in_process_player_rather_than_decoding`].
+const TRANSPORT_BACKENDS: [&str; 3] = [
+    "crates/cranpose-media/src/player.rs",
+    "crates/cranpose/src/ios_media.rs",
+    "crates/cranpose/src/web_media.rs",
+];
+
+const ANDROID_MEDIA_BACKEND: &str = "crates/cranpose/src/android_media.rs";
 
 /// A media player that is asked "where are you now?" every frame does that work
 /// whether or not anything moved, and learns about a failure only by noticing
@@ -2738,13 +2750,38 @@ fn the_media_service_is_published_to_rather_than_polled() {
             && media.contains("pub fn publish_playback_progress("),
         "the contract is publish-what-happened"
     );
-    for backend in MEDIA_BACKENDS {
+    for backend in TRANSPORT_BACKENDS {
         let source = workspace_source(backend);
         assert!(
             source.contains("publish_playback_state"),
             "{backend} must publish what it is doing"
         );
     }
+}
+
+/// Android's backend is the framework's own decoder wearing the platform's
+/// session, not a second transport. What it must not go back to is decoding
+/// with `android.media.MediaPlayer`: that plays a file, and a document provider
+/// whose bytes come off a network hands back a pipe instead — which is how a
+/// network library stopped playing between 0.1.41 and 0.1.42.
+#[test]
+fn the_android_media_backend_wraps_the_in_process_player_rather_than_decoding() {
+    let source = workspace_source(ANDROID_MEDIA_BACKEND);
+    assert!(
+        source.contains("SoftwareMediaPlayer"),
+        "the Android backend must play through the framework's own decoder"
+    );
+    let java =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeMedia.java");
+    assert!(
+        !java.contains("android.media.MediaPlayer"),
+        "Android's MediaPlayer cannot read a document a provider streams, so the \
+         session class must not reach for it again"
+    );
+    assert!(
+        java.contains("AudioManager") && java.contains("MediaSession"),
+        "what is left to Java is the half only Java has: audio focus and the lock screen"
+    );
 }
 
 /// A control the device will not honour is worse than a control that is not
@@ -2768,7 +2805,7 @@ fn every_media_backend_states_what_it_can_do() {
 /// as many controls as there are bands.
 #[test]
 fn every_media_backend_states_the_equalizer_it_has() {
-    for backend in MEDIA_BACKENDS {
+    for backend in TRANSPORT_BACKENDS {
         let source = workspace_source(backend);
         assert!(
             source.contains("equalizer:"),

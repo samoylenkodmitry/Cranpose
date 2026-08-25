@@ -44,7 +44,7 @@
 //! * Anything else: `AudioError::Unsupported`, and the service falls back to
 //!   the no-op player so the app still runs.
 
-mod backend;
+pub mod backend;
 mod engine;
 mod mixer;
 pub mod ring;
@@ -53,7 +53,7 @@ use std::sync::{Arc, OnceLock};
 
 use cranpose_services::{set_platform_audio, AudioPlayerRef};
 pub use engine::AudioEngine;
-pub use mixer::{MAX_CLIPS, MAX_VOICES};
+pub use mixer::{RenderStatus, IDLE_GRACE_SECONDS, MAX_CLIPS, MAX_VOICES};
 
 static INSTALLED_ENGINE: OnceLock<Arc<AudioEngine>> = OnceLock::new();
 
