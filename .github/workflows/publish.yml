@@ -480,15 +480,26 @@ jobs:
           set -euo pipefail
           version="${TAG_NAME#v}"
           python3 scripts/sync_isolated_demo.py "$version"
-          # Re-resolve rather than `-p cranpose -p cranpose-core`: the manifest
-          # has just been bumped, so the lock's old entries no longer satisfy
-          # the new requirement and `-p` fails with "package ID specification
-          # `cranpose` did not match any packages" -- which left `v0.1.100` on
-          # a main whose isolated demo still asked for `0.1.99`, and the
-          # version gate red. Refreshing the whole lock is what this demo is
-          # for anyway: it proves the published crates build against current
-          # dependencies, not against a lock pinned when the demo was written.
-          cargo update --manifest-path apps/isolated-demo/Cargo.toml
+          # `cargo fetch`, not `cargo update`. The manifest has just been
+          # bumped, so the lock no longer satisfies it and something has to
+          # re-resolve; the two commands differ in how much.
+          #
+          # `cargo update -p cranpose -p cranpose-core` cannot do it -- the
+          # spec names a version the lock has never seen, and it fails with
+          # "package ID specification `cranpose` did not match any packages",
+          # which is what once left a tag published and the demo still asking
+          # for the release before it.
+          #
+          # Bare `cargo update` does it by updating EVERYTHING to the newest
+          # compatible version. One release did that to 135 third-party crates
+          # at once and put 336 KB into the demo binary, over the size budget,
+          # from a step whose job was to change one number.
+          #
+          # `cargo fetch` resolves conservatively: it moves what the new
+          # requirement forces and leaves every other lock entry alone. Bump
+          # dependencies deliberately, in their own commit, where the size and
+          # dependency budgets can say what the bump cost.
+          cargo fetch --manifest-path apps/isolated-demo/Cargo.toml
 
       - name: Land the bump on the default branch
         run: |
