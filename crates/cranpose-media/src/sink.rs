@@ -8,7 +8,9 @@
 //!   device's and pushes the result into the ring.
 //! * The **device callback** owns the consuming half of the ring. It pops,
 //!   scales by the volume, and writes. It allocates nothing, locks nothing and
-//!   never blocks — an underrun is silence, not a stall.
+//!   never blocks — an underrun is silence, not a stall. The device it runs on
+//!   is [`cranpose_audio::backend`], the same AAudio-or-cpal stream the audio
+//!   engine uses, so there is one output device per platform in the workspace.
 //! * The **transport** (whatever thread calls [`Sink`]'s methods) owns neither.
 //!   It reads atomics and sends commands.
 //!
@@ -25,11 +27,16 @@ use std::{
     time::Duration,
 };
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cranpose_audio::ring;
+use cranpose_audio::{
+    backend::{self, AudioSink, Renderer},
+    ring, RenderStatus,
+};
 use cranpose_services::MediaError;
 
-use crate::source::{SampleSource, SeekError};
+use crate::{
+    source::{SampleSource, SeekError},
+    spool::SpoolCancel,
+};
 
 /// How much decoded audio the ring holds, as a fraction of a second.
 ///
@@ -41,6 +48,11 @@ const BUFFER_SECONDS: f32 = 0.2;
 /// The smallest ring worth allocating, for a device that reports an
 /// implausibly low rate.
 const MIN_BUFFER_SAMPLES: usize = 4096;
+
+/// The highest rate the ring is sized to hold [`BUFFER_SECONDS`] of. Above it a
+/// device gets a proportionally shorter buffer, which is still many times the
+/// decode thread's nap.
+const MAX_DEVICE_RATE: u32 = 96_000;
 
 /// How long the decode thread sleeps when the ring is full or playback is
 /// paused. A fraction of the buffer, so it wakes with room to spare.
@@ -84,20 +96,55 @@ struct Shared {
     volume: AtomicVolume,
     /// Playback rate, read by the decode thread on every block.
     speed: AtomicVolume,
-    device_rate: u32,
+    /// The format the device actually negotiated, published by the callback
+    /// the first time it runs and re-published if the device ever changes it.
+    ///
+    /// Zero until then. AAudio only reports the rate once the stream is open,
+    /// so the callback is the one participant that always knows, and the decode
+    /// thread waits for it rather than converting to a guess.
+    device_rate: AtomicU32,
+    device_channels: AtomicU32,
 }
 
 impl Shared {
+    /// A sink's shared state before anything has been decoded or played.
+    fn new(volume: f32, speed: f32) -> Shared {
+        Shared {
+            generation: AtomicU64::new(0),
+            frames_written: AtomicU64::new(0),
+            base_nanos: AtomicU64::new(0),
+            frames_pushed: AtomicU64::new(0),
+            frames_taken: AtomicU64::new(0),
+            source_done: AtomicBool::new(false),
+            paused: AtomicBool::new(true),
+            volume: AtomicVolume::new(volume),
+            speed: AtomicVolume::new(speed),
+            device_rate: AtomicU32::new(0),
+            device_channels: AtomicU32::new(0),
+        }
+    }
+
     /// Media position: where the last rebase put us, plus the device frames
     /// written since, converted through the speed those frames were produced at.
     fn position(&self) -> Duration {
         let base = Duration::from_nanos(self.base_nanos.load(Ordering::Relaxed));
         let frames = self.frames_written.load(Ordering::Relaxed);
-        if self.device_rate == 0 {
+        let rate = self.device_rate.load(Ordering::Relaxed);
+        if rate == 0 {
             return base;
         }
-        let elapsed = frames as f64 / f64::from(self.device_rate) * f64::from(self.speed.get());
+        let elapsed = frames as f64 / f64::from(rate) * f64::from(self.speed.get());
         base.saturating_add(Duration::from_secs_f64(elapsed.max(0.0)))
+    }
+
+    /// The negotiated format, or `None` until the callback has published it.
+    fn device_format(&self) -> Option<(u32, usize)> {
+        let rate = self.device_rate.load(Ordering::Acquire);
+        let channels = self.device_channels.load(Ordering::Acquire);
+        if rate == 0 || channels == 0 {
+            return None;
+        }
+        Some((rate, channels as usize))
     }
 
     /// Moves the position to `position` and starts counting from zero again.
@@ -126,141 +173,68 @@ enum Command {
 
 /// An open item on an open device.
 pub(crate) struct Sink {
-    /// Held for its lifetime: dropping it closes the output stream.
-    stream: cpal::Stream,
+    /// Held for its lifetime: dropping it stops the stream and drops the
+    /// renderer, and with it the consuming half of the ring.
+    device: Box<dyn AudioSink>,
     shared: Arc<Shared>,
     commands: Sender<Command>,
     /// Joined on drop so the decode thread never outlives the sink that owns
     /// its ring.
     decoder: Option<std::thread::JoinHandle<()>>,
     seekable: Arc<AtomicBool>,
+    /// Stops the decode thread waiting on a stream that has gone quiet, so
+    /// ending an item never waits on a provider.
+    spool: SpoolCancel,
 }
 
 impl Sink {
-    /// Opens the default output device and starts decoding `source` into it,
+    /// Opens the platform output device and starts decoding `source` into it,
     /// paused at its start.
     pub(crate) fn open(
         source: Box<dyn SampleSource>,
+        spool: SpoolCancel,
         volume: f32,
         speed: f32,
     ) -> Result<Sink, MediaError> {
-        let host = cpal::default_host();
-        let device = host.default_output_device().ok_or_else(|| {
-            MediaError::Failed("the system reports no default audio output device".to_owned())
-        })?;
-        let supported = device
-            .default_output_config()
-            .map_err(|error| MediaError::Failed(format!("no usable output config: {error}")))?;
-        let sample_format = supported.sample_format();
-        let config: cpal::StreamConfig = supported.into();
-        let device_channels = usize::from(config.channels).max(1);
-        let device_rate = config.sample_rate;
+        let (producer, consumer) = ring::channel::<f32>(ring_capacity());
 
-        let capacity = ring_capacity(device_rate, device_channels);
-        let (producer, mut consumer) = ring::channel::<f32>(capacity);
-
-        let shared = Arc::new(Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(0),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(0),
-            frames_taken: AtomicU64::new(0),
-            source_done: AtomicBool::new(false),
-            paused: AtomicBool::new(true),
-            volume: AtomicVolume::new(volume),
-            speed: AtomicVolume::new(speed),
-            device_rate,
-        });
+        let shared = Arc::new(Shared::new(volume, speed));
         let seekable = Arc::new(AtomicBool::new(true));
+
+        let device = backend::open(Box::new(MediaRenderer {
+            consumer,
+            shared: Arc::clone(&shared),
+            generation: 0,
+            channels: backend::NOMINAL_CHANNELS,
+        }))
+        .map_err(|error| MediaError::Failed(format!("no output device: {error}")))?;
 
         let (commands, orders) = mpsc::channel();
         let decode_shared = Arc::clone(&shared);
         let decode_seekable = Arc::clone(&seekable);
         let decoder = std::thread::Builder::new()
             .name("cranpose-media-decode".to_owned())
-            .spawn(move || {
-                decode_loop(
-                    source,
-                    producer,
-                    decode_shared,
-                    decode_seekable,
-                    orders,
-                    device_rate,
-                    device_channels,
-                )
-            })
+            .spawn(move || decode_loop(source, producer, decode_shared, decode_seekable, orders))
             .map_err(|error| MediaError::Failed(format!("no decode thread: {error}")))?;
 
-        let callback_shared = Arc::clone(&shared);
-        let mut callback_generation = 0u64;
-        let error_callback = |error| log::warn!("cranpose-media stream error: {error}");
-
-        let stream = match sample_format {
-            cpal::SampleFormat::F32 => device.build_output_stream(
-                config,
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    render(
-                        data,
-                        &mut consumer,
-                        &callback_shared,
-                        &mut callback_generation,
-                        device_channels,
-                        |sample| sample,
-                    );
-                },
-                error_callback,
-                None,
-            ),
-            cpal::SampleFormat::I16 => device.build_output_stream(
-                config,
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    render(
-                        data,
-                        &mut consumer,
-                        &callback_shared,
-                        &mut callback_generation,
-                        device_channels,
-                        |sample| (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16,
-                    );
-                },
-                error_callback,
-                None,
-            ),
-            other => {
-                return Err(MediaError::Failed(format!(
-                    "the default output device wants {other:?} samples, which this player does not write"
-                )))
-            }
-        }
-        .map_err(|error| MediaError::Failed(format!("failed to build the output stream: {error}")))?;
-
-        stream
-            .play()
-            .map_err(|error| MediaError::Failed(format!("failed to start the stream: {error}")))?;
-
-        log::debug!("cranpose-media: cpal stream at {device_rate} Hz, {device_channels} channels");
-
         Ok(Sink {
-            stream,
+            device,
             shared,
             commands,
             decoder: Some(decoder),
             seekable,
+            spool,
         })
     }
 
     pub(crate) fn play(&self) {
         self.shared.paused.store(false, Ordering::Release);
-        if let Err(error) = self.stream.play() {
-            log::warn!("cranpose-media: failed to start the output stream: {error}");
-        }
+        self.device.resume();
     }
 
     pub(crate) fn pause(&self) {
         self.shared.paused.store(true, Ordering::Release);
-        if let Err(error) = self.stream.pause() {
-            log::warn!("cranpose-media: failed to pause the output stream: {error}");
-        }
+        self.device.suspend();
     }
 
     pub(crate) fn set_volume(&self, volume: f32) {
@@ -297,70 +271,113 @@ impl Sink {
 impl Drop for Sink {
     fn drop(&mut self) {
         let _ = self.commands.send(Command::Stop);
+        // The order matters: a decode thread waiting for bytes from a provider
+        // that stopped talking would not reach the command until the wait timed
+        // out, and this runs on whichever thread ended the item -- usually the
+        // one drawing the screen.
+        self.spool.cancel();
         if let Some(decoder) = self.decoder.take() {
             let _ = decoder.join();
         }
     }
 }
 
-/// Ring size: [`BUFFER_SECONDS`] of device audio, never below a floor that
-/// keeps a small or oddly-configured device from underrunning every callback.
-fn ring_capacity(device_rate: u32, device_channels: usize) -> usize {
-    let samples = (device_rate as f32 * BUFFER_SECONDS) as usize * device_channels;
-    samples.max(MIN_BUFFER_SAMPLES).next_power_of_two()
+/// What the device callback runs: pop what the decode thread has ready, scale
+/// it, and write silence for whatever is missing.
+struct MediaRenderer {
+    consumer: ring::Consumer<f32>,
+    shared: Arc<Shared>,
+    /// The seek generation this callback has already flushed to.
+    generation: u64,
+    /// The device's channel count, kept here so the callback does not read an
+    /// atomic per block to convert samples into frames.
+    channels: usize,
 }
 
-/// The device callback. Pops what the decode thread has ready, scales it, and
-/// writes silence for whatever is missing.
-fn render<T: cpal::Sample>(
-    data: &mut [T],
-    consumer: &mut ring::Consumer<f32>,
-    shared: &Shared,
-    callback_generation: &mut u64,
-    device_channels: usize,
-    convert: impl Fn(f32) -> T,
-) {
-    let generation = shared.generation.load(Ordering::Acquire);
-    if generation != *callback_generation {
-        // Everything still queued belongs to the position we seeked away from.
-        let mut discarded = 0u64;
-        while consumer.pop().is_some() {
-            discarded += 1;
+impl Renderer for MediaRenderer {
+    fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
+        let rate = sample_rate.max(1.0) as u32;
+        let channels = channels.max(1);
+        if self.channels == channels && self.shared.device_rate.load(Ordering::Relaxed) == rate {
+            return;
         }
-        shared.frames_taken.fetch_add(discarded, Ordering::AcqRel);
-        *callback_generation = generation;
+        self.channels = channels;
+        // Channels first, rate last: the decode thread reads the rate first and
+        // takes a non-zero one as the promise that both are published.
+        self.shared
+            .device_channels
+            .store(channels as u32, Ordering::Release);
+        self.shared.device_rate.store(rate, Ordering::Release);
     }
 
-    let volume = shared.volume.get();
-    let mut taken = 0u64;
-    for slot in data.iter_mut() {
-        match consumer.pop() {
-            Some(sample) => {
-                taken += 1;
-                *slot = convert(sample * volume);
+    fn render(&mut self, out: &mut [f32]) -> RenderStatus {
+        let generation = self.shared.generation.load(Ordering::Acquire);
+        if generation != self.generation {
+            // Everything still queued belongs to the position we seeked away
+            // from.
+            let mut discarded = 0u64;
+            while self.consumer.pop().is_some() {
+                discarded += 1;
             }
-            None => *slot = convert(0.0),
+            self.shared
+                .frames_taken
+                .fetch_add(discarded, Ordering::AcqRel);
+            self.generation = generation;
         }
+
+        let volume = self.shared.volume.get();
+        let mut taken = 0u64;
+        for slot in out.iter_mut() {
+            match self.consumer.pop() {
+                Some(sample) => {
+                    taken += 1;
+                    *slot = sample * volume;
+                }
+                None => *slot = 0.0,
+            }
+        }
+        if taken > 0 {
+            self.shared.frames_taken.fetch_add(taken, Ordering::AcqRel);
+            let frames = taken / self.channels.max(1) as u64;
+            self.shared
+                .frames_written
+                .fetch_add(frames, Ordering::Relaxed);
+        }
+        // Never idle: a media sink lives exactly as long as the item it plays,
+        // so the stream it holds is released by dropping the sink rather than
+        // by the callback giving it up mid-track.
+        RenderStatus::Continue
     }
-    if taken > 0 {
-        shared.frames_taken.fetch_add(taken, Ordering::AcqRel);
-        let frames = taken / device_channels.max(1) as u64;
-        shared.frames_written.fetch_add(frames, Ordering::Relaxed);
-    }
+}
+
+/// Ring size: [`BUFFER_SECONDS`] of device audio, never below a floor that
+/// keeps a small or oddly-configured device from underrunning every callback.
+///
+/// The ring is allocated before the device says what it negotiated — AAudio
+/// only reports its rate once the stream is open — so it is sized for
+/// [`MAX_DEVICE_RATE`]. A slower device gets a longer buffer than
+/// [`BUFFER_SECONDS`], which costs nothing but the memory.
+fn ring_capacity() -> usize {
+    let samples = (MAX_DEVICE_RATE as f32 * BUFFER_SECONDS) as usize * backend::NOMINAL_CHANNELS;
+    samples.max(MIN_BUFFER_SAMPLES).next_power_of_two()
 }
 
 /// The decode thread: convert the item to the device's shape and keep the ring
 /// as full as it will go.
+///
+/// It does not know the device's shape when it starts. The callback publishes
+/// the negotiated format the first time it runs, and the converter is built
+/// then — and rebuilt if the device ever reports a different one, which is what
+/// keeps a track playing at the right pitch across a route change.
 fn decode_loop(
     mut source: Box<dyn SampleSource>,
     mut producer: ring::Producer<f32>,
     shared: Arc<Shared>,
     seekable: Arc<AtomicBool>,
     orders: Receiver<Command>,
-    device_rate: u32,
-    device_channels: usize,
 ) {
-    let mut converter = Converter::new(&*source, device_rate, device_channels);
+    let mut converter: Option<Converter> = None;
+    let mut format = (0u32, 0usize);
     let mut pending: Option<f32> = None;
 
     loop {
@@ -369,7 +386,9 @@ fn decode_loop(
             Ok(Command::Seek(position)) => {
                 match source.try_seek(position) {
                     Ok(()) => {
-                        converter.reset();
+                        if let Some(converter) = converter.as_mut() {
+                            converter.reset();
+                        }
                         pending = None;
                         shared.source_done.store(false, Ordering::Release);
                         shared.rebase(position);
@@ -394,6 +413,26 @@ fn decode_loop(
             std::thread::sleep(DECODE_IDLE_NAP);
             continue;
         }
+
+        let Some(negotiated) = shared.device_format() else {
+            // The device has not run its first callback yet, so there is
+            // nothing to convert to.
+            std::thread::sleep(DECODE_IDLE_NAP);
+            continue;
+        };
+        if negotiated != format {
+            log::debug!(
+                "cranpose-media: device at {} Hz, {} channels",
+                negotiated.0,
+                negotiated.1
+            );
+            format = negotiated;
+            converter = Some(Converter::new(&*source, format.0, format.1));
+            pending = None;
+        }
+        let Some(converter) = converter.as_mut() else {
+            continue;
+        };
 
         let sample = match pending.take() {
             Some(sample) => Some(sample),
@@ -559,16 +598,42 @@ mod tests {
     use super::*;
     use crate::source::SamplesBuffer;
 
-    #[test]
-    fn a_ring_holds_a_fifth_of_a_second_rounded_up_to_a_power_of_two() {
-        let capacity = ring_capacity(48_000, 2);
-        assert!(capacity.is_power_of_two());
-        assert!(capacity >= (48_000.0 * BUFFER_SECONDS) as usize * 2);
+    /// A sink's shared state as it is once the device has published a format,
+    /// which is what every position and end-of-item question is asked about.
+    fn playing_at(device_rate: u32) -> Shared {
+        let shared = Shared::new(1.0, 1.0);
+        shared.paused.store(false, Ordering::Release);
+        shared
+            .device_channels
+            .store(backend::NOMINAL_CHANNELS as u32, Ordering::Release);
+        shared.device_rate.store(device_rate, Ordering::Release);
+        shared
     }
 
     #[test]
-    fn a_tiny_device_rate_still_gets_a_usable_ring() {
-        assert!(ring_capacity(8_000, 1) >= MIN_BUFFER_SAMPLES);
+    fn a_ring_holds_a_fifth_of_a_second_at_the_highest_rate_it_is_sized_for() {
+        let capacity = ring_capacity();
+        assert!(capacity.is_power_of_two());
+        assert!(
+            capacity
+                >= (MAX_DEVICE_RATE as f32 * BUFFER_SECONDS) as usize * backend::NOMINAL_CHANNELS
+        );
+        assert!(capacity >= MIN_BUFFER_SAMPLES);
+    }
+
+    #[test]
+    fn the_format_is_unknown_until_the_callback_publishes_it() {
+        let shared = Shared::new(1.0, 1.0);
+        assert_eq!(shared.device_format(), None);
+        // A position asked for before the first callback is the base, not a
+        // division by a rate of zero.
+        shared.frames_written.store(24_000, Ordering::Relaxed);
+        assert_eq!(shared.position(), Duration::ZERO);
+
+        shared.device_channels.store(2, Ordering::Release);
+        shared.device_rate.store(48_000, Ordering::Release);
+        assert_eq!(shared.device_format(), Some((48_000, 2)));
+        assert_eq!(shared.position(), Duration::from_millis(500));
     }
 
     #[test]
@@ -640,52 +705,23 @@ mod tests {
 
     #[test]
     fn the_position_follows_the_frames_the_callback_wrote() {
-        let shared = Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(24_000),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(0),
-            frames_taken: AtomicU64::new(0),
-            source_done: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-            volume: AtomicVolume::new(1.0),
-            speed: AtomicVolume::new(1.0),
-            device_rate: 48_000,
-        };
+        let shared = playing_at(48_000);
+        shared.frames_written.store(24_000, Ordering::Relaxed);
         assert_eq!(shared.position(), Duration::from_millis(500));
     }
 
     #[test]
     fn double_speed_advances_the_position_twice_as_fast() {
-        let shared = Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(24_000),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(0),
-            frames_taken: AtomicU64::new(0),
-            source_done: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-            volume: AtomicVolume::new(1.0),
-            speed: AtomicVolume::new(2.0),
-            device_rate: 48_000,
-        };
+        let shared = playing_at(48_000);
+        shared.frames_written.store(24_000, Ordering::Relaxed);
+        shared.speed.set(2.0);
         assert_eq!(shared.position(), Duration::from_secs(1));
     }
 
     #[test]
     fn rebasing_moves_the_position_and_restarts_the_count() {
-        let shared = Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(96_000),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(0),
-            frames_taken: AtomicU64::new(0),
-            source_done: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-            volume: AtomicVolume::new(1.0),
-            speed: AtomicVolume::new(1.0),
-            device_rate: 48_000,
-        };
+        let shared = playing_at(48_000);
+        shared.frames_written.store(96_000, Ordering::Relaxed);
         shared.rebase(Duration::from_secs(30));
         assert_eq!(shared.position(), Duration::from_secs(30));
         assert_eq!(shared.frames_written.load(Ordering::Relaxed), 0);
@@ -693,18 +729,10 @@ mod tests {
 
     #[test]
     fn an_item_has_not_ended_while_the_ring_still_holds_samples() {
-        let shared = Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(0),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(1_000),
-            frames_taken: AtomicU64::new(400),
-            source_done: AtomicBool::new(true),
-            paused: AtomicBool::new(false),
-            volume: AtomicVolume::new(1.0),
-            speed: AtomicVolume::new(1.0),
-            device_rate: 48_000,
-        };
+        let shared = playing_at(48_000);
+        shared.frames_pushed.store(1_000, Ordering::Release);
+        shared.frames_taken.store(400, Ordering::Release);
+        shared.source_done.store(true, Ordering::Release);
         assert!(!shared.ended());
         shared.frames_taken.store(1_000, Ordering::Release);
         assert!(shared.ended());
@@ -712,18 +740,9 @@ mod tests {
 
     #[test]
     fn a_source_that_is_still_decoding_has_not_ended_however_much_was_taken() {
-        let shared = Shared {
-            generation: AtomicU64::new(0),
-            frames_written: AtomicU64::new(0),
-            base_nanos: AtomicU64::new(0),
-            frames_pushed: AtomicU64::new(10),
-            frames_taken: AtomicU64::new(10),
-            source_done: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-            volume: AtomicVolume::new(1.0),
-            speed: AtomicVolume::new(1.0),
-            device_rate: 48_000,
-        };
+        let shared = playing_at(48_000);
+        shared.frames_pushed.store(10, Ordering::Release);
+        shared.frames_taken.store(10, Ordering::Release);
         assert!(!shared.ended());
     }
 

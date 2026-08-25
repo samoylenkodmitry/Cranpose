@@ -98,6 +98,10 @@ pub(crate) fn register(app: android_activity::AndroidApp) {
     set_platform_bundled_assets(Arc::new(AndroidBundledAssets { app: app.clone() }));
     set_platform_app_updater(Arc::new(AndroidAppUpdater { app: app.clone() }));
     crate::android_camera::register(app.clone());
+    // The decoder is a feature: an application that plays nothing should not
+    // carry symphonia. Without it Android has no media backend at all, which
+    // the media service reports rather than papers over.
+    #[cfg(feature = "media")]
     crate::android_media::register(app.clone());
     // Pulled rather than pushed from `onCreate`: `getIntent()` is populated
     // before the native thread starts, so reading it here is deterministic,

@@ -82,7 +82,7 @@ pub struct AudioEngine {
 impl AudioEngine {
     /// Creates an engine that opens the platform output device on first use.
     pub fn new() -> AudioEngine {
-        AudioEngine::with_sink_opener(Box::new(backend::open))
+        AudioEngine::with_sink_opener(Box::new(backend::open_mixer))
     }
 
     /// Creates an engine over a caller-supplied device opener. The platform

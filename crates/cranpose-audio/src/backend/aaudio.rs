@@ -8,12 +8,12 @@
 //! The stream asks for `LowLatency` with a 32-bit float, two-channel format.
 //! AAudio calls back on a real-time thread it owns; the callback below does
 //! exactly two things — read the negotiated format off the stream handle and
-//! run the mixer — so the real-time budget holds.
+//! run the renderer — so the real-time budget holds.
 //!
 //! The stream is not kept running for its own sake. A `LowLatency` output on
 //! Android is an MMAP route with the always-on audio DSP behind it, and it
 //! costs power whether or not the samples crossing it are zero, so when the
-//! mixer reports that nothing has sounded for a while the callback returns
+//! renderer reports that nothing has sounded for a while the callback returns
 //! [`AudioCallbackResult::Stop`] and the engine starts the stream again on the
 //! next sound. That is AAudio's own idiom for a stream with nothing to do.
 //!
@@ -37,22 +37,20 @@ use ndk::audio::{
 };
 
 use crate::{
-    backend::AudioSink,
-    mixer::{Mixer, MixerSeed, RenderStatus},
+    backend::{AudioSink, Renderer, NOMINAL_CHANNELS},
+    mixer::RenderStatus,
 };
 
-/// The rate the mixer assumes until the stream reports the one it negotiated.
-const NOMINAL_SAMPLE_RATE: f32 = 48_000.0;
-const REQUESTED_CHANNELS: i32 = 2;
+const REQUESTED_CHANNELS: i32 = NOMINAL_CHANNELS as i32;
 
-pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
+pub(crate) fn open(renderer: Box<dyn Renderer>) -> Result<Box<dyn AudioSink>, AudioError> {
     let connected = Arc::new(AtomicBool::new(true));
     let (requests, request_rx) = mpsc::channel();
     let (startup_tx, startup_rx) = mpsc::sync_channel(1);
     let worker_connected = Arc::clone(&connected);
     let worker = thread::Builder::new()
         .name("cranpose-aaudio".into())
-        .spawn(move || run_worker(seed, worker_connected, request_rx, startup_tx))
+        .spawn(move || run_worker(renderer, worker_connected, request_rx, startup_tx))
         .map_err(|error| {
             AudioError::Backend(format!("failed to start the AAudio owner thread: {error}"))
         })?;
@@ -77,12 +75,12 @@ pub(crate) fn open(seed: MixerSeed) -> Result<Box<dyn AudioSink>, AudioError> {
 }
 
 fn run_worker(
-    seed: MixerSeed,
+    renderer: Box<dyn Renderer>,
     connected: Arc<AtomicBool>,
     requests: mpsc::Receiver<StreamRequest>,
     startup: mpsc::SyncSender<Result<(), AudioError>>,
 ) {
-    let stream = match open_stream(seed, Arc::clone(&connected)) {
+    let stream = match open_stream(renderer, Arc::clone(&connected)) {
         Ok(stream) => stream,
         Err(error) => {
             connected.store(false, Ordering::Release);
@@ -111,8 +109,10 @@ fn run_worker(
     stop_stream(&stream);
 }
 
-fn open_stream(seed: MixerSeed, connected: Arc<AtomicBool>) -> Result<AudioStream, AudioError> {
-    let mut mixer = Mixer::new(seed, NOMINAL_SAMPLE_RATE, REQUESTED_CHANNELS as usize);
+fn open_stream(
+    mut renderer: Box<dyn Renderer>,
+    connected: Arc<AtomicBool>,
+) -> Result<AudioStream, AudioError> {
     let error_connected = Arc::clone(&connected);
 
     let stream = AudioStreamBuilder::new()
@@ -129,9 +129,9 @@ fn open_stream(seed: MixerSeed, connected: Arc<AtomicBool>) -> Result<AudioStrea
             move |stream: &AudioStream, audio_data: *mut c_void, frames: i32| {
                 // Both getters read a field on the stream handle; neither locks
                 // nor allocates, and `set_device_format` returns immediately
-                // once the format matches what the mixer already assumed.
+                // once the format matches what the renderer already assumed.
                 let channels = stream.channel_count().max(1) as usize;
-                mixer.set_device_format(stream.sample_rate() as f32, channels);
+                renderer.set_device_format(stream.sample_rate() as f32, channels);
 
                 let samples = frames.max(0) as usize * channels;
                 if samples == 0 || audio_data.is_null() {
@@ -142,7 +142,7 @@ fn open_stream(seed: MixerSeed, connected: Arc<AtomicBool>) -> Result<AudioStrea
                 // channelCount` writable float samples for this call only, and
                 // the stream is verified as 32-bit float before it is started.
                 let out = unsafe { std::slice::from_raw_parts_mut(data, samples) };
-                match mixer.render(out) {
+                match renderer.render(out) {
                     RenderStatus::Continue => AudioCallbackResult::Continue,
                     // Returning `Stop` is what ends this real-time thread; the
                     // engine also calls `request_stop` from the UI thread (see
@@ -317,7 +317,7 @@ fn stream_is_usable(stream: &AudioStream, connected: &AtomicBool) -> bool {
 
 fn stop_stream(stream: &AudioStream) {
     // Stopping before the stream closes means the callback has returned for
-    // the last time, so the mixer it owns is dropped on its owner thread.
+    // the last time, so the renderer it owns is dropped on its owner thread.
     if let Err(error) = stream.request_stop() {
         log::warn!("failed to stop the AAudio stream: {error}");
     }

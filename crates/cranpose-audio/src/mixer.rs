@@ -62,7 +62,8 @@ pub const BUS_COUNT: usize = 2;
 /// battery is. Anything shorter buys nothing measurable and starts to thrash.
 pub const IDLE_GRACE_SECONDS: f32 = 2.0;
 
-/// What the output device should do once [`Mixer::render`] returns.
+/// What the output device should do once a
+/// [`render`](crate::backend::Renderer::render) call returns.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RenderStatus {
     /// Keep the stream running: something is sounding, or work is queued.
@@ -272,11 +273,8 @@ impl Mixer {
 
     /// Re-reads the device format. AAudio only reports the negotiated rate once
     /// the stream is open, so the first callback corrects the assumption the
-    /// mixer was built with; running voices keep their pitch.
-    ///
-    /// Backends that know the format up front (cpal) never call this, which is
-    /// why the allow is needed on builds that compile only those.
-    #[allow(dead_code)]
+    /// mixer was built with; running voices keep their pitch. A backend that
+    /// knows the format up front (cpal) calls it once, before the stream runs.
     pub fn set_device_format(&mut self, sample_rate: f32, channels: usize) {
         let sample_rate = sample_rate.max(1.0);
         let channels = channels.max(1);

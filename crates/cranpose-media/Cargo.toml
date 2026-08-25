@@ -9,7 +9,7 @@ authors.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-description = "Desktop media playback backend for Cranpose (symphonia decoders, cpal output)"
+description = "In-process media playback backend for Cranpose (symphonia decoders, shared output device)"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -23,13 +23,16 @@ cranpose-services = { workspace = true }
 log = "0.4"
 parking_lot = "0.12.5"
 
+# The output device, the real-time callback and the queue that feeds it all come
+# from the audio engine, so the workspace has one device per platform rather
+# than one per crate that wants to make a sound.
+[target.'cfg(target_os = "android")'.dependencies]
+cranpose-audio = { workspace = true, features = ["aaudio"] }
+
 [target.'cfg(not(any(target_arch = "wasm32", target_os = "android", target_os = "ios")))'.dependencies]
-# The output device and the queue that feeds it come from the audio engine, so
-# the workspace has one real-time ring and one cpal. `default-features = false`
-# leaves the engine's own device backends off: this crate opens its own stream
-# and wants nothing else from that crate.
-cranpose-audio = { workspace = true }
-cpal = "0.18.1"
+cranpose-audio = { workspace = true, features = ["cpal-backend"] }
+
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "ios")))'.dependencies]
 symphonia = { version = "0.6.1", default-features = false, features = ["all", "opt-simd"] }
 
 [dev-dependencies]

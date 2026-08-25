@@ -123,22 +123,8 @@ public class CranposeActivity extends NativeActivity {
     private static final int CAMERA_STOPPED = 2;
     private static final int CAMERA_FAILED = 3;
 
-    private static native void nativeOnMediaState(int kind, String detail);
-    private static native void nativeOnMediaProgress(long positionMs, long durationMs,
-            long bufferedMs);
     private static native void nativeOnMediaAudioFocus(int focus);
     private static native void nativeOnMediaCommand(int command, long positionMs);
-    private static native void nativeOnMediaSamples(byte[] waveform, int sampleRate);
-
-    /** What the media stack is doing; see the constants on {@link CranposeMedia}. */
-    static void onMediaState(int kind, String detail) {
-        nativeOnMediaState(kind, detail == null ? "" : detail);
-    }
-
-    /** Where the open item is. Durations are negative when the item has none. */
-    static void onMediaProgress(long positionMs, long durationMs, long bufferedMs) {
-        nativeOnMediaProgress(positionMs, durationMs, bufferedMs);
-    }
 
     /** What the rest of the device is doing with the output. */
     static void onMediaAudioFocus(int focus) {
@@ -148,11 +134,6 @@ public class CranposeActivity extends NativeActivity {
     /** A button pressed on the lock screen, the notification or a headset. */
     static void onMediaCommand(int command, long positionMs) {
         nativeOnMediaCommand(command, positionMs);
-    }
-
-    /** One block of waveform for a visualiser, as unsigned 8-bit samples. */
-    static void onMediaSamples(byte[] waveform, int sampleRate) {
-        nativeOnMediaSamples(waveform, sampleRate);
     }
     public void cranposeSetKeepScreenOn(boolean enabled) {
         if (enabled) {
@@ -533,7 +514,7 @@ public class CranposeActivity extends NativeActivity {
     private long pendingToken;
     private CranposeAccessibilityProvider cranposeAccessibilityProvider;
     private CranposeCamera cranposeCamera;
-    private CranposeMedia cranposeMedia;
+    private volatile CranposeMedia cranposeMedia;
     private boolean cranposeBackgroundActive;
     private boolean cranposePaused;
 
@@ -621,87 +602,51 @@ public class CranposeActivity extends NativeActivity {
         return true;
     }
 
-    private CranposeMedia cranposeMedia() {
+    /**
+     * Synchronized because the transport calls in from the decode side as well
+     * as from the UI thread: {@link #cranposeMediaRequestFocus()} answers on
+     * whichever thread asked, and two of them must not each build a session.
+     */
+    private synchronized CranposeMedia cranposeMedia() {
         if (cranposeMedia == null) {
             cranposeMedia = new CranposeMedia(this);
         }
         return cranposeMedia;
     }
 
-    /** Opens {@code uri}; what happens next arrives through {@link #onMediaState}. */
-    public void cranposeMediaPrepare(String uri) {
-        runOnUiThread(() -> cranposeMedia().prepare(uri));
+    /**
+     * Takes audio focus for playback, reporting whether the broker granted it.
+     * The decoder is Cranpose's own, so this is the whole of what Android is
+     * asked for before a track starts.
+     *
+     * <p>Answered on the calling thread rather than posted: the caller needs
+     * the verdict before it starts the stream.
+     */
+    public boolean cranposeMediaRequestFocus() {
+        return cranposeMedia().requestFocus();
     }
 
-    public void cranposeMediaPlay() {
-        runOnUiThread(() -> cranposeMedia().play());
-    }
-
-    public void cranposeMediaPause() {
-        runOnUiThread(() -> cranposeMedia().pause());
-    }
-
-    public void cranposeMediaStop() {
+    /** Gives audio focus back once nothing is playing. */
+    public void cranposeMediaAbandonFocus() {
         runOnUiThread(() -> {
             if (cranposeMedia != null) {
-                cranposeMedia.stop();
+                cranposeMedia.abandonFocus();
             }
         });
     }
 
-    public void cranposeMediaSeekTo(int positionMs) {
-        runOnUiThread(() -> cranposeMedia().seekTo(positionMs));
-    }
-
-    public void cranposeMediaSetVolume(float volume) {
-        runOnUiThread(() -> cranposeMedia().setVolume(volume));
-    }
-
-    public void cranposeMediaSetSpeed(float speed) {
-        runOnUiThread(() -> cranposeMedia().setSpeed(speed));
-    }
-
-    public void cranposeMediaSetLooping(boolean looping) {
-        runOnUiThread(() -> cranposeMedia().setLooping(looping));
+    /**
+     * Publishes where playback is to the lock screen; see the session constants
+     * on {@link CranposeMedia}. A duration of {@code -1} means the item has
+     * none.
+     */
+    public void cranposeMediaSessionUpdate(int state, long positionMs, long durationMs,
+            float speed) {
+        runOnUiThread(() -> cranposeMedia().sessionUpdate(state, positionMs, durationMs, speed));
     }
 
     public void cranposeMediaSetMetadata(String title, String artist) {
         runOnUiThread(() -> cranposeMedia().setMetadata(title, artist));
-    }
-
-    public void cranposeMediaSetAnalysisEnabled(boolean enabled) {
-        runOnUiThread(() -> cranposeMedia().setAnalysisEnabled(enabled));
-    }
-
-    /** Whether this device will give a visualiser the samples it is playing. */
-    public boolean cranposeMediaSupportsAnalysis() {
-        return cranposeMedia().supportsAnalysis();
-    }
-
-    /**
-     * How long the item at {@code uri} is, in milliseconds, or {@code -1} where
-     * the container carries no duration. Reads the file, so native callers run
-     * it off the UI thread.
-     */
-    public int cranposeMediaProbeDurationMs(String uri) {
-        return cranposeMedia().probeDurationMs(uri);
-    }
-
-    /**
-     * The equalizer band centres this device has, in hertz. Empty where the
-     * device has no equalizer.
-     */
-    public int[] cranposeMediaEqualizerBands() {
-        return cranposeMedia().equalizerBandCenters();
-    }
-
-    /** The most a band can lift or cut on this device, in millibels. */
-    public int cranposeMediaEqualizerRange() {
-        return cranposeMedia().equalizerRangeMillibels();
-    }
-
-    public void cranposeMediaSetEqualizer(boolean enabled, int preampMillibels, int[] gains) {
-        runOnUiThread(() -> cranposeMedia().setEqualizer(enabled, preampMillibels, gains));
     }
 
     private static native void nativeOnAccessibilityActivate(float x, float y);
@@ -1155,6 +1100,37 @@ public class CranposeActivity extends NativeActivity {
             throw new IOException("no descriptor for " + uriString);
         }
         return descriptor.detachFd();
+    }
+
+    /**
+     * How many bytes the document at {@code uriString} is, or {@code -1} where
+     * the provider does not say.
+     *
+     * <p>The provider's own answer, not the descriptor's: a provider that
+     * fetches its bytes over a network hands back a pipe, which cannot be
+     * stat-ed, while still listing a size for the document. A decoder that
+     * knows the length can seek by it instead of reading to the end to find out
+     * where the end is.
+     */
+    public long cranposeContentLength(String uriString) {
+        try (Cursor cursor = getContentResolver().query(
+                Uri.parse(uriString),
+                new String[] {OpenableColumns.SIZE},
+                null,
+                null,
+                null)) {
+            if (cursor == null || !cursor.moveToFirst()) {
+                return -1;
+            }
+            int column = cursor.getColumnIndex(OpenableColumns.SIZE);
+            if (column < 0 || cursor.isNull(column)) {
+                return -1;
+            }
+            long size = cursor.getLong(column);
+            return size > 0 ? size : -1;
+        } catch (Exception error) {
+            return -1;
+        }
     }
 
     /**
@@ -2012,6 +1988,9 @@ public class CranposeActivity extends NativeActivity {
         }
         if (cranposeCamera != null) {
             cranposeCamera.stop();
+        }
+        if (cranposeMedia != null) {
+            cranposeMedia.release();
         }
         if (cranposeNetworkCallback != null) {
             try {

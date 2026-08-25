@@ -792,6 +792,29 @@ impl Future for FolderNext {
     }
 }
 
+/// How many bytes the provider says the document at `uri` is, or `None` where
+/// it does not say.
+///
+/// The provider's own answer rather than the descriptor's: one that fetches its
+/// bytes over a network hands back a pipe, which cannot be stat-ed, while still
+/// listing a size for the document.
+pub fn content_uri_length(uri: &str) -> Option<u64> {
+    let length = call_activity(|env, activity| {
+        let argument = env.new_string(uri).map_err(|error| error.to_string())?;
+        let argument: &JObject = argument.as_ref();
+        env.call_method(
+            &activity,
+            jni_str!("cranposeContentLength"),
+            jni_sig!("(Ljava/lang/String;)J"),
+            &[JValue::Object(argument)],
+        )
+        .and_then(|value| value.j())
+        .map_err(|error| error.to_string())
+    })
+    .ok()?;
+    u64::try_from(length).ok().filter(|length| *length > 0)
+}
+
 /// Opens a `content://` document for reading, returning a [`File`] backed by
 /// the provider's descriptor. Nothing is copied; the descriptor is detached
 /// from its `ParcelFileDescriptor` so the returned `File` owns and closes it.

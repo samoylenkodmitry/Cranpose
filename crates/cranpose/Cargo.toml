@@ -110,13 +110,14 @@ audio = ["dep:cranpose-audio", "cranpose-audio/aaudio"]
 # Adds the desktop output device (cpal) so sound works while developing on
 # macOS, Windows or Linux. Linux builds need the ALSA development headers.
 audio-desktop = ["audio", "cranpose-audio/cpal-backend"]
-# The desktop media backend (`cranpose_media`), registered into
+# The in-process media backend (`cranpose_media`), registered into
 # `cranpose_services::media`. Off by default because it links a system audio
-# library (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows) and carries the
-# `symphonia` decoders. Android, iOS and the web use the platform's own media
-# stack and need no feature. Harmless to enable on those targets — the backend
-# compiles away and the platform one stays installed.
-media-desktop = ["dep:cranpose-media"]
+# library on desktop (ALSA on Linux, CoreAudio on macOS, WASAPI on Windows) and
+# carries the `symphonia` decoders everywhere. On Android it is what decodes:
+# the platform's own `MediaPlayer` cannot read a document a provider streams,
+# and the Android backend wraps this one with the media session. iOS and the web
+# use their platform stack, and there the backend compiles away.
+media = ["dep:cranpose-media"]
 renderer-pixels = ["cranpose-render-pixels"]
 renderer-wgpu = ["cranpose-render-wgpu", "dep:wgpu", "dep:pollster"]
 # App-defined WGSL RuntimeShaders on the slim renderer (naga at runtime,
