@@ -22,14 +22,28 @@ use futures_task::{waker, ArcWake};
 use super::{inspector_metadata, Modifier, PointerEvent};
 
 impl Modifier {
+    /// A suspending gesture handler. It restarts when `key` changes and
+    /// otherwise runs on across recomposition, which is what makes a drag
+    /// survive the frames it spans.
+    ///
+    /// Its identity is the declaration — this call, with these keys — not the
+    /// node it happens to land on. Two branches of an `if` are two different
+    /// gestures even when both pass `()`, and if the slot table hands the
+    /// second branch the first one's node, the arriving gesture is the one
+    /// that has to run: keeping the departed branch's handler would deliver
+    /// its events to code that is no longer on screen.
+    #[track_caller]
     pub fn pointer_input<K, F, Fut>(self, key: K, handler: F) -> Self
     where
         K: Hash + 'static,
         F: Fn(PointerInputScope) -> Fut + 'static,
         Fut: Future<Output = ()> + 'static,
     {
-        let element =
-            PointerInputElement::new(vec![KeyToken::new(&key)], pointer_input_handler(handler));
+        let element = PointerInputElement::new(
+            KeyToken::declaration_site(std::panic::Location::caller()),
+            vec![KeyToken::new(&key)],
+            pointer_input_handler(handler),
+        );
         let key_count = element.key_count();
         let handler_id = element.handler_id();
         self.then(
@@ -88,15 +102,19 @@ impl PointerInputTaskRegistry {
 
 #[derive(Clone)]
 struct PointerInputElement {
+    /// Where the gesture was declared. Part of its identity, and not one of
+    /// the `keys` the caller passed, which are what `keyCount` reports.
+    site: KeyToken,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,
     handler_id: u64,
 }
 
 impl PointerInputElement {
-    fn new(keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
+    fn new(site: KeyToken, keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
         let handler_id = pointer_handler_identity(&handler);
         Self {
+            site,
             keys,
             handler,
             handler_id,
@@ -119,6 +137,7 @@ fn pointer_handler_identity(handler: &PointerInputHandler) -> u64 {
 impl fmt::Debug for PointerInputElement {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PointerInputElement")
+            .field("site", &self.site)
             .field("keys", &self.keys)
             .field("handler", &Rc::as_ptr(&self.handler))
             .field("handler_id", &self.handler_id)
@@ -131,7 +150,7 @@ impl PartialEq for PointerInputElement {
         // Only compare keys, not handler_id. In Compose, elements are equal if their
         // keys match, even if the handler closure is recreated on recomposition.
         // This ensures nodes are reused instead of being dropped and recreated.
-        self.keys == other.keys
+        self.site == other.site && self.keys == other.keys
     }
 }
 
@@ -141,6 +160,7 @@ impl Hash for PointerInputElement {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Only hash keys, not handler_id. This ensures stable hashing across
         // recompositions when the closure is recreated but keys remain the same.
+        self.site.hash(state);
         self.keys.hash(state);
     }
 }
@@ -149,11 +169,11 @@ impl ModifierNodeElement for PointerInputElement {
     type Node = SuspendingPointerInputNode;
 
     fn create(&self) -> Self::Node {
-        SuspendingPointerInputNode::new(self.keys.clone(), self.handler.clone())
+        SuspendingPointerInputNode::new(self.site, self.keys.clone(), self.handler.clone())
     }
 
     fn update(&self, node: &mut Self::Node) {
-        node.update(self.keys.clone(), self.handler.clone());
+        node.update(self.site, self.keys.clone(), self.handler.clone());
     }
 
     fn capabilities(&self) -> NodeCapabilities {
@@ -387,6 +407,9 @@ impl ArcWake for PointerInputTaskWaker {
 }
 
 pub struct SuspendingPointerInputNode {
+    /// Which `pointer_input` call the running gesture belongs to. A node that
+    /// is handed to a different declaration is running the wrong gesture.
+    site: KeyToken,
     keys: Vec<KeyToken>,
     handler: PointerInputHandler,
     dispatcher: PointerEventDispatcher,
@@ -400,8 +423,9 @@ pub struct SuspendingPointerInputNode {
 }
 
 impl SuspendingPointerInputNode {
-    fn new(keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
+    fn new(site: KeyToken, keys: Vec<KeyToken>, handler: PointerInputHandler) -> Self {
         Self {
+            site,
             keys,
             handler,
             dispatcher: PointerEventDispatcher::new(),
@@ -414,12 +438,17 @@ impl SuspendingPointerInputNode {
         }
     }
 
-    fn update(&mut self, keys: Vec<KeyToken>, handler: PointerInputHandler) {
+    fn update(&mut self, site: KeyToken, keys: Vec<KeyToken>, handler: PointerInputHandler) {
         // Only restart if keys changed - not if handler Rc pointer changed.
         // In Compose, closures are recreated every composition but the task should
         // continue running as long as the keys are the same. This matches Jetpack
         // Compose behavior where rememberUpdatedState keeps the task alive.
-        let should_restart = self.keys != keys;
+        //
+        // A different declaration site is a different gesture, whatever its
+        // keys say: the node has been handed from one `pointer_input` call to
+        // another, and the arriving one is the gesture that is on screen.
+        let should_restart = self.site != site || self.keys != keys;
+        self.site = site;
         self.keys = keys;
         self.handler = handler; // Update handler even if not restarting
         if should_restart {
@@ -498,6 +527,10 @@ struct KeyToken {
 }
 
 impl KeyToken {
+    fn declaration_site(site: &'static std::panic::Location<'static>) -> Self {
+        Self::new(&(site.file(), site.line(), site.column()))
+    }
+
     fn new<T: Hash + 'static>(value: &T) -> Self {
         let mut hasher = default::new();
         value.hash(&mut hasher);

@@ -26,6 +26,51 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
+### Conditional branches share one composition slot
+
+Compose's compiler plugin gives every `if`/`else` and `match` branch a group of
+its own, so a branch that leaves takes its nodes with it. Cranpose has no
+plugin, and a `#[composable]` opens one group keyed on where it is *defined*,
+not where it is called. Two branches emitting the same widget are therefore one
+slot: the arriving branch is handed the node the departing one was using,
+together with whatever that node was carrying.
+
+What it cost, on a Pixel Watch 3: starting CranOrbit's Daily run from the title
+ring left the ball parked on the paddle through any number of taps. The taps
+arrived and the simulation ran — the run ended `TIME UP` at score 0 while it
+was being tapped — but the ring's gesture loop was still the one reading them,
+because `pointer_input` restarts only when its key changes and both branches
+passed `()`. Campaign works only because it stops at a screen of a different
+shape on the way to the arena. Two earlier fixes missed it by reasoning about
+`AppState`, which was never at fault.
+
+`a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen` in
+`cranpose-app-shell` is the reproduction: before the fix it reported
+`(menu, arena) = (2, 0)`, the departed branch having eaten the arriving one's
+tap.
+
+Gestures are closed: a handler's identity is now the declaration — this call,
+with these keys — so a node handed to a different `pointer_input` call
+restarts. **The general case is open.** A reused node still carries the
+departed branch's `remember`ed state, its animations and its scroll offsets,
+and nothing warns the author. The same shape already produced a second
+reported bug in the same application, where every list screen shared one
+scroll position because one call site is one slot.
+
+Applications can state the identity themselves with `cranpose_core::with_key`,
+Compose's `key(…) { }`, and CranOrbit's router now does. That is the framework
+asking every author to remember what Compose's compiler never makes them think
+about, and the failure is quiet: a stale gesture or a wrong scroll offset reads
+as a rendering glitch, not as shared state.
+
+Closing it means what the plugin does — a group per branch. The macro parses
+the function with `syn` and could wrap branch bodies, but the group API is
+closure-shaped (`Composer::with_group_seed`), and wrapping an arbitrary branch
+in a closure breaks `return`, `?`, `break` and `continue` inside it. So this
+wants an RAII group guard on the composer first, then the macro transform,
+then a sweep of the repo's own conditionals. It is a slot-table change and
+deserves its own validation pass rather than riding along with a bug fix.
+
 ## Limits that are correct, and surprising
 
 These are deliberate. They are here so nobody rediscovers them as bugs.
@@ -66,37 +111,13 @@ scrolling list is restored, and the blank screen on backing out of the pause
 overlay is fixed in Cranpose `0.1.99` -- `SwipeToDismissBox` was holding its
 content off screen after firing `on_dismiss`, right for a dismissed row whose
 host removes it and wrong for a navigation gesture whose host stays composed.
-Both are verified on the watch against `v1.3.3`. What is left:
+Both are verified on the watch against `v1.3.3`.
 
-### A level does not begin play when it is started
-
-Reported from the watch: after the framework-ownership work, tapping to start a
-level does not get the game playing.
-
-Partly reproduced against `v1.3.3`, and the part that did not reproduce matters
-as much as the part that did. Tapping `START` on the level intro **does** open
-the arena, and it animates: five screenshots two seconds apart were all
-different, so the render loop and some simulation are running. What is visible
-in those frames is the ball still sitting on the paddle, unlaunched, with the
-bricks untouched — a level that is loaded and idling rather than one that never
-opened.
-
-Whether the ball fails to launch, or is waiting for an input that is no longer
-delivered, is **not** established. `robot_*` coverage does not reach this: the
-arena is a real GPU surface and the launch is an input gesture.
-
-What the next attempt needs to know, because it cost time here: **a dozing
-watch freezes the picture and reads exactly like a frozen game.** Two
-consecutive screenshots came back byte-identical after a tap and a drag, which
-looked like input being ignored, and `dumpsys power` said `mWakefulness=Dozing`.
-Check wakefulness before concluding anything from a still frame, and drive the
-test faster than the display's idle timeout.
-
-The discriminator to reach for first is whether the simulation is advancing at
-all -- `AppState::needs_frames`/`simulation_runs` on a state driven headlessly
-through `start_selected_level` -- because that separates "the ball is waiting
-for input that no longer arrives" from "the session never started". A headless
-test can settle it without a watch, and none exists.
+A Daily run that would not launch the ball on a tap is fixed in `v1.3.6`, by
+CranOrbit naming its three gesture surfaces and keying the router on them. The
+cause was not in this application, though: see *Conditional branches share one
+composition slot* above, which is what let the ring go on reading the arena's
+taps. What is left:
 
 ### Leaving a run is crown-only, and the back gesture cannot do it
 
@@ -127,40 +148,6 @@ wrong twice over. Injected gestures deliver exactly one `on_back` per swipe,
 and the alternation they were invoked to explain is the intended behaviour.
 Both handlers do reach `on_back`, and that is worth knowing, but nothing
 observed needs it as an explanation.
-
-### CranOrbit's list screens share one scroll position
-
-Open Settings, scroll to the bottom, open Credits from the last row: Credits
-opens already scrolled to its end. The scroll position is not per screen.
-
-`WearListScreen` remembers exactly one list state, at
-`app/src/ui/composed.rs:342`:
-
-```rust
-let list = rememberWearScalingListState(CentreAnchor {
-    index: CENTRED_ITEM,
-    offset: 0.0,
-});
-```
-
-and `OrbitApp` calls `WearListScreen` from a single site, passing the screen as
-an argument. One call site is one composition slot, so Settings, Credits,
-Volume and Haptics all read and write the same remembered state, and switching
-screens carries the offset across. `remember` is doing exactly what it
-promises — the slot did not change, so the value does not — and the identity
-the state should hang off, which screen is being shown, is never stated.
-
-The framework already has what states it: `cranpose_core::with_key`, Compose's
-`key(…) { }`. Keying the list screen by its screen gives each one its own slot
-and its own scroll position, and drops the stale one when a screen goes away.
-Resetting the anchor on a screen change would look similar and is not the same
-thing: it would return to Credits from a sub-screen having forgotten where the
-reader was, which is the bug in the other direction.
-
-This is a hazard for any screen-switching composable that remembers scroll
-state at one call site, not a quirk of this application. Nothing in the widget
-or its documentation points at it, and the failure is quiet — a wrong starting
-offset reads as a rendering glitch rather than as shared state.
 
 ## CranAmp's network library: fixed, and what it cost
 

@@ -7678,6 +7678,140 @@ fn pointer_input_scope_reports_node_size_in_running_shell() {
     APP_SHELL_POINTER_SCOPE_EVENTS.with(|slot| slot.borrow_mut().clear());
 }
 
+thread_local! {
+    static APP_SHELL_ROUTER_ARENA: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
+    static APP_SHELL_ROUTER_MENU_DOWNS: Cell<u32> = const { Cell::new(0) };
+    static APP_SHELL_ROUTER_ARENA_DOWNS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// A screen router: one full-screen gesture surface for a ring menu and
+/// another for a game arena, picked by a plain `if`/`else`, each asking for
+/// gestures with `pointer_input((), ..)` — the key that means "this gesture
+/// outlives recomposition". Compose's compiler plugin gives each branch its
+/// own group, so switching branches is a new node and a new gesture.
+#[composable]
+fn app_shell_router_branch_probe() {
+    let arena = rememberMutableStateOf(|| false);
+    APP_SHELL_ROUTER_ARENA.with(|slot| *slot.borrow_mut() = Some(arena));
+    // Each branch is its own call site, the way an app writes two different
+    // screen composables — the only thing they share is the slot position.
+    if arena.get() {
+        Box(
+            Modifier::empty().fill_max_size().pointer_input(
+                (),
+                move |scope: PointerInputScope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Down {
+                                    APP_SHELL_ROUTER_ARENA_DOWNS
+                                        .with(|count| count.set(count.get() + 1));
+                                }
+                            }
+                        })
+                        .await;
+                },
+            ),
+            BoxSpec::default(),
+            || {},
+        );
+    } else {
+        Box(
+            Modifier::empty().fill_max_size().pointer_input(
+                (),
+                move |scope: PointerInputScope| async move {
+                    scope
+                        .await_pointer_event_scope(|await_scope| async move {
+                            loop {
+                                let event = await_scope.await_pointer_event().await;
+                                if event.kind == PointerEventKind::Down {
+                                    APP_SHELL_ROUTER_MENU_DOWNS
+                                        .with(|count| count.set(count.get() + 1));
+                                }
+                            }
+                        })
+                        .await;
+                },
+            ),
+            BoxSpec::default(),
+            || {},
+        );
+    }
+}
+
+/// Reported from a Pixel Watch 3: starting the Daily run from cranorbit's
+/// title ring left the ball parked on the paddle, and no number of taps
+/// launched it, while the same tap worked in Campaign. Campaign reaches the
+/// arena through an intervening screen; Daily goes straight from the ring to
+/// the arena, and that is the branch switch below.
+///
+/// `pointer_input` restarts its handler only when the key changes, which is
+/// Compose's contract. It holds only because Compose gives each conditional
+/// branch its own group, so the branch that leaves takes its node with it.
+/// Reuse the node across the switch and the departed branch's gesture loop is
+/// still the one reading the events.
+#[test]
+fn a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen() {
+    let _guard = test_guard();
+    APP_SHELL_ROUTER_ARENA.with(|slot| {
+        slot.borrow_mut().take();
+    });
+    APP_SHELL_ROUTER_MENU_DOWNS.with(|count| count.set(0));
+    APP_SHELL_ROUTER_ARENA_DOWNS.with(|count| count.set(0));
+
+    let root_key = location_key(file!(), line!(), column!());
+    let mut shell = AppShell::new(
+        HitGraphRenderer::default(),
+        root_key,
+        app_shell_router_branch_probe,
+    );
+    shell.set_viewport(408.0, 408.0);
+    shell.update();
+
+    let tap = |shell: &mut AppShell<HitGraphRenderer>| {
+        shell.set_cursor(10.0, 10.0);
+        shell.update();
+        shell.set_cursor(204.0, 204.0);
+        shell.update();
+        assert!(shell.pointer_pressed(), "the surface must take the press");
+        shell.update();
+        assert!(
+            shell.pointer_released(),
+            "the surface must take the release"
+        );
+        shell.update();
+    };
+
+    tap(&mut shell);
+    assert_eq!(
+        APP_SHELL_ROUTER_MENU_DOWNS.with(|count| count.get()),
+        1,
+        "the menu owns the gesture while the menu is what is on screen"
+    );
+
+    // The menu's own tap is what moves to the arena.
+    APP_SHELL_ROUTER_ARENA
+        .with(|slot| *slot.borrow())
+        .expect("the probe publishes its route")
+        .set(true);
+    shell.update();
+
+    tap(&mut shell);
+    let menu = APP_SHELL_ROUTER_MENU_DOWNS.with(|count| count.get());
+    let arena = APP_SHELL_ROUTER_ARENA_DOWNS.with(|count| count.get());
+    assert_eq!(
+        (menu, arena),
+        (1, 1),
+        "the arena must read the tap once the arena is what is on screen, and the \
+         menu must stop reading gestures after it has left it (menu, arena)"
+    );
+
+    APP_SHELL_ROUTER_ARENA.with(|slot| {
+        slot.borrow_mut().take();
+    });
+}
+
 #[test]
 fn headless_shell_render_graph_survives_restored_draw_state() {
     let _guard = test_guard();
