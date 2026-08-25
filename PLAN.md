@@ -249,6 +249,27 @@ a host-level `flock` against each other — two X11 suites sharing one display
 interfere, and a suite competing with itself for the CPU produces exactly the
 timing failures the suite is meant to catch.
 
+That `flock` covers the robot suites and nothing else, and the host it
+protects carries **nineteen other repositories' runners**. None of them know
+the robot suite exists. A neighbour's Rust build takes twelve cores, the frame
+the suite is timing takes twice as long, and the suite reports a per-frame
+regression that reproduces nowhere: `robot_text_handle_cycle_stability` failed
+on `main` at `drag work_avg_ms 0.73 -> 1.66` and `layer_cache_size 3 -> 13
+(allowed 12)`, then passed on the same host on that commit **and** on the
+commit before it once the box was quiet. Half an hour was spent bisecting
+three innocent pull requests.
+
+The suite now waits for the load average to come down before it starts timing
+(`wait_for_host_quiet`, called after the build and before the first test), and
+`host_state_summary` -- already printed before every attempt -- carries
+`load_1m` so a red names its own conditions. It never refuses to run: after
+ten minutes it starts anyway and says so, because a gate that will not start
+is worse than one that starts late.
+
+That is a confound removed, not the problem solved. The problem is that a
+measurement gate shares a machine with nineteen unrelated build queues, and
+the fix for that is a host the robot suite does not share.
+
 The applications are still on one Linux runner each, and it shows: cranscan's
 release sat queued behind its own `main` CI on `samarch-1-cranscan` while the
 tag was already pushed. The lever there is the same one, applied per

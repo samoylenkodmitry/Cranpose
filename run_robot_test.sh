@@ -478,6 +478,11 @@ if [ "$BUILD_ONLY" = "1" ]; then
     exit 0
 fi
 
+# The build above just had every core of this machine; the tests below are
+# timed. Let the load fall back to something a measurement can be taken
+# against -- our own build first, and any neighbour's that is still running.
+wait_for_host_quiet "the robot suite" | tee -a "$LOG_FILE"
+
 echo "============================================" | tee -a "$LOG_FILE"
 echo "Running Robot Test Suite" | tee -a "$LOG_FILE"
 echo "Found ${#EXAMPLES[@]} robot tests" | tee -a "$LOG_FILE"

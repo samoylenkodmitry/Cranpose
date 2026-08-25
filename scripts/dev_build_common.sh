@@ -213,13 +213,36 @@ host_max_temp_c() {
     '
 }
 
+host_cpu_count() {
+    if command -v nproc >/dev/null 2>&1; then
+        nproc
+    elif command -v sysctl >/dev/null 2>&1; then
+        sysctl -n hw.ncpu 2>/dev/null || echo 1
+    else
+        echo 1
+    fi
+}
+
+# The one-minute load average, or empty where the kernel does not publish one.
+host_load_1m() {
+    if [ -r /proc/loadavg ]; then
+        awk '{ printf "%.2f\n", $1 }' /proc/loadavg
+    elif command -v sysctl >/dev/null 2>&1; then
+        sysctl -n vm.loadavg 2>/dev/null | awk '{ gsub(/[{}]/, ""); printf "%.2f\n", $1 }'
+    fi
+}
+
 host_state_summary() {
-    local temp
+    local temp load
     temp="$(host_max_temp_c)"
+    load="$(host_load_1m)"
     if [ -n "$temp" ]; then
         printf '%s temp_c=max:%s' "$(host_cpu_freq_summary)" "$temp"
     else
         printf '%s temp_c=unknown' "$(host_cpu_freq_summary)"
+    fi
+    if [ -n "$load" ]; then
+        printf ' load_1m=%s/%s' "$load" "$(host_cpu_count)"
     fi
 }
 
@@ -229,6 +252,66 @@ number_lt() {
 
 number_gt() {
     awk -v left="$1" -v right="$2" 'BEGIN { exit !(left > right) }'
+}
+
+# Waits until the machine is quiet enough for a timing measurement to mean
+# something, then returns.
+#
+# This runs in CI, unlike `wait_for_host_capacity`, because CI is where the
+# problem is. `with_robot_host_lock.sh` keeps two robot suites off one host,
+# but the host it protects also carries nineteen other repositories' runners,
+# and none of them know the robot suite exists. A Rust build next door
+# saturates twelve cores, the frame the suite is timing takes twice as long,
+# and the suite reports a per-frame regression that reproduces nowhere -- the
+# text-handle cycle test failed on `main` at `drag work_avg_ms 0.73 -> 1.66`
+# and then passed on the same host, on the same commit AND on the commit
+# before it, with nothing else running.
+#
+# It never refuses to run. A gate that will not start is worse than one that
+# starts late, so after `CRANPOSE_HOST_QUIET_MAX_WAIT_SECS` it goes ahead and
+# says on stdout that it did -- which puts the host's load in the log above
+# any failure it then reports, so a red is attributable instead of mysterious.
+wait_for_host_quiet() {
+    local label="${1:-the timing suite}"
+
+    if [ "${CRANPOSE_HOST_QUIET_GUARD:-1}" = "0" ]; then
+        return 0
+    fi
+
+    local load cpus allowed elapsed
+    load="$(host_load_1m)"
+    if [ -z "$load" ]; then
+        return 0
+    fi
+
+    cpus="$(host_cpu_count)"
+    # Per core, so the same number means the same thing on a 4-core laptop and
+    # a 12-core runner. At 0.6 the machine still has room for the suite's own
+    # process; at 1.0 it is already fully committed to somebody else's build.
+    allowed="$(awk -v cpus="$cpus" -v per="${CRANPOSE_HOST_MAX_LOAD_PER_CPU:-0.6}" \
+        'BEGIN { printf "%.2f", cpus * per }')"
+    local poll_secs="${CRANPOSE_HOST_QUIET_POLL_SECS:-15}"
+    local max_wait_secs="${CRANPOSE_HOST_QUIET_MAX_WAIT_SECS:-600}"
+    elapsed=0
+
+    while number_gt "$load" "$allowed"; do
+        if [ "$elapsed" -ge "$max_wait_secs" ]; then
+            echo "host quiet guard: gave up after ${elapsed}s and started $label" \
+                 "on a busy host (load_1m=$load over $allowed on $cpus cpus)." \
+                 "TREAT ANY TIMING FAILURE BELOW AS UNMEASURED."
+            return 0
+        fi
+        echo "host quiet guard: waiting for $label -- load_1m=$load over $allowed on $cpus cpus"
+        sleep "$poll_secs"
+        elapsed=$((elapsed + poll_secs))
+        load="$(host_load_1m)"
+        [ -n "$load" ] || return 0
+    done
+
+    if [ "$elapsed" -gt 0 ]; then
+        echo "host quiet guard: host settled after ${elapsed}s (load_1m=$load of $allowed on $cpus cpus)"
+    fi
+    return 0
 }
 
 wait_for_host_capacity() {
