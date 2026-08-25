@@ -71,7 +71,7 @@ jobs:
         # server. Two Linux runners can now pick either job up, so a
         # host-level lock serialises the two robot jobs against each other
         # without serialising anything else in the fleet — see
-        # scripts/ci/with_robot_host_lock.sh.
+        # scripts/ci/with_host_lock.sh.
         run: just robot-gpu
 
       - name: sccache stats

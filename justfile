@@ -61,7 +61,8 @@ clippy:
 
 # Lint the exact package and feature set the web demo ships.
 clippy-wasm:
-    cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
+    scripts/ci/with_host_lock.sh --shared \
+      cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
 
 # Lint the iOS simulator binary.
 clippy-ios:
@@ -129,7 +130,8 @@ dep-budget:
 
 # Desktop binary size ceiling, measured against the isolated demo.
 size-budget:
-    cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml --package isolated-demo --bin isolated-demo --profile release-small --patch-workspace-cranpose --max-bytes 15728640
+    scripts/ci/with_host_lock.sh --shared \
+      cargo xtask binary-size --manifest-path apps/isolated-demo/Cargo.toml --package isolated-demo --bin isolated-demo --profile release-small --patch-workspace-cranpose --max-bytes 15728640
 
 # Spell-check prose and identifiers. Runs in about a tenth of a second; the
 # domain-term allowlist is in _typos.toml.
@@ -150,7 +152,16 @@ versions:
     python3 scripts/check_cranpose_versions.py
 
 # Everything the architecture-budget job enforces.
-budgets: featureless dep-budget size-budget
+# This is the heavy job on the machine the robot suite measures on --
+# `featureless` alone builds the workspace three ways -- so it takes the
+# shared side of the host lock for its whole run rather than per recipe.
+
+# Every architecture budget.
+budgets:
+    scripts/ci/with_host_lock.sh --shared just budgets-here
+
+# The budgets themselves, once `budgets` holds the host lock.
+budgets-here: featureless dep-budget size-budget
 
 # --- builds ----------------------------------------------------------------
 
@@ -170,7 +181,7 @@ run-isolated:
 
 # Build the web demo.
 web:
-    apps/desktop-demo/build-web.sh --release
+    scripts/ci/with_host_lock.sh --shared apps/desktop-demo/build-web.sh --release
 
 # Build the starter template for web, the way the publish canary does.
 web-isolated:
@@ -181,11 +192,13 @@ web-isolated:
 
 # Build the Android demo.
 android:
-    cd apps/android-demo/android && ./gradlew --no-daemon :app:assembleRelease
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease
 
 # Build the Android release artifact, with the Rust side fully optimised.
 android-release:
-    cd apps/android-demo/android && ./gradlew --no-daemon :app:assembleRelease -PrustFastRelease=false
+    cd apps/android-demo/android && ../../../scripts/ci/with_host_lock.sh --shared \
+      ./gradlew --no-daemon :app:assembleRelease -PrustFastRelease=false
 
 # Build the starter template for Android, the way the publish canary does.
 android-isolated:
@@ -223,8 +236,7 @@ robot-one example:
 
 # CI's GPU half of the robot suite.
 robot-gpu:
-    scripts/ci/with_robot_host_lock.sh \
-      xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
+    xvfb-run -a -s "-screen 0 1280x800x24" ./run_robot_test.sh \
       --sequential \
       --skip robot_underline_screenshot \
       --skip robot_text_strikeout_presented \
@@ -233,7 +245,6 @@ robot-gpu:
 # CI's software-present half: exactly the three captures excluded above.
 robot-captures:
     WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 \
-      scripts/ci/with_robot_host_lock.sh \
       xvfb-run -a -s "-screen 0 1600x1200x24" ./run_robot_test.sh \
       --sequential \
       --example robot_underline_screenshot \

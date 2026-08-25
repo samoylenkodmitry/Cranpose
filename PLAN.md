@@ -249,6 +249,35 @@ a host-level `flock` against each other — two X11 suites sharing one display
 interfere, and a suite competing with itself for the CPU produces exactly the
 timing failures the suite is meant to catch.
 
+That `flock` covers the robot suites and nothing else, and the host it
+protects carries **nineteen other repositories' runners**. None of them know
+the robot suite exists. A neighbour's Rust build takes twelve cores, the frame
+the suite is timing takes twice as long, and the suite reports a per-frame
+regression that reproduces nowhere: `robot_text_handle_cycle_stability` failed
+on `main` at `drag work_avg_ms 0.73 -> 1.66` and `layer_cache_size 3 -> 13
+(allowed 12)`, then passed on the same host on that commit **and** on the
+commit before it once the box was quiet. Half an hour was spent bisecting
+three innocent pull requests.
+
+So the lock is now over the machine's capacity rather than over the robot
+suite, and it has two sides (`scripts/ci/with_host_lock.sh`). The three heavy
+Linux builds that share this host -- the size budget, the wasm build, the
+Android release build -- take the **shared** side for their whole run. The
+robot suite builds without it and takes the **exclusive** side for the timed
+part only, so builds still overlap builds and only a measurement empties the
+machine. Neither side ever refuses to run: after forty-five minutes it starts
+anyway and says on stdout that it did.
+
+That lock covers this fleet. The other nineteen queues on the box are not
+ours to serialise, so the suite also waits for the load average itself
+(`wait_for_host_quiet`, after the build and before the first test), and
+`host_state_summary` -- already printed before every attempt -- carries
+`load_1m` so a red names its own conditions.
+
+Both are confounds removed, not the problem solved. The problem is that a
+measurement gate shares a machine with nineteen unrelated build queues, and
+the fix for that is a host the robot suite does not share.
+
 The applications are still on one Linux runner each, and it shows: cranscan's
 release sat queued behind its own `main` CI on `samarch-1-cranscan` while the
 tag was already pushed. The lever there is the same one, applied per

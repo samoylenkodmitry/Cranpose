@@ -42,6 +42,27 @@ if [ ! -x "${CARGO_RUNNER[0]}" ]; then
     CARGO_RUNNER=(cargo)
 fi
 
+# The host lock, in two phases (scripts/ci/with_host_lock.sh owns the file).
+#
+# Phase one, from here: the shared side, the same side every heavy build on
+# this machine takes. The suite's own build is a build like any other, and
+# holding it here is what keeps a second robot suite -- or an Android release
+# -- from compiling beside the tests further down.
+#
+# Phase two, once the build is done: this fd is CLOSED and the exclusive side
+# taken on another. Converting in place would deadlock two suites that each
+# hold the shared side and each want the exclusive one; releasing first cannot,
+# and the worst it costs is letting a builder in during the gap, which the
+# exclusive acquire then waits out.
+HOST_LOCK_FILE="/tmp/cranpose-host-capacity.lock"
+host_lock_available() {
+    command -v flock >/dev/null 2>&1 && : >>"$HOST_LOCK_FILE" 2>/dev/null
+}
+if host_lock_available; then
+    exec 8>"$HOST_LOCK_FILE"
+    flock -s 8 || true
+fi
+
 # Default to sequential execution for stability. Parallel runs remain opt-in.
 if [ -n "${CRANPOSE_ROBOT_PARALLEL:-}" ]; then
     PARALLEL_JOBS="$CRANPOSE_ROBOT_PARALLEL"
@@ -477,6 +498,38 @@ if [ "$BUILD_ONLY" = "1" ]; then
     echo "Build-only robot gate completed for ${#EXAMPLES[@]} examples." | tee -a "$LOG_FILE"
     exit 0
 fi
+
+# Everything below this line is timed, and nothing above it was.
+#
+# Phase two of the host lock: drop the shared side taken for the build, and
+# take the exclusive one. It waits out every build sharing this machine and
+# keeps the next from starting until the suite is done -- so builds still
+# overlap builds, and only a measurement empties the machine.
+#
+# The file descriptor is the lock. It is released when this script exits, by
+# the kernel, however it exits.
+if host_lock_available; then
+    exec 8>&-
+    exec 9>"$HOST_LOCK_FILE"
+    if flock -n -x 9; then
+        echo "Host capacity: exclusive, taken immediately" | tee -a "$LOG_FILE"
+    else
+        echo "Host capacity: waiting for the builds sharing this machine..." | tee -a "$LOG_FILE"
+        lock_wait_started_at=$(date +%s)
+        if flock -w "${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}" -x 9; then
+            echo "Host capacity: exclusive after $(( $(date +%s) - lock_wait_started_at ))s" \
+                | tee -a "$LOG_FILE"
+        else
+            echo "Host capacity: gave up waiting; measuring beside another build." \
+                 "TREAT ANY TIMING FAILURE BELOW AS UNMEASURED." | tee -a "$LOG_FILE"
+        fi
+    fi
+fi
+
+# The lock covers this fleet. It does not cover the nineteen other
+# repositories' runners on the same box, so also wait for the load average
+# itself -- our own build's, and any stranger's that is still running.
+wait_for_host_quiet "the robot suite" | tee -a "$LOG_FILE"
 
 echo "============================================" | tee -a "$LOG_FILE"
 echo "Running Robot Test Suite" | tee -a "$LOG_FILE"

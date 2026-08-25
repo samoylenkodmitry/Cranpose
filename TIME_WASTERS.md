@@ -1082,3 +1082,30 @@ Opening Round Sync does not repair the provider — its cached port is still the
 dead one. `adb shell am force-stop de.felixnuesse.extract` and then re-open the
 picker, which starts provider and daemon together. Worth knowing before reading
 this as a fault in whatever app is doing the picking.
+
+## A red robot timing test that is the neighbours, not the code
+
+`robot_text_handle_cycle_stability` went red on `main` with
+`drag work_avg_ms grew 0.73 -> 1.66` and `layer_cache_size grew 3 -> 13
+(allowed 12)`. Three pull requests had landed since the last green run, and
+the obvious next move -- read their diffs for something that could leak a
+layer -- costs an hour and finds nothing, because it is not there.
+
+Do this first instead. Run the one test on samarch-1 at `HEAD` and at the last
+green commit, both with the box
+otherwise quiet. Both passing is the answer: the failure was the load. That
+host runs nineteen repositories' runners and the lock only holds robot suites
+apart, so any neighbour's build lands inside the measurement.
+
+Two ways to see it without running anything: a failure margin that is one over
+the line, and a timing metric that moved with it. A real leak grows every
+cycle and clears the tolerance by a mile.
+
+The preserved output is on the host, which is faster than the truncated
+Actions log -- CI prints `Preserving robot result artifacts after status 1:
+<dir>`, and that directory holds each test's full stdout.
+
+And do not run your own build on samarch-1 while a robot job is going: it is
+the same contention, caused by you, and it killed a CI robot job mid-compile
+while this was being diagnosed.
+
