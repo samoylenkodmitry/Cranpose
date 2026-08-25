@@ -119,6 +119,21 @@ cause was not in this application, though: see *Conditional branches share one
 composition slot* above, which is what let the ring go on reading the arena's
 taps. What is left:
 
+### Campaign's level intro is a scrolling list where Daily's is the ring
+
+Reported from the watch on `v1.3.7`: starting Campaign reaches a vertically
+scrollable screen with a `START` button on it, where Daily goes straight to the
+round arena. The two modes take different routes to the same place, and the
+scrolling one is the wrong shape for a watch -- a round screen showing a list
+whose only content is one button.
+
+Not yet root-caused. What is worth knowing before looking: the level intro is
+the screen Campaign stops at on its way to the arena, and it is *why* Campaign
+never showed the launch bug that Daily did -- it changes the composition's shape
+between the ring and the arena. So this screen is load-bearing for the wrong
+reason, and removing it without keying the router would bring the older bug
+back on Campaign too.
+
 ### Leaving a run is crown-only, and the back gesture cannot do it
 
 Back from play pauses, and back from the pause overlay resumes. So the gesture
