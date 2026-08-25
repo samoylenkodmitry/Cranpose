@@ -406,6 +406,31 @@ armv7-linux-androideabi` and ensure `ANDROID_NDK_HOME` points at the installed
 NDK. Also repair broken `~/.cargo/bin/{cargo,rustup}` proxies first; otherwise
 Gradle's nested shell reports misleading `cargo: command not found` failures.
 
+## A build cache can delete the host's `cargo`, `rustc` and `rustup`
+
+`Swatinem/rust-cache` caches `~/.cargo/bin` and **prunes** it on save: files
+that were not there when it restored are removed. On a self-hosted runner that
+directory is the host's own toolchain, so a job can finish green and leave the
+machine with no `cargo` at all. The signature is unmistakable and easy to
+misread as a broken PATH: `~/.cargo/bin` still holds `cargo-fmt`,
+`cargo-clippy`, `clippy-driver`, `rust-analyzer` and friends, but `cargo`,
+`rustc`, `rustdoc` and `rustup` -- exactly the rustup proxies -- are gone,
+while `~/.rustup/toolchains` is untouched. Two Macs lost them the same
+afternoon; the evidence is in the run log, where the restore and save steps
+both name `/Users/<user>/.cargo/bin`.
+
+The fix in the workflow is `with: cache-bin: false` on every use of the
+action. Cranpose has carried no `rust-cache` since #338, so check the app
+repositories rather than this one.
+
+The repair on the host, which does not disturb the installed toolchains:
+
+    curl -sSf https://sh.rustup.rs -o rustup-init.sh
+    sh rustup-init.sh -y --no-modify-path --default-toolchain none
+    rustup default stable
+
+Verify with `ls ~/.cargo/bin` and `cargo --version` before blaming a build.
+
 ## Prefer in-process GPU telemetry for repeated physical-iOS profiling
 
 Detaching an Instruments `xctrace` recording can leave the phone listed as
