@@ -46,7 +46,7 @@ struct BranchGroupInjector<'a> {
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
-        let needs_group = block_can_reach_composer(block);
+        let needs_group = block_can_reach_composer(block) && !block_is_fully_keyed(block);
         self.visit_block_mut(block);
         if !needs_group {
             return;
@@ -60,7 +60,7 @@ impl BranchGroupInjector<'_> {
             self.wrap_block(&mut block_expr.block);
             return;
         }
-        let needs_group = expr_can_reach_composer(body);
+        let needs_group = expr_can_reach_composer(body) && !expr_is_keyed_call(body);
         self.visit_expr_mut(body);
         if !needs_group {
             return;
@@ -197,6 +197,38 @@ fn expr_can_reach_composer(expr: &Expr) -> bool {
     let mut scan = ComposerReachScan { found: false };
     scan.visit_expr(expr);
     scan.found
+}
+
+/// A branch bracket exists to supply the identity a branch's content lacks.
+/// A branch whose every statement is an explicit `with_key` call has already
+/// stated its identity, and the bracket would only stand between those keys
+/// and the sibling-move machinery — `for row { if visible { with_key(id, …) } }`
+/// must keep the keyed move semantics it always had. Such branches get no
+/// bracket.
+fn block_is_fully_keyed(block: &Block) -> bool {
+    if block.stmts.is_empty() {
+        return false;
+    }
+    block.stmts.iter().all(|stmt| match stmt {
+        Stmt::Expr(expr, _) => expr_is_keyed_call(expr),
+        _ => false,
+    })
+}
+
+fn expr_is_keyed_call(expr: &Expr) -> bool {
+    let callee_is_with_key = |name: &syn::Ident| name == "with_key";
+    match expr {
+        Expr::Call(call) => match call.func.as_ref() {
+            Expr::Path(path) => path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| callee_is_with_key(&segment.ident)),
+            _ => false,
+        },
+        Expr::MethodCall(method) => callee_is_with_key(&method.method),
+        _ => false,
+    }
 }
 
 /// Whether an expression contains a direct call shaped like composition: a

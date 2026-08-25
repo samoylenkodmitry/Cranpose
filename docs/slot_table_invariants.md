@@ -15,6 +15,15 @@ This document is the short operational checklist for the slot table implementati
 - A transparent group is a conditional branch's bracket: it never carries a
   scope, and detaching a transparent child detaches its children as their own
   subtrees (each with its own retention decision) followed by the bare shell.
+- Explicit keys keep their subtrees across transparent brackets within a pass:
+  an arriving key that would insert fresh first claims the identical key parked
+  by an already-finished bracket of the same nearest non-transparent owner,
+  then steals it from a later unvisited bracket of the same branch site. Both
+  reattach as `Moved` — scopes live, nodes attached. Unclaimed parked subtrees
+  flow into their owner group's finish, where dispose-or-retain runs exactly as
+  it did before brackets existed. (A branch consisting solely of `with_key`
+  calls opens no bracket in the first place; its keys use the ordinary keyed
+  sibling-move path.)
 
 ## Payloads
 

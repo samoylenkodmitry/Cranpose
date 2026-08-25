@@ -54,7 +54,13 @@ A branch group is *transparent* in the slot table: it never carries a
 recompose scope — reads inside a branch invalidate the enclosing function's
 scope, which re-evaluates the condition — and detachment reaches through the
 bracket so a `RetainWhenInactive` group inside a departed branch is retained
-rather than inheriting dispose-by-default from the shell
+rather than inheriting dispose-by-default from the shell. A branch whose every
+statement is an explicit `with_key` call gets no bracket at all — it has
+already stated its identity, so `for row { if visible { with_key(id, …) } }`
+keeps the keyed sibling-move semantics and cost it always had. Where a bracket
+does hold keyed content beside unkeyed content, an explicit key still keeps
+its subtree across brackets within a pass — claimed from the orphan pool or
+stolen from a later bracket of the same branch site — instead of being rebuilt
 (`docs/slot_table_invariants.md`).
 
 The edge that remains: a branch that composes only through names the

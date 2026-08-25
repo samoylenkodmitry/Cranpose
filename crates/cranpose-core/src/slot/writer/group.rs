@@ -94,11 +94,33 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         detached: DetachedSubtree,
     ) -> Option<GroupStart<ActiveGroupId>> {
+        self.reattach_started_group(key, detached, GroupStartKind::Restored)
+    }
+
+    /// Bring a keyed subtree back that never left the composition's applier —
+    /// it moved between branch brackets within this pass. `Moved` rather than
+    /// `Restored`: the content's scopes are live and its nodes attached, so
+    /// the normal skip machinery re-registers them without a forced
+    /// recomposition.
+    fn adopt_started_group(
+        &mut self,
+        key: GroupKey,
+        detached: DetachedSubtree,
+    ) -> Option<GroupStart<ActiveGroupId>> {
+        self.reattach_started_group(key, detached, GroupStartKind::Moved)
+    }
+
+    fn reattach_started_group(
+        &mut self,
+        key: GroupKey,
+        detached: DetachedSubtree,
+        kind: GroupStartKind,
+    ) -> Option<GroupStart<ActiveGroupId>> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);
         match self.table.restore_subtree(cursor, key, detached) {
-            Ok(anchor) => self.open_started_group(anchor, GroupStartKind::Restored),
+            Ok(anchor) => self.open_started_group(anchor, kind),
             Err(detached) => {
                 log::error!(
                     "slot writer rejected detached subtree restore at parent={parent_anchor:?} child_index={insert_index}"
@@ -107,6 +129,33 @@ impl SlotWriteSession<'_> {
                 None
             }
         }
+    }
+
+    /// Keyed continuity across branch brackets: an explicit key that would
+    /// otherwise insert fresh may claim the identical key parked by an
+    /// already-finished bracket of the same owner, or steal it out of a later
+    /// bracket from the same branch site that has not composed yet. Both are
+    /// the same shifted-by-one list; without this, hiding one row rebuilds
+    /// every keyed row behind it and loses their state.
+    fn claim_or_steal_keyed_subtree(&mut self, key: GroupKey) -> Option<DetachedSubtree> {
+        key.explicit_key?;
+        let parent_anchor = self.state.current_parent_anchor();
+        if self.state.has_orphaned_keyed() {
+            let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
+            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, key) {
+                return Some(subtree);
+            }
+        }
+        let parent_is_transparent = self
+            .table
+            .active_group_index(parent_anchor)
+            .and_then(|index| self.table.groups.get(index))
+            .is_some_and(|group| group.transparent);
+        if !parent_is_transparent {
+            return None;
+        }
+        self.table
+            .steal_keyed_subtree_from_later_transparent_siblings(parent_anchor, key)
     }
 
     fn recover_malformed_group_start(
@@ -258,6 +307,13 @@ impl SlotWriteSession<'_> {
 
         let cursor = ChildCursor::new(parent_anchor, insert_index);
         let resolution = self.resolve_active_child(cursor, key);
+        if matches!(resolution, ActiveChildResolution::InsertNew) {
+            if let Some(subtree) = self.claim_or_steal_keyed_subtree(key) {
+                if let Some(started) = self.adopt_started_group(key, subtree) {
+                    return started;
+                }
+            }
+        }
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
         self.open_started_group(started.anchor, started.kind)
             .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))

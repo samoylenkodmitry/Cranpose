@@ -644,6 +644,154 @@ fn a_misclassified_handler_closure_degrades_to_a_no_op() {
     assert_composition_valid(&composition);
 }
 
+thread_local! {
+    static KEYED_VALUES: RefCell<Vec<(u64, i32)>> = const { RefCell::new(Vec::new()) };
+}
+
+#[composable]
+fn keyed_visibility_probe(rows: Vec<(u64, bool)>) {
+    KEYED_VALUES.with(|values| values.borrow_mut().clear());
+    for (id, visible) in rows {
+        if visible {
+            cranpose_core::with_key(&id, || {
+                let value = remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    BRANCH_INITS.with(Cell::get) as i32
+                });
+                let value = value.with(|value| *value);
+                KEYED_VALUES.with(|log| log.borrow_mut().push((id, value)));
+            });
+        }
+    }
+}
+
+fn keyed_values() -> Vec<(u64, i32)> {
+    KEYED_VALUES.with(|values| values.borrow().clone())
+}
+
+#[test]
+fn keyed_state_survives_a_front_removal_across_branch_shells() {
+    // `for row { if visible { with_key(id, …) } }` is the canonical list
+    // shape. Hiding the first row shifts every later iteration's branch
+    // bracket by one; the explicit key inside must keep its subtree — moved,
+    // not disposed and recomposed — or a 1024-row list pays a full rebuild
+    // for one hidden row and loses all its keyed state.
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(17, || {
+            keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
+        })
+        .expect("initial composition");
+    assert_eq!(branch_inits(), 3);
+    assert_eq!(keyed_values(), vec![(1, 1), (2, 2), (3, 3)]);
+
+    composition
+        .render(17, || {
+            keyed_visibility_probe(vec![(1, false), (2, true), (3, true)])
+        })
+        .expect("hide the first row");
+    assert_eq!(
+        (branch_inits(), keyed_values()),
+        (3, vec![(2, 2), (3, 3)]),
+        "hiding one row must not recompose the keyed rows behind it"
+    );
+    assert_composition_valid(&composition);
+
+    composition
+        .render(17, || {
+            keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
+        })
+        .expect("show the first row again");
+    assert_eq!(
+        (branch_inits(), keyed_values()),
+        (4, vec![(1, 4), (2, 2), (3, 3)]),
+        "re-showing the first row must compose it fresh and keep the others"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn mixed_keyed_visibility_probe(rows: Vec<(u64, bool)>) {
+    KEYED_VALUES.with(|values| values.borrow_mut().clear());
+    for (id, visible) in rows {
+        if visible {
+            // Unkeyed content beside the keyed call: this branch cannot elide
+            // its bracket, so the keyed subtree must travel between brackets
+            // through the steal/orphan-pool machinery.
+            let _breadcrumb = remember(|| 0_i32);
+            cranpose_core::with_key(&id, || {
+                let value = remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    BRANCH_INITS.with(Cell::get) as i32
+                });
+                let value = value.with(|value| *value);
+                KEYED_VALUES.with(|log| log.borrow_mut().push((id, value)));
+            });
+        }
+    }
+}
+
+#[test]
+fn keyed_state_survives_a_front_removal_across_branch_brackets() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(19, || {
+            mixed_keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
+        })
+        .expect("initial composition");
+    assert_eq!(branch_inits(), 3);
+    assert_eq!(keyed_values(), vec![(1, 1), (2, 2), (3, 3)]);
+
+    composition
+        .render(19, || {
+            mixed_keyed_visibility_probe(vec![(1, false), (2, true), (3, true)])
+        })
+        .expect("hide the first row");
+    assert_eq!(
+        (branch_inits(), keyed_values()),
+        (3, vec![(2, 2), (3, 3)]),
+        "a bracketed keyed row must be stolen across brackets, not recomposed"
+    );
+    assert_composition_valid(&composition);
+
+    composition
+        .render(19, || {
+            mixed_keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
+        })
+        .expect("show the first row again");
+    assert_eq!(
+        (branch_inits(), keyed_values()),
+        (4, vec![(1, 4), (2, 2), (3, 3)]),
+        "re-showing the first row must reclaim the shifted rows from the orphan pool"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[test]
+fn keyed_state_follows_a_reorder_across_branch_shells() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(18, || keyed_visibility_probe(vec![(1, true), (2, true)]))
+        .expect("initial composition");
+    assert_eq!(keyed_values(), vec![(1, 1), (2, 2)]);
+
+    composition
+        .render(18, || keyed_visibility_probe(vec![(2, true), (1, true)]))
+        .expect("swap the rows");
+    assert_eq!(
+        (branch_inits(), keyed_values()),
+        (2, vec![(2, 2), (1, 1)]),
+        "a keyed row must carry its state through a reorder across brackets"
+    );
+    assert_composition_valid(&composition);
+}
+
 #[composable]
 fn loop_branch_probe(flags: Vec<bool>) {
     BRANCH_LOG.with(|log| log.borrow_mut().clear());

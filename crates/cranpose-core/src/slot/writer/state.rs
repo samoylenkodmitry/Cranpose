@@ -1,8 +1,20 @@
 use super::{
-    super::{DetachedSubtree, SlotPassMode, SlotTable},
+    super::{DetachedSubtree, GroupKey, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
 use crate::{collections::map::HashMap, AnchorId};
+
+/// A keyed subtree a departed conditional branch left behind, waiting within
+/// the pass for the same key to arrive under another branch bracket of the
+/// same owner. `owner` is the nearest non-transparent ancestor: if the key is
+/// not claimed by the time that group finishes, the subtree flows into its
+/// normal detached-children handling — exactly where it would have been
+/// disposed before branch brackets existed.
+pub(in crate::slot) struct OrphanedKeyedSubtree {
+    pub(in crate::slot) owner: AnchorId,
+    pub(in crate::slot) key: GroupKey,
+    pub(in crate::slot) subtree: DetachedSubtree,
+}
 
 #[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
@@ -11,6 +23,7 @@ pub(crate) struct SlotWriteSessionState {
     frame_pool: Vec<GroupFrame>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
+    pub(in crate::slot) orphaned_keyed: Vec<OrphanedKeyedSubtree>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -36,6 +49,13 @@ impl SlotWriteSessionState {
                 self.rejected_restore_subtrees.len()
             );
             self.rejected_restore_subtrees.clear();
+        }
+        if !self.orphaned_keyed.is_empty() {
+            log::error!(
+                "slot writer reset discarded {} orphaned keyed subtrees that were not flushed",
+                self.orphaned_keyed.len()
+            );
+            self.orphaned_keyed.clear();
         }
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
@@ -101,6 +121,51 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn note_removed_nodes(&mut self, count: usize) {
         self.removed_node_count += count;
         self.update_compaction_hint();
+    }
+
+    pub(in crate::slot) fn park_orphaned_keyed(
+        &mut self,
+        owner: AnchorId,
+        key: GroupKey,
+        subtree: DetachedSubtree,
+    ) {
+        self.orphaned_keyed.push(OrphanedKeyedSubtree {
+            owner,
+            key,
+            subtree,
+        });
+    }
+
+    pub(in crate::slot) fn claim_orphaned_keyed(
+        &mut self,
+        owner: AnchorId,
+        key: GroupKey,
+    ) -> Option<DetachedSubtree> {
+        let position = self
+            .orphaned_keyed
+            .iter()
+            .position(|orphan| orphan.owner == owner && orphan.key == key)?;
+        Some(self.orphaned_keyed.remove(position).subtree)
+    }
+
+    pub(in crate::slot) fn drain_orphaned_keyed_for_owner(
+        &mut self,
+        owner: AnchorId,
+    ) -> Vec<DetachedSubtree> {
+        let mut drained = Vec::new();
+        let mut index = 0;
+        while index < self.orphaned_keyed.len() {
+            if self.orphaned_keyed[index].owner == owner {
+                drained.push(self.orphaned_keyed.remove(index).subtree);
+            } else {
+                index += 1;
+            }
+        }
+        drained
+    }
+
+    pub(in crate::slot) fn has_orphaned_keyed(&self) -> bool {
+        !self.orphaned_keyed.is_empty()
     }
 
     pub(in crate::slot) fn note_detached_subtrees(&mut self, subtrees: &[DetachedSubtree]) {

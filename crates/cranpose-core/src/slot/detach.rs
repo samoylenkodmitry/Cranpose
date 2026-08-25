@@ -361,17 +361,110 @@ impl SlotTable {
         Ok(root_anchor)
     }
 
+    /// The nearest ancestor that is not a transparent branch bracket —
+    /// the group whose finish is where a departed branch's content would
+    /// have been handled before brackets existed. `AnchorId::INVALID`
+    /// names the root.
+    pub(in crate::slot) fn nearest_non_transparent_ancestor(&self, anchor: AnchorId) -> AnchorId {
+        let mut current = anchor;
+        loop {
+            if !current.is_valid() {
+                return AnchorId::INVALID;
+            }
+            let Some(index) = self.active_group_index(current) else {
+                return AnchorId::INVALID;
+            };
+            let Some(record) = self.groups.get(index) else {
+                return AnchorId::INVALID;
+            };
+            if !record.transparent {
+                return current;
+            }
+            current = record.parent_anchor;
+        }
+    }
+
+    /// Detach `key`'s subtree out of a later transparent sibling of `shell`,
+    /// searching only brackets from the same branch site (same static key):
+    /// the removal of an earlier loop iteration shifts every later bracket by
+    /// one, and the keyed content inside must move rather than be recomposed.
+    pub(in crate::slot) fn steal_keyed_subtree_from_later_transparent_siblings(
+        &mut self,
+        shell_anchor: AnchorId,
+        key: GroupKey,
+    ) -> Option<DetachedSubtree> {
+        let shell_index = self.active_group_index(shell_anchor)?;
+        let shell = self.groups.get(shell_index)?;
+        let shell_static_key = shell.key.static_key;
+        let parent_anchor = shell.parent_anchor;
+        let siblings = self.direct_child_range(parent_anchor);
+        let mut index = shell_index + self.group_subtree_len_at_index(shell_index);
+        while index < siblings.end() {
+            let record = self.groups.get(index)?;
+            if record.parent_anchor != parent_anchor {
+                return None;
+            }
+            let subtree_len = self.group_subtree_len_at_index(index);
+            if record.transparent && record.key.static_key == shell_static_key {
+                if let Some(found) = self.find_keyed_child_in_transparent_subtree(index, key) {
+                    let subtree = self.detach_subtree_at_index_internal(found, false);
+                    if subtree.group_count() == 0 {
+                        return None;
+                    }
+                    return Some(subtree);
+                }
+            }
+            index += subtree_len;
+        }
+        None
+    }
+
+    /// A direct child of `shell_index` matching `key`, descending through
+    /// nested transparent brackets only.
+    fn find_keyed_child_in_transparent_subtree(
+        &self,
+        shell_index: usize,
+        key: GroupKey,
+    ) -> Option<usize> {
+        let shell_anchor = self.groups.get(shell_index)?.anchor;
+        let end = shell_index + self.group_subtree_len_at_index(shell_index);
+        let mut index = shell_index + 1;
+        while index < end {
+            let record = self.groups.get(index)?;
+            if record.parent_anchor != shell_anchor {
+                log::error!(
+                    "slot table stopped a keyed steal scan at index {index}: expected a direct child of {shell_anchor:?}, found a child of {:?}",
+                    record.parent_anchor
+                );
+                return None;
+            }
+            if record.key == key {
+                return Some(index);
+            }
+            let subtree_len = self.group_subtree_len_at_index(index);
+            if record.transparent {
+                if let Some(found) = self.find_keyed_child_in_transparent_subtree(index, key) {
+                    return Some(found);
+                }
+            }
+            index += subtree_len;
+        }
+        None
+    }
+
     pub(in crate::slot) fn root_finish_result(
         &mut self,
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
+        let mut detached = state.drain_orphaned_keyed_for_owner(AnchorId::INVALID);
         if !state.root.detach_remaining_children {
-            return Vec::new();
+            return detached;
         }
 
         let next_child_index = state.root.next_child_index;
         let cursor = ChildCursor::new(AnchorId::INVALID, next_child_index);
-        self.detach_subtrees_at_cursor(cursor)
+        detached.extend(self.detach_subtrees_at_cursor(cursor));
+        detached
     }
 }
 
