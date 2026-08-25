@@ -406,7 +406,7 @@ armv7-linux-androideabi` and ensure `ANDROID_NDK_HOME` points at the installed
 NDK. Also repair broken `~/.cargo/bin/{cargo,rustup}` proxies first; otherwise
 Gradle's nested shell reports misleading `cargo: command not found` failures.
 
-## A build cache can delete the host's `cargo`, `rustc` and `rustup`
+## A build cache can delete anything under a shared `~/.cargo`
 
 `Swatinem/rust-cache` caches `~/.cargo/bin` and **prunes** it on save: files
 that were not there when it restored are removed. On a self-hosted runner that
@@ -419,9 +419,24 @@ while `~/.rustup/toolchains` is untouched. Two Macs lost them the same
 afternoon; the evidence is in the run log, where the restore and save steps
 both name `/Users/<user>/.cargo/bin`.
 
-The fix in the workflow is `with: cache-bin: false` on every use of the
-action. Cranpose has carried no `rust-cache` since #338, so check the app
-repositories rather than this one.
+`~/.cargo/bin` is not the only directory it does this to. With
+`cache-bin: false` already in place, the same action left a half-deleted
+`zerocopy-0.8.48` in `~/.cargo/registry` and failed a Cranpose `wasm build`
+with `failed to read Cargo.toml: NotFound` out of that crate's `build.rs` --
+one minute before a cranamp iOS job finished saving its cache on the same
+Mac. The re-run passed in 1m33s on a quiet host.
+
+So `cache-bin: false` is a patch on one directory, not the fix. The fix is
+not to run the action where the filesystem is the host's:
+
+    - uses: Swatinem/rust-cache@v2
+      if: runner.environment == 'github-hosted'
+
+Nothing is lost by skipping it there -- a self-hosted `~/.cargo` persists
+between jobs already -- and the machine stops being a shared mutable
+directory two repositories fight over. Cranpose has carried no `rust-cache`
+since #338, so check the app repositories rather than this one; cranamp is
+gated as above since #53.
 
 The repair on the host, which does not disturb the installed toolchains:
 
