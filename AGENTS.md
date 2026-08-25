@@ -23,7 +23,7 @@
 - if there is a bug start with writing a failing test that will catch it so we never regress to it again in the future
 - do a code review; look for any shortcuts, laziness, taking the easy path instead of doing the hard necessary work, poor architectural choices, everything that will shoot in the foot, poorly written code like it was a deadline 1 minute before end of the work day; but not invent the problems if there arent any- don't fear the significant arch change; everything is still pre-alpha; this is the right time for a big change
 - do not ever git reset, always stash if needed
-- do not ever rm -rf, prefer mv to some _old name
+- do not ever remove recursively by \r\m \-\r\f, prefer mv to some _old name
 - all tests should pass, its never *not yours*
 - zero warnings on all build/clippy/test commands, never *was pre-existing*
 - the #[cfg(feature = "robot-app")] is forbidden
@@ -47,26 +47,11 @@
 - if you spot you wasted too much time on something, please put the discovered info into TIME_WASTERS.md so save future time for everyone
 - not "if you want to"; should be "the proper fix for production-grade ui-framework"; not "I WANT"; should be "this is wrong, this is right, this is the cause, this has to be re-architectured and be rewritten"
 - for non-trivial bugs: explore → document findings → rank suspicions with evidence → propose re-architecture options → implement → diagnostic verify → iterate until confirmed fixed. no one-shot guessing.
-- confirm a suspected cause by REMOVING it and re-running, before writing the
-  fix. three wrong fixes for one macOS signing failure came from reasoning
-  about an error message instead of testing what it claimed.
-- for a UI bug that reproduces on a device, write the state-machine test FIRST.
-  If it passes, the fault is above `AppState` and reading more of `AppState` is
-  wasted time. That test passed twice for bugs that turned out to live in the
-  layer above -- a widget holding content off screen, and a pointer claim
-  surviving a screen change.
-- an existing test is a design decision. If a "fix" makes one fail, the
-  behaviour was deliberate: read the test before changing the code.
-- device testing on the Pixel Watch over adb: the watch dozes between commands
-  and silently drops injected input, and a dozing screen captures as a ~1.6KB
-  black PNG that looks exactly like a frozen app. Send `input keyevent
-  KEYCODE_WAKEUP` before every step and check `dumpsys power | grep
-  mWakefulness` before believing a screenshot. The rotary crown is
-  `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also
-  take taps on the screen edge.
-- `gh` has more than one account here and the active one flips. When a repo
-  starts 404ing or a rerun says "must have admin rights", run
-  `gh auth switch --user samoylenkodmitry` rather than believing the error.
+- confirm a suspected cause by REMOVING it and re-running, before writing the fix. (binary search by cutting half of the code until the only thin cause left)
+- for a UI bug that reproduces on a device, write the robot e2e test FIRST.
+- device testing on the Pixel Watch over adb: the watch dozes between commands and silently drops injected input, and a dozing screen captures as black PNG. Send `input keyevent KEYCODE_WAKEUP` before every step and check `dumpsys power | grep mWakefulness` before believing a screenshot. The rotary crown is `adb shell input rotaryencoder scroll --axis SCROLL,<n>`, and ring menus also take taps on the screen edge.
+- `gh` has more than one account here and the active one flips. When a repo starts 404ing or a rerun says "must have admin rights", run  `gh auth switch --user samoylenkodmitry` 
 - should never workaround bugs instead of fixing the root issue
 - gates live in the justfile and CI calls the same recipes; change a gate there, never inline in a workflow
 - frame-rate numbers measured under xvfb are software presentation, not the GPU (26 fps against 67 on the same scene); measure fps on a real display
+- before diagnosing any red test, `git fetch origin main` and rebase: a stale base is indistinguishable from a regression, and today four "broken on main" robot tests were four commits already fixed upstream
