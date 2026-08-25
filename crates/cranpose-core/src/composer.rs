@@ -554,6 +554,32 @@ pub struct Composer {
     pub(crate) core: Rc<ComposerCore>,
 }
 
+/// Closes a conditional branch's group when it goes out of scope.
+///
+/// Created by [`Composer::__branch_group`]; the drop detaches whatever the
+/// branch stopped emitting and ends the group, mirroring the close half of
+/// `Composer::with_group_seed` minus the scope bookkeeping a branch does not
+/// have.
+pub struct BranchGroupGuard {
+    composer: Composer,
+    parent_scope: Option<ScopeId>,
+}
+
+impl Drop for BranchGroupGuard {
+    fn drop(&mut self) {
+        let result = self
+            .composer
+            .with_slot_session_mut(|slots| slots.finish_group_body());
+        self.composer
+            .handle_finished_group_result(self.parent_scope, result);
+        self.composer
+            .with_slot_session_mut(|slots| slots.end_group());
+        if let Err(err) = self.composer.flush_pending_commands_if_large() {
+            log::error!("mid-composition command flush failed: {err}");
+        }
+    }
+}
+
 pub(crate) enum EmittedNode {
     Fresh(Box<dyn Node>),
     Recycled(RecycledNode),
@@ -1109,6 +1135,32 @@ impl Composer {
     pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
         let seed = explicit_group_key_seed(key, std::panic::Location::caller());
         self.with_group_seed(seed, f)
+    }
+
+    /// Opens the group for one conditional branch of a composable body and
+    /// returns the guard that closes it. `#[composable]` inserts this around
+    /// every `if`/`else` and `match` branch that can reach the composer, the
+    /// way Compose's compiler plugin gives each branch a group of its own, so
+    /// the arriving branch is never handed the slots the departing branch was
+    /// using.
+    ///
+    /// A branch group is a plain slot-table group with no [`RecomposeScope`]:
+    /// state read inside a branch invalidates the enclosing function's scope,
+    /// which re-runs the body and re-evaluates the condition. The guard closes
+    /// the group on drop, so `return`, `?`, `break` and `continue` unwind the
+    /// slot table correctly.
+    #[doc(hidden)]
+    pub fn __branch_group(&self, key: Key) -> BranchGroupGuard {
+        let seed = crate::slot::GroupKeySeed::unkeyed(key);
+        self.with_slot_session_mut(|slots| {
+            let reserved = slots.preview_group_key(seed);
+            let start = slots.begin_group(reserved, None);
+            slots.mark_group_transparent(start.group);
+        });
+        BranchGroupGuard {
+            composer: self.clone(),
+            parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
+        }
     }
 
     fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {

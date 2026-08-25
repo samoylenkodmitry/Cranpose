@@ -770,6 +770,10 @@ fn samples_across_swap(nested: bool) -> Vec<SwapSample> {
     composition
         .process_invalid_scopes()
         .expect("the row stops being busy");
+    // Each branch owns its node, so in the plain case the swap replaces the
+    // composition's root node — re-read it instead of measuring the disposed
+    // one.
+    let root = composition.root().expect("root node after the swap");
     measure(&mut composition, root);
     composition.runtime_handle().drain_ui();
     samples.push(SwapSample {

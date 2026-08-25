@@ -46,6 +46,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
             generation: 0,
             anchor: owner,
             scope_id: None,
+            transparent: false,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {
@@ -85,6 +86,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             generation: 0,
             anchor: owner,
             scope_id: None,
+            transparent: false,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {

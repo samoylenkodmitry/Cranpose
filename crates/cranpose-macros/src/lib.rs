@@ -4,6 +4,8 @@ use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
 use syn::{parse_macro_input, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type};
 
+mod branch_groups;
+
 /// Check if a type is Fn-like (impl FnMut/Fn/FnOnce, Box<dyn FnMut>, generic with Fn bound, etc.)
 /// For generic type parameters (e.g., `F` where F: FnMut()), we need to check the bounds.
 fn is_fn_like_type(ty: &Type) -> bool {
@@ -297,6 +299,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     }
+
+    branch_groups::inject_branch_groups(&core_path, &mut func.block);
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
@@ -625,12 +629,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::call_site(),
         );
 
+        // The recompose fn already stores its value in the return slot; the
+        // callback's copy is deliberately discarded (`let _`), which matters
+        // for composables returning a #[must_use] type such as Result.
         let recompose_setter = quote! {
             {
                 __composer.set_recompose_callback(move |
                     __composer: &#core_path::Composer|
                 {
-                    #recompose_fn_ident #ty_generics_turbofish (
+                    let _ = #recompose_fn_ident #ty_generics_turbofish (
                         __composer
                     );
                 });
@@ -775,10 +782,12 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             #func
         })
     } else {
-        // no_skip path: still uses simple rebinds
+        // no_skip path: still uses simple rebinds. The group closure's
+        // parameter is named `__composer` so injected branch guards resolve
+        // to it, exactly as they do in the helper fn of the skip path.
         let wrapped = quote!({
-            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
-                __composer.with_group(#key_expr, |__scope: &#core_path::Composer| {
+            #core_path::with_current_composer(|__outer_composer: &#core_path::Composer| {
+                __outer_composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
                     #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                     #(#rebinds_for_no_skip)*
                     #original_block

@@ -26,50 +26,45 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### Conditional branches share one composition slot
+### Conditional branches share one composition slot — closed, with one edge
 
-Compose's compiler plugin gives every `if`/`else` and `match` branch a group of
-its own, so a branch that leaves takes its nodes with it. Cranpose has no
-plugin, and a `#[composable]` opens one group keyed on where it is *defined*,
-not where it is called. Two branches emitting the same widget are therefore one
-slot: the arriving branch is handed the node the departing one was using,
-together with whatever that node was carrying.
-
-What it cost, on a Pixel Watch 3: starting CranOrbit's Daily run from the title
-ring left the ball parked on the paddle through any number of taps. The taps
-arrived and the simulation ran — the run ended `TIME UP` at score 0 while it
-was being tapped — but the ring's gesture loop was still the one reading them,
-because `pointer_input` restarts only when its key changes and both branches
-passed `()`. Campaign works only because it stops at a screen of a different
-shape on the way to the arena. Two earlier fixes missed it by reasoning about
-`AppState`, which was never at fault.
-
+Every `if`/`else` branch and `match` arm of a `#[composable]` body now opens a
+group of its own, the way Compose's compiler plugin does it. `#[composable]`
+wraps each branch that can reach the composer in an RAII guard
+(`Composer::__branch_group`), keyed on the branch's source location plus a
+per-function index, so `return`, `?`, `break` and `continue` unwind the group
+correctly. The arriving branch composes fresh state; the departing branch
+takes its nodes, `remember`ed values and effects with it —
+`branch_group_tests` in `cranpose-core` pins each of these, and
 `a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen` in
-`cranpose-app-shell` is the reproduction: before the fix it reported
-`(menu, arena) = (2, 0)`, the departed branch having eaten the arriving one's
-tap.
+`cranpose-app-shell` pins the gesture shape that a Pixel Watch 3 surfaced in
+CranOrbit before gestures were keyed by declaration.
 
-Gestures are closed: a handler's identity is now the declaration — this call,
-with these keys — so a node handed to a different `pointer_input` call
-restarts. **The general case is open.** A reused node still carries the
-departed branch's `remember`ed state, its animations and its scroll offsets,
-and nothing warns the author. The same shape already produced a second
-reported bug in the same application, where every list screen shared one
-scroll position because one call site is one slot.
+The transform reaches into content lambdas too — the closures a caller hands
+to `Column`, a lazy item's `|index| …`, a scope builder — because that is
+where most conditionals in real applications live. A closure is treated as
+content when it contains a composable-shaped call (a CamelCase call or a
+`remember*` hook, which is what the repo's naming convention reserves for
+composition). Guards inside closures resolve the composer through the
+thread-local context and become no-ops when there is no composition pass
+underway, so an event handler the classifier over-matches keeps exactly its
+old behavior.
 
-Applications can state the identity themselves with `cranpose_core::with_key`,
-Compose's `key(…) { }`, and CranOrbit's router now does. That is the framework
-asking every author to remember what Compose's compiler never makes them think
-about, and the failure is quiet: a stale gesture or a wrong scroll offset reads
-as a rendering glitch, not as shared state.
+A branch group is *transparent* in the slot table: it never carries a
+recompose scope — reads inside a branch invalidate the enclosing function's
+scope, which re-evaluates the condition — and detachment reaches through the
+bracket so a `RetainWhenInactive` group inside a departed branch is retained
+rather than inheriting dispose-by-default from the shell
+(`docs/slot_table_invariants.md`).
 
-Closing it means what the plugin does — a group per branch. The macro parses
-the function with `syn` and could wrap branch bodies, but the group API is
-closure-shaped (`Composer::with_group_seed`), and wrapping an arbitrary branch
-in a closure breaks `return`, `?`, `break` and `continue` inside it. So this
-wants an RAII group guard on the composer first, then the macro transform,
-then a sweep of the repo's own conditionals. It is a slot-table change and
-deserves its own validation pass rather than riding along with a bug fix.
+The edge that remains: a branch that composes only through names the
+classifier cannot see — a snake_case helper that itself calls composables,
+inside a closure — keeps the old shared-slot behavior, because a proc macro
+cannot see types, only names. In the direct body there is no such hole (any
+call wraps). And identity across *data* is still the author's statement: one
+call site fed different values is one slot in Compose too, so a list screen
+that renders per-route content keys it with `cranpose_core::with_key`, as
+CranOrbit's router does.
 
 ## Limits that are correct, and surprising
 

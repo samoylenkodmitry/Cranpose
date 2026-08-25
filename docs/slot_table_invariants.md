@@ -12,6 +12,9 @@ This document is the short operational checklist for the slot table implementati
 - Direct siblings are contiguous inside their parent-bounded range.
 - Group identity matching searches only direct siblings, never grandchildren.
 - Duplicate explicit sibling keys are invalid.
+- A transparent group is a conditional branch's bracket: it never carries a
+  scope, and detaching a transparent child detaches its children as their own
+  subtrees (each with its own retention decision) followed by the bare shell.
 
 ## Payloads
 

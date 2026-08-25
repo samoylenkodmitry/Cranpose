@@ -1149,3 +1149,12 @@ And do not run your own build on samarch-1 while a robot job is going: it is
 the same contention, caused by you, and it killed a CI robot job mid-compile
 while this was being diagnosed.
 
+- Detached full-suite runs, two traps from one session (2026-08-25): (1) `cargo
+  test --workspace 2>&1 | tail -c 200000 > log` reports the PIPELINE's exit —
+  tail's 0 — so a 59-error compile failure arrived as "completed, exit 0";
+  write `; echo "EXIT_CODE:$?" >> log` inside the detached command and read the
+  log, never the wrapper's status. (2) Editing macro/core sources while a
+  detached workspace run is mid-flight hands later crates a different macro
+  than earlier ones already compiled against; results from such a run are
+  mixed-fingerprint noise. Freeze sources for the duration, or kill and
+  relaunch after the edit — a relaunch on a warm target is cheap.

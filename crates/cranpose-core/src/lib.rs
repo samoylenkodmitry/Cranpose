@@ -38,7 +38,7 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
-pub use composer::{CapturedCompositionContext, Composer, ValueSlotHandle};
+pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
@@ -314,13 +314,17 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
 }
 
 fn source_location_key(file: &str, line: u32, column: u32) -> Key {
+    avalanche_location_key(source_location_hash(file, line, column))
+}
+
+fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash = fnv1a_location_key_bytes(hash, file.as_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xff]);
     hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xfe]);
     hash = fnv1a_location_key_bytes(hash, &column.to_le_bytes());
-    avalanche_location_key(hash)
+    hash
 }
 
 fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -341,6 +345,44 @@ fn avalanche_location_key(mut value: u64) -> u64 {
 
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let key = source_location_key(file, line, column);
+    #[cfg(test)]
+    register_location_key_debug_info(key, file, line, column);
+    #[cfg(all(debug_assertions, not(test)))]
+    if location_key_diagnostics_enabled() {
+        register_location_key_debug_info(key, file, line, column);
+    }
+    key
+}
+
+/// Branch group entry for conditionals inside content closures, where the
+/// composable's `__composer` binding is out of reach — a `'static` closure
+/// cannot capture it. Resolves the composer from the thread-local context
+/// instead, and returns `None` when there is no composition underway (the
+/// closure turned out to be an event handler or ran outside a slot pass), so
+/// a misclassified closure degrades to exactly the pre-transform behavior.
+#[doc(hidden)]
+pub fn __branch_group_scope(key: Key) -> Option<BranchGroupGuard> {
+    with_current_composer_opt(|composer| {
+        composer
+            .active_slots_host()
+            .has_active_pass()
+            .then(|| composer.__branch_group(key))
+    })
+    .flatten()
+}
+
+/// Group key for one conditional branch of a `#[composable]` body.
+///
+/// The location is the branch's own source position, and `branch` is the
+/// macro-assigned index of the branch within its function, mixed into the
+/// hash so every branch keeps a distinct key even when macro-generated code
+/// collapses all spans onto one location.
+#[doc(hidden)]
+pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> Key {
+    let mut hash = source_location_hash(file, line, column);
+    hash = fnv1a_location_key_bytes(hash, &[0xfd]);
+    hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
+    let key = avalanche_location_key(hash);
     #[cfg(test)]
     register_location_key_debug_info(key, file, line, column);
     #[cfg(all(debug_assertions, not(test)))]

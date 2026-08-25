@@ -308,6 +308,10 @@ impl SlotWriteSession<'_> {
         self.table.assign_active_group_scope(group, scope_id)
     }
 
+    pub(crate) fn mark_group_transparent(&mut self, group: ActiveGroupId) -> bool {
+        self.table.mark_group_transparent(group)
+    }
+
     pub(crate) fn end_recompose(&mut self) {
         self.end_group();
     }

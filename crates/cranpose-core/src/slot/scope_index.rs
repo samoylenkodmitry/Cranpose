@@ -190,7 +190,43 @@ impl SlotTable {
             );
             return false;
         }
+        if record.transparent {
+            log::error!(
+                "scope id {scope_id:?} assignment ignored for transparent branch group at index {group_index}"
+            );
+            return false;
+        }
         self.scope_index
             .assign(&mut self.groups[group_index], scope_id)
+    }
+
+    /// Marks an active group as a lifecycle-transparent branch bracket.
+    ///
+    /// Refused for groups that carry a scope: a scoped group owns its
+    /// children's lifecycle, which is exactly what a transparent bracket
+    /// disclaims.
+    pub(super) fn mark_group_transparent(&mut self, group: ActiveGroupId) -> bool {
+        let group_index = group.index();
+        let Some(record) = self.groups.get_mut(group_index) else {
+            log::error!("transparent mark ignored for missing active group index {group_index}");
+            return false;
+        };
+        if record.generation != group.generation() {
+            log::error!(
+                "transparent mark ignored for stale active group handle at index {group_index}: handle generation {:?}, current generation {:?}",
+                group.generation(),
+                record.generation
+            );
+            return false;
+        }
+        if record.scope_id.is_some() {
+            log::error!(
+                "transparent mark ignored for scoped group at index {group_index}: scope {:?}",
+                record.scope_id
+            );
+            return false;
+        }
+        record.transparent = true;
+        true
     }
 }

@@ -16,6 +16,11 @@ pub(super) struct GroupRecord {
     pub(super) generation: u32,
     pub(super) anchor: AnchorId,
     pub(super) scope_id: Option<ScopeId>,
+    /// A lifecycle-transparent bracket: the group exists only to give a
+    /// conditional branch its own identity. It never carries a scope, and
+    /// detachment reaches through it so each child decides its own retention
+    /// fate instead of inheriting dispose-by-default from the bracket.
+    pub(super) transparent: bool,
 }
 
 #[derive(Clone, Copy)]

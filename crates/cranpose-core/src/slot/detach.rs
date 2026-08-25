@@ -225,9 +225,46 @@ impl SlotTable {
             return Vec::new();
         }
         let mut detached = Vec::new();
-        let mut dirty_start = None;
-        while self.direct_child_anchor_at_cursor(cursor).is_some() {
-            dirty_start.get_or_insert(cursor.index());
+        let dirty_start = self
+            .direct_child_anchor_at_cursor(cursor)
+            .is_some()
+            .then(|| cursor.index());
+        self.detach_children_at_cursor_into(cursor, &mut detached);
+        self.flush_group_index_refresh_from(dirty_start);
+        #[cfg(any(test, debug_assertions))]
+        if !detached.is_empty() {
+            self.debug_assert_valid_after("detach_subtrees_at_cursor");
+        }
+        detached
+    }
+
+    fn detach_children_at_cursor_into(
+        &mut self,
+        cursor: ChildCursor,
+        detached: &mut Vec<DetachedSubtree>,
+    ) {
+        while let Some(child_anchor) = self.direct_child_anchor_at_cursor(cursor) {
+            // A transparent group is a conditional branch's bracket: structure,
+            // not a lifecycle unit. Detach through it so every group that owns
+            // state carries its own retention decision — a retain-marked group
+            // inside a departed branch must be retained, not buried in a shell
+            // whose missing scope reads as dispose-by-default. The bare shell
+            // follows as its own subtree.
+            if self
+                .groups
+                .get(cursor.index())
+                .is_some_and(|group| group.transparent && group.subtree_len > 1)
+            {
+                let shell_children = ChildCursor::new(child_anchor, cursor.index() + 1);
+                if self.repair_child_cursor_parent_subtree(shell_children, "branch shell detach") {
+                    self.detach_children_at_cursor_into(shell_children, detached);
+                } else {
+                    log::error!(
+                        "slot table detached a branch shell whole after rejecting its child cursor at index {}",
+                        cursor.index()
+                    );
+                }
+            }
             let subtree = self.detach_subtree_at_index_internal(cursor.index(), false);
             if subtree.group_count() == 0 {
                 log::error!(
@@ -239,12 +276,6 @@ impl SlotTable {
             }
             detached.push(subtree);
         }
-        self.flush_group_index_refresh_from(dirty_start);
-        #[cfg(any(test, debug_assertions))]
-        if !detached.is_empty() {
-            self.debug_assert_valid_after("detach_subtrees_at_cursor");
-        }
-        detached
     }
 
     pub(in crate::slot) fn restore_subtree(

@@ -17,5 +17,13 @@ pub(super) fn validate_active_group_scope(
     table: &SlotTable,
     group: &GroupRecord,
 ) -> Result<(), SlotInvariantError> {
+    if group.transparent {
+        if let Some(scope_id) = group.scope_id {
+            return Err(SlotInvariantError::TransparentGroupWithScope {
+                group_anchor: group.anchor,
+                scope_id,
+            });
+        }
+    }
     table.scope_index.validate_group(group)
 }
