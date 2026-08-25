@@ -61,7 +61,8 @@ clippy:
 
 # Lint the exact package and feature set the web demo ships.
 clippy-wasm:
-    cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
+    scripts/ci/with_host_lock.sh --shared \
+      cargo clippy --target wasm32-unknown-unknown -p desktop-app-platform --no-default-features --features web,renderer-wgpu -- -D warnings
 
 # Lint the iOS simulator binary.
 clippy-ios:
@@ -151,7 +152,16 @@ versions:
     python3 scripts/check_cranpose_versions.py
 
 # Everything the architecture-budget job enforces.
-budgets: featureless dep-budget size-budget
+# This is the heavy job on the machine the robot suite measures on --
+# `featureless` alone builds the workspace three ways -- so it takes the
+# shared side of the host lock for its whole run rather than per recipe.
+
+# Every architecture budget.
+budgets:
+    scripts/ci/with_host_lock.sh --shared just budgets-here
+
+# The budgets themselves, once `budgets` holds the host lock.
+budgets-here: featureless dep-budget size-budget
 
 # --- builds ----------------------------------------------------------------
 
