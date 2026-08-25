@@ -15,11 +15,30 @@ use std::{
 
 use cranpose::AppLauncher;
 use cranpose_testing::find_text_in_semantics;
-use desktop_app::app::{self, TEST_ACTIVE_TAB_STATE};
+use desktop_app::app::{self, DEMO_TABS, TEST_ACTIVE_TAB_STATE};
 use image::RgbaImage;
 
 const WINDOW_WIDTH: u32 = 900;
 const WINDOW_HEIGHT: u32 = 800;
+
+/// The bottom edge of the tab strip, measured rather than assumed.
+///
+/// Anything above this line is behind the chrome and cannot be expected to
+/// have rendered, whatever the chrome happens to contain. A literal here
+/// silently becomes wrong the moment the strip changes height -- which is
+/// what a source-view toggle above the tab content did to five robot tests.
+fn chrome_bottom(robot: &cranpose::Robot) -> f32 {
+    let measured = DEMO_TABS
+        .iter()
+        .filter_map(|tab| find_text_in_semantics(robot, tab.label()))
+        .map(|(_, y, _, h)| y + h)
+        .fold(0.0f32, f32::max);
+    assert!(
+        measured > 0.0,
+        "no tab label found in semantics: the chrome probe cannot measure what it is guarding against"
+    );
+    measured
+}
 
 fn main() {
     let _ = env_logger::try_init();
@@ -48,6 +67,8 @@ fn main() {
                 .invoke_app_hook("set-tab", "shaderrect")
                 .expect("select shaderrect tab");
             settle(&robot, 800);
+            let chrome_bottom = chrome_bottom(&robot);
+            println!("chrome bottom measured at y={chrome_bottom:.1}");
             let texts = [
                 "Fire Shader — Animated Flame Border",
                 "SDF Halo Border",
@@ -60,7 +81,8 @@ fn main() {
                     if let Some((x, y, w, h)) = find_text_in_semantics(&robot, label) {
                         let ink = count_ink(&shot, x, y, w, h);
                         println!("initial '{label}' at ({x:.0},{y:.0}) ink={ink}");
-                        let fully_visible = y > 100.0 && y + h < WINDOW_HEIGHT as f32 - 10.0;
+                        let fully_visible =
+                            y > chrome_bottom && y + h < WINDOW_HEIGHT as f32 - 10.0;
                         if fully_visible && ink < 40 {
                             fail(
                                 &robot,
@@ -80,7 +102,8 @@ fn main() {
                 let mut line = format!("step={step}");
                 for label in texts {
                     if let Some((x, y, w, h)) = find_text_in_semantics(&robot, label) {
-                        let visible = y + h > 100.0 && y < WINDOW_HEIGHT as f32 - 10.0;
+                        let visible =
+                            y + h > chrome_bottom && y < WINDOW_HEIGHT as f32 - 10.0;
                         if visible {
                             let ink = count_ink(&shot, x, y, w, h);
                             line.push_str(&format!(" | {label}: y={y:.0} ink={ink}"));
