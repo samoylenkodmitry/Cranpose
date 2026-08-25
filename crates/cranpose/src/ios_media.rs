@@ -391,6 +391,13 @@ fn with_player<R>(action: impl FnOnce(&AVAudioPlayer) -> R) -> Option<R> {
     Some(action(&holder.player))
 }
 
+/// What Core Audio reads for `AVAudioPlayer`. Apple's own containers are here
+/// — AIFF and CAF — and the formats it never took up are not: Ogg, Vorbis and
+/// Opus play on the other three backends and not on this one.
+const IOS_AUDIO_EXTENSIONS: &[&str] = &[
+    "3gp", "aac", "aif", "aiff", "caf", "flac", "m4a", "m4b", "m4v", "mov", "mp3", "mp4", "wav",
+];
+
 impl MediaPlayer for IosMediaPlayer {
     fn capabilities(&self) -> MediaCapabilities {
         MediaCapabilities {
@@ -417,6 +424,9 @@ impl MediaPlayer for IosMediaPlayer {
         (duration.is_finite() && duration > 0.0).then(|| Duration::from_secs_f64(duration))
     }
 
+    fn audio_extensions(&self) -> Vec<&'static str> {
+        IOS_AUDIO_EXTENSIONS.to_vec()
+    }
     fn prepare(&self, item: &MediaItem) -> Result<(), MediaError> {
         self.stop();
         let url =

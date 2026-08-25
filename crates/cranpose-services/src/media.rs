@@ -578,6 +578,23 @@ pub trait MediaPlayer: Send + Sync {
     /// Applies an equalizer setting, already clamped to this backend's bands.
     fn set_equalizer(&self, _settings: &EqualizerSettings) {}
 
+    /// The audio file extensions this backend can decode, lower case and
+    /// without the dot.
+    ///
+    /// An application that picks tracks off a disk decides what to offer from
+    /// this rather than from a list of its own. Which formats play is a
+    /// property of the stack underneath — the platform's decoders on a phone,
+    /// the ones compiled in on a desktop — and a list written next to the
+    /// picker is a claim about a backend it never asks. It goes stale the
+    /// moment the backend changes, and the failure is quiet: the tracks import
+    /// and then refuse to play.
+    ///
+    /// Empty where the backend cannot say, which a caller should read as "no
+    /// opinion, offer what you like" rather than as "nothing plays".
+    fn audio_extensions(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Reads how long `item` is without opening it for playback.
     ///
     /// A playlist shows the length of entries nobody has played yet, and the
@@ -1157,6 +1174,17 @@ pub fn media_equalizer_bands() -> Vec<EqualizerBand> {
         Some(player) if player.capabilities().equalizer => player.equalizer_bands(),
         _ => Vec::new(),
     }
+}
+
+/// The audio file extensions the platform backend can decode, lower case and
+/// without the dot.
+///
+/// Empty where there is no backend, or where the backend has no opinion. See
+/// [`MediaPlayer::audio_extensions`].
+pub fn media_audio_extensions() -> Vec<&'static str> {
+    media_player()
+        .map(|player| player.audio_extensions())
+        .unwrap_or_default()
 }
 
 /// The equalizer setting last applied.
@@ -2000,6 +2028,54 @@ mod tests {
         clear_platform_media_player();
         set_platform_media_player(FakePlayer::with(MediaCapabilities::TRANSPORT));
         assert!(!set_media_analysis_enabled(true));
+    }
+
+    /// A backend states the formats it decodes, so a picker offers what will
+    /// play rather than what some list next to it once claimed.
+    ///
+    /// CranAmp shipped the second: a hardcoded list left over from decoding in
+    /// process, kept after the tracks were handed to the platform's decoder.
+    /// It went on offering AIFF and CAF on a phone whose `MediaPlayer` reads
+    /// neither, so they imported and then refused to play with nothing on
+    /// screen to say why.
+    #[test]
+    fn the_backend_states_which_audio_formats_it_decodes() {
+        let guard = test_service_guard();
+        clear_platform_media_player();
+        assert!(
+            media_audio_extensions().is_empty(),
+            "with no backend there is nothing to claim"
+        );
+
+        struct Narrow;
+        impl MediaPlayer for Narrow {
+            fn capabilities(&self) -> MediaCapabilities {
+                MediaCapabilities::TRANSPORT
+            }
+            fn prepare(&self, _item: &MediaItem) -> Result<(), MediaError> {
+                Ok(())
+            }
+            fn play(&self) -> Result<(), MediaError> {
+                Ok(())
+            }
+            fn pause(&self) {}
+            fn stop(&self) {}
+            fn set_volume(&self, _volume: f32) {}
+            fn audio_extensions(&self) -> Vec<&'static str> {
+                vec!["mp3", "wav"]
+            }
+        }
+
+        set_platform_media_player(Arc::new(Narrow));
+        assert_eq!(media_audio_extensions(), vec!["mp3", "wav"]);
+
+        clear_platform_media_player();
+        set_platform_media_player(FakePlayer::with(MediaCapabilities::TRANSPORT));
+        assert!(
+            media_audio_extensions().is_empty(),
+            "a backend with no opinion says so rather than guessing"
+        );
+        drop(guard);
     }
 
     #[test]
