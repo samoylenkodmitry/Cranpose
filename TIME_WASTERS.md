@@ -1092,7 +1092,7 @@ the obvious next move -- read their diffs for something that could leak a
 layer -- costs an hour and finds nothing, because it is not there.
 
 Do this first instead. Run the one test on samarch-1 at `HEAD` and at the last
-green commit, both under `scripts/ci/with_robot_host_lock.sh`, with the box
+green commit, both with the box
 otherwise quiet. Both passing is the answer: the failure was the load. That
 host runs nineteen repositories' runners and the lock only holds robot suites
 apart, so any neighbour's build lands inside the measurement.

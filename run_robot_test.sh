@@ -478,9 +478,37 @@ if [ "$BUILD_ONLY" = "1" ]; then
     exit 0
 fi
 
-# The build above just had every core of this machine; the tests below are
-# timed. Let the load fall back to something a measurement can be taken
-# against -- our own build first, and any neighbour's that is still running.
+# Everything below this line is timed, and nothing above it was.
+#
+# The exclusive side of the host lock: it waits out any Cranpose build sharing
+# this machine (they hold the shared side -- see scripts/ci/with_host_lock.sh)
+# and keeps the next one from starting until the suite is done. Taken here
+# rather than around the whole invocation so that builds still overlap builds;
+# only the measurement empties the machine.
+#
+# The file descriptor is the lock. It is released when this script exits, by
+# the kernel, however it exits.
+HOST_LOCK_FILE="/tmp/cranpose-host-capacity.lock"
+if command -v flock >/dev/null 2>&1 && : >>"$HOST_LOCK_FILE" 2>/dev/null; then
+    exec 9>"$HOST_LOCK_FILE"
+    if flock -n -x 9; then
+        echo "Host capacity: exclusive, taken immediately" | tee -a "$LOG_FILE"
+    else
+        echo "Host capacity: waiting for the builds sharing this machine..." | tee -a "$LOG_FILE"
+        lock_wait_started_at=$(date +%s)
+        if flock -w "${CRANPOSE_HOST_LOCK_MAX_WAIT_SECS:-2700}" -x 9; then
+            echo "Host capacity: exclusive after $(( $(date +%s) - lock_wait_started_at ))s" \
+                | tee -a "$LOG_FILE"
+        else
+            echo "Host capacity: gave up waiting; measuring beside another build." \
+                 "TREAT ANY TIMING FAILURE BELOW AS UNMEASURED." | tee -a "$LOG_FILE"
+        fi
+    fi
+fi
+
+# The lock covers this fleet. It does not cover the nineteen other
+# repositories' runners on the same box, so also wait for the load average
+# itself -- our own build's, and any stranger's that is still running.
 wait_for_host_quiet "the robot suite" | tee -a "$LOG_FILE"
 
 echo "============================================" | tee -a "$LOG_FILE"

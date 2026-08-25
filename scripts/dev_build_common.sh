@@ -258,9 +258,9 @@ number_gt() {
 # something, then returns.
 #
 # This runs in CI, unlike `wait_for_host_capacity`, because CI is where the
-# problem is. `with_robot_host_lock.sh` keeps two robot suites off one host,
-# but the host it protects also carries nineteen other repositories' runners,
-# and none of them know the robot suite exists. A Rust build next door
+# problem is. `with_host_lock.sh` keeps this fleet's builds off the machine
+# while the suite measures, but the same box also carries nineteen other
+# repositories' runners, and none of them know the robot suite exists. A Rust build next door
 # saturates twelve cores, the frame the suite is timing takes twice as long,
 # and the suite reports a per-frame regression that reproduces nowhere -- the
 # text-handle cycle test failed on `main` at `drag work_avg_ms 0.73 -> 1.66`

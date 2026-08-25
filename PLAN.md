@@ -259,14 +259,22 @@ on `main` at `drag work_avg_ms 0.73 -> 1.66` and `layer_cache_size 3 -> 13
 commit before it once the box was quiet. Half an hour was spent bisecting
 three innocent pull requests.
 
-The suite now waits for the load average to come down before it starts timing
-(`wait_for_host_quiet`, called after the build and before the first test), and
-`host_state_summary` -- already printed before every attempt -- carries
-`load_1m` so a red names its own conditions. It never refuses to run: after
-ten minutes it starts anyway and says so, because a gate that will not start
-is worse than one that starts late.
+So the lock is now over the machine's capacity rather than over the robot
+suite, and it has two sides (`scripts/ci/with_host_lock.sh`). The three heavy
+Linux builds that share this host -- the size budget, the wasm build, the
+Android release build -- take the **shared** side for their whole run. The
+robot suite builds without it and takes the **exclusive** side for the timed
+part only, so builds still overlap builds and only a measurement empties the
+machine. Neither side ever refuses to run: after forty-five minutes it starts
+anyway and says on stdout that it did.
 
-That is a confound removed, not the problem solved. The problem is that a
+That lock covers this fleet. The other nineteen queues on the box are not
+ours to serialise, so the suite also waits for the load average itself
+(`wait_for_host_quiet`, after the build and before the first test), and
+`host_state_summary` -- already printed before every attempt -- carries
+`load_1m` so a red names its own conditions.
+
+Both are confounds removed, not the problem solved. The problem is that a
 measurement gate shares a machine with nineteen unrelated build queues, and
 the fix for that is a host the robot suite does not share.
 
