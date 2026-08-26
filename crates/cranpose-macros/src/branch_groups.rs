@@ -23,6 +23,24 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     }
 }
 
+struct SyncInteriors<'a, 'b> {
+    injector: &'a mut BranchGroupInjector<'b>,
+}
+
+impl VisitMut for SyncInteriors<'_, '_> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Closure(_) | Expr::Async(_) => self.injector.visit_expr_mut(expr),
+            Expr::Const(_) => {}
+            _ => visit_mut::visit_expr_mut(self, expr),
+        }
+    }
+
+    fn visit_item_mut(&mut self, item: &mut syn::Item) {
+        self.injector.visit_item_mut(item);
+    }
+}
+
 fn composer_alias_ident() -> syn::Ident {
     syn::Ident::new("__cranpose_branch_composer", Span::mixed_site())
 }
@@ -48,18 +66,20 @@ impl BranchGroupInjector<'_> {
     }
 
     fn fold_local_statements(&mut self, block: &mut Block) {
-        let has_bound_local = block
-            .stmts
-            .iter()
-            .any(|stmt| matches!(stmt, Stmt::Local(local) if local.init.is_some()));
-        if !has_bound_local {
+        fn wants_sandwich(stmt: &Stmt) -> bool {
+            match stmt {
+                Stmt::Local(local) => local.init.is_some(),
+                Stmt::Macro(invocation) => invocation.semi_token.is_some(),
+                _ => false,
+            }
+        }
+        if !block.stmts.iter().any(wants_sandwich) {
             return;
         }
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         let mut rebuilt = Vec::with_capacity(block.stmts.len());
         for stmt in block.stmts.drain(..) {
-            let folds = matches!(&stmt, Stmt::Local(local) if local.init.is_some());
-            if folds {
+            if wants_sandwich(&stmt) {
                 rebuilt.push(self.branch_guard_stmt(stmt.span()));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
@@ -180,6 +200,14 @@ impl BranchGroupInjector<'_> {
         }};
     }
 
+    fn instrument_sync_interiors(&mut self, expr: &mut Expr) {
+        SyncInteriors { injector: self }.visit_expr_mut(expr);
+    }
+
+    fn instrument_sync_interiors_block(&mut self, block: &mut Block) {
+        SyncInteriors { injector: self }.visit_block_mut(block);
+    }
+
     fn visit_nested_fn(
         &mut self,
         signature: &syn::Signature,
@@ -216,6 +244,7 @@ impl VisitMut for BranchGroupInjector<'_> {
         match expr {
             Expr::Closure(closure) => {
                 if closure.asyncness.is_some() && expr_contains_await(&closure.body) {
+                    self.instrument_sync_interiors(&mut closure.body);
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
@@ -230,6 +259,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             }
             Expr::Async(async_block) => {
                 if block_contains_await(&async_block.block) {
+                    self.instrument_sync_interiors_block(&mut async_block.block);
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);

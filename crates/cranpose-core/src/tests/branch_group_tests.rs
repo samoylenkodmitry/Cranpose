@@ -3182,6 +3182,83 @@ fn CountingPage(tag: i32) {
     BRANCH_SEEN.with(|seen| seen.set(value));
 }
 
+#[composable]
+fn suspending_factory_probe(flag: bool) {
+    let render = poll_ready(async move {
+        std::future::ready(()).await;
+        move || {
+            if flag {
+                let value = remember_branch_marker(87);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(88);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        }
+    });
+    render();
+}
+
+#[test]
+fn a_sync_closure_from_a_suspending_async_body_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(101, || suspending_factory_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 87));
+
+    pass(&mut composition, false).expect("switch arms in the factory's closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 88),
+        "the async state machine stays uninstrumented for Send, but a sync \
+         closure defined inside it composes later and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+macro_rules! maybe_remember {
+    ($enabled:expr) => {
+        if $enabled {
+            let value = remember_branch_marker(85);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    };
+}
+
+#[composable]
+fn macro_statement_neighbor_probe(enabled: bool) -> i32 {
+    maybe_remember!(enabled);
+    remember_branch_marker(86)
+}
+
+#[test]
+fn a_macro_statement_does_not_feed_its_neighbor() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(100, || {
+            let tail = macro_statement_neighbor_probe(enabled);
+            BRANCH_SEEN.with(|seen| seen.set(tail));
+        })
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 86));
+
+    pass(&mut composition, false).expect("drop the macro's conditional slot");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 86),
+        "a macro invocation statement needs its own fold so a vanished slot \
+         inside it is not adopted by the statement after it"
+    );
+    assert_composition_valid(&composition);
+}
+
 fn poll_ready<F: std::future::Future>(future: F) -> F::Output {
     let mut pinned = std::pin::pin!(future);
     let waker = std::task::Waker::noop();

@@ -123,14 +123,19 @@ typed IR:
   arms end scrutinee temporary extension — so the statement is the
   finest sound granularity for a syntactic transform.
 
-- **An async body that awaits is not composition territory.** An
-  await-free async block or closure runs synchronously when polled, so
-  its conditionals carry folds like any other code and its future stays
-  `Send` — no guard can cross a suspension point that does not exist
-  (pinned as `an_await_free_async_block_keeps_branch_identity`). A body
-  that awaits is left untouched: a fold held across a suspension would
-  poison `Send` and outlive the pass, so composing inside one is
-  unsupported rather than silently wrong-by-half.
+- **An async body that awaits is not composition territory, but what it
+  defines is.** An await-free async block or closure runs synchronously
+  when polled, so its conditionals carry folds like any other code and
+  its future stays `Send` — no guard can cross a suspension point that
+  does not exist (pinned as
+  `an_await_free_async_block_keeps_branch_identity`; a nested item's
+  awaits belong to its own future and do not mark the block,
+  `a_dormant_async_item_does_not_mark_the_block_suspending`). A body
+  that awaits keeps its own statements untouched — a fold held across a
+  suspension would poison `Send` — while the synchronous closures and
+  functions it defines are instrumented normally, since their guards
+  live only while those bodies run
+  (`a_sync_closure_from_a_suspending_async_body_keeps_branch_identity`).
 
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that
