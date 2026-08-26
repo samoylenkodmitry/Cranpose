@@ -2944,5 +2944,12 @@ fn two_composables_selected_through_one_macro_call_site_stay_distinct() {
         "span collapse makes both calls report one caller; the definition key must \
          still separate PageB from PageA"
     );
+
+    pass(&mut composition, true).expect("switch back to the first page");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (3, 61),
+        "returning to PageA remakes its slot fresh instead of adopting PageB's"
+    );
     assert_composition_valid(&composition);
 }
