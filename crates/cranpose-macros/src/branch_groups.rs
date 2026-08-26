@@ -191,7 +191,7 @@ impl VisitMut for BranchGroupInjector<'_> {
         };
         match expr {
             Expr::Closure(closure) => {
-                if closure.asyncness.is_some() {
+                if closure.asyncness.is_some() && expr_contains_await(&closure.body) {
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
@@ -204,7 +204,15 @@ impl VisitMut for BranchGroupInjector<'_> {
                 }};
                 self.in_content_closure = previous;
             }
-            Expr::Async(_) | Expr::Const(_) => {}
+            Expr::Async(async_block) => {
+                if block_contains_await(&async_block.block) {
+                    return;
+                }
+                let previous = std::mem::replace(&mut self.in_content_closure, true);
+                self.wrap_block(&mut async_block.block);
+                self.in_content_closure = previous;
+            }
+            Expr::Const(_) => {}
             Expr::If(expr_if) => {
                 self.wrap_condition(&mut expr_if.cond);
                 self.wrap_block(&mut expr_if.then_branch);
@@ -328,6 +336,50 @@ fn expr_is_place(expr: &Expr) -> bool {
         Expr::Group(group) => expr_is_place(&group.expr),
         _ => false,
     }
+}
+
+fn block_contains_await(block: &Block) -> bool {
+    struct AwaitScan {
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for AwaitScan {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if self.found {
+                return;
+            }
+            match expr {
+                Expr::Await(_) => self.found = true,
+                Expr::Async(_) => {}
+                Expr::Closure(closure) if closure.asyncness.is_some() => {}
+                _ => syn::visit::visit_expr(self, expr),
+            }
+        }
+    }
+    let mut scan = AwaitScan { found: false };
+    scan.visit_block(block);
+    scan.found
+}
+
+fn expr_contains_await(expr: &Expr) -> bool {
+    struct AwaitScan {
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for AwaitScan {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if self.found {
+                return;
+            }
+            match expr {
+                Expr::Await(_) => self.found = true,
+                Expr::Async(_) => {}
+                Expr::Closure(closure) if closure.asyncness.is_some() => {}
+                _ => syn::visit::visit_expr(self, expr),
+            }
+        }
+    }
+    let mut scan = AwaitScan { found: false };
+    scan.visit_expr(expr);
+    scan.found
 }
 
 fn expr_contains_let(expr: &Expr) -> bool {

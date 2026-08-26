@@ -122,6 +122,15 @@ typed IR:
   inference, match arms end scrutinee temporary extension — so the
   statement is the finest sound granularity for a syntactic transform.
 
+- **An async body that awaits is not composition territory.** An
+  await-free async block or closure runs synchronously when polled, so
+  its conditionals carry folds like any other code and its future stays
+  `Send` — no guard can cross a suspension point that does not exist
+  (pinned as `an_await_free_async_block_keeps_branch_identity`). A body
+  that awaits is left untouched: a fold held across a suspension would
+  poison `Send` and outlive the pass, so composing inside one is
+  unsupported rather than silently wrong-by-half.
+
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that
 renders per-route content keys it with `cranpose_core::with_key`, as

@@ -3134,6 +3134,9 @@ fn async_closure_probe() {
     let make = async || std::future::ready(7).await;
     let future = require_send(make());
     drop(future);
+    let make_sync = async || 7;
+    let instrumented = require_send(make_sync());
+    drop(instrumented);
 }
 
 #[test]
@@ -3177,6 +3180,52 @@ fn CountingPage(tag: i32) {
     let _ = tag;
     let value = remember_branch_marker(BRANCH_INITS.with(|inits| inits.get()) as i32 + 71);
     BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+fn poll_ready<F: std::future::Future>(future: F) -> F::Output {
+    let mut pinned = std::pin::pin!(future);
+    let waker = std::task::Waker::noop();
+    let mut context = std::task::Context::from_waker(waker);
+    match pinned.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(value) => value,
+        std::task::Poll::Pending => {
+            unreachable!("an await-free future completes on the first poll")
+        }
+    }
+}
+
+#[composable]
+fn await_free_async_block_probe(flag: bool) {
+    poll_ready(async {
+        if flag {
+            let value = remember_branch_marker(81);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(82);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    });
+}
+
+#[test]
+fn an_await_free_async_block_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(98, || await_free_async_block_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 81));
+
+    pass(&mut composition, false).expect("switch arms inside the async block");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 82),
+        "an async body with no await runs synchronously during composition; its \
+         arms need folds like any other conditional"
+    );
+    assert_composition_valid(&composition);
 }
 
 #[composable]
