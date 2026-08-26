@@ -142,20 +142,35 @@ impl SlotWriteSession<'_> {
     fn claim_or_steal_keyed_subtree(&mut self, key: GroupKey) -> Option<DetachedSubtree> {
         key.explicit_key?;
         let parent_anchor = self.state.current_parent_anchor();
-        let branch_site = self
+        let parent_is_transparent = self
             .table
             .active_group_index(parent_anchor)
             .and_then(|index| self.table.groups.get(index))
-            .filter(|group| group.transparent)
-            .map(|group| group.key.static_key)?;
+            .is_some_and(|group| group.transparent);
+        if !parent_is_transparent {
+            return None;
+        }
         if self.state.has_orphaned_keyed() {
             let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
-            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, branch_site, key) {
+            let branch_path = self.table.branch_path_key(parent_anchor);
+            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, branch_path, key) {
                 return Some(subtree);
             }
         }
         self.table
-            .steal_keyed_subtree_from_later_transparent_siblings(parent_anchor, key)
+            .steal_keyed_subtree_along_branch_path(parent_anchor, key)
+    }
+
+    /// Reserve the key a group is about to be begun with. For an unkeyed
+    /// seed this first materializes any pending branch shell at the current
+    /// level, so the ordinal is counted in the frame the matching
+    /// `begin_group` will consume it in; an explicitly keyed seed passes
+    /// shells by, exactly like its `begin_group` will.
+    pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
+        if seed.explicit_key.is_none() {
+            self.materialize_deferred_branch_shells();
+        }
+        self.preview_group_key(seed)
     }
 
     fn recover_malformed_group_start(

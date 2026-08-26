@@ -417,7 +417,12 @@ fn tokens_contain_free_call(tokens: &TokenStream2) -> bool {
                 if tokens_contain_free_call(&group.stream()) {
                     return true;
                 }
-                call_candidate = false;
+                // A parenthesized callee — `(stateful_label)(1)` — is a group
+                // followed by its argument group.
+                call_candidate = matches!(
+                    group.delimiter(),
+                    proc_macro2::Delimiter::Parenthesis | proc_macro2::Delimiter::None
+                );
                 previous_was_dot = false;
             }
             proc_macro2::TokenTree::Punct(punct) => {

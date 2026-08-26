@@ -1544,3 +1544,162 @@ fn a_composing_method_inside_a_value_macro_gets_a_branch_group() {
     );
     assert_composition_valid(&composition);
 }
+
+mod deferred_shell_ordinals {
+    use super::*;
+
+    fn with_key<K>(_key: &K, content: impl FnOnce()) {
+        content();
+    }
+
+    #[composable]
+    pub(super) fn probe(cond: bool) {
+        stateful_child(0);
+        if cond {
+            with_key(&1, || stateful_child(1));
+        } else {
+            with_key(&2, || stateful_child(2));
+        }
+    }
+}
+
+#[test]
+fn a_materialized_shell_keeps_group_ordinals_consistent() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    // The composable before the branch consumes the same static key at the
+    // outer level; the lookalike's content then composes the same child
+    // inside a shell that materializes mid-operation. The reservation and
+    // the consumption must agree on the frame they count ordinals in.
+    composition
+        .render(45, || deferred_shell_ordinals::probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 1);
+
+    composition
+        .render(45, || deferred_shell_ordinals::probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        branch_seen(),
+        2,
+        "the shell-materialized branch child must own fresh state"
+    );
+    assert_composition_valid(&composition);
+}
+
+mod deferred_shell_nodes {
+    use std::cell::Cell;
+
+    use super::*;
+
+    thread_local! {
+        pub(super) static NODE_BUILDS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn with_key<K>(_key: &K, content: impl FnOnce()) {
+        content();
+    }
+
+    #[composable(no_skip)]
+    pub(super) fn probe() {
+        let composer = with_current_composer(Clone::clone);
+        if NODE_BUILDS.with(Cell::get) < usize::MAX {
+            with_key(&1, || {
+                composer.emit_node(|| {
+                    NODE_BUILDS.with(|count| count.set(count.get() + 1));
+                    TestDummyNode
+                });
+            });
+        }
+    }
+}
+
+#[test]
+fn a_materialized_shell_reuses_its_node_across_passes() {
+    deferred_shell_nodes::NODE_BUILDS.with(|count| count.set(0));
+    let mut composition = test_composition();
+
+    composition
+        .render(46, deferred_shell_nodes::probe)
+        .expect("initial composition");
+    assert_eq!(
+        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
+        1
+    );
+
+    composition
+        .render(46, deferred_shell_nodes::probe)
+        .expect("recompose the same shape");
+    assert_eq!(
+        deferred_shell_nodes::NODE_BUILDS.with(std::cell::Cell::get),
+        1,
+        "the node inside a materialized shell must be reused, not rebuilt every pass"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn nested_bracket_rows(rows: Vec<i32>) {
+    for row in rows {
+        if row != 0 {
+            let _crumb = remember(|| 0_i32);
+            if row > 0 {
+                let _inner_crumb = remember(|| 0_i32);
+                keyed_pool_marker(row);
+            }
+        }
+    }
+}
+
+#[test]
+fn keyed_state_survives_a_front_removal_through_nested_brackets() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(47, || nested_bracket_rows(vec![1, 2]))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 2));
+
+    composition
+        .render(47, || nested_bracket_rows(vec![2]))
+        .expect("remove the front row");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "row 2's keyed state sits two brackets deep; the steal must ascend the branch path"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn value_macro_paren_callee_probe(cond: bool) {
+    let label = if cond {
+        format!("{}", (stateful_label)(1))
+    } else {
+        format!("{}", (stateful_label)(2))
+    };
+    BRANCH_SEEN.with(|seen| seen.set(label.parse().unwrap_or(-1)));
+}
+
+#[test]
+fn a_parenthesized_callee_inside_a_value_macro_gets_a_branch_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(48, || value_macro_paren_callee_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(48, || value_macro_paren_callee_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a parenthesized callee still composes; the branch needs its bracket"
+    );
+    assert_composition_valid(&composition);
+}

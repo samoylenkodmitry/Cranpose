@@ -19,8 +19,8 @@ pub(in crate::slot) struct DeferredBranchShell {
 
 /// A keyed subtree a departed conditional branch left behind, waiting within
 /// the pass for the same key to arrive under another bracket of the same
-/// branch site (`branch_site` is the parking bracket's static key — the same
-/// restriction the sibling steal applies): a shifted loop occurrence may
+/// bracket path (`branch_path` folds the transparent chain's static keys —
+/// the same restriction the sibling steal applies): a shifted occurrence may
 /// claim it, a *different* conditional branch never — branch isolation wins
 /// over the key. `owner` is the nearest non-transparent ancestor: if the key
 /// is not claimed by the time that group finishes, the subtree flows into
@@ -28,7 +28,7 @@ pub(in crate::slot) struct DeferredBranchShell {
 /// disposed before branch brackets existed.
 pub(in crate::slot) struct OrphanedKeyedSubtree {
     pub(in crate::slot) owner: AnchorId,
-    pub(in crate::slot) branch_site: crate::Key,
+    pub(in crate::slot) branch_path: crate::Key,
     pub(in crate::slot) key: GroupKey,
     pub(in crate::slot) subtree: DetachedSubtree,
 }
@@ -151,13 +151,13 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn park_orphaned_keyed(
         &mut self,
         owner: AnchorId,
-        branch_site: crate::Key,
+        branch_path: crate::Key,
         key: GroupKey,
         subtree: DetachedSubtree,
     ) {
         self.orphaned_keyed.push(OrphanedKeyedSubtree {
             owner,
-            branch_site,
+            branch_path,
             key,
             subtree,
         });
@@ -166,11 +166,11 @@ impl SlotWriteSessionState {
     pub(in crate::slot) fn claim_orphaned_keyed(
         &mut self,
         owner: AnchorId,
-        branch_site: crate::Key,
+        branch_path: crate::Key,
         key: GroupKey,
     ) -> Option<DetachedSubtree> {
         let position = self.orphaned_keyed.iter().position(|orphan| {
-            orphan.owner == owner && orphan.branch_site == branch_site && orphan.key == key
+            orphan.owner == owner && orphan.branch_path == branch_path && orphan.key == key
         })?;
         Some(self.orphaned_keyed.remove(position).subtree)
     }

@@ -71,7 +71,12 @@ impl SlotWriteSession<'_> {
         result
     }
 
-    pub(crate) fn current_node_record(&self) -> Option<(NodeId, u32)> {
+    /// The next node slot the current group would reuse. Materializes any
+    /// pending branch shell first: the emit path decides fresh-vs-reuse from
+    /// this answer, and the answer must come from the frame the node will
+    /// actually be recorded in.
+    pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32)> {
+        self.materialize_deferred_branch_shells();
         let frame = self.state.group_stack.last()?;
         self.table
             .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)

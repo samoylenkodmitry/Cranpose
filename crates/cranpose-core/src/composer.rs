@@ -1031,7 +1031,7 @@ impl Composer {
         let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
-        let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
+        let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
         let host = self.active_slots_host();
         let restored = self.core.shared_state.take_retained(
             &host,
@@ -1165,7 +1165,7 @@ impl Composer {
     pub fn __branch_group(&self, key: Key) -> BranchGroupGuard {
         let seed = crate::slot::GroupKeySeed::unkeyed(key);
         self.with_slot_session_mut(|slots| {
-            let reserved = slots.preview_group_key(seed);
+            let reserved = slots.reserve_group_key(seed);
             let start = slots.begin_group(reserved, None);
             slots.mark_group_transparent(start.group);
         });

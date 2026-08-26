@@ -73,7 +73,7 @@ impl SlotTable {
             .active_group_index(group_anchor)
             .and_then(|index| self.groups.get(index))
             .filter(|group| group.transparent)
-            .map(|group| group.key.static_key);
+            .map(|_| self.branch_path_key(group_anchor));
         if let Some(branch_site) = finishing_transparent_site {
             // A branch bracket's departed keyed children wait out the pass
             // under the nearest real group: a shifted bracket of the same

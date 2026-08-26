@@ -384,34 +384,95 @@ impl SlotTable {
         }
     }
 
-    /// Detach `key`'s subtree out of a later transparent sibling of `shell`,
-    /// searching only brackets from the same branch site (same static key):
-    /// the removal of an earlier loop iteration shifts every later bracket by
-    /// one, and the keyed content inside must move rather than be recomposed.
-    pub(in crate::slot) fn steal_keyed_subtree_from_later_transparent_siblings(
+    /// The identity of the branch-site *path* a keyed child lives under: a
+    /// fold of the static keys of the transparent chain from just below the
+    /// nearest non-transparent ancestor down to `anchor`. Parking and
+    /// claiming both compute it, so a key moves only between occurrences of
+    /// the same nested bracket path — a different conditional branch, at any
+    /// depth, never claims it.
+    pub(in crate::slot) fn branch_path_key(&self, anchor: AnchorId) -> crate::Key {
+        let mut chain: Vec<crate::Key> = Vec::new();
+        let mut current = anchor;
+        while let Some(record) = self
+            .active_group_index(current)
+            .and_then(|index| self.groups.get(index))
+        {
+            if !record.transparent {
+                break;
+            }
+            chain.push(record.key.static_key);
+            current = record.parent_anchor;
+        }
+        let mut folded: crate::Key = 0xcbf2_9ce4_8422_2325;
+        for static_key in chain.iter().rev() {
+            folded ^= *static_key;
+            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        folded
+    }
+
+    /// Detach `key`'s subtree out of a later occurrence of the claimer's
+    /// nested bracket path: at each transparent level, from the claimer's
+    /// bracket up to the nearest non-transparent ancestor, scan later
+    /// same-site siblings and descend the remaining path of nested same-site
+    /// brackets before matching the key. The removal of an earlier loop
+    /// iteration shifts every later bracket by one — at whatever depth the
+    /// keyed content sits — and it must move rather than be recomposed.
+    pub(in crate::slot) fn steal_keyed_subtree_along_branch_path(
         &mut self,
-        shell_anchor: AnchorId,
+        claimer_bracket: AnchorId,
         key: GroupKey,
     ) -> Option<DetachedSubtree> {
-        let shell_index = self.active_group_index(shell_anchor)?;
-        let shell = self.groups.get(shell_index)?;
-        let shell_static_key = shell.key.static_key;
-        let parent_anchor = shell.parent_anchor;
+        let mut level = claimer_bracket;
+        let mut descent: Vec<crate::Key> = Vec::new();
+        loop {
+            if let Some(found) = self.find_key_in_later_same_site_siblings(level, &descent, key) {
+                let subtree = self.detach_subtree_at_index_internal(found, false);
+                if subtree.group_count() == 0 {
+                    return None;
+                }
+                return Some(subtree);
+            }
+            let record = self
+                .active_group_index(level)
+                .and_then(|index| self.groups.get(index))?;
+            let parent = record.parent_anchor;
+            let level_static = record.key.static_key;
+            let parent_is_transparent = self
+                .active_group_index(parent)
+                .and_then(|index| self.groups.get(index))
+                .is_some_and(|group| group.transparent);
+            if !parent_is_transparent {
+                return None;
+            }
+            descent.insert(0, level_static);
+            level = parent;
+        }
+    }
+
+    /// Later siblings of `level` sharing its static key, each descended along
+    /// `descent` before matching `key`.
+    fn find_key_in_later_same_site_siblings(
+        &self,
+        level: AnchorId,
+        descent: &[crate::Key],
+        key: GroupKey,
+    ) -> Option<usize> {
+        let level_index = self.active_group_index(level)?;
+        let level_record = self.groups.get(level_index)?;
+        let level_static = level_record.key.static_key;
+        let parent_anchor = level_record.parent_anchor;
         let siblings = self.direct_child_range(parent_anchor);
-        let mut index = shell_index + self.group_subtree_len_at_index(shell_index);
+        let mut index = level_index + self.group_subtree_len_at_index(level_index);
         while index < siblings.end() {
             let record = self.groups.get(index)?;
             if record.parent_anchor != parent_anchor {
                 return None;
             }
             let subtree_len = self.group_subtree_len_at_index(index);
-            if record.transparent && record.key.static_key == shell_static_key {
-                if let Some(found) = self.find_keyed_child_in_transparent_subtree(index, key) {
-                    let subtree = self.detach_subtree_at_index_internal(found, false);
-                    if subtree.group_count() == 0 {
-                        return None;
-                    }
-                    return Some(subtree);
+            if record.transparent && record.key.static_key == level_static {
+                if let Some(found) = self.find_key_along_descent(index, descent, key) {
+                    return Some(found);
                 }
             }
             index += subtree_len;
@@ -419,11 +480,13 @@ impl SlotTable {
         None
     }
 
-    /// A direct child of `shell_index` matching `key`, descending through
-    /// nested transparent brackets only.
-    fn find_keyed_child_in_transparent_subtree(
+    /// Walk `shell_index`'s direct children along `descent` — each step a
+    /// nested transparent bracket of that static key — and match `key` as a
+    /// direct child at the path's end.
+    fn find_key_along_descent(
         &self,
         shell_index: usize,
+        descent: &[crate::Key],
         key: GroupKey,
     ) -> Option<usize> {
         let shell_anchor = self.groups.get(shell_index)?.anchor;
@@ -438,13 +501,19 @@ impl SlotTable {
                 );
                 return None;
             }
-            if record.key == key {
-                return Some(index);
-            }
             let subtree_len = self.group_subtree_len_at_index(index);
-            if record.transparent {
-                if let Some(found) = self.find_keyed_child_in_transparent_subtree(index, key) {
-                    return Some(found);
+            match descent.split_first() {
+                None => {
+                    if record.key == key {
+                        return Some(index);
+                    }
+                }
+                Some((next_static, rest)) => {
+                    if record.transparent && record.key.static_key == *next_static {
+                        if let Some(found) = self.find_key_along_descent(index, rest, key) {
+                            return Some(found);
+                        }
+                    }
                 }
             }
             index += subtree_len;
