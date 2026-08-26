@@ -890,3 +890,35 @@ fn moved_group_invalidates_previous_active_group_id() {
     harness.finish_pass();
     assert_eq!(harness.table.active_group_anchor(resolved), second_anchor);
 }
+
+#[test]
+fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
+    let mut state = crate::slot::SlotWriteSessionState::default();
+    state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+
+    let first = state.push_branch_fold(0x1111);
+    let _ = state.branch_fold();
+    let second = state.push_branch_fold(0x2222);
+    let _ = state.branch_fold();
+    let third = state.push_branch_fold(0x3333);
+    let _ = state.branch_fold();
+    let fourth = state.push_branch_fold(0x4444);
+    let _ = state.branch_fold();
+    let _ = first;
+
+    state.close_branch_fold(second);
+    state.close_branch_fold(fourth);
+
+    let observed = state.branch_fold();
+    let mut expected = crate::slot::BRANCH_PATH_ROOT;
+    for key in [0x1111_u64, 0x3333] {
+        expected ^= key;
+        expected = expected.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    assert_eq!(
+        observed, expected,
+        "the fold after non-LIFO closes must contain exactly the live entries"
+    );
+    state.close_branch_fold(third);
+    state.close_branch_fold(first);
+}

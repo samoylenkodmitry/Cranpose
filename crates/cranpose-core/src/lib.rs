@@ -350,6 +350,12 @@ pub fn caller_location_key() -> Key {
     location_key(caller.file(), caller.line(), caller.column())
 }
 
+#[doc(hidden)]
+#[track_caller]
+pub fn composable_identity_key(definition: Key) -> Key {
+    (definition ^ caller_location_key()).wrapping_mul(0x0000_0100_0000_01b3)
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let key = source_location_key(file, line, column);
     #[cfg(test)]

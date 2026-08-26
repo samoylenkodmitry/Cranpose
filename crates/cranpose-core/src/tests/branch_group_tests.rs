@@ -2870,3 +2870,43 @@ fn a_composing_unary_in_a_condition_stays_inside_its_fold() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+#[allow(non_snake_case)]
+fn PageA() {
+    let value = remember_branch_marker(61);
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[composable]
+#[allow(non_snake_case)]
+fn PageB() {
+    let value = remember_branch_marker(62);
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[composable]
+fn fn_pointer_page_probe(first: bool) {
+    let page: fn() = if first { PageA } else { PageB };
+    page();
+}
+
+#[test]
+fn two_composables_selected_through_one_call_site_stay_distinct() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
+        composition.render(88, || fn_pointer_page_probe(first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 61));
+
+    pass(&mut composition, false).expect("switch pages through the pointer");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 62),
+        "identity must carry the callee too; PageB is not PageA at the same call site"
+    );
+    assert_composition_valid(&composition);
+}

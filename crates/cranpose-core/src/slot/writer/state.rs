@@ -19,6 +19,7 @@ pub(crate) struct SlotWriteSessionState {
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     branch_fold_entries: Vec<BranchFoldEntry>,
     branch_fold: Option<crate::Key>,
+    dead_branch_folds: usize,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -52,6 +53,7 @@ impl SlotWriteSessionState {
             );
             self.branch_fold_entries.clear();
             self.branch_fold = None;
+            self.dead_branch_folds = 0;
         }
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
@@ -179,13 +181,18 @@ impl SlotWriteSessionState {
                 .branch_fold_entries
                 .pop()
                 .expect("length checked above");
-            self.branch_fold = entry.prev_fold;
+            self.branch_fold = if self.dead_branch_folds == 0 {
+                entry.prev_fold
+            } else {
+                None
+            };
             while self
                 .branch_fold_entries
                 .last()
                 .is_some_and(|entry| !entry.live)
             {
                 self.branch_fold_entries.pop();
+                self.dead_branch_folds -= 1;
                 self.branch_fold = None;
             }
             return;
@@ -197,7 +204,10 @@ impl SlotWriteSessionState {
             );
             return;
         };
-        entry.live = false;
+        if entry.live {
+            entry.live = false;
+            self.dead_branch_folds += 1;
+        }
         self.branch_fold = None;
     }
 
