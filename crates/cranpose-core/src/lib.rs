@@ -371,6 +371,21 @@ pub fn __branch_group_scope(key: Key) -> Option<BranchGroupGuard> {
     .flatten()
 }
 
+/// [`__branch_group_scope`] for a fully-keyed branch: the bracket is reserved
+/// as a deferred shell (see [`Composer::__branch_group_deferred`]) instead of
+/// opened, so the real `with_key` keeps its unbracketed sibling structure and
+/// a lookalike still materializes an isolating bracket.
+#[doc(hidden)]
+pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
+    with_current_composer_opt(|composer| {
+        composer
+            .active_slots_host()
+            .has_active_pass()
+            .then(|| composer.__branch_group_deferred(key))
+    })
+    .flatten()
+}
+
 /// Group key for one conditional branch of a `#[composable]` body.
 ///
 /// The location is the branch's own source position, and `branch` is the

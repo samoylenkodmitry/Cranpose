@@ -1295,3 +1295,122 @@ fn a_user_binding_named_like_the_composer_is_not_broken_by_guards() {
     assert_eq!((branch_inits(), branch_seen()), (2, 8));
     assert_composition_valid(&composition);
 }
+
+mod fake_shape_with_key {
+    use super::*;
+
+    /// The real API's exact shape — two arguments, closure last — but no
+    /// keyed group inside: the elision must repair itself at runtime.
+    fn with_key<K>(_key: &K, content: impl FnOnce()) {
+        content();
+    }
+
+    #[composable]
+    pub(super) fn probe(cond: bool) {
+        if cond {
+            with_key(&1, || {
+                let value = remember_branch_marker(1);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            });
+        } else {
+            with_key(&2, || {
+                let value = remember_branch_marker(2);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            });
+        }
+    }
+}
+
+#[test]
+fn a_lookalike_with_key_of_the_real_shape_still_gets_a_bracket() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(39, || fake_shape_with_key::probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(39, || fake_shape_with_key::probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a lookalike opens no keyed group, so its positional slots must materialize the bracket"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn keyed_helper(marker: i32) {
+    with_key(&"shared", || {
+        let value = remember_branch_marker(marker);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    });
+}
+
+#[composable]
+fn keyed_via_helper_probe(cond: bool) {
+    if cond {
+        keyed_helper(1);
+    } else {
+        keyed_helper(2);
+    }
+}
+
+#[test]
+fn an_explicit_key_does_not_carry_state_across_branch_sites() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(40, || keyed_via_helper_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(40, || keyed_via_helper_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "Compose parity: a plain key moves within its branch site (list reorders), \
+         it does not carry state across a branch switch"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn stateful_label(marker: i32) -> i32 {
+    remember_branch_marker(marker)
+}
+
+#[composable]
+fn value_macro_snake_probe(cond: bool) {
+    let label = if cond {
+        format!("{}", stateful_label(1))
+    } else {
+        format!("{}", stateful_label(2))
+    };
+    BRANCH_SEEN.with(|seen| seen.set(label.parse().unwrap_or(-1)));
+}
+
+#[test]
+fn a_snake_case_composable_inside_a_value_macro_gets_a_branch_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(41, || value_macro_snake_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(41, || value_macro_snake_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a snake_case composable inside `format!` still composes; the branch needs its bracket"
+    );
+    assert_composition_valid(&composition);
+}

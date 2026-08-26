@@ -29,31 +29,27 @@ is quietly wrong sends work to the wrong places for as long as nobody reads it.
 ### Branch groups: the edges the transform cannot reach
 
 Branch groups are in: every `if`/`else` branch, `match` arm, composing match
-guard and composing `if` condition of a `#[composable]` body — and of the
-content lambdas and executable nested items (`fn`s, local `impl` and trait
-methods, `mod` contents) it contains, classified by composer reachability
-(free calls anywhere including inside closures, `Composer`'s composing
-methods by name, non-value macros) — owns its composition slots, with keyed
-subtrees preserved across brackets
-(`docs/slot_table_invariants.md`, `branch_group_tests`, and
-`robot_recomposition_lab` end to end). The remaining edges, each the price of
-running on names before expansion rather than on typed IR:
+guard, composing `if`-condition operand (each `&&`/`||` operand and `let`
+scrutinee individually, so short-circuiting cannot shift later slots) of a
+`#[composable]` body — and of the content lambdas and executable nested
+items (`fn`s, local `impl` and trait methods, `mod` contents) it contains,
+classified by composer reachability (free calls anywhere including inside
+closures and value-macro arguments, `Composer`'s composing methods by name,
+non-value macros) — owns its composition slots, with keyed subtrees
+preserved across brackets. A branch that is syntactically only `with_key`
+calls reserves its bracket as a deferred shell: the real `with_key` passes
+through and keeps the unbracketed keyed sibling structure and cost, while a
+lookalike function of the same name and shape materializes the bracket on
+its first positional operation — the reserved-name failure mode is isolation,
+not sharing (`docs/slot_table_invariants.md`, `branch_group_tests`, and
+`robot_recomposition_lab` end to end). The remaining edges, each the price
+of running on names before expansion rather than on typed IR:
 
 - **A conditional expanded out of a `macro_rules!` body is never bracketed.**
   The attribute macro runs before function-like macros expand, so an `if`
   whose arms only exist after expansion keeps the old shared-slot behavior.
-  The same blindness hides a snake_case composable inside a value macro's
-  arguments (`format!("{}", snake_helper())`): token soup carries no call
-  graph. Compose's plugin runs on IR after inlining, which is what closing
-  this would take.
-- **`with_key` and CamelCase are reserved composition names.** A user
-  function named `with_key` with the real API's exact shape (two arguments,
-  closure last) is elided like the real one; if it opens no keyed group, its
-  branches keep the pre-transform shared-slot behavior — degradation, not
-  corruption. Lookalikes of any other arity keep their bracket. A `let` in a
-  match guard or `if` condition is the same class: its bindings must flow
-  into the arm or branch, so a composing `if let`/let-chain condition cannot
-  be given a group of its own.
+  Compose's plugin runs on IR after inlining, which is what closing this
+  would take.
 - **An over-matched content closure that composes nothing pays for its
   groups.** A closure the classifier flags (it contains free calls) whose
   branches never compose gets real transparent groups when it runs during a
@@ -61,11 +57,9 @@ running on names before expansion rather than on typed IR:
   the suite but linear in iteration count for a hot non-composing closure
   inside a composable loop. The classifier cannot shrink (a snake_case
   composable is indistinguishable from a snake_case helper); the fix, if a
-  real workload hits this, is lazy group materialization: the guard parks a
-  pending key and the first slot, group or node operation inside the branch
-  materializes it, so a branch that composes nothing costs a `Vec`
-  push/pop. That is a composer-core change and waits for a workload that
-  needs it.
+  real workload hits this, is extending the deferred-shell reservation the
+  fully-keyed branches already use to every branch, so a branch that
+  composes nothing costs a `Vec` push and pop.
 - **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
   steal scans later same-site brackets linearly and the orphan pool is a
   linear scan, so reversing N rows of

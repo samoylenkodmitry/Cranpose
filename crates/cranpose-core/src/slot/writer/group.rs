@@ -285,11 +285,73 @@ impl SlotWriteSession<'_> {
         Some(group)
     }
 
+    /// Reserve a branch bracket without opening it. An explicitly keyed child
+    /// group passes through (it states its own identity); anything else at
+    /// the bracket's level first materializes it via
+    /// [`Self::materialize_deferred_branch_shells`]. Returns the token the
+    /// closing guard hands back to [`Self::close_deferred_branch_shell`].
+    pub(crate) fn begin_deferred_branch_shell(&mut self, seed: GroupKeySeed) -> usize {
+        let parent = self.state.current_parent_anchor();
+        self.state
+            .deferred_branch_shells
+            .push(super::state::DeferredBranchShell {
+                parent,
+                seed,
+                materialized: false,
+            });
+        self.state.deferred_branch_shells.len() - 1
+    }
+
+    /// Close the shell the guard holds. Returns whether it materialized into
+    /// a real open group the caller must now finish like any branch group.
+    pub(crate) fn close_deferred_branch_shell(&mut self, token: usize) -> bool {
+        if self.state.deferred_branch_shells.len() != token + 1 {
+            log::error!(
+                "deferred branch shell {token} closed out of order at depth {}",
+                self.state.deferred_branch_shells.len()
+            );
+            return self
+                .state
+                .deferred_branch_shells
+                .get(token)
+                .is_some_and(|shell| shell.materialized);
+        }
+        let shell = self
+            .state
+            .deferred_branch_shells
+            .pop()
+            .expect("length checked above");
+        shell.materialized
+    }
+
+    /// Open every pending branch shell whose level the next operation is
+    /// about to write into. Marked materialized before its `begin_group` so
+    /// the recursive hook terminates.
+    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
+        while let Some(shell) = self.state.deferred_branch_shells.last() {
+            if shell.materialized || shell.parent != self.state.current_parent_anchor() {
+                return;
+            }
+            let seed = shell.seed;
+            self.state
+                .deferred_branch_shells
+                .last_mut()
+                .expect("checked above")
+                .materialized = true;
+            let key = self.preview_group_key(seed);
+            let started = self.begin_group(key, None);
+            self.mark_group_transparent(started.group);
+        }
+    }
+
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
+        if key.explicit_key.is_none() {
+            self.materialize_deferred_branch_shells();
+        }
         self.state.consume_group_key(key);
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
@@ -325,6 +387,15 @@ impl SlotWriteSession<'_> {
             return;
         };
         let group_anchor = frame.group_anchor;
+        while self
+            .state
+            .deferred_branch_shells
+            .last()
+            .is_some_and(|shell| !shell.materialized && shell.parent == group_anchor)
+        {
+            log::error!("a deferred branch shell leaked past its group; dropping it");
+            self.state.deferred_branch_shells.pop();
+        }
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             self.state.recycle_group_frame(frame);

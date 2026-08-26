@@ -563,10 +563,22 @@ pub struct Composer {
 pub struct BranchGroupGuard {
     composer: Composer,
     parent_scope: Option<ScopeId>,
+    /// `Some` for a fully-keyed branch whose bracket was reserved as a
+    /// deferred shell rather than opened; on drop the shell reports whether
+    /// something materialized it, and only then is there a group to close.
+    deferred_shell: Option<usize>,
 }
 
 impl Drop for BranchGroupGuard {
     fn drop(&mut self) {
+        if let Some(token) = self.deferred_shell {
+            let materialized = self
+                .composer
+                .with_slot_session_mut(|slots| slots.close_deferred_branch_shell(token));
+            if !materialized {
+                return;
+            }
+        }
         let result = self
             .composer
             .with_slot_session_mut(|slots| slots.finish_group_body());
@@ -1160,6 +1172,25 @@ impl Composer {
         BranchGroupGuard {
             composer: self.clone(),
             parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
+            deferred_shell: None,
+        }
+    }
+
+    /// The bracket for a branch that consists solely of `with_key` calls. The
+    /// real `with_key` opens explicitly keyed groups that state their own
+    /// identity, so the bracket stays a reservation and the keyed sibling
+    /// machinery sees exactly the structure it always had; if the branch
+    /// turns out to compose positionally after all — a user function that
+    /// merely shares the name and shape — the first such operation
+    /// materializes the bracket and the branch is isolated like any other.
+    #[doc(hidden)]
+    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
+        let seed = crate::slot::GroupKeySeed::unkeyed(key);
+        let token = self.with_slot_session_mut(|slots| slots.begin_deferred_branch_shell(seed));
+        BranchGroupGuard {
+            composer: self.clone(),
+            parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
+            deferred_shell: Some(token),
         }
     }
 

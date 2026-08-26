@@ -1,8 +1,21 @@
 use super::{
-    super::{DetachedSubtree, GroupKey, SlotPassMode, SlotTable},
+    super::{DetachedSubtree, GroupKey, GroupKeySeed, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
 use crate::{collections::map::HashMap, AnchorId};
+
+/// A branch bracket a fully-keyed conditional branch reserved without opening.
+/// The real `with_key` opens an explicitly keyed child that carries its own
+/// identity, so the bracket stays unmaterialized and costs a push and a pop;
+/// the first other composition operation at the bracket's level — a lookalike
+/// `with_key` composing positionally, a value slot, a node — materializes the
+/// bracket before the operation lands, so the branch is isolated exactly as
+/// if it had been bracketed eagerly.
+pub(in crate::slot) struct DeferredBranchShell {
+    pub(in crate::slot) parent: AnchorId,
+    pub(in crate::slot) seed: GroupKeySeed,
+    pub(in crate::slot) materialized: bool,
+}
 
 /// A keyed subtree a departed conditional branch left behind, waiting within
 /// the pass for the same key to arrive under another branch bracket of the
@@ -24,6 +37,7 @@ pub(crate) struct SlotWriteSessionState {
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     pub(in crate::slot) orphaned_keyed: Vec<OrphanedKeyedSubtree>,
+    pub(in crate::slot) deferred_branch_shells: Vec<DeferredBranchShell>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -56,6 +70,13 @@ impl SlotWriteSessionState {
                 self.orphaned_keyed.len()
             );
             self.orphaned_keyed.clear();
+        }
+        if !self.deferred_branch_shells.is_empty() {
+            log::error!(
+                "slot writer reset discarded {} deferred branch shells whose guards never closed",
+                self.deferred_branch_shells.len()
+            );
+            self.deferred_branch_shells.clear();
         }
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
