@@ -64,64 +64,6 @@ impl BranchGroupInjector<'_> {
 
     fn wrap_condition(&mut self, condition: &mut Expr) {
         self.wrap_condition_inner(condition);
-        if !matches!(condition, Expr::Let(_)) {
-            self.inject_before_first_chain_let(condition);
-        }
-    }
-
-    fn synthetic_chain_let(&mut self, span: Span) -> Expr {
-        let guard_expr = self.branch_guard_expr(span);
-        let ident = syn::Ident::new("__cranpose_chain_fold_guard", span);
-        let pat: syn::Pat = syn::Pat::Ident(syn::PatIdent {
-            attrs: Vec::new(),
-            by_ref: None,
-            mutability: None,
-            ident,
-            subpat: None,
-        });
-        Expr::Let(syn::ExprLet {
-            attrs: Vec::new(),
-            let_token: syn::token::Let(span),
-            pat: Box::new(pat),
-            eq_token: syn::token::Eq(span),
-            expr: Box::new(guard_expr),
-        })
-    }
-
-    fn inject_before_first_chain_let(&mut self, expr: &mut Expr) -> bool {
-        match expr {
-            Expr::Let(_) => {
-                let span = expr.span();
-                let synthetic = self.synthetic_chain_let(span);
-                let original = expr.clone();
-                *expr = Expr::Binary(syn::ExprBinary {
-                    attrs: Vec::new(),
-                    left: Box::new(synthetic),
-                    op: syn::BinOp::And(syn::token::AndAnd(span)),
-                    right: Box::new(original),
-                });
-                true
-            }
-            Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_)) => {
-                if self.inject_before_first_chain_let(&mut binary.left) {
-                    return true;
-                }
-                if matches!(&*binary.right, Expr::Let(_)) {
-                    let span = binary.right.span();
-                    let synthetic = self.synthetic_chain_let(span);
-                    let original_left = binary.left.clone();
-                    *binary.left = Expr::Binary(syn::ExprBinary {
-                        attrs: Vec::new(),
-                        left: original_left,
-                        op: syn::BinOp::And(syn::token::AndAnd(span)),
-                        right: Box::new(synthetic),
-                    });
-                    return true;
-                }
-                false
-            }
-            _ => false,
-        }
     }
 
     fn wrap_condition_inner(&mut self, condition: &mut Expr) {
@@ -211,27 +153,6 @@ impl BranchGroupInjector<'_> {
         }};
     }
 
-    fn branch_guard_expr(&mut self, span: Span) -> Expr {
-        let branch = self.next_branch;
-        self.next_branch += 1;
-        let core_path = self.core_path;
-        if self.in_content_closure {
-            syn::parse_quote_spanned! {span=>
-                #core_path::__branch_group_scope_deferred(
-                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                )
-            }
-        } else {
-            self.uses_composer_alias = true;
-            let composer = composer_alias_ident();
-            syn::parse_quote_spanned! {span=>
-                #composer.__branch_group_deferred(
-                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                )
-            }
-        }
-    }
-
     fn visit_nested_fn(
         &mut self,
         signature: &syn::Signature,
@@ -259,6 +180,11 @@ impl BranchGroupInjector<'_> {
 
 impl VisitMut for BranchGroupInjector<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        let folds_whole_statement = match &*expr {
+            Expr::If(expr_if) => expr_contains_let(&expr_if.cond),
+            Expr::While(while_loop) => expr_contains_let(&while_loop.cond),
+            _ => false,
+        };
         match expr {
             Expr::Closure(closure) => {
                 if closure.asyncness.is_some() {
@@ -308,6 +234,14 @@ impl VisitMut for BranchGroupInjector<'_> {
             }
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
             _ => visit_mut::visit_expr_mut(self, expr),
+        }
+        if folds_whole_statement {
+            let guard = self.branch_guard_stmt(expr.span());
+            let original = expr.clone();
+            *expr = syn::parse_quote! {{
+                #guard
+                #original
+            }};
         }
     }
 

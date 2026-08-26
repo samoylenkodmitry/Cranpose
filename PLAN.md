@@ -84,15 +84,17 @@ typed IR:
   surrounding context.** A `ref` pattern binds into the place, so a `let`
   scrutinee that is a place expression keeps its structure; its value
   sub-parts carry folds, but a composing `Deref` impl on the place chain
-  itself runs under the enclosing fold. A bare `if let` scrutinee is
-  always evaluated with its statement, so it vanishes only with its
-  context and cannot alias. The one place-path evaluation that can
-  vanish alone — a scrutinee behind a short-circuiting `&&` in an
-  edition-2024 `let` chain — is covered by a synthetic irrefutable
-  chain-`let` binding a fold guard, injected before the chain's first
-  `let`; the binding lives through the remaining scrutinees and the arm,
-  and the place syntax is untouched (pinned as
-  `a_short_circuited_place_deref_does_not_leak_into_a_later_deref`). A closure
+  itself runs under the enclosing fold, and every `let`-bearing
+  condition is covered by the
+  whole-statement fold: an `if` or `while` whose condition contains any
+  `let` is enclosed in a block holding a fold guard, so every scrutinee
+  evaluation — chained or plain, place or value, however many times a
+  `while let` repeats — carries an identity the code after the statement
+  never shares, the place syntax is untouched, and no let-chain syntax is
+  ever fabricated (a `let` is gated by its own span's edition, so a
+  fabricated chain around a user's edition-2021 `let` would not compile;
+  pinned as `a_short_circuited_place_deref_does_not_leak_into_a_later_deref`
+  and `a_shrinking_while_let_scrutinee_does_not_feed_a_later_helper_call`). A closure
   consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`)
   still folds into the surrounding context, bounded by source stamps.
 - **A reuse-retained scope inside a keyed wrapper recomposes fresh when the

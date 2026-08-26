@@ -2954,6 +2954,40 @@ fn two_composables_selected_through_one_macro_call_site_stay_distinct() {
     assert_composition_valid(&composition);
 }
 
+fn next_marker(enabled: bool, marker: i32) -> Option<i32> {
+    enabled.then(|| remember_branch_marker(marker))
+}
+
+#[composable]
+fn while_let_scrutinee_probe(mut count: usize) {
+    while let Some(_) = next_marker(count > 0, 10) {
+        count -= 1;
+    }
+    let tail = next_marker(true, 20).expect("the tail always composes");
+    BRANCH_SEEN.with(|seen| seen.set(tail));
+}
+
+#[test]
+fn a_shrinking_while_let_scrutinee_does_not_feed_a_later_helper_call() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, count: usize| {
+        composition.render(94, || while_let_scrutinee_probe(count))
+    };
+
+    pass(&mut composition, 1).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 20));
+
+    pass(&mut composition, 0).expect("run the loop zero times");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 20),
+        "the tail call must keep its own slot when the loop scrutinee composes \
+         fewer times"
+    );
+    assert_composition_valid(&composition);
+}
+
 struct ChainHolder {
     value: Option<i32>,
     marker: i32,
