@@ -1412,9 +1412,9 @@ fn create_android_gpu_resources(
                 adapter_info.vendor, adapter_info.device,
             );
             let file_path = std::path::Path::new(&cache_dir).join(file_name);
-            cranpose_render_wgpu::set_debug_toggle(
+            cranpose_render_wgpu::set_debug_toggle_os(
                 "CRANPOSE_PIPELINE_CACHE_FILE",
-                Some(file_path.to_string_lossy().as_ref()),
+                Some(file_path.as_os_str()),
             );
         }
     }
@@ -1784,9 +1784,9 @@ pub fn run(
     if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
         if let Some(data_path) = app.internal_data_path() {
             let cache_dir = data_path.join("cranpose_gpu");
-            cranpose_render_wgpu::set_debug_toggle(
+            cranpose_render_wgpu::set_debug_toggle_os(
                 "CRANPOSE_PIPELINE_CACHE_DIR",
-                Some(cache_dir.to_string_lossy().as_ref()),
+                Some(cache_dir.as_os_str()),
             );
         }
     }

@@ -223,6 +223,9 @@ impl BranchGroupInjector<'_> {
                 .is_some_and(|segment| segment.ident == "composable")
         });
         if !runs_during_composition || expands_itself {
+            if signature.asyncness.is_some() && !expands_itself {
+                self.instrument_sync_interiors_block(block);
+            }
             return;
         }
         let previous = std::mem::replace(&mut self.in_content_closure, true);
@@ -375,6 +378,12 @@ impl VisitMut for BranchGroupInjector<'_> {
                         self.visit_item_mut(nested);
                     }
                 }
+            }
+            syn::Item::Static(item_static) => {
+                self.instrument_sync_interiors(&mut item_static.expr);
+            }
+            syn::Item::Const(item_const) => {
+                self.instrument_sync_interiors(&mut item_const.expr);
             }
             _ => {}
         }

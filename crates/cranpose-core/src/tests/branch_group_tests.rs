@@ -3229,6 +3229,80 @@ fn a_sync_closure_from_a_suspending_async_body_keeps_branch_identity() {
     assert_composition_valid(&composition);
 }
 
+#[composable]
+fn async_fn_factory_probe(flag: bool) {
+    async fn factory(flag: bool) -> impl Fn() {
+        std::future::ready(()).await;
+        move || {
+            if flag {
+                let value = remember_branch_marker(89);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(90);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        }
+    }
+    let render = poll_ready(factory(flag));
+    render();
+}
+
+#[test]
+fn a_sync_closure_from_an_async_fn_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(102, || async_fn_factory_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 89));
+
+    pass(&mut composition, false).expect("switch arms in the async fn's closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 90),
+        "an async fn stays uninstrumented for Send, but the sync closure it \
+         returns composes and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn static_closure_probe(flag: bool) {
+    static RENDER: fn(bool) = |flag| {
+        if flag {
+            let value = remember_branch_marker(93);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(94);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    };
+    RENDER(flag);
+}
+
+#[test]
+fn a_static_item_closure_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(103, || static_closure_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 93));
+
+    pass(&mut composition, false).expect("switch arms in the static closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 94),
+        "a closure stored in a local static item executes at runtime; its \
+         branches need folds even though the item initializer must stay const"
+    );
+    assert_composition_valid(&composition);
+}
+
 macro_rules! maybe_remember {
     ($enabled:expr) => {
         if $enabled {

@@ -6,7 +6,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod cost_tuner;
 pub(crate) use cranpose_render_common::debug_toggles;
-pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle};
+pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
 mod display_clip;
 mod effect_renderer;
 mod frame_graph;
