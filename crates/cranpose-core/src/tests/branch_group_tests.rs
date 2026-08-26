@@ -2958,6 +2958,60 @@ fn next_marker(enabled: bool, marker: i32) -> Option<i32> {
     enabled.then(|| remember_branch_marker(marker))
 }
 
+struct ComposingIter {
+    remaining: usize,
+    marker: i32,
+}
+
+impl Iterator for ComposingIter {
+    type Item = i32;
+
+    fn next(&mut self) -> Option<i32> {
+        if self.remaining == 0 {
+            return None;
+        }
+        self.remaining -= 1;
+        Some(remember_branch_marker(self.marker))
+    }
+}
+
+#[composable]
+fn adjacent_loops_probe(first_count: usize) {
+    for value in (ComposingIter {
+        remaining: first_count,
+        marker: 75,
+    }) {
+        let _ = value;
+    }
+    for value in (ComposingIter {
+        remaining: 1,
+        marker: 76,
+    }) {
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn a_shrinking_loop_does_not_feed_the_next_loops_iterator() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first_count: usize| {
+        composition.render(95, || adjacent_loops_probe(first_count))
+    };
+
+    pass(&mut composition, 1).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 76));
+
+    pass(&mut composition, 0).expect("run the first loop zero times");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 76),
+        "a composing next() outside the body fold must not hand the first \
+         loop's slot to the second loop"
+    );
+    assert_composition_valid(&composition);
+}
+
 #[composable]
 fn while_let_scrutinee_probe(mut count: usize) {
     while let Some(_marker) = next_marker(count > 0, 10) {

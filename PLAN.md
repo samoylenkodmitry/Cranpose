@@ -29,8 +29,9 @@ is quietly wrong sends work to the wrong places for as long as nobody reads it.
 ### Branch groups: fold-only identity
 
 Every conditional site of a `#[composable]` body — `if`/`else` branch,
-`match` arm and guard, `for`/`while`/`loop` body, each `&&`/`||`
-condition operand and `let` scrutinee, and every closure or executable
+`match` arm and guard, `for`/`while`/`loop` body — a `for` statement
+whole, so a composing `IntoIterator`/`Iterator::next` outside the body
+is covered too — each `&&`/`||` condition operand and `let` scrutinee, and every closure or executable
 nested item defined inside a branch — pushes an RAII **branch fold**: a
 location key on a per-pass stack. Nothing ever materializes; a guard costs a push and a pop, and
 closing folds in any order is safe (entries are marked dead and trimmed).

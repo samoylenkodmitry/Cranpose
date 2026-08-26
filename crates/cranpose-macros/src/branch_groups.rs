@@ -183,6 +183,7 @@ impl VisitMut for BranchGroupInjector<'_> {
         let folds_whole_statement = match &*expr {
             Expr::If(expr_if) => expr_contains_let(&expr_if.cond),
             Expr::While(while_loop) => expr_contains_let(&while_loop.cond),
+            Expr::ForLoop(_) => true,
             _ => false,
         };
         match expr {
