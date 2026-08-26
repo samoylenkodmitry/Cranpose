@@ -17,24 +17,6 @@ pub(super) struct GroupRecord {
     pub(super) anchor: AnchorId,
     pub(super) scope_id: Option<ScopeId>,
     pub(super) transparent: bool,
-    pub(super) shell_site: Option<crate::Key>,
-}
-
-impl SlotTable {
-    pub(in crate::slot) fn group_shell_site(&self, anchor: AnchorId) -> Option<crate::Key> {
-        self.active_group_index(anchor)
-            .and_then(|index| self.groups.get(index))
-            .and_then(|group| group.shell_site)
-    }
-
-    pub(in crate::slot) fn set_group_shell_site(&mut self, anchor: AnchorId, site: crate::Key) {
-        if let Some(record) = self
-            .active_group_index(anchor)
-            .and_then(|index| self.groups.get_mut(index))
-        {
-            record.shell_site = Some(site);
-        }
-    }
 }
 
 #[derive(Clone, Copy)]

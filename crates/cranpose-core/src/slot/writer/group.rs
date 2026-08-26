@@ -149,9 +149,7 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        if seed.explicit_key.is_none() {
-            self.materialize_deferred_branch_shells();
-        }
+        self.materialize_deferred_branch_shells();
         self.preview_group_key(seed)
     }
 
@@ -319,7 +317,7 @@ impl SlotWriteSession<'_> {
         shell.materialized
     }
 
-    fn pending_unmaterialized_shell_site(&self) -> Option<crate::Key> {
+    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
         let parent = self.state.current_parent_anchor();
         let shells = &self.state.deferred_branch_shells;
         let mut start = shells.len();
@@ -331,27 +329,13 @@ impl SlotWriteSession<'_> {
             start -= 1;
         }
         if start == shells.len() {
-            return None;
+            return;
         }
-        let mut folded: crate::Key = super::super::BRANCH_PATH_ROOT;
-        for shell in &shells[start..] {
-            folded ^= shell.seed.static_key;
-            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
+        let seeds: Vec<_> = shells[start..].iter().map(|shell| shell.seed).collect();
+        for shell in &mut self.state.deferred_branch_shells[start..] {
+            shell.materialized = true;
         }
-        Some(folded)
-    }
-
-    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
-        while let Some(shell) = self.state.deferred_branch_shells.last() {
-            if shell.materialized || shell.parent != self.state.current_parent_anchor() {
-                return;
-            }
-            let seed = shell.seed;
-            self.state
-                .deferred_branch_shells
-                .last_mut()
-                .expect("checked above")
-                .materialized = true;
+        for seed in seeds {
             let key = self.preview_group_key(seed);
             let started = self.begin_group(key, None);
             self.mark_group_transparent(started.group);
@@ -363,51 +347,19 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        if key.explicit_key.is_none() {
-            self.materialize_deferred_branch_shells();
-        }
+        self.materialize_deferred_branch_shells();
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("begin_group");
         self.discard_stale_group_frames();
-        let mut pass_through_site = if key.explicit_key.is_some() {
-            self.pending_unmaterialized_shell_site()
-        } else {
-            None
-        };
-        let mut cursor = ChildCursor::new(
+        let cursor = ChildCursor::new(
             self.state.current_parent_anchor(),
             self.state.current_child_cursor(),
         );
-        let mut resolution = restored
+        let resolution = restored
             .is_none()
             .then(|| self.resolve_active_child(cursor, key));
-
-        if let (Some(site), Some(probe)) = (pass_through_site, &resolution) {
-            let previous_site = match probe {
-                ActiveChildResolution::ReuseExpected { anchor } => {
-                    self.table.group_shell_site(*anchor)
-                }
-                ActiveChildResolution::MoveLaterSibling { root } => {
-                    self.table.group_shell_site(root.anchor())
-                }
-                ActiveChildResolution::InsertNew => None,
-            };
-            match previous_site {
-                Some(previous) if previous != site => {
-                    self.materialize_deferred_branch_shells();
-                    pass_through_site = None;
-                    cursor = ChildCursor::new(
-                        self.state.current_parent_anchor(),
-                        self.state.current_child_cursor(),
-                    );
-                    resolution = Some(self.resolve_active_child(cursor, key));
-                }
-                Some(_) => pass_through_site = None,
-                None => {}
-            }
-        }
 
         self.state.consume_group_key(key);
         if key.explicit_key.is_some() {
@@ -431,7 +383,6 @@ impl SlotWriteSession<'_> {
 
         if let Some(restored) = restored {
             if let Some(started) = self.restore_started_group(key, restored) {
-                self.stamp_shell_site(started.anchor, pass_through_site);
                 return started;
             }
         }
@@ -440,23 +391,13 @@ impl SlotWriteSession<'_> {
         if matches!(resolution, ActiveChildResolution::InsertNew) {
             if let Some(subtree) = self.claim_or_steal_keyed_subtree(key) {
                 if let Some(started) = self.adopt_started_group(key, subtree) {
-                    self.stamp_shell_site(started.anchor, pass_through_site);
                     return started;
                 }
             }
         }
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
-        let opened = self
-            .open_started_group(started.anchor, started.kind)
-            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor));
-        self.stamp_shell_site(opened.anchor, pass_through_site);
-        opened
-    }
-
-    fn stamp_shell_site(&mut self, anchor: AnchorId, site: Option<crate::Key>) {
-        if let Some(site) = site {
-            self.table.set_group_shell_site(anchor, site);
-        }
+        self.open_started_group(started.anchor, started.kind)
+            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
     }
 
     pub(crate) fn end_group(&mut self) {

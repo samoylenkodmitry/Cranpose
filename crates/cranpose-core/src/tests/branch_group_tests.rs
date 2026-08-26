@@ -2154,3 +2154,137 @@ fn a_shadowed_value_macro_still_brackets_its_branch() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn nested_shell_probe(first: bool) {
+    fn shared_nested_branch_helper(marker: i32) {
+        if marker > 0 {
+            let value = remember_branch_marker(marker);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    }
+    if first {
+        shared_nested_branch_helper(1);
+    } else {
+        shared_nested_branch_helper(2);
+    }
+}
+
+#[test]
+fn a_helper_branch_called_from_both_arms_keeps_the_outer_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(65, || nested_shell_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(65, || nested_shell_probe(false))
+        .expect("switch to the else arm");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "the helper's inner branch must nest inside the outer arm's shell, not replace it"
+    );
+
+    composition
+        .render(65, || nested_shell_probe(true))
+        .expect("switch back to the then arm");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (3, 1),
+        "returning to a departed arm must compose the helper fresh"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn keyed_shell_helper(marker: i32) {
+    cranpose_core::with_key(&"same", || {
+        let value = remember_branch_marker(marker);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    });
+}
+
+#[composable]
+fn keyed_provenance_probe(flag: bool) {
+    if flag {
+        keyed_shell_helper(1);
+        return;
+    }
+    keyed_shell_helper(2);
+}
+
+#[test]
+fn a_keyed_group_does_not_cross_between_branch_and_tail_occurrences() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(66, || keyed_provenance_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(66, || keyed_provenance_probe(false))
+        .expect("switch to the tail occurrence");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "the unbracketed tail call must not adopt the branch occurrence's keyed state"
+    );
+
+    composition
+        .render(66, || keyed_provenance_probe(true))
+        .expect("switch back to the branch occurrence");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (3, 1),
+        "the branch occurrence must not adopt the tail occurrence's keyed state"
+    );
+    assert_composition_valid(&composition);
+}
+
+struct BranchAddend {
+    marker: i32,
+}
+
+impl std::ops::Add for BranchAddend {
+    type Output = i32;
+
+    fn add(self, rhs: Self) -> i32 {
+        remember_branch_marker(self.marker + rhs.marker)
+    }
+}
+
+#[composable]
+fn operator_branch_probe(first: bool) {
+    let value = if first {
+        BranchAddend { marker: 1 } + BranchAddend { marker: 0 }
+    } else {
+        BranchAddend { marker: 2 } + BranchAddend { marker: 0 }
+    };
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[test]
+fn an_operator_that_composes_still_gets_branch_shells() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(67, || operator_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(67, || operator_branch_probe(false))
+        .expect("switch to the else arm");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "an arm whose only call is an operator impl must still own its shell"
+    );
+    assert_composition_valid(&composition);
+}

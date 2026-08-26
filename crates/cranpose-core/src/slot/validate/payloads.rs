@@ -148,7 +148,6 @@ mod tests {
             anchor: owner,
             scope_id: None,
             transparent: false,
-            shell_site: None,
         });
         table.payloads.push(PayloadRecord {
             owner,

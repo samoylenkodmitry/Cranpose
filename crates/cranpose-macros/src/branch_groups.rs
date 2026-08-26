@@ -41,7 +41,6 @@ struct BranchGroupInjector<'a> {
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
-        let reaches = block_can_reach_composer(block);
         self.branch_depth += 1;
         let tail = match block.stmts.last() {
             Some(Stmt::Expr(_, None)) => block.stmts.len().checked_sub(1),
@@ -54,9 +53,6 @@ impl BranchGroupInjector<'_> {
             self.in_branch_value_position = previous;
         }
         self.branch_depth -= 1;
-        if !reaches {
-            return;
-        }
         let guard = self.branch_guard_stmt(block.brace_token.span.join());
         block.stmts.insert(0, guard);
     }
@@ -66,15 +62,11 @@ impl BranchGroupInjector<'_> {
             self.wrap_block(&mut block_expr.block);
             return;
         }
-        let reaches = expr_can_reach_composer(body);
         self.branch_depth += 1;
         let previous = std::mem::replace(&mut self.in_branch_value_position, true);
         self.visit_expr_mut(body);
         self.in_branch_value_position = previous;
         self.branch_depth -= 1;
-        if !reaches {
-            return;
-        }
         let guard = self.branch_guard_stmt(body.span());
         let original = body.clone();
         *body = syn::parse_quote! {{
@@ -102,17 +94,14 @@ impl BranchGroupInjector<'_> {
                 if expr_is_place(scrutinee) {
                     self.wrap_place_value_parts(scrutinee);
                 } else {
-                    let needs_group = expr_can_reach_composer(scrutinee);
                     self.visit_expr_mut(scrutinee);
-                    if needs_group {
-                        let guard_expr = self.branch_guard_expr(scrutinee.span());
-                        let original = scrutinee.clone();
-                        **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
-                    }
+                    let guard_expr = self.branch_guard_expr(scrutinee.span());
+                    let original = scrutinee.clone();
+                    **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
                 }
             }
             leaf => {
-                let needs_group = expr_can_reach_composer(leaf) && !expr_contains_let(leaf);
+                let needs_group = !expr_contains_let(leaf);
                 self.visit_expr_mut(leaf);
                 if !needs_group {
                     return;
@@ -174,11 +163,7 @@ impl BranchGroupInjector<'_> {
     }
 
     fn wrap_value_part(&mut self, expr: &mut Expr) {
-        let needs_group = expr_can_reach_composer(expr);
         self.visit_expr_mut(expr);
-        if !needs_group {
-            return;
-        }
         let guard_stmt = self.branch_guard_stmt(expr.span());
         let original = expr.clone();
         *expr = syn::parse_quote! {{
@@ -234,7 +219,7 @@ impl BranchGroupInjector<'_> {
 impl VisitMut for BranchGroupInjector<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
-            Expr::Closure(closure) if expr_can_reach_composer(&closure.body) => {
+            Expr::Closure(closure) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 let was_arg = std::mem::replace(&mut self.closure_in_arg_position, false);
                 let in_value = std::mem::replace(&mut self.in_branch_value_position, false);
@@ -250,7 +235,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.in_branch_value_position = in_value;
                 self.in_content_closure = previous;
             }
-            Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
+            Expr::Async(_) | Expr::Const(_) => {}
             Expr::If(expr_if) => {
                 self.wrap_condition(&mut expr_if.cond);
                 self.wrap_block(&mut expr_if.then_branch);
@@ -349,17 +334,6 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 }
 
-fn block_can_reach_composer(block: &Block) -> bool {
-    let mut scan = ComposerReachScan { found: false };
-    scan.visit_block(block);
-    scan.found
-}
-
-fn expr_can_reach_composer(expr: &Expr) -> bool {
-    let mut scan = ComposerReachScan { found: false };
-    scan.visit_expr(expr);
-    scan.found
-}
 fn expr_is_place(expr: &Expr) -> bool {
     match expr {
         Expr::Path(_) | Expr::Field(_) | Expr::Index(_) => true,
@@ -389,37 +363,4 @@ fn expr_contains_let(expr: &Expr) -> bool {
     let mut scan = LetScan { found: false };
     scan.visit_expr(expr);
     scan.found
-}
-
-struct ComposerReachScan {
-    found: bool,
-}
-
-impl<'ast> Visit<'ast> for ComposerReachScan {
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if self.found {
-            return;
-        }
-        match expr {
-            Expr::Closure(closure) => self.visit_expr(&closure.body),
-            Expr::Async(_) | Expr::Const(_) => {}
-            Expr::Call(_) => self.found = true,
-            Expr::MethodCall(_) => self.found = true,
-            Expr::Macro(_) => self.found = true,
-            _ => syn::visit::visit_expr(self, expr),
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if self.found {
-            return;
-        }
-        if let Stmt::Macro(_) = stmt {
-            self.found = true;
-            return;
-        }
-        syn::visit::visit_stmt(self, stmt);
-    }
-
-    fn visit_item(&mut self, _item: &'ast syn::Item) {}
 }
