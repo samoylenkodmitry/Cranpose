@@ -933,3 +933,365 @@ fn branches_inside_a_loop_key_per_occurrence() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn method_call_branch_probe(cond: bool) {
+    let composer = with_current_composer(Clone::clone);
+    if cond {
+        let value = composer.remember(|| {
+            BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            1
+        });
+        BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+    } else {
+        let value = composer.remember(|| {
+            BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            2
+        });
+        BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+    }
+}
+
+#[test]
+fn branches_composing_only_through_composer_methods_own_their_state() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(30, || method_call_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(30, || method_call_branch_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a branch composing via `composer.remember` must not inherit the other branch's slot"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn guard_composition_probe(route: u8) {
+    let matched = match route {
+        0 if remember_branch_marker(10) == 10 => 1,
+        1 if remember_branch_marker(20) == 20 => 2,
+        _ => 3,
+    };
+    BRANCH_SEEN.with(|seen| seen.set(matched));
+}
+
+#[test]
+fn match_guards_own_their_composition_slots() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(31, || guard_composition_probe(0))
+        .expect("compose the first guard");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(31, || guard_composition_probe(1))
+        .expect("switch to the second guard");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "the second guard must not be handed the first guard's remember slot"
+    );
+
+    composition
+        .render(31, || guard_composition_probe(0))
+        .expect("switch back to the first guard");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (3, 1),
+        "returning to a departed guard must compose fresh state"
+    );
+    assert_composition_valid(&composition);
+}
+
+mod fake_arity_with_key {
+    use super::*;
+
+    /// Same name as the framework's `with_key`, different arity, no keyed
+    /// group: the elision must not mistake it for the real one.
+    fn with_key(_key: &i32, marker: i32, content: impl FnOnce(i32)) {
+        content(marker);
+    }
+
+    #[composable]
+    pub(super) fn probe(cond: bool) {
+        if cond {
+            with_key(&1, 7, |marker| {
+                let value = remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    marker
+                });
+                BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+            });
+        } else {
+            with_key(&2, 8, |marker| {
+                let value = remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    marker
+                });
+                BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+            });
+        }
+    }
+}
+
+#[test]
+fn a_lookalike_with_key_of_different_arity_keeps_the_bracket() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(32, || fake_arity_with_key::probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 7));
+
+    composition
+        .render(32, || fake_arity_with_key::probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 8),
+        "a three-argument lookalike opens no keyed group, so the branch bracket must stay"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn local_fn_branch_probe(cond: bool) {
+    fn local(cond: bool) {
+        if cond {
+            let value = remember_branch_marker(1);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(2);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    }
+    local(cond);
+}
+
+#[test]
+fn conditionals_inside_local_functions_own_their_branches() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(33, || local_fn_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(33, || local_fn_branch_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a local fn runs under the current composer; its branches need groups too"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn method_keyed_arg_probe(cond: bool) {
+    let composer = with_current_composer(Clone::clone);
+    if cond {
+        with_key(
+            &composer
+                .remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    1_i32
+                })
+                .with(|value| *value),
+            || {
+                let value = remember_branch_marker(101);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            },
+        );
+    } else {
+        with_key(
+            &composer
+                .remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    2_i32
+                })
+                .with(|value| *value),
+            || {
+                let value = remember_branch_marker(202);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            },
+        );
+    }
+}
+
+#[test]
+fn a_key_argument_composing_through_methods_keeps_the_bracket() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(34, || method_keyed_arg_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 101));
+
+    composition
+        .render(34, || method_keyed_arg_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (4, 202),
+        "the key remember composes; without the bracket the departed branch's slot leaks into it"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn closure_through_method_probe(cond: bool) {
+    let occupied = Some(());
+    let shown = if cond {
+        occupied.map(|()| {
+            let value = remember_branch_marker(1);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            value
+        })
+    } else {
+        occupied.map(|()| {
+            let value = remember_branch_marker(2);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+            value
+        })
+    };
+    let _ = shown;
+}
+
+#[test]
+fn branches_composing_through_method_call_closures_own_their_state() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(35, || closure_through_method_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(35, || closure_through_method_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "`Option::map` runs its closure during composition; the branch needs its bracket"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn composing_condition_probe(enabled: bool) {
+    if enabled && remember_branch_marker(1) == 1 {
+        BRANCH_LOG.with(|log| log.borrow_mut().push("on".to_string()));
+    }
+    let after = remember(|| {
+        BRANCH_INITS.with(|count| count.set(count.get() + 1));
+        99
+    });
+    BRANCH_SEEN.with(|seen| seen.set(after.with(|value| *value)));
+}
+
+#[test]
+fn a_composing_if_condition_owns_its_slots() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(36, || composing_condition_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 99));
+
+    composition
+        .render(36, || composing_condition_probe(false))
+        .expect("short-circuit the condition");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 99),
+        "skipping the condition's remember must not shift the slot after the `if`"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn impl_method_branch_probe(cond: bool) {
+    struct Helper;
+    impl Helper {
+        fn render(&self, cond: bool) {
+            if cond {
+                let value = remember_branch_marker(1);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(2);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        }
+    }
+    Helper.render(cond);
+}
+
+#[test]
+fn conditionals_inside_local_impl_methods_own_their_branches() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(37, || impl_method_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(37, || impl_method_branch_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "a local impl method runs under the current composer; its branches need groups"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn composer_shadowing_probe(cond: bool) {
+    // `__composer` is the expansion's own parameter name; a user binding of
+    // it must neither break the guards (they hold a hygienic alias captured
+    // before any user statement) nor be disturbed.
+    let __composer = 7_u8;
+    if cond {
+        let value = remember_branch_marker(i32::from(__composer));
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    } else {
+        let value = remember_branch_marker(i32::from(__composer) + 1);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn a_user_binding_named_like_the_composer_is_not_broken_by_guards() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(38, || composer_shadowing_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 7));
+
+    composition
+        .render(38, || composer_shadowing_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!((branch_inits(), branch_seen()), (2, 8));
+    assert_composition_valid(&composition);
+}

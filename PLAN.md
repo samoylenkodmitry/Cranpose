@@ -26,20 +26,46 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### Branch groups: two edges the transform cannot reach
+### Branch groups: the edges the transform cannot reach
 
-Branch groups are in: every `if`/`else` branch and `match` arm of a
-`#[composable]` body — and of the content lambdas handed to composables,
-classified by reachability rather than naming — owns its composition slots,
-with keyed subtrees preserved across brackets
+Branch groups are in: every `if`/`else` branch, `match` arm, composing match
+guard and composing `if` condition of a `#[composable]` body — and of the
+content lambdas and executable nested items (`fn`s, local `impl` and trait
+methods, `mod` contents) it contains, classified by composer reachability
+(free calls anywhere including inside closures, `Composer`'s composing
+methods by name, non-value macros) — owns its composition slots, with keyed
+subtrees preserved across brackets
 (`docs/slot_table_invariants.md`, `branch_group_tests`, and
-`robot_recomposition_lab` end to end). Two edges remain:
+`robot_recomposition_lab` end to end). The remaining edges, each the price of
+running on names before expansion rather than on typed IR:
 
 - **A conditional expanded out of a `macro_rules!` body is never bracketed.**
   The attribute macro runs before function-like macros expand, so an `if`
   whose arms only exist after expansion keeps the old shared-slot behavior.
-  Compose's plugin runs on IR after inlining, which is what closing this
-  would take.
+  The same blindness hides a snake_case composable inside a value macro's
+  arguments (`format!("{}", snake_helper())`): token soup carries no call
+  graph. Compose's plugin runs on IR after inlining, which is what closing
+  this would take.
+- **`with_key` and CamelCase are reserved composition names.** A user
+  function named `with_key` with the real API's exact shape (two arguments,
+  closure last) is elided like the real one; if it opens no keyed group, its
+  branches keep the pre-transform shared-slot behavior — degradation, not
+  corruption. Lookalikes of any other arity keep their bracket. A `let` in a
+  match guard or `if` condition is the same class: its bindings must flow
+  into the arm or branch, so a composing `if let`/let-chain condition cannot
+  be given a group of its own.
+- **An over-matched content closure that composes nothing pays for its
+  groups.** A closure the classifier flags (it contains free calls) whose
+  branches never compose gets real transparent groups when it runs during a
+  pass — one persistent record per executed branch site, bench-neutral in
+  the suite but linear in iteration count for a hot non-composing closure
+  inside a composable loop. The classifier cannot shrink (a snake_case
+  composable is indistinguishable from a snake_case helper); the fix, if a
+  real workload hits this, is lazy group materialization: the guard parks a
+  pending key and the first slot, group or node operation inside the branch
+  materializes it, so a branch that composes nothing costs a `Vec`
+  push/pop. That is a composer-core change and waits for a workload that
+  needs it.
 - **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
   steal scans later same-site brackets linearly and the orphan pool is a
   linear scan, so reversing N rows of

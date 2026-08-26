@@ -22,26 +22,48 @@ use syn::{
 /// Wrap every conditional branch of `block` in a branch group.
 ///
 /// The composition path includes content lambdas — closures whose bodies
-/// could reach the composer — whose guards resolve the composer through the
-/// thread-local context. Closures that cannot reach it, `async` blocks,
-/// `const` blocks and nested items are left alone: their code does not run
-/// while this function composes.
+/// could reach the composer — and plain nested `fn`s, both of whose guards
+/// resolve the composer through the thread-local context. Closures that
+/// cannot reach the composer, `async` and `const` blocks and non-`fn` nested
+/// items are left alone: their code does not run while this function
+/// composes.
 pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) {
     let mut injector = BranchGroupInjector {
         core_path,
         next_branch: 0,
         in_content_closure: false,
+        uses_composer_alias: false,
     };
     injector.visit_block_mut(block);
+    if injector.uses_composer_alias {
+        // Captured before any user statement runs, under `mixed_site` hygiene:
+        // a user binding or shadowing of `__composer` later in the body can
+        // neither be seen by the guards nor break them.
+        let alias = composer_alias_ident();
+        block
+            .stmts
+            .insert(0, syn::parse_quote! { let #alias = __composer; });
+    }
+}
+
+/// The guards' reference to the composable's composer parameter. `mixed_site`
+/// spans from one expansion share a hygiene context, so the binding this
+/// names in the body prologue is the one every guard resolves, and user code
+/// can neither read nor shadow it.
+fn composer_alias_ident() -> syn::Ident {
+    syn::Ident::new("__cranpose_branch_composer", Span::mixed_site())
 }
 
 struct BranchGroupInjector<'a> {
     core_path: &'a TokenStream2,
     next_branch: u32,
-    /// Inside a content closure the composable's `__composer` binding cannot
-    /// be captured (`'static`), so guards go through the thread-local
-    /// composer context instead.
+    /// Inside a content closure or nested item the composable's composer
+    /// binding cannot be captured (`'static`), so guards go through the
+    /// thread-local composer context instead.
     in_content_closure: bool,
+    /// Whether any guard referenced the hygienic composer alias, which then
+    /// must be bound in the body prologue.
+    uses_composer_alias: bool,
 }
 
 impl BranchGroupInjector<'_> {
@@ -73,6 +95,27 @@ impl BranchGroupInjector<'_> {
         }};
     }
 
+    /// A match guard or `if` condition runs before any branch group opens,
+    /// and how much of it runs varies — guards by the scrutinee, conditions
+    /// by `&&`/`||` short-circuiting — so a composing one needs a group of
+    /// its own: without one its slots land in the parent and shift everything
+    /// composed after it. One containing `let` cannot be moved into a block —
+    /// its bindings must flow into the arm or branch — so composing inside a
+    /// `let` guard or let-chain stays an uncovered edge.
+    fn wrap_condition(&mut self, condition: &mut Expr) {
+        let needs_group = expr_can_reach_composer(condition) && !expr_contains_let(condition);
+        self.visit_expr_mut(condition);
+        if !needs_group {
+            return;
+        }
+        let guard_stmt = self.branch_guard_stmt(condition.span());
+        let original = condition.clone();
+        *condition = syn::parse_quote! {{
+            #guard_stmt
+            #original
+        }};
+    }
+
     /// The guard binding carries a leading underscore so an otherwise empty
     /// branch does not warn, while still living to the end of the branch —
     /// `let _ = …` would drop the group immediately. The identifier uses
@@ -90,12 +133,41 @@ impl BranchGroupInjector<'_> {
                 );
             }
         } else {
+            self.uses_composer_alias = true;
+            let composer = composer_alias_ident();
             syn::parse_quote_spanned! {span=>
-                let #guard = __composer.__branch_group(
+                let #guard = #composer.__branch_group(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
             }
         }
+    }
+
+    /// A `const` fn must stay const-evaluable and an `async` fn's guard would
+    /// live across `.await`; a nested `#[composable]` runs this transform on
+    /// itself. Everything else — `unsafe` and `extern` fns included, whose
+    /// bodies are ordinary Rust — is transformed like a content closure,
+    /// resolving the composer through the thread-local context.
+    fn visit_nested_fn(
+        &mut self,
+        signature: &syn::Signature,
+        attrs: &[syn::Attribute],
+        block: &mut Block,
+    ) {
+        let runs_during_composition =
+            signature.constness.is_none() && signature.asyncness.is_none();
+        let expands_itself = attrs.iter().any(|attr| {
+            attr.path()
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "composable")
+        });
+        if !runs_during_composition || expands_itself {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.in_content_closure, true);
+        self.visit_block_mut(block);
+        self.in_content_closure = previous;
     }
 }
 
@@ -110,7 +182,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             // the composer through the thread-local context, which yields
             // `None` outside an active composition pass, so an event handler
             // this over-matches keeps its old behavior instead of breaking.
-            Expr::Closure(closure) if closure_can_reach_composer(&closure.body) => {
+            Expr::Closure(closure) if expr_can_reach_composer(&closure.body) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 self.visit_expr_mut(&mut closure.body);
                 self.in_content_closure = previous;
@@ -120,7 +192,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             // composer.
             Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
             Expr::If(expr_if) => {
-                self.visit_expr_mut(&mut expr_if.cond);
+                self.wrap_condition(&mut expr_if.cond);
                 self.wrap_block(&mut expr_if.then_branch);
                 if let Some((_, else_expr)) = &mut expr_if.else_branch {
                     match else_expr.as_mut() {
@@ -136,7 +208,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.visit_expr_mut(&mut expr_match.expr);
                 for arm in &mut expr_match.arms {
                     if let Some((_, guard)) = &mut arm.guard {
-                        self.visit_expr_mut(guard);
+                        self.wrap_condition(guard);
                     }
                     self.wrap_arm_body(&mut arm.body);
                 }
@@ -164,8 +236,42 @@ impl VisitMut for BranchGroupInjector<'_> {
         }
     }
 
-    fn visit_item_mut(&mut self, _item: &mut syn::Item) {
-        // A nested item owns its own scope; it is not this composable's body.
+    fn visit_item_mut(&mut self, item: &mut syn::Item) {
+        // A nested `fn`, a local `impl`'s methods, a local trait's default
+        // bodies and anything inside a nested `mod` all run under whatever
+        // composer is current when they are called — composables resolve the
+        // composer through the thread-local context, not a capture — so their
+        // branches need groups like a content closure's. Every other item is
+        // not executable code.
+        match item {
+            syn::Item::Fn(item_fn) => {
+                self.visit_nested_fn(&item_fn.sig, &item_fn.attrs, &mut item_fn.block);
+            }
+            syn::Item::Impl(item_impl) => {
+                for impl_item in &mut item_impl.items {
+                    if let syn::ImplItem::Fn(method) = impl_item {
+                        self.visit_nested_fn(&method.sig, &method.attrs, &mut method.block);
+                    }
+                }
+            }
+            syn::Item::Trait(item_trait) => {
+                for trait_item in &mut item_trait.items {
+                    if let syn::TraitItem::Fn(method) = trait_item {
+                        if let Some(default_body) = &mut method.default {
+                            self.visit_nested_fn(&method.sig, &method.attrs, default_body);
+                        }
+                    }
+                }
+            }
+            syn::Item::Mod(item_mod) => {
+                if let Some((_, items)) = &mut item_mod.content {
+                    for nested in items {
+                        self.visit_item_mut(nested);
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn visit_type_mut(&mut self, _ty: &mut syn::Type) {
@@ -181,29 +287,24 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 }
 
-/// Whether a branch could interact with the composer. Composition always goes
-/// through a free-function call or a macro: composables are free functions by
-/// construction (the composer travels through `with_current_composer`, never
-/// through a receiver), so a branch whose only calls are method calls —
-/// `value.to_string()`, `text.clone()` — cannot create slots and needs no
-/// group. Std's value macros (`format!`, `vec!`, …) cannot compose either and
-/// are skipped by name; every other macro wraps, which is what keeps
-/// `DisposableEffect!` and friends grouped. Closures, async and const blocks
-/// and nested items are skipped for the same reason the transform skips them.
+/// Whether a branch could interact with the composer. Every free call could
+/// be a composable; method calls compose only through `Composer`'s own
+/// surface — the handle is `Clone`, so `with_current_composer(Clone::clone)`
+/// can carry it into a branch that then composes purely through methods — and
+/// those methods are recognized by name, leaving ordinary calls like
+/// `value.to_string()` inert. Std's value macros (`format!`, `vec!`, …)
+/// cannot compose either and are skipped by name; every other macro wraps,
+/// which is what keeps `DisposableEffect!` and friends grouped. Closures,
+/// async and const blocks and nested items are skipped for the same reason
+/// the transform skips them.
 fn block_can_reach_composer(block: &Block) -> bool {
-    let mut scan = ComposerReachScan {
-        found: false,
-        through_closures: false,
-    };
+    let mut scan = ComposerReachScan { found: false };
     scan.visit_block(block);
     scan.found
 }
 
 fn expr_can_reach_composer(expr: &Expr) -> bool {
-    let mut scan = ComposerReachScan {
-        found: false,
-        through_closures: false,
-    };
+    let mut scan = ComposerReachScan { found: false };
     scan.visit_expr(expr);
     scan.found
 }
@@ -224,6 +325,13 @@ fn block_is_fully_keyed(block: &Block) -> bool {
     })
 }
 
+/// `with_key` is a reserved composition name inside `#[composable]` code, the
+/// way CamelCase is: a proc macro resolves names, not types, so a user
+/// function of the same name and shape is indistinguishable from the real
+/// one. Getting it wrong here degrades to the pre-transform shared-slot
+/// behavior, never to slot corruption, and the shape is pinned to the real
+/// API — exactly two arguments, the second a closure literal — so lookalikes
+/// of any other arity keep their bracket.
 fn expr_is_keyed_call(expr: &Expr) -> bool {
     let callee_is_with_key = |name: &syn::Ident| name == "with_key";
     let (receiver_composes, args) = match expr {
@@ -244,36 +352,17 @@ fn expr_is_keyed_call(expr: &Expr) -> bool {
         }
         _ => return false,
     };
-    if receiver_composes {
+    if receiver_composes || args.len() != 2 {
         return false;
     }
     // Only the content closure runs inside the keyed group. The key — and a
     // method receiver — evaluate in the surrounding group first, so an
     // argument that could compose (`with_key(&remembered_key(1), …)`) still
     // needs the branch bracket for its identity: no elision then.
-    let Some(content) = args.last() else {
-        return false;
-    };
-    if !matches!(content, Expr::Closure(_)) {
+    if !matches!(args.last(), Some(Expr::Closure(_))) {
         return false;
     }
-    args.iter()
-        .take(args.len() - 1)
-        .all(|argument| !expr_can_reach_composer(argument))
-}
-
-/// Whether a closure's body could reach the composer — the same rule branches
-/// use, except nested closures are scanned through: a closure whose only
-/// composition sits inside an inner closure still needs the transform to
-/// descend into it. A false positive only costs a no-op guard; a false
-/// negative keeps the pre-transform behavior.
-fn closure_can_reach_composer(body: &Expr) -> bool {
-    let mut scan = ComposerReachScan {
-        found: false,
-        through_closures: true,
-    };
-    scan.visit_expr(body);
-    scan.found
+    !expr_can_reach_composer(&args[0])
 }
 
 /// Whether raw macro tokens contain what looks like a composable call: a
@@ -352,11 +441,56 @@ fn macro_is_value_shaped(path: &syn::Path) -> bool {
     )
 }
 
+/// The composing surface of `Composer`, recognized by method name. Prefixes
+/// keep the list stable across the `remember*`, `with_group*`,
+/// `mutable_state*` and `subcompose*` families; ordinary methods —
+/// `.to_string()`, `.with(…)`, `.get()` — stay inert. A CamelCase method is
+/// treated as composing for the same reason a CamelCase free call is.
+fn method_name_composes(name: &syn::Ident) -> bool {
+    const COMPOSING_METHOD_PREFIXES: &[&str] = &[
+        "remember",
+        "with_group",
+        "with_key",
+        "with_slot_value",
+        "use_value_slot",
+        "mutable_state",
+        "subcompose",
+        "cranpose_with_reuse",
+        "install",
+    ];
+    let name = name.to_string();
+    COMPOSING_METHOD_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+        || name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// Whether the expression contains a `let` outside closures — a match guard
+/// with one cannot be wrapped in a block without severing the bindings the
+/// arm body relies on.
+fn expr_contains_let(expr: &Expr) -> bool {
+    struct LetScan {
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for LetScan {
+        fn visit_expr(&mut self, expr: &'ast Expr) {
+            if self.found {
+                return;
+            }
+            match expr {
+                Expr::Let(_) => self.found = true,
+                Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
+                _ => syn::visit::visit_expr(self, expr),
+            }
+        }
+    }
+    let mut scan = LetScan { found: false };
+    scan.visit_expr(expr);
+    scan.found
+}
+
 struct ComposerReachScan {
     found: bool,
-    /// Branch filters stop at closure boundaries (a closure defined in a
-    /// branch does not run there); closure classification scans through them.
-    through_closures: bool,
 }
 
 impl<'ast> Visit<'ast> for ComposerReachScan {
@@ -365,11 +499,16 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
             return;
         }
         match expr {
-            Expr::Closure(closure) if self.through_closures => {
-                self.visit_expr(&closure.body);
-            }
-            Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
+            // Closures are scanned through: `opt.map(|_| Child())` runs its
+            // closure during composition, and one that truly runs later only
+            // costs its branch a guard that no-ops outside a pass. Async and
+            // const blocks never run on the composition path.
+            Expr::Closure(closure) => self.visit_expr(&closure.body),
+            Expr::Async(_) | Expr::Const(_) => {}
             Expr::Call(_) => self.found = true,
+            Expr::MethodCall(method) if method_name_composes(&method.method) => {
+                self.found = true;
+            }
             Expr::Macro(expr_macro) => {
                 if !macro_is_value_shaped(&expr_macro.mac.path)
                     || tokens_contain_composable_call(&expr_macro.mac.tokens)
