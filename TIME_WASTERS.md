@@ -1158,3 +1158,14 @@ while this was being diagnosed.
   than earlier ones already compiled against; results from such a run are
   mixed-fingerprint noise. Freeze sources for the duration, or kill and
   relaunch after the edit — a relaunch on a warm target is cheap.
+
+## Robot suite over ssh on samarch-1 needs an explicit DISPLAY
+
+A headless ssh session has no `DISPLAY`, and every robot test fails with
+"neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set" — 153
+failures that look like a catastrophic regression are one missing env var.
+`DISPLAY=:0` (the machine's real X session, xdpyinfo-verified reachable
+over ssh) runs the suite; `:116`+ are xvfb instances that also work for
+correctness but present in software. And do not `git pull` the remote clone
+while its previous chain is still running — same mid-run source-edit trap
+as locally, one machine removed.
