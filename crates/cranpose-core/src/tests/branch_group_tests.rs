@@ -3171,6 +3171,72 @@ fn template_page_probe(first: bool) {
     page();
 }
 
+#[composable]
+#[allow(non_snake_case)]
+fn CountingPage(tag: i32) {
+    let _ = tag;
+    let value = remember_branch_marker(BRANCH_INITS.with(|inits| inits.get()) as i32 + 71);
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[composable]
+fn same_pointer_two_sites_probe(first: Option<i32>) {
+    let page: fn(i32) = CountingPage;
+    let _ = first.map(page);
+    page(7);
+}
+
+#[test]
+fn one_pointer_called_from_two_sites_keeps_two_identities() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
+        composition.render(96, || same_pointer_two_sites_probe(first))
+    };
+
+    pass(&mut composition, Some(3)).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, None).expect("drop the optional call");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 72),
+        "the shim erases the caller, so the two sites need their own identity; \
+         the surviving call must keep its own instance, not adopt the vanished one"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn two_let_bound_erased_calls_probe(first: Option<i32>, second: Option<i32>) {
+    let page: fn(i32) = CountingPage;
+    let _first_result = first.map(page);
+    let _second_result = second.map(page);
+}
+
+#[test]
+fn a_let_bound_erased_call_is_positional_by_construction() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
+        composition.render(97, || two_let_bound_erased_calls_probe(first, Some(7)))
+    };
+
+    pass(&mut composition, Some(3)).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, None).expect("drop the first binding's call");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 71),
+        "two erased calls inside binding initializers share the collapsed shim \
+         caller and no statement fold separates them: the survivor adopts the \
+         vanished instance, the documented residual of caller erasure; the \
+         escape is with_key around either initializer"
+    );
+    assert_composition_valid(&composition);
+}
+
 #[test]
 fn two_composables_from_one_template_invocation_stay_distinct() {
     reset_branch_probes();

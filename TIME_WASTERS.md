@@ -1199,3 +1199,12 @@ building synthetic `let`-chain nodes with user-file spans still fails
 edition 2021. Passed-through user tokens keep their own edition. To emit
 newer syntax than the workspace edition, bump the proc-macro crate's
 edition alone.
+
+## A/B bench scripts: cd persists across the second arm
+
+`{ cd main-base && cargo bench; cargo bench }` benches main twice — the
+`cd` survives the first arm, so the "reversed order" run compared main
+against itself and its ±6% noise was mistaken for proof that a +15%
+branch-first reading was order bias. Always `cd` explicitly in *both*
+arms with absolute paths, and treat any suspiciously clean reversal as a
+prompt to check which binary actually ran.

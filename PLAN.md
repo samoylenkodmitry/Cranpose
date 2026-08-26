@@ -106,6 +106,22 @@ typed IR:
   `keyed_wrapper_retention_behaves_identically_in_both_shell_classes`);
   making retention descend into detached subtrees is filed as its own task.
 
+- **A call through an erased callable is positional per statement, not per
+  call site.** `#[track_caller]` cannot survive coercion to a fn pointer
+  or `dyn Fn`: the shim reports the definition site, so every invocation
+  of one erased callable shares one caller. Every expression statement
+  carries its own fold, so erased calls in different statements — sol's
+  `show.then(child)` next to a bare `child()` — stay distinct. What
+  remains collapsed is several erased invocations inside binding
+  initializers (or one statement), which vanish and adopt positionally
+  (pinned as `a_let_bound_erased_call_is_positional_by_construction`;
+  the escape is `with_key`). Compose keys every invocation site in its
+  compiler plugin; a runtime fold per call was tried and each wrapper
+  shape violates a different language contract — blocks change
+  statement-temporary lifetimes, a generic identity fn hardens operator
+  inference, match arms end scrutinee temporary extension — so the
+  statement is the finest sound granularity for a syntactic transform.
+
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that
 renders per-route content keys it with `cranpose_core::with_key`, as

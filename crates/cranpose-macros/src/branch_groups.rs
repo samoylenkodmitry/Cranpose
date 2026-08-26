@@ -102,19 +102,22 @@ impl BranchGroupInjector<'_> {
         self.next_branch += 1;
         let core_path = self.core_path;
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        let key = syn::Ident::new("__CRANPOSE_BRANCH_KEY", Span::mixed_site());
+        let cached_key = quote::quote! {{
+            static #key: ::std::sync::OnceLock<#core_path::Key> = ::std::sync::OnceLock::new();
+            *#key.get_or_init(|| {
+                #core_path::branch_location_key(file!(), line!(), column!(), #branch)
+            })
+        }};
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
-                let #guard = #core_path::__branch_group_scope_deferred(
-                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                );
+                let #guard = #core_path::__branch_group_scope_deferred(#cached_key);
             }
         } else {
             self.uses_composer_alias = true;
             let composer = composer_alias_ident();
             syn::parse_quote_spanned! {span=>
-                let #guard = #composer.__branch_group_deferred(
-                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                );
+                let #guard = #composer.__branch_group_deferred(#cached_key);
             }
         }
     }
@@ -243,6 +246,22 @@ impl VisitMut for BranchGroupInjector<'_> {
                 #guard
                 #original
             }};
+        }
+    }
+
+    fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
+        visit_mut::visit_stmt_mut(self, stmt);
+        if let Stmt::Expr(expr, Some(semi)) = stmt {
+            let guard = self.branch_guard_stmt(expr.span());
+            let original = expr.clone();
+            let semi = *semi;
+            *stmt = Stmt::Expr(
+                syn::parse_quote! {{
+                    #guard
+                    #original #semi
+                }},
+                None,
+            );
         }
     }
 
