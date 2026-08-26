@@ -35,11 +35,14 @@ individually, so short-circuiting cannot shift later slots) of a
 items (`fn`s, local `impl` and trait methods, `mod` contents) it contains —
 reserves its bracket unconditionally as a deferred shell. There is no
 reachability classifier: a branch that composes nothing costs a `Vec` push
-and pop, and the first slot operation inside a branch materializes the
-whole pending shell run in order, so identity is structural — keyed opens
-materialize like everything else, and branch versus tail occurrences of one
-keyed site are distinct groups, with keyed subtrees preserved across
-brackets (`docs/slot_table_invariants.md`, `branch_group_tests`, and
+and pop, and the first unkeyed slot operation inside a branch materializes
+the whole pending shell run in order, so identity is structural. A keyed
+open under a still-deferred run folds the run's sites into its static key
+instead of materializing: the branch identity lives in the group key
+itself, so branch versus tail occurrences of one keyed site are distinct
+groups while keyed rows keep their flat indexed sibling structure and
+toggle cost, with keyed subtrees preserved across materialized brackets
+(`docs/slot_table_invariants.md`, `branch_group_tests`, and
 `robot_recomposition_lab` end to end). The remaining edges, each the price
 of running on names before expansion rather than on typed IR:
 

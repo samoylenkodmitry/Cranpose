@@ -21,9 +21,10 @@ This document is the short operational checklist for the slot table implementati
   then steals it from a later unvisited bracket of the same branch site. Both
   reattach as `Moved` — scopes live, nodes attached. Unclaimed parked subtrees
   flow into their owner group's finish, where dispose-or-retain runs exactly as
-  it did before brackets existed. (A keyed open materializes its pending
-  brackets like any other slot operation; within one bracket the keys use the
-  ordinary keyed sibling-move path.)
+  it did before brackets existed. (A keyed open under a still-deferred bracket
+  run folds the run's sites into its static key instead of materializing
+  anything: the branch identity is part of the group key itself, and the keys
+  keep the ordinary keyed sibling-move path and cost.)
 
 ## Payloads
 

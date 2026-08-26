@@ -149,7 +149,12 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        self.materialize_deferred_branch_shells();
+        let mut seed = seed;
+        if seed.explicit_key.is_none() {
+            self.materialize_deferred_branch_shells();
+        } else {
+            seed.static_key = self.fold_pending_shells_into(seed.static_key);
+        }
         self.preview_group_key(seed)
     }
 
@@ -317,7 +322,7 @@ impl SlotWriteSession<'_> {
         shell.materialized
     }
 
-    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
+    fn pending_shell_run_start(&self) -> usize {
         let parent = self.state.current_parent_anchor();
         let shells = &self.state.deferred_branch_shells;
         let mut start = shells.len();
@@ -328,10 +333,33 @@ impl SlotWriteSession<'_> {
             }
             start -= 1;
         }
+        start
+    }
+
+    fn fold_pending_shells_into(&self, static_key: crate::Key) -> crate::Key {
+        let start = self.pending_shell_run_start();
+        let shells = &self.state.deferred_branch_shells;
         if start == shells.len() {
+            return static_key;
+        }
+        let mut folded: crate::Key = super::super::BRANCH_PATH_ROOT;
+        for shell in &shells[start..] {
+            folded ^= shell.seed.static_key;
+            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        folded ^= static_key;
+        folded.wrapping_mul(0x0000_0100_0000_01b3)
+    }
+
+    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
+        let start = self.pending_shell_run_start();
+        if start == self.state.deferred_branch_shells.len() {
             return;
         }
-        let seeds: Vec<_> = shells[start..].iter().map(|shell| shell.seed).collect();
+        let seeds: Vec<_> = self.state.deferred_branch_shells[start..]
+            .iter()
+            .map(|shell| shell.seed)
+            .collect();
         for shell in &mut self.state.deferred_branch_shells[start..] {
             shell.materialized = true;
         }
@@ -347,7 +375,9 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        self.materialize_deferred_branch_shells();
+        if key.explicit_key.is_none() {
+            self.materialize_deferred_branch_shells();
+        }
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
