@@ -200,11 +200,6 @@ impl SlotTable {
             .assign(&mut self.groups[group_index], scope_id)
     }
 
-    /// Marks an active group as a lifecycle-transparent branch bracket.
-    ///
-    /// Refused for groups that carry a scope: a scoped group owns its
-    /// children's lifecycle, which is exactly what a transparent bracket
-    /// disclaims.
     pub(super) fn mark_group_transparent(&mut self, group: ActiveGroupId) -> bool {
         let group_index = group.index();
         let Some(record) = self.groups.get_mut(group_index) else {

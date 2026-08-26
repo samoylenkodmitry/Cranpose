@@ -7,28 +7,12 @@ use crate::{
     AnchorId,
 };
 
-/// A branch bracket a fully-keyed conditional branch reserved without opening.
-/// The real `with_key` opens an explicitly keyed child that carries its own
-/// identity, so the bracket stays unmaterialized and costs a push and a pop;
-/// the first other composition operation at the bracket's level — a lookalike
-/// `with_key` composing positionally, a value slot, a node — materializes the
-/// bracket before the operation lands, so the branch is isolated exactly as
-/// if it had been bracketed eagerly.
 pub(in crate::slot) struct DeferredBranchShell {
     pub(in crate::slot) parent: AnchorId,
     pub(in crate::slot) seed: GroupKeySeed,
     pub(in crate::slot) materialized: bool,
 }
 
-/// A keyed subtree a departed conditional branch left behind, waiting within
-/// the pass for the same key to arrive under another bracket of the same
-/// bracket path (`branch_path` folds the transparent chain's static keys —
-/// the same restriction the sibling steal applies): a shifted occurrence may
-/// claim it, a *different* conditional branch never — branch isolation wins
-/// over the key. `owner` is the nearest non-transparent ancestor: if the key
-/// is not claimed by the time that group finishes, the subtree flows into
-/// its normal detached-children handling — exactly where it would have been
-/// disposed before branch brackets existed.
 pub(in crate::slot) struct OrphanedKeyedSubtree {
     pub(in crate::slot) owner: AnchorId,
     pub(in crate::slot) branch_path: crate::Key,
@@ -45,9 +29,6 @@ pub(crate) struct SlotWriteSessionState {
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     pub(in crate::slot) orphaned_keyed: Vec<OrphanedKeyedSubtree>,
     pub(in crate::slot) deferred_branch_shells: Vec<DeferredBranchShell>,
-    /// Explicit keys begun under a transparent bracket this pass, keyed by
-    /// (owner, branch path, key): the cross-bracket duplicate check the
-    /// per-frame `insert_seen` cannot perform.
     pub(in crate::slot) seen_cross_bracket_explicit_keys: HashSet<(AnchorId, crate::Key, GroupKey)>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,

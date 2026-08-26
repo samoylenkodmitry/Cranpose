@@ -1,16 +1,3 @@
-//! The branch-group transform: what Compose's compiler plugin does for
-//! conditionals, performed on the parsed body of a `#[composable]` function.
-//!
-//! Every `if`/`else` branch and `match` arm that can reach the composer is
-//! given a group of its own, keyed on the branch's source location plus a
-//! per-function branch index. Without this, two branches emitting the same
-//! slot shape are one slot: the arriving branch is handed the node,
-//! `remember` values and effects the departing branch was using.
-//!
-//! The guard is an RAII value rather than a closure so `return`, `?`, `break`
-//! and `continue` inside a branch keep working; dropping the guard closes the
-//! group on every exit path.
-
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::{
     spanned::Spanned,
@@ -19,14 +6,6 @@ use syn::{
     Block, Expr, Stmt,
 };
 
-/// Wrap every conditional branch of `block` in a branch group.
-///
-/// The composition path includes content lambdas — closures whose bodies
-/// could reach the composer — and plain nested `fn`s, both of whose guards
-/// resolve the composer through the thread-local context. Closures that
-/// cannot reach the composer, `async` and `const` blocks and non-`fn` nested
-/// items are left alone: their code does not run while this function
-/// composes.
 pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) {
     let mut injector = BranchGroupInjector {
         core_path,
@@ -39,9 +18,6 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
-        // Captured before any user statement runs, under `mixed_site` hygiene:
-        // a user binding or shadowing of `__composer` later in the body can
-        // neither be seen by the guards nor break them.
         let alias = composer_alias_ident();
         block
             .stmts
@@ -49,10 +25,6 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     }
 }
 
-/// The guards' reference to the composable's composer parameter. `mixed_site`
-/// spans from one expansion share a hygiene context, so the binding this
-/// names in the body prologue is the one every guard resolves, and user code
-/// can neither read nor shadow it.
 fn composer_alias_ident() -> syn::Ident {
     syn::Ident::new("__cranpose_branch_composer", Span::mixed_site())
 }
@@ -60,28 +32,10 @@ fn composer_alias_ident() -> syn::Ident {
 struct BranchGroupInjector<'a> {
     core_path: &'a TokenStream2,
     next_branch: u32,
-    /// Inside a content closure or nested item the composable's composer
-    /// binding cannot be captured (`'static`), so guards go through the
-    /// thread-local composer context instead.
     in_content_closure: bool,
-    /// Whether any guard referenced the hygienic composer alias, which then
-    /// must be bound in the body prologue.
     uses_composer_alias: bool,
-    /// How many conditional branches enclose the visit position. A content
-    /// closure defined inside a branch may be invoked after the branch guard
-    /// closes — `let render = if c { || A(1) } else { || A(2) }; render();` —
-    /// so its body gets a group anchored at the closure's own definition
-    /// site, carrying the branch identity to wherever it runs.
     branch_depth: u32,
-    /// The closure being visited sits directly in call-argument position: it
-    /// is consumed by that call — run inline under the still-open branch
-    /// guard (content lambdas), or stored as a handler whose guards no-op —
-    /// so it needs no body group of its own.
     closure_in_arg_position: bool,
-    /// The visit position is a branch's tail value: whatever it produces —
-    /// including a closure laundered through a helper like
-    /// `boxed(|| A(1))` — escapes the branch and may run after the guard
-    /// closes, so argument position stops exempting closure bodies here.
     in_branch_value_position: bool,
 }
 
@@ -129,14 +83,6 @@ impl BranchGroupInjector<'_> {
         }};
     }
 
-    /// A match guard or `if` condition runs before any branch group opens,
-    /// and how much of it runs varies — guards by the scrutinee, conditions
-    /// by `&&`/`||` short-circuiting — so a composing one needs a group of
-    /// its own: without one its slots land in the parent and shift everything
-    /// composed after it. `let` operands cannot be moved into a block — their
-    /// bindings must flow into the arm or branch — so the walk descends the
-    /// `&&`/`||` spine and wraps each composing operand individually,
-    /// wrapping a `let` operand's scrutinee rather than the `let` itself.
     fn wrap_condition(&mut self, condition: &mut Expr) {
         let previous = std::mem::replace(&mut self.in_branch_value_position, false);
         self.wrap_condition_inner(condition);
@@ -151,20 +97,9 @@ impl BranchGroupInjector<'_> {
             }
             Expr::Paren(paren) => self.wrap_condition_inner(&mut paren.expr),
             Expr::Unary(unary) => self.wrap_condition_inner(&mut unary.expr),
-            // A `let` scrutinee's temporaries live into the branch body —
-            // that is what lets `if let Some(x) = make().first()` keep the
-            // borrow — so it can never be moved into a block. The guard rides
-            // along as one of those temporaries instead: a tuple holds the
-            // guard while the scrutinee's value is projected out, and the
-            // group closes when the `if let`'s temporaries drop, after the
-            // branch body.
             Expr::Let(let_expr) => {
                 let scrutinee = &mut let_expr.expr;
                 if expr_is_place(scrutinee) {
-                    // A place must stay a place — a `ref` pattern binds into
-                    // it — but its value sub-expressions (an index, a deref
-                    // operand) are wrappable, so a composing
-                    // `values[stateful_index()]` still gets its group.
                     self.wrap_place_value_parts(scrutinee);
                 } else {
                     let needs_group = expr_can_reach_composer(scrutinee);
@@ -192,16 +127,6 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    /// The guard binding carries a leading underscore so an otherwise empty
-    /// branch does not warn, while still living to the end of the branch —
-    /// `let _ = …` would drop the group immediately. The identifier uses
-    /// `mixed_site` hygiene, so user code can never see it and a user binding
-    /// of the same name is never shadowed. Every guard is a deferred shell:
-    /// a reservation that materializes into a real bracket on the branch's
-    /// first composing operation and costs a push and a pop otherwise, so
-    /// over-matching a branch that never composes is free, and the real
-    /// `with_key` keeps its unbracketed keyed sibling structure by passing
-    /// through.
     fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
@@ -224,9 +149,6 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    /// Walk a place expression and wrap its composing value sub-expressions:
-    /// the index of an indexing, the operand of a deref, the base chain of a
-    /// field access. The place structure itself is untouched.
     fn wrap_place_value_parts(&mut self, place: &mut Expr) {
         match place {
             Expr::Index(index) => {
@@ -243,9 +165,6 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    /// A place's base is either a deeper place (walked) or a value — a
-    /// call-valued field base like `stateful_holder().item` — which gets its
-    /// own wrap.
     fn wrap_place_or_value(&mut self, expr: &mut Expr) {
         if expr_is_place(expr) {
             self.wrap_place_value_parts(expr);
@@ -254,7 +173,6 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    /// Block-wrap one value-position sub-expression when it composes.
     fn wrap_value_part(&mut self, expr: &mut Expr) {
         let needs_group = expr_can_reach_composer(expr);
         self.visit_expr_mut(expr);
@@ -269,8 +187,6 @@ impl BranchGroupInjector<'_> {
         }};
     }
 
-    /// The guard as a bare expression, for positions where a `let` statement
-    /// cannot go — a `let` scrutinee's tuple ride-along.
     fn branch_guard_expr(&mut self, span: Span) -> Expr {
         let branch = self.next_branch;
         self.next_branch += 1;
@@ -292,11 +208,6 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    /// A `const` fn must stay const-evaluable and an `async` fn's guard would
-    /// live across `.await`; a nested `#[composable]` runs this transform on
-    /// itself. Everything else — `unsafe` and `extern` fns included, whose
-    /// bodies are ordinary Rust — is transformed like a content closure,
-    /// resolving the composer through the thread-local context.
     fn visit_nested_fn(
         &mut self,
         signature: &syn::Signature,
@@ -323,25 +234,11 @@ impl BranchGroupInjector<'_> {
 impl VisitMut for BranchGroupInjector<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
-            // A closure that could reach the composer — any free call or
-            // non-value macro in its body, the same rule branches use — is
-            // treated as a content lambda: plain content, a lazy item's
-            // `|index| …`, a scope builder. Its branches compose and need
-            // groups like the direct body's. Guards inside closures resolve
-            // the composer through the thread-local context, which yields
-            // `None` outside an active composition pass, so an event handler
-            // this over-matches keeps its old behavior instead of breaking.
             Expr::Closure(closure) if expr_can_reach_composer(&closure.body) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 let was_arg = std::mem::replace(&mut self.closure_in_arg_position, false);
                 let in_value = std::mem::replace(&mut self.in_branch_value_position, false);
                 self.visit_expr_mut(&mut closure.body);
-                // A closure born in a branch can outlive the branch guard and
-                // compose at its call site; anchor its body to the closure's
-                // definition site so each branch's closure keeps its own
-                // slots. One sitting directly in call-argument position is
-                // consumed by that call and needs none; outside branches
-                // there is no sibling to collide with.
                 if self.branch_depth > 0 && (!was_arg || in_value) {
                     let guard = self.branch_guard_stmt(closure.span());
                     let original = closure.body.clone();
@@ -353,17 +250,12 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.in_branch_value_position = in_value;
                 self.in_content_closure = previous;
             }
-            // Not on this function's composition path: other closures may run
-            // long after composition, async and const blocks never see the
-            // composer.
             Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
             Expr::If(expr_if) => {
                 self.wrap_condition(&mut expr_if.cond);
                 self.wrap_block(&mut expr_if.then_branch);
                 if let Some((_, else_expr)) = &mut expr_if.else_branch {
                     match else_expr.as_mut() {
-                        // An `else if` chain: recurse so every arm gets its
-                        // own branch index.
                         Expr::If(_) => self.visit_expr_mut(else_expr),
                         Expr::Block(block_expr) => self.wrap_block(&mut block_expr.block),
                         other => self.visit_expr_mut(other),
@@ -397,8 +289,6 @@ impl VisitMut for BranchGroupInjector<'_> {
                     self.closure_in_arg_position = previous;
                 }
             }
-            // The repeat count is a const context; only the element repeats
-            // at runtime.
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
             _ => visit_mut::visit_expr_mut(self, expr),
         }
@@ -409,8 +299,6 @@ impl VisitMut for BranchGroupInjector<'_> {
             return;
         };
         self.visit_expr_mut(&mut init.expr);
-        // A `let … else` diverge block runs only when the pattern refutes:
-        // it is a branch like any other.
         if let Some((_, diverge)) = &mut init.diverge {
             if let Expr::Block(block_expr) = diverge.as_mut() {
                 self.wrap_block(&mut block_expr.block);
@@ -421,12 +309,6 @@ impl VisitMut for BranchGroupInjector<'_> {
     }
 
     fn visit_item_mut(&mut self, item: &mut syn::Item) {
-        // A nested `fn`, a local `impl`'s methods, a local trait's default
-        // bodies and anything inside a nested `mod` all run under whatever
-        // composer is current when they are called — composables resolve the
-        // composer through the thread-local context, not a capture — so their
-        // branches need groups like a content closure's. Every other item is
-        // not executable code.
         match item {
             syn::Item::Fn(item_fn) => {
                 self.visit_nested_fn(&item_fn.sig, &item_fn.attrs, &mut item_fn.block);
@@ -458,29 +340,15 @@ impl VisitMut for BranchGroupInjector<'_> {
         }
     }
 
-    fn visit_type_mut(&mut self, _ty: &mut syn::Type) {
-        // Types are const contexts: an array length like `[f32; if …]` must
-        // not receive a runtime guard.
-    }
+    fn visit_type_mut(&mut self, _ty: &mut syn::Type) {}
 
     fn visit_angle_bracketed_generic_arguments_mut(
         &mut self,
         _args: &mut syn::AngleBracketedGenericArguments,
     ) {
-        // Turbofish arguments are const contexts too.
     }
 }
 
-/// Whether a branch could interact with the composer. Every free call could
-/// be a composable; method calls compose only through `Composer`'s own
-/// surface — the handle is `Clone`, so `with_current_composer(Clone::clone)`
-/// can carry it into a branch that then composes purely through methods — and
-/// those methods are recognized by name, leaving ordinary calls like
-/// `value.to_string()` inert. Std's value macros (`format!`, `vec!`, …)
-/// cannot compose either and are skipped by name; every other macro wraps,
-/// which is what keeps `DisposableEffect!` and friends grouped. Closures,
-/// async and const blocks and nested items are skipped for the same reason
-/// the transform skips them.
 fn block_can_reach_composer(block: &Block) -> bool {
     let mut scan = ComposerReachScan { found: false };
     scan.visit_block(block);
@@ -492,11 +360,6 @@ fn expr_can_reach_composer(expr: &Expr) -> bool {
     scan.visit_expr(expr);
     scan.found
 }
-/// Whether the expression is a place expression — a path, field access,
-/// index, or dereference (through parens). A `ref` pattern binds into the
-/// place, so a place scrutinee can never be replaced by a value-producing
-/// wrapper: `if let Some(ref v) = values[i()]` must keep indexing the
-/// vector, not move out of it.
 fn expr_is_place(expr: &Expr) -> bool {
     match expr {
         Expr::Path(_) | Expr::Field(_) | Expr::Index(_) => true,
@@ -507,9 +370,6 @@ fn expr_is_place(expr: &Expr) -> bool {
     }
 }
 
-/// Whether the expression contains a `let` outside closures — a match guard
-/// with one cannot be wrapped in a block without severing the bindings the
-/// arm body relies on.
 fn expr_contains_let(expr: &Expr) -> bool {
     struct LetScan {
         found: bool,
@@ -541,17 +401,9 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
             return;
         }
         match expr {
-            // Closures are scanned through: `opt.map(|_| Child())` runs its
-            // closure during composition, and one that truly runs later only
-            // costs its branch a guard that no-ops outside a pass. Async and
-            // const blocks never run on the composition path.
             Expr::Closure(closure) => self.visit_expr(&closure.body),
             Expr::Async(_) | Expr::Const(_) => {}
             Expr::Call(_) => self.found = true,
-            // Any method can transitively reach the composer through the
-            // thread-local context — `Helper.render()` calling a composable
-            // inside — so every call shape counts. The shell this earns is a
-            // reservation that costs nothing unless something composes.
             Expr::MethodCall(_) => self.found = true,
             Expr::Macro(_) => self.found = true,
             _ => syn::visit::visit_expr(self, expr),

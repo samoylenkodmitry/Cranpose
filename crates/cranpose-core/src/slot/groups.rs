@@ -16,16 +16,7 @@ pub(super) struct GroupRecord {
     pub(super) generation: u32,
     pub(super) anchor: AnchorId,
     pub(super) scope_id: Option<ScopeId>,
-    /// A lifecycle-transparent bracket: the group exists only to give a
-    /// conditional branch its own identity. It never carries a scope, and
-    /// detachment reaches through it so each child decides its own retention
-    /// fate instead of inheriting dispose-by-default from the bracket.
     pub(super) transparent: bool,
-    /// For an explicitly keyed group that passed through a deferred branch
-    /// shell: the shell's branch-site key. A `with_key` wrapper collapses the
-    /// location salt to one line, so this is what still distinguishes two
-    /// branches funneling the same key through it — a reuse arriving from a
-    /// different site materializes its bracket and composes fresh.
     pub(super) shell_site: Option<crate::Key>,
 }
 

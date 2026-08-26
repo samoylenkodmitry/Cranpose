@@ -1,11 +1,5 @@
 use super::*;
 
-// Every conditional branch of a `#[composable]` body owns its composition
-// slots, the way Compose's compiler plugin gives each `if`/`else` and `match`
-// branch a group of its own. The arriving branch must never be handed the
-// node, `remember` slots, or effects the departing branch was using just
-// because the two branches share a slot shape.
-
 thread_local! {
     static BRANCH_INITS: Cell<usize> = const { Cell::new(0) };
     static BRANCH_SEEN: Cell<i32> = const { Cell::new(0) };
@@ -235,8 +229,6 @@ fn a_branch_switch_disposes_the_effects_of_the_departed_branch() {
 #[composable]
 fn value_only_branch_probe(cond: bool) {
     let margin = if cond { 4_i32 } else { 8 };
-    // Method calls and std value macros cannot compose either: composables
-    // are free functions, so these branches must stay group-free too.
     let label = if cond {
         "on".to_string()
     } else {
@@ -283,8 +275,6 @@ fn a_value_only_conditional_adds_no_group() {
 
 #[composable]
 fn format_arg_probe(cond: bool) {
-    // `format!` cannot compose, but its arguments can: the token scan must
-    // see the `remember*` call inside and give each branch its group.
     let label = if cond {
         format!("a{}", remember_branch_marker(41))
     } else {
@@ -486,9 +476,6 @@ fn closure_branch_probe(cond: bool) {
 
 #[test]
 fn conditionals_inside_plain_closures_are_left_alone() {
-    // A closure with no composable-shaped call inside it is not content, so
-    // the transform leaves it untouched: its branches carry no guards at all,
-    // not even the no-op thread-local kind.
     reset_branch_probes();
     let mut composition = test_composition();
     composition
@@ -530,11 +517,6 @@ fn content_closure_branch_probe(cond: bool) {
 
 #[test]
 fn content_closure_branches_own_their_slots() {
-    // The branch transform must reach into content lambdas — the closures a
-    // caller hands to layout composables — because that is where most
-    // conditionals in real applications live. The guard resolves the
-    // composer through the thread-local context since a `'static` closure
-    // cannot capture `__composer`.
     reset_branch_probes();
     let mut composition = test_composition();
 
@@ -578,8 +560,6 @@ fn indexed_closure_branch_probe(cond: bool) {
 
 #[test]
 fn an_argument_taking_content_closure_gets_branch_groups_too() {
-    // Lazy item lambdas are `|index| …`-shaped; the classifier keys on the
-    // composable call inside, not on arity.
     reset_branch_probes();
     let mut composition = test_composition();
 
@@ -605,9 +585,6 @@ fn remembered_key_marker(marker: i32) -> i32 {
 
 #[composable]
 fn composing_key_argument_probe(cond: bool) {
-    // The key argument itself composes, so this branch cannot elide its
-    // bracket: `remembered_key_marker` runs before `with_key`'s group opens
-    // and would share a slot across branches without one.
     if cond {
         cranpose_core::with_key(&remembered_key_marker(61), || {});
     } else {
@@ -644,8 +621,6 @@ fn a_composing_key_argument_keeps_the_bracket() {
 #[composable]
 fn snake_case_closure_branch_probe(cond: bool) {
     content_host(move || {
-        // `stateful_child` is snake_case: the closure classifier must key on
-        // reachability, not naming convention.
         if cond {
             stateful_child(7100);
         } else {
@@ -678,8 +653,6 @@ fn snake_case_composables_inside_content_closures_get_branch_groups() {
 #[composable]
 fn guard_name_collision_probe(cond: bool) {
     if cond {
-        // The macro's own guard binding uses mixed_site hygiene, so this
-        // user binding of the same name stays visible to user code.
         let __cranpose_branch_group_guard = 41;
         let value = remember_branch_marker(__cranpose_branch_group_guard);
         BRANCH_SEEN.with(|seen| seen.set(value));
@@ -726,9 +699,6 @@ fn handler_storing_probe(cond: bool) {
 
 #[test]
 fn a_misclassified_handler_closure_degrades_to_a_no_op() {
-    // The CamelCase call makes the classifier treat this handler as content,
-    // so its branches carry guards — but running it outside a composition
-    // pass must find no composer and change nothing.
     reset_branch_probes();
     let mut composition = test_composition();
     composition
@@ -772,11 +742,6 @@ fn keyed_values() -> Vec<(u64, i32)> {
 
 #[test]
 fn keyed_state_survives_a_front_removal_across_branch_shells() {
-    // `for row { if visible { with_key(id, …) } }` is the canonical list
-    // shape. Hiding the first row shifts every later iteration's branch
-    // bracket by one; the explicit key inside must keep its subtree — moved,
-    // not disposed and recomposed — or a 1024-row list pays a full rebuild
-    // for one hidden row and loses all its keyed state.
     reset_branch_probes();
     let mut composition = test_composition();
 
@@ -818,9 +783,6 @@ fn mixed_keyed_visibility_probe(rows: Vec<(u64, bool)>) {
     KEYED_VALUES.with(|values| values.borrow_mut().clear());
     for (id, visible) in rows {
         if visible {
-            // Unkeyed content beside the keyed call: this branch cannot elide
-            // its bracket, so the keyed subtree must travel between brackets
-            // through the steal/orphan-pool machinery.
             let _breadcrumb = remember(|| 0_i32);
             cranpose_core::with_key(&id, || {
                 let value = remember(|| {
@@ -1016,8 +978,6 @@ fn match_guards_own_their_composition_slots() {
 mod fake_arity_with_key {
     use super::*;
 
-    /// Same name as the framework's `with_key`, different arity, no keyed
-    /// group: the elision must not mistake it for the real one.
     fn with_key(_key: &i32, marker: i32, content: impl FnOnce(i32)) {
         content(marker);
     }
@@ -1266,9 +1226,6 @@ fn conditionals_inside_local_impl_methods_own_their_branches() {
 
 #[composable]
 fn composer_shadowing_probe(cond: bool) {
-    // `__composer` is the expansion's own parameter name; a user binding of
-    // it must neither break the guards (they hold a hygienic alias captured
-    // before any user statement) nor be disturbed.
     let __composer = 7_u8;
     if cond {
         let value = remember_branch_marker(i32::from(__composer));
@@ -1299,8 +1256,6 @@ fn a_user_binding_named_like_the_composer_is_not_broken_by_guards() {
 mod fake_shape_with_key {
     use super::*;
 
-    /// The real API's exact shape — two arguments, closure last — but no
-    /// keyed group inside: the elision must repair itself at runtime.
     fn with_key<K>(_key: &K, content: impl FnOnce()) {
         content();
     }
@@ -1444,9 +1399,6 @@ fn a_parked_keyed_subtree_stays_within_its_branch_site() {
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    // The first branch re-keys from 1 to 2 and parks key 1; the second branch
-    // then asks for key 1 from the same helper line. Branch isolation must
-    // win: the parked subtree belongs to the first branch's site.
     composition
         .render(42, || cross_branch_pool_probe(2, true))
         .expect("re-key the first branch and enable the second");
@@ -1568,10 +1520,6 @@ fn a_materialized_shell_keeps_group_ordinals_consistent() {
     reset_branch_probes();
     let mut composition = test_composition();
 
-    // The composable before the branch consumes the same static key at the
-    // outer level; the lookalike's content then composes the same child
-    // inside a shell that materializes mid-operation. The reservation and
-    // the consumption must agree on the frame they count ordinals in.
     composition
         .render(45, || deferred_shell_ordinals::probe(true))
         .expect("initial composition");
@@ -1714,10 +1662,6 @@ fn a_key_flattened_out_of_a_skipped_inner_bracket_keeps_its_path() {
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 2));
 
-    // The first occurrence still enters the outer branch but skips its inner
-    // one, so key 1 is flattened out of the skipped inner bracket at the
-    // outer finish; the second occurrence asks for it under outer → inner.
-    // The park must remember the key's true nested path.
     composition
         .render(50, || nested_bracket_rows(vec![-1, 1]))
         .expect("skip the inner branch of the first occurrence");
@@ -1794,10 +1738,6 @@ fn duplicate_explicit_keys_across_brackets_of_one_site_panic_loudly() {
     reset_branch_probes();
     let mut composition = test_composition();
 
-    // Two simultaneously visible occurrences of one branch site using the
-    // same explicit key: the fully keyed form panics on the duplicate, and
-    // the bracketed form must be exactly as loud rather than letting a later
-    // shift silently adopt the other row's state.
     let _ = composition.render(52, || duplicate_keyed_rows(vec![1, 2]));
 }
 
@@ -1807,9 +1747,6 @@ fn branch_labels() -> Vec<String> {
 
 #[composable]
 fn scrutinee_borrow_probe() {
-    // The scrutinee's temporary collection must stay alive into the branch
-    // body: wrapping the scrutinee in a guard block would end the borrow at
-    // the block and this function would not compile.
     if let Some(label) = branch_labels().first() {
         let value = remember_branch_marker(label.len() as i32);
         BRANCH_SEEN.with(|seen| seen.set(value));
@@ -1895,9 +1832,6 @@ fn a_delegating_with_key_lookalike_does_not_merge_branch_identity() {
         .expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    // The wrapper is one `#[track_caller]` line, so the real `with_key`'s
-    // location salt no longer distinguishes the branches; the deferred shell
-    // must notice the keyed group arriving from a different branch site.
     composition
         .render(55, || delegating_with_key::probe(false))
         .expect("switch to the else branch");
@@ -1944,8 +1878,6 @@ fn index_helper() -> usize {
 #[composable]
 fn place_scrutinee_probe() {
     let values: Vec<Option<String>> = vec![Some("row".to_string())];
-    // A place scrutinee with a `ref` binding must keep its place-ness: a
-    // value wrap would try to move the Option out of the vector (E0507).
     if let Some(ref value) = values[index_helper()] {
         let marker = remember_branch_marker(value.len() as i32);
         BRANCH_SEEN.with(|seen| seen.set(marker));
@@ -1988,9 +1920,6 @@ fn a_branch_selected_closure_carries_its_branch_identity() {
         .expect("initial composition");
     assert_eq!(branch_seen(), 301);
 
-    // The closure composes at the call site, outside the branch guard; its
-    // body must carry identity from its definition site so the two branches'
-    // closures never share the child's state.
     composition
         .render(58, || closure_select_probe(false))
         .expect("switch to the else branch");
@@ -2029,9 +1958,6 @@ fn branches_composing_through_arbitrary_methods_own_their_state() {
         .expect("initial composition");
     assert_eq!(branch_seen(), 401);
 
-    // `render` matches no composing-name family, yet it composes: any call
-    // can transitively reach the composer, so every branch that calls
-    // anything reserves a shell — free until something composes inside.
     composition
         .render(59, || transitive_method_probe(false))
         .expect("switch to the else branch");
@@ -2104,9 +2030,6 @@ fn nested_pending_shells_fold_into_keyed_provenance() {
         .expect("initial composition");
     assert_eq!(branch_seen(), 501);
 
-    // The keyed group passes through two pending shells — the outer branch
-    // and the helper's inner one. Only the outer differs between the arms,
-    // so provenance must fold the whole pending chain.
     composition
         .render(61, || nested_shell_provenance_probe(false))
         .expect("switch to the else branch");

@@ -260,11 +260,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for (index, arg) in func.sig.inputs.iter_mut().enumerate() {
         if let FnArg::Typed(PatType { pat, ty, .. }) = arg {
-            // The expansion threads its own `__composer` binding through the
-            // body; a user binding of that name — anywhere in the pattern,
-            // `(__composer, enabled)` included — would shadow it into
-            // whatever type the user chose and every injected reference
-            // would break. Refuse loudly instead of failing strangely.
             if let Some(reserved) = find_reserved_pattern_ident(pat) {
                 let name = reserved.to_string();
                 return syn::Error::new(
@@ -643,9 +638,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             Span::call_site(),
         );
 
-        // The recompose fn already stores its value in the return slot; the
-        // callback's copy is deliberately discarded (`let _`), which matters
-        // for composables returning a #[must_use] type such as Result.
         let recompose_setter = quote! {
             {
                 __composer.set_recompose_callback(move |
@@ -796,9 +788,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             #func
         })
     } else {
-        // no_skip path: still uses simple rebinds. The group closure's
-        // parameter is named `__composer` so injected branch guards resolve
-        // to it, exactly as they do in the helper fn of the skip path.
         let wrapped = quote!({
             #core_path::with_current_composer(|__outer_composer: &#core_path::Composer| {
                 __outer_composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
@@ -813,9 +802,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 }
 
-/// Any binding in a parameter pattern that collides with the expansion's own
-/// namespace — `__composer` or the `__cranpose*` prefix — including inside
-/// tuple, struct, or reference patterns.
 fn find_reserved_pattern_ident(pat: &Pat) -> Option<&Ident> {
     use syn::visit::Visit;
 

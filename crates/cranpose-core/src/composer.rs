@@ -561,18 +561,9 @@ pub struct Composer {
     pub(crate) core: Rc<ComposerCore>,
 }
 
-/// Closes a conditional branch's group when it goes out of scope.
-///
-/// Created by [`Composer::__branch_group`]; the drop detaches whatever the
-/// branch stopped emitting and ends the group, mirroring the close half of
-/// `Composer::with_group_seed` minus the scope bookkeeping a branch does not
-/// have.
 pub struct BranchGroupGuard {
     composer: Composer,
     parent_scope: Option<ScopeId>,
-    /// `Some` for a fully-keyed branch whose bracket was reserved as a
-    /// deferred shell rather than opened; on drop the shell reports whether
-    /// something materialized it, and only then is there a group to close.
     deferred_shell: Option<usize>,
 }
 
@@ -859,7 +850,6 @@ impl Composer {
     }
 
     /// Registers a virtual node in the Applier.
-    ///
     /// This is used by SubcomposeLayoutNode to register virtual container nodes
     /// so that subsequent insert_child commands can find them and attach children.
     /// Without this, virtual nodes would only exist in SubcomposeLayoutNodeInner.virtual_nodes
@@ -1040,9 +1030,6 @@ impl Composer {
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
         let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
         let host = self.active_slots_host();
-        // The fold walks the transparent chain per group open; with nothing
-        // retained — the overwhelmingly common state — the key is never
-        // compared, so skip the walk.
         let branch_path = if self.core.shared_state.has_retained(&host) {
             self.with_slot_session_mut(|slots| slots.current_branch_occurrence_path_key())
         } else {
@@ -1165,18 +1152,7 @@ impl Composer {
         self.with_group_seed(seed, f)
     }
 
-    /// Opens the group for one conditional branch of a composable body and
-    /// returns the guard that closes it. `#[composable]` inserts this around
-    /// every `if`/`else` and `match` branch that can reach the composer, the
-    /// way Compose's compiler plugin gives each branch a group of its own, so
-    /// the arriving branch is never handed the slots the departing branch was
-    /// using.
     ///
-    /// A branch group is a plain slot-table group with no [`RecomposeScope`]:
-    /// state read inside a branch invalidates the enclosing function's scope,
-    /// which re-runs the body and re-evaluates the condition. The guard closes
-    /// the group on drop, so `return`, `?`, `break` and `continue` unwind the
-    /// slot table correctly.
     #[doc(hidden)]
     pub fn __branch_group(&self, key: Key) -> BranchGroupGuard {
         let seed = crate::slot::GroupKeySeed::unkeyed(key);
@@ -1192,13 +1168,6 @@ impl Composer {
         }
     }
 
-    /// The bracket for a branch that consists solely of `with_key` calls. The
-    /// real `with_key` opens explicitly keyed groups that state their own
-    /// identity, so the bracket stays a reservation and the keyed sibling
-    /// machinery sees exactly the structure it always had; if the branch
-    /// turns out to compose positionally after all — a user function that
-    /// merely shares the name and shape — the first such operation
-    /// materializes the bracket and the branch is isolated like any other.
     #[doc(hidden)]
     pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
         let seed = crate::slot::GroupKeySeed::unkeyed(key);

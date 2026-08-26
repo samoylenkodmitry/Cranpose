@@ -250,22 +250,13 @@ impl ActiveSubtreeRoot {
     }
 }
 
-/// The fold seed of an empty transparent chain: the branch path of anything
-/// living directly under a non-transparent group.
 pub(crate) const BRANCH_PATH_ROOT: crate::Key = 0xcbf2_9ce4_8422_2325;
 
 pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
-    /// The branch-site path this subtree was detached from — the fold of the
-    /// transparent chain above its original parent, computed while that chain
-    /// was still in the table. Parking keys on it, so a keyed subtree moves
-    /// only between occurrences of the same nested bracket path.
     pub(crate) branch_path: crate::Key,
-    /// The site path with each bracket's ordinal mixed in: one occurrence's
-    /// identity. Retention keys on it, so two loop occurrences of one site
-    /// retain two subtrees instead of colliding.
     pub(crate) branch_occurrence_path: crate::Key,
 }
 

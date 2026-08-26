@@ -74,14 +74,6 @@ impl SlotTable {
             .and_then(|index| self.groups.get(index))
             .is_some_and(|group| group.transparent);
         if finishing_is_transparent {
-            // A branch bracket's departed keyed children wait out the pass
-            // under the nearest real group: a shifted bracket of the same
-            // branch path may claim them by key, and whatever stays unclaimed
-            // flows into that group's own finish — the exact place this
-            // content was disposed or retained before brackets existed. Each
-            // subtree recorded its own path at detach time: a key flattened
-            // out of a skipped nested bracket parks under its full nested
-            // path, not the finishing bracket's.
             let owner = self.nearest_non_transparent_ancestor(group_anchor);
             let mut kept = Vec::new();
             for subtree in detached_children.drain(..) {

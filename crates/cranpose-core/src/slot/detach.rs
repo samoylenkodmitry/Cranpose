@@ -150,9 +150,6 @@ impl SlotTable {
         // extract payload and node segments, clear active indexes, refresh the
         // active suffix when requested, then shrink ancestor spans.
         let root_parent_anchor = self.groups[root_index].parent_anchor;
-        // The path is only computable while the parent chain is still in the
-        // table, which is exactly now: the shell-dissolution recursion detaches
-        // nested children before it dissolves their shells.
         let branch_path = self.branch_path_key(root_parent_anchor);
         let branch_occurrence_path = self.branch_occurrence_path_key(root_parent_anchor);
         let Some(removed_group_range) =
@@ -255,23 +252,11 @@ impl SlotTable {
         detached: &mut Vec<DetachedSubtree>,
     ) {
         while let Some(child_anchor) = self.direct_child_anchor_at_cursor(cursor) {
-            // A transparent group is a conditional branch's bracket: structure,
-            // not a lifecycle unit. Detach through it so every group that owns
-            // state carries its own retention decision — a retain-marked group
-            // inside a departed branch must be retained, not buried in a shell
-            // whose missing scope reads as dispose-by-default. The bare shell
-            // follows as its own subtree.
             if self
                 .groups
                 .get(cursor.index())
                 .is_some_and(|group| group.transparent && group.subtree_len > 1)
             {
-                // Earlier removals in this loop shift the suffix left while
-                // the anchor index map refresh is deferred; the recursion
-                // below resolves this shell and its children through that
-                // map, so bring it up to date from the shell's position
-                // first. A second sibling shell dissolved whole here is a
-                // retained child silently disposed inside it.
                 self.refresh_group_indexes_from(cursor.index());
                 let shell_children = ChildCursor::new(child_anchor, cursor.index() + 1);
                 if self.repair_child_cursor_parent_subtree(shell_children, "branch shell detach") {
@@ -379,10 +364,6 @@ impl SlotTable {
         Ok(root_anchor)
     }
 
-    /// The nearest ancestor that is not a transparent branch bracket —
-    /// the group whose finish is where a departed branch's content would
-    /// have been handled before brackets existed. `AnchorId::INVALID`
-    /// names the root.
     pub(in crate::slot) fn nearest_non_transparent_ancestor(&self, anchor: AnchorId) -> AnchorId {
         let mut current = anchor;
         loop {
@@ -402,21 +383,10 @@ impl SlotTable {
         }
     }
 
-    /// The identity of the branch-site *path* a keyed child lives under: a
-    /// fold of the static keys of the transparent chain from just below the
-    /// nearest non-transparent ancestor down to `anchor`. Parking and
-    /// claiming both compute it, so a key moves only between occurrences of
-    /// the same nested bracket path — a different conditional branch, at any
-    /// depth, never claims it.
     pub(in crate::slot) fn branch_path_key(&self, anchor: AnchorId) -> crate::Key {
         self.fold_transparent_chain(anchor, |record| record.key.static_key)
     }
 
-    /// [`Self::branch_path_key`] with each bracket's ordinal mixed in: the
-    /// identity of one *occurrence* of the nested path. Keyed-move continuity
-    /// wants the site identity — a shifted occurrence must claim its
-    /// sibling's key — while retention wants the occurrence: two loop
-    /// occurrences of one site retain two subtrees.
     pub(in crate::slot) fn branch_occurrence_path_key(&self, anchor: AnchorId) -> crate::Key {
         self.fold_transparent_chain(anchor, |record| {
             record.key.static_key ^ crate::Key::from(record.key.ordinal).rotate_left(17)
@@ -448,13 +418,6 @@ impl SlotTable {
         folded
     }
 
-    /// Detach `key`'s subtree out of a later occurrence of the claimer's
-    /// nested bracket path: at each transparent level, from the claimer's
-    /// bracket up to the nearest non-transparent ancestor, scan later
-    /// same-site siblings and descend the remaining path of nested same-site
-    /// brackets before matching the key. The removal of an earlier loop
-    /// iteration shifts every later bracket by one — at whatever depth the
-    /// keyed content sits — and it must move rather than be recomposed.
     pub(in crate::slot) fn steal_keyed_subtree_along_branch_path(
         &mut self,
         claimer_bracket: AnchorId,
@@ -487,8 +450,6 @@ impl SlotTable {
         }
     }
 
-    /// Later siblings of `level` sharing its static key, each descended along
-    /// `descent` before matching `key`.
     fn find_key_in_later_same_site_siblings(
         &self,
         level: AnchorId,
@@ -517,9 +478,6 @@ impl SlotTable {
         None
     }
 
-    /// Walk `shell_index`'s direct children along `descent` — each step a
-    /// nested transparent bracket of that static key — and match `key` as a
-    /// direct child at the path's end.
     fn find_key_along_descent(
         &self,
         shell_index: usize,

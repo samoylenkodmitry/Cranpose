@@ -97,11 +97,6 @@ impl SlotWriteSession<'_> {
         self.reattach_started_group(key, detached, GroupStartKind::Restored)
     }
 
-    /// Bring a keyed subtree back that never left the composition's applier —
-    /// it moved between branch brackets within this pass. `Moved` rather than
-    /// `Restored`: the content's scopes are live and its nodes attached, so
-    /// the normal skip machinery re-registers them without a forced
-    /// recomposition.
     fn adopt_started_group(
         &mut self,
         key: GroupKey,
@@ -131,14 +126,6 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    /// Keyed continuity across branch brackets of one branch site: an
-    /// explicit key that would otherwise insert fresh may claim the identical
-    /// key parked by an already-finished bracket of the same site and owner,
-    /// or steal it out of a later same-site bracket that has not composed
-    /// yet. Both are the same shifted-by-one list; without this, hiding one
-    /// row rebuilds every keyed row behind it and loses their state. A key
-    /// arriving under a *different* branch site — or under no bracket at
-    /// all — gets neither: branch isolation wins over the key.
     fn claim_or_steal_keyed_subtree(&mut self, key: GroupKey) -> Option<DetachedSubtree> {
         key.explicit_key?;
         let parent_anchor = self.state.current_parent_anchor();
@@ -161,11 +148,6 @@ impl SlotWriteSession<'_> {
             .steal_keyed_subtree_along_branch_path(parent_anchor, key)
     }
 
-    /// Reserve the key a group is about to be begun with. For an unkeyed
-    /// seed this first materializes any pending branch shell at the current
-    /// level, so the ordinal is counted in the frame the matching
-    /// `begin_group` will consume it in; an explicitly keyed seed passes
-    /// shells by, exactly like its `begin_group` will.
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
         if seed.explicit_key.is_none() {
             self.materialize_deferred_branch_shells();
@@ -173,9 +155,6 @@ impl SlotWriteSession<'_> {
         self.preview_group_key(seed)
     }
 
-    /// The occurrence identity of the branch path the group about to be
-    /// opened sits under — see [`SlotTable::branch_occurrence_path_key`]; the
-    /// root fold when it sits under a real group.
     pub(crate) fn current_branch_occurrence_path_key(&self) -> crate::Key {
         self.table
             .branch_occurrence_path_key(self.state.current_parent_anchor())
@@ -308,11 +287,6 @@ impl SlotWriteSession<'_> {
         Some(group)
     }
 
-    /// Reserve a branch bracket without opening it. An explicitly keyed child
-    /// group passes through (it states its own identity); anything else at
-    /// the bracket's level first materializes it via
-    /// [`Self::materialize_deferred_branch_shells`]. Returns the token the
-    /// closing guard hands back to [`Self::close_deferred_branch_shell`].
     pub(crate) fn begin_deferred_branch_shell(&mut self, seed: GroupKeySeed) -> usize {
         let parent = self.state.current_parent_anchor();
         self.state
@@ -325,8 +299,6 @@ impl SlotWriteSession<'_> {
         self.state.deferred_branch_shells.len() - 1
     }
 
-    /// Close the shell the guard holds. Returns whether it materialized into
-    /// a real open group the caller must now finish like any branch group.
     pub(crate) fn close_deferred_branch_shell(&mut self, token: usize) -> bool {
         if self.state.deferred_branch_shells.len() != token + 1 {
             log::error!(
@@ -347,11 +319,6 @@ impl SlotWriteSession<'_> {
         shell.materialized
     }
 
-    /// The fold of every pending, unmaterialized shell at the current level —
-    /// the trailing run of the shell stack — outermost first. A keyed group
-    /// passing through nested shells (an outer branch calling a helper whose
-    /// inner branch holds the `with_key`) belongs to the whole chain: folding
-    /// only the innermost site would let two outer arms share it.
     fn pending_unmaterialized_shell_site(&self) -> Option<crate::Key> {
         let parent = self.state.current_parent_anchor();
         let shells = &self.state.deferred_branch_shells;
@@ -374,9 +341,6 @@ impl SlotWriteSession<'_> {
         Some(folded)
     }
 
-    /// Open every pending branch shell whose level the next operation is
-    /// about to write into. Marked materialized before its `begin_group` so
-    /// the recursive hook terminates.
     pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
         while let Some(shell) = self.state.deferred_branch_shells.last() {
             if shell.materialized || shell.parent != self.state.current_parent_anchor() {
@@ -420,12 +384,6 @@ impl SlotWriteSession<'_> {
             .is_none()
             .then(|| self.resolve_active_child(cursor, key));
 
-        // A keyed group reused through a pending shell must have come from
-        // the same branch site. A `with_key` wrapper collapses the location
-        // salt onto one line, so two branches funneling one key through it
-        // would otherwise share identity — the exact failure branch groups
-        // exist to prevent. On conflict the shell materializes and the key
-        // composes fresh inside the bracket.
         if let (Some(site), Some(probe)) = (pass_through_site, &resolution) {
             let previous_site = match probe {
                 ActiveChildResolution::ReuseExpected { anchor } => {
@@ -446,18 +404,12 @@ impl SlotWriteSession<'_> {
                     );
                     resolution = Some(self.resolve_active_child(cursor, key));
                 }
-                // Already stamped with this site: the steady-state reuse of a
-                // keyed row. Skip the redundant write below.
                 Some(_) => pass_through_site = None,
                 None => {}
             }
         }
 
         self.state.consume_group_key(key);
-        // The per-frame duplicate check cannot see across sibling brackets of
-        // one branch site, where the continuity machinery would let a later
-        // shift silently adopt the duplicate's subtree. Be exactly as loud as
-        // the frame-local check the fully keyed (elided) form hits.
         if key.explicit_key.is_some() {
             let parent_anchor = cursor.parent();
             let parent_is_transparent = self
@@ -501,8 +453,6 @@ impl SlotWriteSession<'_> {
         opened
     }
 
-    /// Record which branch site's shell an explicitly keyed group passed
-    /// through, so a later reuse from a different site is recognized.
     fn stamp_shell_site(&mut self, anchor: AnchorId, site: Option<crate::Key>) {
         if let Some(site) = site {
             self.table.set_group_shell_site(anchor, site);

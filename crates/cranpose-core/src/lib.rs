@@ -85,7 +85,6 @@ pub use slot::{
 pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
-///
 /// Use this function when you need to update `MutableState` from outside the
 /// composition or layout phase, typically in event handlers or async tasks.
 ///
@@ -354,12 +353,6 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     key
 }
 
-/// Branch group entry for conditionals inside content closures, where the
-/// composable's `__composer` binding is out of reach — a `'static` closure
-/// cannot capture it. Resolves the composer from the thread-local context
-/// instead, and returns `None` when there is no composition underway (the
-/// closure turned out to be an event handler or ran outside a slot pass), so
-/// a misclassified closure degrades to exactly the pre-transform behavior.
 #[doc(hidden)]
 pub fn __branch_group_scope(key: Key) -> Option<BranchGroupGuard> {
     with_current_composer_opt(|composer| {
@@ -371,10 +364,6 @@ pub fn __branch_group_scope(key: Key) -> Option<BranchGroupGuard> {
     .flatten()
 }
 
-/// [`__branch_group_scope`] for a fully-keyed branch: the bracket is reserved
-/// as a deferred shell (see [`Composer::__branch_group_deferred`]) instead of
-/// opened, so the real `with_key` keeps its unbracketed sibling structure and
-/// a lookalike still materializes an isolating bracket.
 #[doc(hidden)]
 pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
     with_current_composer_opt(|composer| {
@@ -386,12 +375,7 @@ pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
     .flatten()
 }
 
-/// Group key for one conditional branch of a `#[composable]` body.
 ///
-/// The location is the branch's own source position, and `branch` is the
-/// macro-assigned index of the branch within its function, mixed into the
-/// hash so every branch keeps a distinct key even when macro-generated code
-/// collapses all spans onto one location.
 #[doc(hidden)]
 pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> Key {
     let mut hash = source_location_hash(file, line, column);

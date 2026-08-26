@@ -1,13 +1,3 @@
-//! The Recomposition Lab: every conditional shape the branch-group transform
-//! rewrites, live on one page, with per-section recomposition counters.
-//!
-//! Each section owns its recompose scope, so the counters show exactly which
-//! scopes a state change re-runs: flipping the phase must bump the phase and
-//! gauge sections and nothing else, and bumping one keyed row must leave every
-//! other counter still. Branch cards carry a global instance number, so a
-//! branch switch visibly composes a fresh card while keyed rows visibly keep
-//! theirs across visibility toggles.
-
 use std::cell::Cell;
 
 use cranpose_core::{self, MutableState};
@@ -66,9 +56,6 @@ fn LabButton(label: &'static str, on_click: impl Fn() + 'static) {
     );
 }
 
-// `no_skip`: the counter's job is to run exactly when its section's body
-// runs; the skip machinery would freeze it at 1 because its argument never
-// changes.
 #[allow(non_snake_case)]
 #[composable(no_skip)]
 fn SectionCounter(name: &'static str) {
@@ -82,8 +69,6 @@ fn SectionCounter(name: &'static str) {
     );
 }
 
-/// Both branches call this same composable: before branch groups, the two
-/// branches were one slot and the card kept the other phase's state.
 #[allow(non_snake_case)]
 #[composable]
 fn PhaseCard(phase: &'static str) {
@@ -122,8 +107,6 @@ pub enum LabRoute {
     Settings,
 }
 
-/// One shared card called from every `match` arm — three source branches,
-/// three identities.
 #[allow(non_snake_case)]
 #[composable]
 fn RouteCard(name: &'static str, show_extra: bool) {
@@ -189,8 +172,6 @@ fn KeyedRow(id: u64) {
     );
 }
 
-/// The canonical list shape: a fully keyed branch, which opens no bracket and
-/// keeps the keyed sibling-move semantics.
 #[allow(non_snake_case)]
 #[composable]
 fn KeyedRowsSection(hide_first: MutableState<bool>) {
@@ -203,9 +184,6 @@ fn KeyedRowsSection(hide_first: MutableState<bool>) {
     LabButton("Toggle row 1", move || hide_first.set(!hide_first.get()));
 }
 
-/// The bracketed variant: unkeyed content beside the keyed call keeps the
-/// bracket, so the keyed rows travel between brackets through the orphan pool
-/// and the sibling steal when row 5 toggles.
 #[allow(non_snake_case)]
 #[composable]
 fn BracketedRowsSection(hide_first: MutableState<bool>) {
@@ -223,8 +201,6 @@ fn BracketedRowsSection(hide_first: MutableState<bool>) {
     LabButton("Toggle row 5", move || hide_first.set(!hide_first.get()));
 }
 
-/// A `SubcomposeLayout` (through `BoxWithConstraints`) inside a conditional,
-/// with another conditional inside its measure-time content lambda.
 #[allow(non_snake_case)]
 #[composable]
 fn GaugeSection(show_gauge: MutableState<bool>, phase: MutableState<bool>) {

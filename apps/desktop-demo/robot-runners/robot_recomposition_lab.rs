@@ -1,20 +1,3 @@
-//! End-to-end contract for the Recomposition Lab tab: every conditional shape
-//! the branch-group transform rewrites, exercised on the live app.
-//!
-//! What it pins, in order:
-//! 1. Branch identity — flipping an `if` composes a fresh card (new instance
-//!    number, clicks reset), both directions.
-//! 2. Match-arm identity — three arms calling the same card composable get
-//!    three identities.
-//! 3. Keyed rows under a conditional (the elided, fully keyed branch): hiding
-//!    the first row keeps every other row's state and instance.
-//! 4. Bracketed keyed rows (unkeyed crumb beside the key): the same guarantee
-//!    through the orphan-pool/steal path.
-//! 5. A SubcomposeLayout inside a conditional, with a conditional inside its
-//!    measure-time content lambda.
-//! 6. Recomposition scopes — per-section composed counters move only when
-//!    their section's state changes; the footer composes exactly once.
-
 mod regression_robot_support;
 
 use std::time::Duration;
@@ -90,7 +73,6 @@ fn main() {
                 semantics_dump(&robot)
             );
 
-            // 1. Branch identity across an if/else flip.
             for _ in 0..3 {
                 click(&robot, "Count in phase");
             }
@@ -118,8 +100,6 @@ fn main() {
                 semantics_dump(&robot)
             );
 
-            // Scope isolation: phase flips must not recompose the row or
-            // route sections.
             assert_eq!(
                 section_composed(&robot, "rows section"),
                 rows_composed_initial,
@@ -133,7 +113,6 @@ fn main() {
                 semantics_dump(&robot)
             );
 
-            // 2. Match-arm identity.
             click(&robot, "Route detail");
             expect_text(&robot, "detail extra line");
             let detail = text_with_prefix(&robot, "route card for detail");
@@ -162,8 +141,6 @@ fn main() {
                 semantics_dump(&robot)
             );
 
-            // 3. Keyed rows under a fully keyed branch keep state across a
-            // front-row toggle, and bumping a row recomposes only that row.
             let rows_composed_before_bumps = section_composed(&robot, "rows section");
             click(&robot, "Row 2 bump");
             click(&robot, "Row 2 bump");
@@ -195,8 +172,6 @@ fn main() {
             expect_text(&robot, "Row 2 count: 2");
             expect_text(&robot, "Row 3 count: 1");
 
-            // 4. The bracketed variant holds the same guarantee through the
-            // orphan-pool/steal machinery.
             click(&robot, "Row 6 bump");
             click(&robot, "Row 6 bump");
             expect_text(&robot, "Row 6 count: 2");
@@ -217,7 +192,6 @@ fn main() {
             expect_text(&robot, "Row 5 count: 0");
             expect_text(&robot, "Row 6 count: 2");
 
-            // 5. SubcomposeLayout inside a conditional.
             let gauge = text_with_prefix(&robot, "gauge width:");
             let gauge_width = trailing_number(&gauge, "width:");
             assert!(
@@ -237,7 +211,6 @@ fn main() {
                 semantics_dump(&robot)
             );
 
-            // 6. The footer composed exactly once through all of the above.
             assert_eq!(
                 section_composed(&robot, "footer"),
                 1,
