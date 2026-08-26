@@ -21,6 +21,18 @@ pub fn debug_toggle(name: &'static str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// As [`debug_toggle`], for settings whose values are paths: the
+/// environment fallback keeps its platform encoding instead of demanding
+/// UTF-8.
+pub fn debug_toggle_os(name: &'static str) -> Option<std::ffi::OsString> {
+    let map = overrides().lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(value) = map.get(name) {
+        return Some(std::ffi::OsString::from(value.clone()));
+    }
+    drop(map);
+    std::env::var_os(name)
+}
+
 /// Test-side control of a debug toggle without mutating the process
 /// environment; `None` clears the override.
 #[doc(hidden)]

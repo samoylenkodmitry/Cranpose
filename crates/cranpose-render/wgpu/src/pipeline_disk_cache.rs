@@ -31,7 +31,7 @@ pub(crate) fn file_path() -> Option<PathBuf> {
     if !disk_cache_enabled() {
         return None;
     }
-    match crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_CACHE_FILE") {
+    match crate::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE") {
         Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
         _ => None,
     }

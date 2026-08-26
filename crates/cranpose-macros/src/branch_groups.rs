@@ -416,6 +416,10 @@ impl<'ast> Visit<'ast> for AwaitScan {
         }
     }
 
+    fn visit_macro(&mut self, _mac: &'ast syn::Macro) {
+        self.found = true;
+    }
+
     fn visit_item(&mut self, _item: &'ast syn::Item) {}
 }
 

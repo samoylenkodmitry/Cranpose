@@ -3129,6 +3129,12 @@ fn require_send<T: Send>(value: T) -> T {
     value
 }
 
+macro_rules! hidden_await {
+    () => {
+        std::future::ready(7).await
+    };
+}
+
 #[composable]
 fn async_closure_probe() {
     let make = async || std::future::ready(7).await;
@@ -3137,6 +3143,9 @@ fn async_closure_probe() {
     let make_sync = async || 7;
     let instrumented = require_send(make_sync());
     drop(instrumented);
+    let make_hidden = async || hidden_await!();
+    let hidden = require_send(make_hidden());
+    drop(hidden);
 }
 
 #[test]

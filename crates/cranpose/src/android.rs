@@ -1394,8 +1394,10 @@ fn create_android_gpu_resources(
     // file is keyed by adapter identity (vendor, device, driver strings), so
     // a driver update or a different GPU starts cold instead of feeding wgpu
     // a stale blob. `run` decided the directory; a pre-set full path wins.
-    if cranpose_render_wgpu::debug_toggle("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
-        if let Some(cache_dir) = cranpose_render_wgpu::debug_toggle("CRANPOSE_PIPELINE_CACHE_DIR") {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
+        if let Some(cache_dir) =
+            cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
+        {
             let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
             for byte in adapter_info
                 .driver
@@ -1779,7 +1781,7 @@ pub fn run(
     // `CRANPOSE_PIPELINE_CACHE_FILE` from this directory. Seeded properties
     // (above) and pre-set environments win, so tests and debugging can
     // redirect or disable it.
-    if cranpose_render_wgpu::debug_toggle("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
         if let Some(data_path) = app.internal_data_path() {
             let cache_dir = data_path.join("cranpose_gpu");
             cranpose_render_wgpu::set_debug_toggle(
