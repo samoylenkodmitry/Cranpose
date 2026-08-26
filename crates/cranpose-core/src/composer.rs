@@ -874,7 +874,6 @@ impl Composer {
     }
 
     /// Gets the children of a node from the Applier.
-    ///
     /// This is used by SubcomposeLayoutNode to get children of virtual nodes
     /// directly from the Applier, where insert_child commands have been applied.
     pub fn get_node_children(&self, node_id: NodeId) -> SmallVec<[NodeId; 8]> {
@@ -899,7 +898,6 @@ impl Composer {
     }
 
     /// Whether any of `node_ids` carries a pending *layout* (placement) repass.
-    ///
     /// Layout-only dirtiness is not a subset of measure dirtiness: a scroll
     /// offset change keeps every measured size intact and therefore bubbles
     /// `needs_layout` alone. Callers that gate cache reuse on
@@ -915,12 +913,10 @@ impl Composer {
     }
 
     /// Records a child node in the current parent frame's expected children list.
-    ///
     /// Used by SubcomposeLayout's `perform_subcompose` to register virtual nodes
     /// with the outer composer's parent frame. This ensures that the `pop_parent`
     /// call at the end of `subcompose_slot` generates a correct `SyncChildren`
     /// command that preserves (rather than removes) the virtual nodes.
-    ///
     /// Without this, `pop_parent` would generate `SyncChildren { expected: [] }`,
     /// which removes all virtual nodes and their subtrees from the applier.
     pub fn record_subcompose_child(&self, child_id: NodeId) {
@@ -947,7 +943,6 @@ impl Composer {
     }
 
     /// Clears all children of a node in the Applier.
-    ///
     /// This is used by SubcomposeLayoutNode when reusing a virtual node for
     /// different content. Without clearing, old children remain attached,
     /// causing duplicate/interleaved items in lazy lists after scrolling.
@@ -1152,7 +1147,6 @@ impl Composer {
         self.with_group_seed(seed, f)
     }
 
-    ///
     #[doc(hidden)]
     pub fn __branch_group(&self, key: Key) -> BranchGroupGuard {
         let seed = crate::slot::GroupKeySeed::unkeyed(key);
@@ -1641,7 +1635,6 @@ impl Composer {
 
     /// Captures the composition context at the current point so work composed
     /// in another slot host inherits both locals and source ownership.
-    ///
     /// A `SubcomposeLayout` captures this while it is being composed and replays
     /// it while subcomposing off the measure pass, so content that is
     /// subcomposed during layout observes the same composition locals as the
