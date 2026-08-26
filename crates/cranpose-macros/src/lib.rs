@@ -261,19 +261,18 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     for (index, arg) in func.sig.inputs.iter_mut().enumerate() {
         if let FnArg::Typed(PatType { pat, ty, .. }) = arg {
             // The expansion threads its own `__composer` binding through the
-            // body; a user parameter of that name would shadow it into
+            // body; a user binding of that name — anywhere in the pattern,
+            // `(__composer, enabled)` included — would shadow it into
             // whatever type the user chose and every injected reference
             // would break. Refuse loudly instead of failing strangely.
-            if let Pat::Ident(pat_ident) = &**pat {
-                let name = pat_ident.ident.to_string();
-                if name == "__composer" || name.starts_with("__cranpose") {
-                    return syn::Error::new(
-                        pat_ident.ident.span(),
-                        format!("`{name}` is reserved by #[composable]"),
-                    )
-                    .to_compile_error()
-                    .into();
-                }
+            if let Some(reserved) = find_reserved_pattern_ident(pat) {
+                let name = reserved.to_string();
+                return syn::Error::new(
+                    reserved.span(),
+                    format!("`{name}` is reserved by #[composable]"),
+                )
+                .to_compile_error()
+                .into();
             }
             let pat_is_mut = matches!(
                 pat.as_ref(),
@@ -812,4 +811,29 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! { #func })
     }
+}
+
+/// Any binding in a parameter pattern that collides with the expansion's own
+/// namespace — `__composer` or the `__cranpose*` prefix — including inside
+/// tuple, struct, or reference patterns.
+fn find_reserved_pattern_ident(pat: &Pat) -> Option<&Ident> {
+    use syn::visit::Visit;
+
+    struct Scan<'ast> {
+        found: Option<&'ast Ident>,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Scan<'ast> {
+        fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+            if self.found.is_none() {
+                let name = node.ident.to_string();
+                if name == "__composer" || name.starts_with("__cranpose") {
+                    self.found = Some(&node.ident);
+                }
+            }
+            syn::visit::visit_pat_ident(self, node);
+        }
+    }
+    let mut scan = Scan { found: None };
+    scan.visit_pat(pat);
+    scan.found
 }

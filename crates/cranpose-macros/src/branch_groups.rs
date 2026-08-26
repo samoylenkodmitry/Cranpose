@@ -35,6 +35,7 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
         uses_composer_alias: false,
         branch_depth: 0,
         closure_in_arg_position: false,
+        in_branch_value_position: false,
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
@@ -77,13 +78,27 @@ struct BranchGroupInjector<'a> {
     /// guard (content lambdas), or stored as a handler whose guards no-op —
     /// so it needs no body group of its own.
     closure_in_arg_position: bool,
+    /// The visit position is a branch's tail value: whatever it produces —
+    /// including a closure laundered through a helper like
+    /// `boxed(|| A(1))` — escapes the branch and may run after the guard
+    /// closes, so argument position stops exempting closure bodies here.
+    in_branch_value_position: bool,
 }
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
         let reaches = block_can_reach_composer(block);
         self.branch_depth += 1;
-        self.visit_block_mut(block);
+        let tail = match block.stmts.last() {
+            Some(Stmt::Expr(_, None)) => block.stmts.len().checked_sub(1),
+            _ => None,
+        };
+        for (index, stmt) in block.stmts.iter_mut().enumerate() {
+            let previous =
+                std::mem::replace(&mut self.in_branch_value_position, Some(index) == tail);
+            self.visit_stmt_mut(stmt);
+            self.in_branch_value_position = previous;
+        }
         self.branch_depth -= 1;
         if !reaches {
             return;
@@ -99,7 +114,9 @@ impl BranchGroupInjector<'_> {
         }
         let reaches = expr_can_reach_composer(body);
         self.branch_depth += 1;
+        let previous = std::mem::replace(&mut self.in_branch_value_position, true);
         self.visit_expr_mut(body);
+        self.in_branch_value_position = previous;
         self.branch_depth -= 1;
         if !reaches {
             return;
@@ -121,13 +138,19 @@ impl BranchGroupInjector<'_> {
     /// `&&`/`||` spine and wraps each composing operand individually,
     /// wrapping a `let` operand's scrutinee rather than the `let` itself.
     fn wrap_condition(&mut self, condition: &mut Expr) {
+        let previous = std::mem::replace(&mut self.in_branch_value_position, false);
+        self.wrap_condition_inner(condition);
+        self.in_branch_value_position = previous;
+    }
+
+    fn wrap_condition_inner(&mut self, condition: &mut Expr) {
         match condition {
             Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
-                self.wrap_condition(&mut binary.left);
-                self.wrap_condition(&mut binary.right);
+                self.wrap_condition_inner(&mut binary.left);
+                self.wrap_condition_inner(&mut binary.right);
             }
-            Expr::Paren(paren) => self.wrap_condition(&mut paren.expr),
-            Expr::Unary(unary) => self.wrap_condition(&mut unary.expr),
+            Expr::Paren(paren) => self.wrap_condition_inner(&mut paren.expr),
+            Expr::Unary(unary) => self.wrap_condition_inner(&mut unary.expr),
             // A `let` scrutinee's temporaries live into the branch body —
             // that is what lets `if let Some(x) = make().first()` keep the
             // borrow — so it can never be moved into a block. The guard rides
@@ -207,16 +230,27 @@ impl BranchGroupInjector<'_> {
     fn wrap_place_value_parts(&mut self, place: &mut Expr) {
         match place {
             Expr::Index(index) => {
-                self.wrap_place_value_parts(&mut index.expr);
+                self.wrap_place_or_value(&mut index.expr);
                 self.wrap_value_part(&mut index.index);
             }
-            Expr::Field(field) => self.wrap_place_value_parts(&mut field.base),
+            Expr::Field(field) => self.wrap_place_or_value(&mut field.base),
             Expr::Paren(paren) => self.wrap_place_value_parts(&mut paren.expr),
             Expr::Group(group) => self.wrap_place_value_parts(&mut group.expr),
             Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
                 self.wrap_value_part(&mut unary.expr);
             }
             _ => {}
+        }
+    }
+
+    /// A place's base is either a deeper place (walked) or a value — a
+    /// call-valued field base like `stateful_holder().item` — which gets its
+    /// own wrap.
+    fn wrap_place_or_value(&mut self, expr: &mut Expr) {
+        if expr_is_place(expr) {
+            self.wrap_place_value_parts(expr);
+        } else {
+            self.wrap_value_part(expr);
         }
     }
 
@@ -300,6 +334,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             Expr::Closure(closure) if expr_can_reach_composer(&closure.body) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 let was_arg = std::mem::replace(&mut self.closure_in_arg_position, false);
+                let in_value = std::mem::replace(&mut self.in_branch_value_position, false);
                 self.visit_expr_mut(&mut closure.body);
                 // A closure born in a branch can outlive the branch guard and
                 // compose at its call site; anchor its body to the closure's
@@ -307,7 +342,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                 // slots. One sitting directly in call-argument position is
                 // consumed by that call and needs none; outside branches
                 // there is no sibling to collide with.
-                if self.branch_depth > 0 && !was_arg {
+                if self.branch_depth > 0 && (!was_arg || in_value) {
                     let guard = self.branch_guard_stmt(closure.span());
                     let original = closure.body.clone();
                     closure.body = syn::parse_quote! {{
@@ -315,6 +350,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                         #original
                     }};
                 }
+                self.in_branch_value_position = in_value;
                 self.in_content_closure = previous;
             }
             // Not on this function's composition path: other closures may run
@@ -456,86 +492,6 @@ fn expr_can_reach_composer(expr: &Expr) -> bool {
     scan.visit_expr(expr);
     scan.found
 }
-
-/// Whether raw macro tokens contain what looks like a call: an identifier or
-/// parenthesized callee immediately followed by a parenthesized group. Macro
-/// arguments are token soup to a proc macro and any call can transitively
-/// compose, so every call shape counts. Over-matching costs a branch a shell
-/// reservation that never materializes; missing a composable would silently
-/// share its slots across branches.
-fn tokens_contain_free_call(tokens: &TokenStream2) -> bool {
-    let mut call_candidate = false;
-    for tree in tokens.clone() {
-        match &tree {
-            proc_macro2::TokenTree::Ident(_) => call_candidate = true,
-            proc_macro2::TokenTree::Group(group) => {
-                if call_candidate && group.delimiter() == proc_macro2::Delimiter::Parenthesis {
-                    return true;
-                }
-                if tokens_contain_free_call(&group.stream()) {
-                    return true;
-                }
-                // A parenthesized callee — `(stateful_label)(1)` — is a group
-                // followed by its argument group.
-                call_candidate = matches!(
-                    group.delimiter(),
-                    proc_macro2::Delimiter::Parenthesis | proc_macro2::Delimiter::None
-                );
-            }
-            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {
-                call_candidate = false;
-            }
-        }
-    }
-    false
-}
-
-/// Std macros that produce values or diverge and can never compose.
-fn macro_is_value_shaped(path: &syn::Path) -> bool {
-    let Some(segment) = path.segments.last() else {
-        return false;
-    };
-    matches!(
-        segment.ident.to_string().as_str(),
-        "format"
-            | "format_args"
-            | "vec"
-            | "print"
-            | "println"
-            | "eprint"
-            | "eprintln"
-            | "write"
-            | "writeln"
-            | "matches"
-            | "assert"
-            | "assert_eq"
-            | "assert_ne"
-            | "debug_assert"
-            | "debug_assert_eq"
-            | "debug_assert_ne"
-            | "todo"
-            | "unimplemented"
-            | "unreachable"
-            | "panic"
-            | "include_str"
-            | "include_bytes"
-            | "concat"
-            | "stringify"
-            | "file"
-            | "line"
-            | "column"
-            | "cfg"
-            | "env"
-            | "option_env"
-            | "dbg"
-            | "trace"
-            | "debug"
-            | "info"
-            | "warn"
-            | "error"
-    )
-}
-
 /// Whether the expression is a place expression — a path, field access,
 /// index, or dereference (through parens). A `ref` pattern binds into the
 /// place, so a place scrutinee can never be replaced by a value-producing
@@ -597,13 +553,7 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
             // inside — so every call shape counts. The shell this earns is a
             // reservation that costs nothing unless something composes.
             Expr::MethodCall(_) => self.found = true,
-            Expr::Macro(expr_macro) => {
-                if !macro_is_value_shaped(&expr_macro.mac.path)
-                    || tokens_contain_free_call(&expr_macro.mac.tokens)
-                {
-                    self.found = true;
-                }
-            }
+            Expr::Macro(_) => self.found = true,
             _ => syn::visit::visit_expr(self, expr),
         }
     }
@@ -612,12 +562,8 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
         if self.found {
             return;
         }
-        if let Stmt::Macro(stmt_macro) = stmt {
-            if !macro_is_value_shaped(&stmt_macro.mac.path)
-                || tokens_contain_free_call(&stmt_macro.mac.tokens)
-            {
-                self.found = true;
-            }
+        if let Stmt::Macro(_) = stmt {
+            self.found = true;
             return;
         }
         syn::visit::visit_stmt(self, stmt);

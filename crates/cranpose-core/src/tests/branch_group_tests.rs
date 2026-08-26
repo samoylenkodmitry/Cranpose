@@ -2075,3 +2075,159 @@ fn a_composing_index_inside_a_place_scrutinee_gets_its_own_group() {
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
 }
+
+fn nested_keyed_same_line(marker: i32) {
+    if marker != 0 {
+        with_key(&"same", || {
+            let value = remember_branch_marker(marker);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        });
+    }
+}
+
+#[composable]
+fn nested_shell_provenance_probe(cond: bool) {
+    if cond {
+        nested_keyed_same_line(501);
+    } else {
+        nested_keyed_same_line(502);
+    }
+}
+
+#[test]
+fn nested_pending_shells_fold_into_keyed_provenance() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(61, || nested_shell_provenance_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 501);
+
+    // The keyed group passes through two pending shells — the outer branch
+    // and the helper's inner one. Only the outer differs between the arms,
+    // so provenance must fold the whole pending chain.
+    composition
+        .render(61, || nested_shell_provenance_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        branch_seen(),
+        502,
+        "a keyed group under nested shells belongs to the full branch path"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn boxed_render(render: impl Fn() + 'static) -> Box<dyn Fn()> {
+    Box::new(render)
+}
+
+#[composable]
+fn boxed_closure_probe(cond: bool) {
+    let render: Box<dyn Fn()> = if cond {
+        boxed_render(|| {
+            stateful_child(601);
+        })
+    } else {
+        boxed_render(|| {
+            stateful_child(602);
+        })
+    };
+    render();
+}
+
+#[test]
+fn a_branch_tail_closure_through_a_helper_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(62, || boxed_closure_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 601);
+
+    composition
+        .render(62, || boxed_closure_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        branch_seen(),
+        602,
+        "a closure escaping through the branch's value must keep its branch identity"
+    );
+    assert_composition_valid(&composition);
+}
+
+struct StatefulHolder {
+    item: Option<String>,
+}
+
+fn stateful_holder() -> StatefulHolder {
+    let value = remember(|| {
+        BRANCH_INITS.with(|count| count.set(count.get() + 1));
+        "row".to_string()
+    });
+    StatefulHolder {
+        item: Some(value.with(std::clone::Clone::clone)),
+    }
+}
+
+#[composable]
+fn field_base_scrutinee_probe() {
+    if let Some(ref value) = stateful_holder().item {
+        BRANCH_SEEN.with(|seen| seen.set(value.len() as i32));
+    }
+}
+
+#[test]
+fn a_composing_field_base_inside_a_place_scrutinee_gets_its_own_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(63, field_base_scrutinee_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+
+    composition
+        .render(63, field_base_scrutinee_probe)
+        .expect("recompose");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+    assert_composition_valid(&composition);
+}
+
+mod shadowed_format {
+    use super::*;
+
+    macro_rules! format {
+        ($marker:literal) => {
+            remember_branch_marker($marker)
+        };
+    }
+
+    #[composable]
+    pub(super) fn probe(cond: bool) {
+        let value = if cond { format!(701) } else { format!(702) };
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn a_shadowed_value_macro_still_brackets_its_branch() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(64, || shadowed_format::probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 701));
+
+    composition
+        .render(64, || shadowed_format::probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 702),
+        "a local macro named like a std value macro can compose; the branch needs its shell"
+    );
+    assert_composition_valid(&composition);
+}

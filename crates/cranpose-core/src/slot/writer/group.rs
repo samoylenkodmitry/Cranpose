@@ -347,12 +347,31 @@ impl SlotWriteSession<'_> {
         shell.materialized
     }
 
-    /// The branch-site key of the innermost pending, unmaterialized shell at
-    /// the current level, if any.
+    /// The fold of every pending, unmaterialized shell at the current level —
+    /// the trailing run of the shell stack — outermost first. A keyed group
+    /// passing through nested shells (an outer branch calling a helper whose
+    /// inner branch holds the `with_key`) belongs to the whole chain: folding
+    /// only the innermost site would let two outer arms share it.
     fn pending_unmaterialized_shell_site(&self) -> Option<crate::Key> {
-        let shell = self.state.deferred_branch_shells.last()?;
-        (!shell.materialized && shell.parent == self.state.current_parent_anchor())
-            .then_some(shell.seed.static_key)
+        let parent = self.state.current_parent_anchor();
+        let shells = &self.state.deferred_branch_shells;
+        let mut start = shells.len();
+        while start > 0 {
+            let shell = &shells[start - 1];
+            if shell.materialized || shell.parent != parent {
+                break;
+            }
+            start -= 1;
+        }
+        if start == shells.len() {
+            return None;
+        }
+        let mut folded: crate::Key = super::super::BRANCH_PATH_ROOT;
+        for shell in &shells[start..] {
+            folded ^= shell.seed.static_key;
+            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(folded)
     }
 
     /// Open every pending branch shell whose level the next operation is
