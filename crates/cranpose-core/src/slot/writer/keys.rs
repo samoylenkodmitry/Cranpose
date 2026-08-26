@@ -21,12 +21,14 @@ impl SlotWriteSessionState {
         }
     }
 
-    pub(in crate::slot) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
-        let ordinal = seed.explicit_key.map_or_else(
-            || self.current_keys_ref().expected_ordinal(seed.static_key),
-            |_| 0,
-        );
-        GroupKey::new(seed.static_key, seed.explicit_key, ordinal)
+    pub(in crate::slot) fn preview_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
+        let static_key = self.mix_branch_fold(seed.static_key);
+        let ordinal = if seed.explicit_key.is_some() {
+            0
+        } else {
+            self.current_keys_ref().expected_ordinal(static_key)
+        };
+        GroupKey::new(static_key, seed.explicit_key, ordinal)
     }
 
     pub(in crate::slot) fn consume_group_key(&mut self, key: GroupKey) {

@@ -145,7 +145,6 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
     let (mut harness, detached, _) =
         detached_single_child_with_options(PARENT_KEY, CHILD_KEY, Some(CHILD_SCOPE), true, true);
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -265,7 +264,6 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
     );
 
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -537,7 +535,6 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
     harness.finish_pass();
 
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached_retained.root_key(),
     };

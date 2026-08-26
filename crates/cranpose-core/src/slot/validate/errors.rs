@@ -154,10 +154,6 @@ pub(crate) enum SlotInvariantError {
         expected: AnchorId,
         actual: Option<AnchorId>,
     },
-    TransparentGroupWithScope {
-        group_anchor: AnchorId,
-        scope_id: ScopeId,
-    },
     RetainedRootKeyMismatch {
         parent_scope: Option<ScopeId>,
         expected: GroupKey,

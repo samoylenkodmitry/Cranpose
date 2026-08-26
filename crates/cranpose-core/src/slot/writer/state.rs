@@ -1,24 +1,12 @@
 use super::{
-    super::{DetachedSubtree, GroupKey, GroupKeySeed, SlotPassMode, SlotTable},
+    super::{DetachedSubtree, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
-use crate::{
-    collections::map::{HashMap, HashSet},
-    AnchorId,
-};
+use crate::{collections::map::HashMap, AnchorId};
 
-pub(in crate::slot) struct DeferredBranchShell {
-    pub(in crate::slot) parent: AnchorId,
-    pub(in crate::slot) seed: GroupKeySeed,
-    pub(in crate::slot) folding: bool,
-    pub(in crate::slot) materialized: bool,
-}
-
-pub(in crate::slot) struct OrphanedKeyedSubtree {
-    pub(in crate::slot) owner: AnchorId,
-    pub(in crate::slot) branch_path: crate::Key,
-    pub(in crate::slot) key: GroupKey,
-    pub(in crate::slot) subtree: DetachedSubtree,
+pub(in crate::slot) struct BranchFoldEntry {
+    key: crate::Key,
+    live: bool,
 }
 
 #[derive(Default)]
@@ -28,9 +16,8 @@ pub(crate) struct SlotWriteSessionState {
     frame_pool: Vec<GroupFrame>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
-    pub(in crate::slot) orphaned_keyed: Vec<OrphanedKeyedSubtree>,
-    pub(in crate::slot) deferred_branch_shells: Vec<DeferredBranchShell>,
-    pub(in crate::slot) seen_cross_bracket_explicit_keys: HashSet<(AnchorId, crate::Key, GroupKey)>,
+    branch_fold_entries: Vec<BranchFoldEntry>,
+    branch_fold: Option<crate::Key>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -57,21 +44,14 @@ impl SlotWriteSessionState {
             );
             self.rejected_restore_subtrees.clear();
         }
-        if !self.orphaned_keyed.is_empty() {
+        if !self.branch_fold_entries.is_empty() {
             log::error!(
-                "slot writer reset discarded {} orphaned keyed subtrees that were not flushed",
-                self.orphaned_keyed.len()
+                "slot writer reset discarded {} branch folds whose guards never closed",
+                self.branch_fold_entries.len()
             );
-            self.orphaned_keyed.clear();
+            self.branch_fold_entries.clear();
+            self.branch_fold = None;
         }
-        if !self.deferred_branch_shells.is_empty() {
-            log::error!(
-                "slot writer reset discarded {} deferred branch shells whose guards never closed",
-                self.deferred_branch_shells.len()
-            );
-            self.deferred_branch_shells.clear();
-        }
-        self.seen_cross_bracket_explicit_keys.clear();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;
@@ -138,53 +118,6 @@ impl SlotWriteSessionState {
         self.update_compaction_hint();
     }
 
-    pub(in crate::slot) fn park_orphaned_keyed(
-        &mut self,
-        owner: AnchorId,
-        branch_path: crate::Key,
-        key: GroupKey,
-        subtree: DetachedSubtree,
-    ) {
-        self.orphaned_keyed.push(OrphanedKeyedSubtree {
-            owner,
-            branch_path,
-            key,
-            subtree,
-        });
-    }
-
-    pub(in crate::slot) fn claim_orphaned_keyed(
-        &mut self,
-        owner: AnchorId,
-        branch_path: crate::Key,
-        key: GroupKey,
-    ) -> Option<DetachedSubtree> {
-        let position = self.orphaned_keyed.iter().position(|orphan| {
-            orphan.owner == owner && orphan.branch_path == branch_path && orphan.key == key
-        })?;
-        Some(self.orphaned_keyed.remove(position).subtree)
-    }
-
-    pub(in crate::slot) fn drain_orphaned_keyed_for_owner(
-        &mut self,
-        owner: AnchorId,
-    ) -> Vec<DetachedSubtree> {
-        let mut drained = Vec::new();
-        let mut index = 0;
-        while index < self.orphaned_keyed.len() {
-            if self.orphaned_keyed[index].owner == owner {
-                drained.push(self.orphaned_keyed.remove(index).subtree);
-            } else {
-                index += 1;
-            }
-        }
-        drained
-    }
-
-    pub(in crate::slot) fn has_orphaned_keyed(&self) -> bool {
-        !self.orphaned_keyed.is_empty()
-    }
-
     pub(in crate::slot) fn note_detached_subtrees(&mut self, subtrees: &[DetachedSubtree]) {
         self.removed_group_count += subtrees
             .iter()
@@ -218,37 +151,62 @@ impl SlotWriteSessionState {
         self.request_payload_storage_compaction |= payload_pressure;
     }
 
-    pub(crate) fn push_deferred_branch_shell(
-        &mut self,
-        seed: GroupKeySeed,
-        folding: bool,
-    ) -> usize {
-        let parent = self.current_parent_anchor();
-        self.deferred_branch_shells.push(DeferredBranchShell {
-            parent,
-            seed,
-            folding,
-            materialized: false,
-        });
-        self.deferred_branch_shells.len() - 1
+    pub(crate) fn push_branch_fold(&mut self, key: crate::Key) -> usize {
+        self.branch_fold_entries
+            .push(BranchFoldEntry { key, live: true });
+        self.branch_fold = None;
+        self.branch_fold_entries.len() - 1
     }
 
-    pub(crate) fn close_deferred_branch_shell(&mut self, token: usize) -> bool {
-        if self.deferred_branch_shells.len() != token + 1 {
+    fn fold_watermark(&self) -> usize {
+        self.group_stack
+            .last()
+            .map(|frame| frame.fold_watermark)
+            .unwrap_or(0)
+            .min(self.branch_fold_entries.len())
+    }
+
+    pub(crate) fn close_branch_fold(&mut self, token: usize) {
+        let Some(entry) = self.branch_fold_entries.get_mut(token) else {
             log::error!(
-                "deferred branch shell {token} closed out of order at depth {}",
-                self.deferred_branch_shells.len()
+                "branch fold {token} closed past depth {}",
+                self.branch_fold_entries.len()
             );
-            return self
-                .deferred_branch_shells
-                .get(token)
-                .is_some_and(|shell| shell.materialized);
+            return;
+        };
+        entry.live = false;
+        while self
+            .branch_fold_entries
+            .last()
+            .is_some_and(|entry| !entry.live)
+        {
+            self.branch_fold_entries.pop();
         }
-        let shell = self
-            .deferred_branch_shells
-            .pop()
-            .expect("length checked above");
-        shell.materialized
+        self.branch_fold = None;
+    }
+
+    pub(in crate::slot) fn branch_fold(&mut self) -> crate::Key {
+        if let Some(fold) = self.branch_fold {
+            return fold;
+        }
+        let watermark = self.fold_watermark();
+        let mut fold = super::super::BRANCH_PATH_ROOT;
+        for entry in &self.branch_fold_entries[watermark..] {
+            if entry.live {
+                fold ^= entry.key;
+                fold = fold.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        self.branch_fold = Some(fold);
+        fold
+    }
+
+    pub(in crate::slot) fn mix_branch_fold(&mut self, key: crate::Key) -> crate::Key {
+        let fold = self.branch_fold();
+        if fold == super::super::BRANCH_PATH_ROOT {
+            return key;
+        }
+        (fold ^ key).wrapping_mul(0x0000_0100_0000_01b3)
     }
 
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
@@ -283,12 +241,15 @@ impl SlotWriteSessionState {
     ) {
         let mut frame = self.frame_pool.pop().unwrap_or_default();
         frame.reset(anchor, next_child_index, old_payload_len, old_node_len);
+        frame.fold_watermark = self.branch_fold_entries.len();
         self.group_stack.push(frame);
+        self.branch_fold = None;
     }
 
     pub(in crate::slot) fn recycle_group_frame(&mut self, mut frame: GroupFrame) {
         frame.reset_for_pool();
         self.frame_pool.push(frame);
+        self.branch_fold = None;
     }
 }
 

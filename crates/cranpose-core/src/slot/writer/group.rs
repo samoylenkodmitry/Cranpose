@@ -42,7 +42,7 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    pub(crate) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
+    pub(crate) fn preview_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
         self.state.preview_group_key(seed)
     }
 
@@ -97,14 +97,6 @@ impl SlotWriteSession<'_> {
         self.reattach_started_group(key, detached, GroupStartKind::Restored)
     }
 
-    fn adopt_started_group(
-        &mut self,
-        key: GroupKey,
-        detached: DetachedSubtree,
-    ) -> Option<GroupStart<ActiveGroupId>> {
-        self.reattach_started_group(key, detached, GroupStartKind::Moved)
-    }
-
     fn reattach_started_group(
         &mut self,
         key: GroupKey,
@@ -126,41 +118,8 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    fn claim_or_steal_keyed_subtree(&mut self, key: GroupKey) -> Option<DetachedSubtree> {
-        key.explicit_key?;
-        let parent_anchor = self.state.current_parent_anchor();
-        let parent_is_transparent = self
-            .table
-            .active_group_index(parent_anchor)
-            .and_then(|index| self.table.groups.get(index))
-            .is_some_and(|group| group.transparent);
-        if !parent_is_transparent {
-            return None;
-        }
-        if self.state.has_orphaned_keyed() {
-            let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
-            let branch_path = self.table.branch_path_key(parent_anchor);
-            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, branch_path, key) {
-                return Some(subtree);
-            }
-        }
-        self.table
-            .steal_keyed_subtree_along_branch_path(parent_anchor, key)
-    }
-
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
-        let mut seed = seed;
-        if seed.explicit_key.is_none() || !self.pending_shell_run_is_folding() {
-            self.materialize_deferred_branch_shells();
-        } else {
-            seed.static_key = self.fold_pending_shells_into(seed.static_key);
-        }
         self.preview_group_key(seed)
-    }
-
-    pub(crate) fn current_branch_occurrence_path_key(&self) -> crate::Key {
-        self.table
-            .branch_occurrence_path_key(self.state.current_parent_anchor())
     }
 
     fn recover_malformed_group_start(
@@ -290,69 +249,11 @@ impl SlotWriteSession<'_> {
         Some(group)
     }
 
-    fn pending_shell_run_start(&self) -> usize {
-        let parent = self.state.current_parent_anchor();
-        let shells = &self.state.deferred_branch_shells;
-        let mut start = shells.len();
-        while start > 0 {
-            let shell = &shells[start - 1];
-            if shell.materialized || shell.parent != parent {
-                break;
-            }
-            start -= 1;
-        }
-        start
-    }
-
-    fn pending_shell_run_is_folding(&self) -> bool {
-        let start = self.pending_shell_run_start();
-        self.state.deferred_branch_shells[start..]
-            .iter()
-            .all(|shell| shell.folding)
-    }
-
-    fn fold_pending_shells_into(&self, static_key: crate::Key) -> crate::Key {
-        let start = self.pending_shell_run_start();
-        let shells = &self.state.deferred_branch_shells;
-        if start == shells.len() {
-            return static_key;
-        }
-        let mut folded: crate::Key = super::super::BRANCH_PATH_ROOT;
-        for shell in &shells[start..] {
-            folded ^= shell.seed.static_key;
-            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        folded ^= static_key;
-        folded.wrapping_mul(0x0000_0100_0000_01b3)
-    }
-
-    pub(in crate::slot) fn materialize_deferred_branch_shells(&mut self) {
-        let start = self.pending_shell_run_start();
-        if start == self.state.deferred_branch_shells.len() {
-            return;
-        }
-        let seeds: Vec<_> = self.state.deferred_branch_shells[start..]
-            .iter()
-            .map(|shell| shell.seed)
-            .collect();
-        for shell in &mut self.state.deferred_branch_shells[start..] {
-            shell.materialized = true;
-        }
-        for seed in seeds {
-            let key = self.preview_group_key(seed);
-            let started = self.begin_group(key, None);
-            self.mark_group_transparent(started.group);
-        }
-    }
-
     pub(crate) fn begin_group(
         &mut self,
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        if key.explicit_key.is_none() || !self.pending_shell_run_is_folding() {
-            self.materialize_deferred_branch_shells();
-        }
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
@@ -367,24 +268,6 @@ impl SlotWriteSession<'_> {
             .then(|| self.resolve_active_child(cursor, key));
 
         self.state.consume_group_key(key);
-        if key.explicit_key.is_some() {
-            let parent_anchor = cursor.parent();
-            let parent_is_transparent = self
-                .table
-                .active_group_index(parent_anchor)
-                .and_then(|index| self.table.groups.get(index))
-                .is_some_and(|group| group.transparent);
-            if parent_is_transparent {
-                let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
-                let branch_path = self.table.branch_path_key(parent_anchor);
-                assert!(
-                    self.state
-                        .seen_cross_bracket_explicit_keys
-                        .insert((owner, branch_path, key)),
-                    "duplicate explicit key across branch brackets of one site: {key:?}",
-                );
-            }
-        }
 
         if let Some(restored) = restored {
             if let Some(started) = self.restore_started_group(key, restored) {
@@ -393,13 +276,6 @@ impl SlotWriteSession<'_> {
         }
 
         let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
-        if matches!(resolution, ActiveChildResolution::InsertNew) {
-            if let Some(subtree) = self.claim_or_steal_keyed_subtree(key) {
-                if let Some(started) = self.adopt_started_group(key, subtree) {
-                    return started;
-                }
-            }
-        }
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
         self.open_started_group(started.anchor, started.kind)
             .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
@@ -411,15 +287,6 @@ impl SlotWriteSession<'_> {
             return;
         };
         let group_anchor = frame.group_anchor;
-        while self
-            .state
-            .deferred_branch_shells
-            .last()
-            .is_some_and(|shell| !shell.materialized && shell.parent == group_anchor)
-        {
-            log::error!("a deferred branch shell leaked past its group; dropping it");
-            self.state.deferred_branch_shells.pop();
-        }
         let Some(group_index) = self.table.active_group_index(group_anchor) else {
             log::error!("slot writer end_group ignored stale group frame anchor {group_anchor:?}");
             self.state.recycle_group_frame(frame);
@@ -457,10 +324,6 @@ impl SlotWriteSession<'_> {
 
     pub(crate) fn set_group_scope(&mut self, group: ActiveGroupId, scope_id: ScopeId) -> bool {
         self.table.assign_active_group_scope(group, scope_id)
-    }
-
-    pub(crate) fn mark_group_transparent(&mut self, group: ActiveGroupId) -> bool {
-        self.table.mark_group_transparent(group)
     }
 
     pub(crate) fn end_recompose(&mut self) {

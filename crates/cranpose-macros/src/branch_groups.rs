@@ -11,7 +11,6 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
         core_path,
         next_branch: 0,
         in_content_closure: false,
-        in_with_key_content: false,
         uses_composer_alias: false,
         branch_depth: 0,
     };
@@ -32,20 +31,18 @@ struct BranchGroupInjector<'a> {
     core_path: &'a TokenStream2,
     next_branch: u32,
     in_content_closure: bool,
-    in_with_key_content: bool,
     uses_composer_alias: bool,
     branch_depth: u32,
 }
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
-        let folding = block_is_keyed_only(block);
         self.branch_depth += 1;
         for stmt in &mut block.stmts {
             self.visit_stmt_mut(stmt);
         }
         self.branch_depth -= 1;
-        let guard = self.branch_guard_stmt(block.brace_token.span.join(), folding);
+        let guard = self.branch_guard_stmt(block.brace_token.span.join());
         block.stmts.insert(0, guard);
     }
 
@@ -54,11 +51,10 @@ impl BranchGroupInjector<'_> {
             self.wrap_block(&mut block_expr.block);
             return;
         }
-        let folding = expr_is_with_key_call(body);
         self.branch_depth += 1;
         self.visit_expr_mut(body);
         self.branch_depth -= 1;
-        let guard = self.branch_guard_stmt(body.span(), folding);
+        let guard = self.branch_guard_stmt(body.span());
         let original = body.clone();
         *body = syn::parse_quote! {{
             #guard
@@ -95,7 +91,7 @@ impl BranchGroupInjector<'_> {
                 if !needs_group {
                     return;
                 }
-                let guard_stmt = self.branch_guard_stmt(leaf.span(), false);
+                let guard_stmt = self.branch_guard_stmt(leaf.span());
                 let original = leaf.clone();
                 *leaf = syn::parse_quote! {{
                     #guard_stmt
@@ -105,7 +101,7 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    fn branch_guard_stmt(&mut self, span: Span, folding: bool) -> Stmt {
+    fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
@@ -114,7 +110,6 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 let #guard = #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                    #folding,
                 );
             }
         } else {
@@ -123,7 +118,6 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 let #guard = #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                    #folding,
                 );
             }
         }
@@ -155,7 +149,7 @@ impl BranchGroupInjector<'_> {
 
     fn wrap_value_part(&mut self, expr: &mut Expr) {
         self.visit_expr_mut(expr);
-        let guard_stmt = self.branch_guard_stmt(expr.span(), false);
+        let guard_stmt = self.branch_guard_stmt(expr.span());
         let original = expr.clone();
         *expr = syn::parse_quote! {{
             #guard_stmt
@@ -171,7 +165,6 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                    false,
                 )
             }
         } else {
@@ -180,7 +173,6 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
-                    false,
                 )
             }
         }
@@ -214,10 +206,9 @@ impl VisitMut for BranchGroupInjector<'_> {
         match expr {
             Expr::Closure(closure) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
-                let exempt = std::mem::replace(&mut self.in_with_key_content, false);
                 self.visit_expr_mut(&mut closure.body);
-                if self.branch_depth > 0 && !exempt {
-                    let guard = self.branch_guard_stmt(closure.span(), false);
+                if self.branch_depth > 0 {
+                    let guard = self.branch_guard_stmt(closure.span());
                     let original = closure.body.clone();
                     closure.body = syn::parse_quote! {{
                         #guard
@@ -245,30 +236,6 @@ impl VisitMut for BranchGroupInjector<'_> {
                         self.wrap_condition(guard);
                     }
                     self.wrap_arm_body(&mut arm.body);
-                }
-            }
-            Expr::Call(_) | Expr::MethodCall(_) => {
-                let keyed_call = expr_is_with_key_call(expr);
-                match expr {
-                    Expr::Call(call) => {
-                        self.visit_expr_mut(&mut call.func);
-                        for argument in &mut call.args {
-                            let flag = keyed_call && matches!(argument, Expr::Closure(_));
-                            let previous = std::mem::replace(&mut self.in_with_key_content, flag);
-                            self.visit_expr_mut(argument);
-                            self.in_with_key_content = previous;
-                        }
-                    }
-                    Expr::MethodCall(method) => {
-                        self.visit_expr_mut(&mut method.receiver);
-                        for argument in &mut method.args {
-                            let flag = keyed_call && matches!(argument, Expr::Closure(_));
-                            let previous = std::mem::replace(&mut self.in_with_key_content, flag);
-                            self.visit_expr_mut(argument);
-                            self.in_with_key_content = previous;
-                        }
-                    }
-                    _ => {}
                 }
             }
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
@@ -328,29 +295,6 @@ impl VisitMut for BranchGroupInjector<'_> {
         &mut self,
         _args: &mut syn::AngleBracketedGenericArguments,
     ) {
-    }
-}
-
-fn block_is_keyed_only(block: &Block) -> bool {
-    !block.stmts.is_empty()
-        && block.stmts.iter().all(|stmt| match stmt {
-            Stmt::Expr(expr, _) => expr_is_with_key_call(expr),
-            _ => false,
-        })
-}
-
-fn expr_is_with_key_call(expr: &Expr) -> bool {
-    match expr {
-        Expr::Call(call) => match call.func.as_ref() {
-            Expr::Path(path) => path
-                .path
-                .segments
-                .last()
-                .is_some_and(|segment| segment.ident == "with_key"),
-            _ => false,
-        },
-        Expr::MethodCall(method) => method.method == "with_key",
-        _ => false,
     }
 }
 

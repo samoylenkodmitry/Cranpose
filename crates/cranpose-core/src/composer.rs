@@ -206,13 +206,6 @@ impl ComposerRuntimeState {
         self.scope_registry.borrow().len()
     }
 
-    pub(crate) fn has_retained(&self, host: &Rc<SlotsHost>) -> bool {
-        self.retention_by_host
-            .borrow()
-            .get(&slots_storage_key(host))
-            .is_some_and(|manager| !manager.is_empty())
-    }
-
     pub(crate) fn take_retained(
         &self,
         host: &Rc<SlotsHost>,
@@ -563,35 +556,20 @@ pub struct Composer {
 
 pub struct BranchGroupGuard {
     composer: Composer,
-    parent_scope: Option<ScopeId>,
-    deferred_shell: Option<usize>,
+    fold_token: Option<usize>,
 }
 
 impl Drop for BranchGroupGuard {
     fn drop(&mut self) {
-        let Some(token) = self.deferred_shell else {
+        let Some(token) = self.fold_token else {
             return;
         };
-        let Some(materialized) = self
+        if !self
             .composer
             .active_slots_host()
-            .try_close_deferred_branch_shell(token)
-        else {
-            log::error!("a branch guard closed while its slot host was busy");
-            return;
-        };
-        if !materialized {
-            return;
-        }
-        let result = self
-            .composer
-            .with_slot_session_mut(|slots| slots.finish_group_body());
-        self.composer
-            .handle_finished_group_result(self.parent_scope, result);
-        self.composer
-            .with_slot_session_mut(|slots| slots.end_group());
-        if let Err(err) = self.composer.flush_pending_commands_if_large() {
-            log::error!("mid-composition command flush failed: {err}");
+            .try_close_branch_fold(token)
+        {
+            log::error!("a branch fold guard closed while its slot host was busy");
         }
     }
 }
@@ -1037,17 +1015,11 @@ impl Composer {
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
         let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
         let host = self.active_slots_host();
-        let branch_path = if self.core.shared_state.has_retained(&host) {
-            self.with_slot_session_mut(|slots| slots.current_branch_occurrence_path_key())
-        } else {
-            crate::slot::BRANCH_PATH_ROOT
-        };
         let restored = self.core.shared_state.take_retained(
             &host,
             RetainKey {
                 parent_scope: parent_scope_id,
                 key: reserved_key,
-                branch_path,
             },
             |subtree| {
                 self.with_slot_session_mut(|slots| {
@@ -1160,15 +1132,10 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    pub fn __branch_group_deferred(&self, key: Key, folding: bool) -> BranchGroupGuard {
-        let seed = crate::slot::GroupKeySeed::unkeyed(key);
-        let deferred_shell = self
-            .active_slots_host()
-            .try_push_deferred_branch_shell(seed, folding);
+    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
         BranchGroupGuard {
             composer: self.clone(),
-            parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
-            deferred_shell,
+            fold_token: self.active_slots_host().try_push_branch_fold(key),
         }
     }
 
@@ -1238,13 +1205,11 @@ impl Composer {
                 });
             }
         }
-        let branch_path = subtree.branch_occurrence_path;
         let evicted = self.core.shared_state.insert_retained(
             slots_host,
             RetainKey {
                 parent_scope,
                 key: root_key,
-                branch_path,
             },
             subtree,
         );

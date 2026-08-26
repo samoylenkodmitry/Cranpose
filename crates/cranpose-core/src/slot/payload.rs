@@ -57,6 +57,12 @@ impl<'a> PayloadInit<'a> {
         }
     }
 
+    pub(in crate::slot) fn mix_source(&mut self, fold: crate::Key) {
+        if fold != super::BRANCH_PATH_ROOT {
+            self.source = (fold ^ self.source).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
     fn make_value(&mut self) -> Box<dyn std::any::Any> {
         (self.make)()
     }
@@ -248,6 +254,29 @@ impl SlotTable {
             == source
     }
 
+    fn find_matching_payload_from(
+        &self,
+        group_index: usize,
+        from_index: usize,
+        payload_len: usize,
+        type_id: TypeId,
+        source: crate::Key,
+    ) -> Option<usize> {
+        let records = self.group_payload_records_at(group_index);
+        (from_index..payload_len)
+            .find(|&index| records[index].type_id == type_id && records[index].source == source)
+    }
+
+    fn rotate_payload_record_to_cursor(
+        &mut self,
+        group_index: usize,
+        found_index: usize,
+        cursor_index: usize,
+    ) {
+        let start = self.group_payload_start_at(group_index);
+        self.payloads[start + cursor_index..=start + found_index].rotate_right(1);
+    }
+
     pub(in crate::slot) fn group_payload_record_at(
         &self,
         group_index: usize,
@@ -428,10 +457,22 @@ impl SlotTable {
         let mut location_refresh = None;
 
         let (anchor, deferred_drop) = if payload_index < payload_len {
-            let anchor = self.payload_slot_identity_at(group_index, payload_index);
             if self.payload_value_type_matches(group_index, payload_index, init.type_id)
                 && self.payload_value_source_matches(group_index, payload_index, init.source)
             {
+                let anchor = self.payload_slot_identity_at(group_index, payload_index);
+                self.update_payload_kind(group_index, payload_index, kind);
+                (anchor, None)
+            } else if let Some(found) = self.find_matching_payload_from(
+                group_index,
+                payload_index + 1,
+                payload_len,
+                init.type_id,
+                init.source,
+            ) {
+                self.rotate_payload_record_to_cursor(group_index, found, payload_index);
+                self.refresh_group_payload_anchor_locations(owner, payload_index);
+                let anchor = self.payload_slot_identity_at(group_index, payload_index);
                 self.update_payload_kind(group_index, payload_index, kind);
                 (anchor, None)
             } else {

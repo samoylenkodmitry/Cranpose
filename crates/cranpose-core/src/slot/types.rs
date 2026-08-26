@@ -257,8 +257,6 @@ pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,
     pub(super) payloads: Vec<PayloadRecord>,
     pub(super) nodes: Vec<NodeRecord>,
-    pub(crate) branch_path: crate::Key,
-    pub(crate) branch_occurrence_path: crate::Key,
 }
 
 impl DetachedSubtree {

@@ -147,7 +147,6 @@ mod tests {
             generation: 1,
             anchor: owner,
             scope_id: None,
-            transparent: false,
         });
         table.payloads.push(PayloadRecord {
             owner,

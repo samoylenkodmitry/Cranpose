@@ -72,7 +72,6 @@ impl Default for RetentionPolicy {
 pub(crate) struct RetainKey {
     pub(crate) parent_scope: Option<ScopeId>,
     pub(crate) key: GroupKey,
-    pub(crate) branch_path: crate::Key,
 }
 
 pub(crate) struct RetainedGroup {
@@ -572,14 +571,12 @@ fn retain_key_cmp(left: &RetainKey, right: &RetainKey) -> Ordering {
         left.key.static_key,
         left.key.explicit_key,
         left.key.ordinal,
-        left.branch_path,
     )
         .cmp(&(
             right.parent_scope,
             right.key.static_key,
             right.key.explicit_key,
             right.key.ordinal,
-            right.branch_path,
         ))
 }
 
@@ -619,24 +616,5 @@ mod tests {
         assert_eq!(budget.max_retained_subtrees, Some(3));
         assert_eq!(budget.max_retained_bytes, Some(4096));
         assert_eq!(budget.max_age_passes, Some(5));
-    }
-
-    #[test]
-    fn retain_keys_differing_only_in_branch_path_are_ordered() {
-        let left = RetainKey {
-            parent_scope: None,
-            key: GroupKey::new(7, None, 0),
-            branch_path: 1,
-        };
-        let right = RetainKey {
-            branch_path: 2,
-            ..left
-        };
-        assert_ne!(
-            retain_key_cmp(&left, &right),
-            Ordering::Equal,
-            "eviction ordering must distinguish branch sites, or a budget \
-             nondeterministically picks which site loses its retained state"
-        );
     }
 }

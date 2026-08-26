@@ -12,19 +12,16 @@ This document is the short operational checklist for the slot table implementati
 - Direct siblings are contiguous inside their parent-bounded range.
 - Group identity matching searches only direct siblings, never grandchildren.
 - Duplicate explicit sibling keys are invalid.
-- A transparent group is a conditional branch's bracket: it never carries a
-  scope, and detaching a transparent child detaches its children as their own
-  subtrees (each with its own retention decision) followed by the bare shell.
-- Explicit keys keep their subtrees across transparent brackets within a pass:
-  an arriving key that would insert fresh first claims the identical key parked
-  by an already-finished bracket of the same nearest non-transparent owner,
-  then steals it from a later unvisited bracket of the same branch site. Both
-  reattach as `Moved` — scopes live, nodes attached. Unclaimed parked subtrees
-  flow into their owner group's finish, where dispose-or-retain runs exactly as
-  it did before brackets existed. (A keyed open under a still-deferred bracket
-  run folds the run's sites into its static key instead of materializing
-  anything: the branch identity is part of the group key itself, and the keys
-  keep the ordinary keyed sibling-move path and cost.)
+- Branch identity is a fold, not a structure: a conditional site pushes a
+  location key on the pass's fold stack, and every group static key and value
+  slot source opened under it mixes in the folds pushed since the enclosing
+  group frame opened. No group is ever created for a branch; an arm's content
+  is ordinary unvisited content when the arm is departed, detached and
+  dispose-or-retained like any other.
+- A value slot resolves by position first, then by identity: a cursor whose
+  record mismatches on `(type, source)` scans forward within its group for the
+  first record that matches and rotates it up, so slots after a branch keep
+  their state when the branch's slot count changes.
 
 ## Payloads
 

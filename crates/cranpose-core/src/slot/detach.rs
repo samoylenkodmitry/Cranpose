@@ -150,8 +150,6 @@ impl SlotTable {
         // extract payload and node segments, clear active indexes, refresh the
         // active suffix when requested, then shrink ancestor spans.
         let root_parent_anchor = self.groups[root_index].parent_anchor;
-        let branch_path = self.branch_path_key(root_parent_anchor);
-        let branch_occurrence_path = self.branch_occurrence_path_key(root_parent_anchor);
         let Some(removed_group_range) =
             self.repair_group_subtree_range_at_index(root_index, "subtree detach")
         else {
@@ -162,8 +160,6 @@ impl SlotTable {
                 groups: Vec::new(),
                 payloads: Vec::new(),
                 nodes: Vec::new(),
-                branch_path,
-                branch_occurrence_path,
             };
         };
         let root_subtree_len = removed_group_range.len();
@@ -175,8 +171,6 @@ impl SlotTable {
                 groups: removed_groups,
                 payloads: Vec::new(),
                 nodes: Vec::new(),
-                branch_path,
-                branch_occurrence_path,
             };
         };
         for group in &mut removed_groups {
@@ -206,8 +200,6 @@ impl SlotTable {
             groups: removed_groups,
             payloads: removed_payloads,
             nodes: removed_nodes,
-            branch_path,
-            branch_occurrence_path,
         };
         #[cfg(any(test, debug_assertions))]
         subtree
@@ -251,23 +243,7 @@ impl SlotTable {
         cursor: ChildCursor,
         detached: &mut Vec<DetachedSubtree>,
     ) {
-        while let Some(child_anchor) = self.direct_child_anchor_at_cursor(cursor) {
-            if self
-                .groups
-                .get(cursor.index())
-                .is_some_and(|group| group.transparent && group.subtree_len > 1)
-            {
-                self.refresh_group_indexes_from(cursor.index());
-                let shell_children = ChildCursor::new(child_anchor, cursor.index() + 1);
-                if self.repair_child_cursor_parent_subtree(shell_children, "branch shell detach") {
-                    self.detach_children_at_cursor_into(shell_children, detached);
-                } else {
-                    log::error!(
-                        "slot table detached a branch shell whole after rejecting its child cursor at index {}",
-                        cursor.index()
-                    );
-                }
-            }
+        while self.direct_child_anchor_at_cursor(cursor).is_some() {
             let subtree = self.detach_subtree_at_index_internal(cursor.index(), false);
             if subtree.group_count() == 0 {
                 log::error!(
@@ -364,163 +340,11 @@ impl SlotTable {
         Ok(root_anchor)
     }
 
-    pub(in crate::slot) fn nearest_non_transparent_ancestor(&self, anchor: AnchorId) -> AnchorId {
-        let mut current = anchor;
-        loop {
-            if !current.is_valid() {
-                return AnchorId::INVALID;
-            }
-            let Some(index) = self.active_group_index(current) else {
-                return AnchorId::INVALID;
-            };
-            let Some(record) = self.groups.get(index) else {
-                return AnchorId::INVALID;
-            };
-            if !record.transparent {
-                return current;
-            }
-            current = record.parent_anchor;
-        }
-    }
-
-    pub(in crate::slot) fn branch_path_key(&self, anchor: AnchorId) -> crate::Key {
-        self.fold_transparent_chain(anchor, |record| record.key.static_key)
-    }
-
-    pub(in crate::slot) fn branch_occurrence_path_key(&self, anchor: AnchorId) -> crate::Key {
-        self.fold_transparent_chain(anchor, |record| {
-            record.key.static_key ^ crate::Key::from(record.key.ordinal).rotate_left(17)
-        })
-    }
-
-    fn fold_transparent_chain(
-        &self,
-        anchor: AnchorId,
-        mut step: impl FnMut(&GroupRecord) -> crate::Key,
-    ) -> crate::Key {
-        let mut chain: Vec<crate::Key> = Vec::new();
-        let mut current = anchor;
-        while let Some(record) = self
-            .active_group_index(current)
-            .and_then(|index| self.groups.get(index))
-        {
-            if !record.transparent {
-                break;
-            }
-            chain.push(step(record));
-            current = record.parent_anchor;
-        }
-        let mut folded: crate::Key = super::BRANCH_PATH_ROOT;
-        for step_key in chain.iter().rev() {
-            folded ^= *step_key;
-            folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        folded
-    }
-
-    pub(in crate::slot) fn steal_keyed_subtree_along_branch_path(
-        &mut self,
-        claimer_bracket: AnchorId,
-        key: GroupKey,
-    ) -> Option<DetachedSubtree> {
-        let mut level = claimer_bracket;
-        let mut descent: Vec<crate::Key> = Vec::new();
-        loop {
-            if let Some(found) = self.find_key_in_later_same_site_siblings(level, &descent, key) {
-                let subtree = self.detach_subtree_at_index_internal(found, false);
-                if subtree.group_count() == 0 {
-                    return None;
-                }
-                return Some(subtree);
-            }
-            let record = self
-                .active_group_index(level)
-                .and_then(|index| self.groups.get(index))?;
-            let parent = record.parent_anchor;
-            let level_static = record.key.static_key;
-            let parent_is_transparent = self
-                .active_group_index(parent)
-                .and_then(|index| self.groups.get(index))
-                .is_some_and(|group| group.transparent);
-            if !parent_is_transparent {
-                return None;
-            }
-            descent.insert(0, level_static);
-            level = parent;
-        }
-    }
-
-    fn find_key_in_later_same_site_siblings(
-        &self,
-        level: AnchorId,
-        descent: &[crate::Key],
-        key: GroupKey,
-    ) -> Option<usize> {
-        let level_index = self.active_group_index(level)?;
-        let level_record = self.groups.get(level_index)?;
-        let level_static = level_record.key.static_key;
-        let parent_anchor = level_record.parent_anchor;
-        let siblings = self.direct_child_range(parent_anchor);
-        let mut index = level_index + self.group_subtree_len_at_index(level_index);
-        while index < siblings.end() {
-            let record = self.groups.get(index)?;
-            if record.parent_anchor != parent_anchor {
-                return None;
-            }
-            let subtree_len = self.group_subtree_len_at_index(index);
-            if record.transparent && record.key.static_key == level_static {
-                if let Some(found) = self.find_key_along_descent(index, descent, key) {
-                    return Some(found);
-                }
-            }
-            index += subtree_len;
-        }
-        None
-    }
-
-    fn find_key_along_descent(
-        &self,
-        shell_index: usize,
-        descent: &[crate::Key],
-        key: GroupKey,
-    ) -> Option<usize> {
-        let shell_anchor = self.groups.get(shell_index)?.anchor;
-        let end = shell_index + self.group_subtree_len_at_index(shell_index);
-        let mut index = shell_index + 1;
-        while index < end {
-            let record = self.groups.get(index)?;
-            if record.parent_anchor != shell_anchor {
-                log::error!(
-                    "slot table stopped a keyed steal scan at index {index}: expected a direct child of {shell_anchor:?}, found a child of {:?}",
-                    record.parent_anchor
-                );
-                return None;
-            }
-            let subtree_len = self.group_subtree_len_at_index(index);
-            match descent.split_first() {
-                None => {
-                    if record.key == key {
-                        return Some(index);
-                    }
-                }
-                Some((next_static, rest)) => {
-                    if record.transparent && record.key.static_key == *next_static {
-                        if let Some(found) = self.find_key_along_descent(index, rest, key) {
-                            return Some(found);
-                        }
-                    }
-                }
-            }
-            index += subtree_len;
-        }
-        None
-    }
-
     pub(in crate::slot) fn root_finish_result(
         &mut self,
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
-        let mut detached = state.drain_orphaned_keyed_for_owner(AnchorId::INVALID);
+        let mut detached = Vec::new();
         if !state.root.detach_remaining_children {
             return detached;
         }

@@ -20,6 +20,7 @@ pub(in crate::slot) struct GroupFrame {
     pub(in crate::slot) sibling_index: Option<SiblingIndex>,
     pub(in crate::slot) body_finished: bool,
     pub(in crate::slot) was_skipped: bool,
+    pub(in crate::slot) fold_watermark: usize,
 }
 
 impl RootFrame {
@@ -44,6 +45,7 @@ impl Default for GroupFrame {
             sibling_index: None,
             body_finished: false,
             was_skipped: false,
+            fold_watermark: 0,
         }
     }
 }
@@ -66,6 +68,7 @@ impl GroupFrame {
         self.sibling_index = None;
         self.body_finished = false;
         self.was_skipped = false;
+        self.fold_watermark = 0;
     }
 
     pub(in crate::slot) fn reset_for_pool(&mut self) {

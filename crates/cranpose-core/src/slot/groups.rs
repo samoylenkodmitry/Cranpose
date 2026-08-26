@@ -16,7 +16,6 @@ pub(super) struct GroupRecord {
     pub(super) generation: u32,
     pub(super) anchor: AnchorId,
     pub(super) scope_id: Option<ScopeId>,
-    pub(super) transparent: bool,
 }
 
 #[derive(Clone, Copy)]

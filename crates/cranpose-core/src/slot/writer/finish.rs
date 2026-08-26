@@ -68,27 +68,7 @@ impl SlotTable {
             direct_nodes.extend(removed.into_iter().map(|node| node.id));
         }
 
-        let mut detached_children = self.detach_unvisited_children_internal(state);
-        let finishing_is_transparent = self
-            .active_group_index(group_anchor)
-            .and_then(|index| self.groups.get(index))
-            .is_some_and(|group| group.transparent);
-        if finishing_is_transparent {
-            let owner = self.nearest_non_transparent_ancestor(group_anchor);
-            let mut kept = Vec::new();
-            for subtree in detached_children.drain(..) {
-                match subtree.root_key_checked() {
-                    Some(key) if key.explicit_key.is_some() => {
-                        let branch_path = subtree.branch_path;
-                        state.park_orphaned_keyed(owner, branch_path, key, subtree);
-                    }
-                    _ => kept.push(subtree),
-                }
-            }
-            detached_children = kept;
-        } else if state.has_orphaned_keyed() {
-            detached_children.extend(state.drain_orphaned_keyed_for_owner(group_anchor));
-        }
+        let detached_children = self.detach_unvisited_children_internal(state);
         let root_nodes = if was_skipped {
             self.collect_subtree_root_node_ids(group_anchor)
         } else {

@@ -51,7 +51,6 @@ impl SlotWriteSession<'_> {
         generation: u32,
         parent_id: Option<NodeId>,
     ) -> NodeSlotUpdate {
-        self.materialize_deferred_branch_shells();
         let Some(frame) = self.state.group_stack.last_mut() else {
             log::error!(
                 "slot writer record_node_with_parent called with an empty group stack; id={id}"
@@ -72,7 +71,6 @@ impl SlotWriteSession<'_> {
     }
 
     pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32)> {
-        self.materialize_deferred_branch_shells();
         let frame = self.state.group_stack.last()?;
         self.table
             .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)

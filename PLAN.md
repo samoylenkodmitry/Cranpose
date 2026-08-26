@@ -26,81 +26,70 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### Branch groups: the edges the transform cannot reach
+### Branch groups: fold-only identity
 
-Branch groups are in: every `if`/`else` branch, `match` arm, match guard,
-`if`-condition operand (each `&&`/`||` operand and `let` scrutinee
-individually, so short-circuiting cannot shift later slots) of a
-`#[composable]` body — and of the content lambdas and executable nested
-items (`fn`s, local `impl` and trait methods, `mod` contents) it contains —
-reserves its bracket unconditionally as a deferred shell. There is no
-reachability classifier: a branch that composes nothing costs a `Vec` push
-and pop, and the first unkeyed slot operation inside a branch materializes
-the whole pending shell run in order, so identity is structural. A keyed
-open under a still-deferred run folds the run's sites into its static key
-instead of materializing: the branch identity lives in the group key
-itself, so branch versus tail occurrences of one keyed site are distinct
-groups while keyed rows keep their flat indexed sibling structure and
-toggle cost, with keyed subtrees preserved across materialized brackets
-(`docs/slot_table_invariants.md`, `branch_group_tests`, and
-`robot_recomposition_lab` end to end).
+Every conditional site of a `#[composable]` body — `if`/`else` branch,
+`match` arm and guard, each `&&`/`||` condition operand and `let`
+scrutinee, and every closure or executable nested item defined inside a
+branch — pushes an RAII **branch fold**: a location key on a per-pass
+stack. Nothing ever materializes; a guard costs a push and a pop, and
+closing folds in any order is safe (entries are marked dead and trimmed).
+Branch identity is mixed into every slot identity instead of being
+represented structurally:
 
-Two location layers back the brackets. A `#[composable]` fn is
-`#[track_caller]` and keys its group by the caller's location, so every
-call site is its own identity — Compose's positional-key parity — and a
-composable called from two places never shares state. Every value slot is
-stamped with the source location of the API call that created it
-(`remember`, `use_state`, the state hooks — captured before the session
-borrow and threaded through), and a slot whose stamp does not match the
-incoming source reinitializes instead of being adopted: a slot written by
-one piece of code can never be silently inherited by another, whatever
-control-flow shape put them at the same cursor. The remaining edges, each
-the price of running on names before expansion rather than on typed IR:
+- A group's static key mixes the folds pushed since its parent group
+  opened, so a group opened in one arm can never be resolved by another
+  arm, keyed rows stay flat indexed siblings with their toggle cost, and a
+  scoped recomposition re-enters cleanly because folds are always relative
+  to the enclosing frame.
+- A value slot's source stamp — the caller location of the `remember`/
+  `use_state`/hook that created it, captured before the session borrow —
+  mixes the same fold. A slot whose stamp mismatches is never adopted;
+  when a branch's slots vanish, following same-group slots resynchronize
+  by a forward scan for their `(type, source)` identity instead of
+  reinitializing, so neighbors keep state across branch cardinality
+  changes.
+- A `#[composable]` fn is `#[track_caller]` and keys its group by the
+  caller's location: every call site is its own identity, Compose's
+  positional-key parity.
 
-- **Composition reached only through a place path composes into the
-  parent's bracket.** A `ref` pattern binds into the place, so a `let`
-  scrutinee that is a place expression keeps its structure; its value
-  sub-parts (an index expression, a dereferenced value) get shells, but a
-  composing `Deref` impl on the place chain itself runs unbracketed. The
-  source stamp bounds the damage: the slots it writes can shift position
-  but can never be adopted by other code. A closure
-  consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`) is the
-  same class: argument position reads as inline consumption.
-- **A conditional expanded out of a `macro_rules!` body is never bracketed,
-  and locations cannot substitute.** The attribute macro runs before
-  function-like macros expand, and `Location::caller()` for code inside an
-  expansion collapses to the invocation site, so neither brackets nor
-  caller keys nor slot stamps can tell the expanded arms apart (pinned as
+Branch departure needs no special lifecycle: an arm's groups and slots are
+ordinary unvisited content, detached and dispose-or-retained exactly as
+before branches existed (`docs/slot_table_invariants.md`,
+`branch_group_tests`, `robot_recomposition_lab` end to end). The remaining
+edges, each the price of running on names before expansion rather than on
+typed IR:
+
+- **A conditional expanded out of a `macro_rules!` body shares its slots.**
+  The attribute macro runs before function-like macros expand, and
+  `Location::caller()` for code inside an expansion collapses to the
+  invocation site, so neither folds nor caller keys nor slot stamps can
+  tell the expanded arms apart (pinned as
   `a_macro_rules_conditional_shares_slots_by_construction` and
   `a_macro_rules_conditional_collapses_composable_caller_identity`; the
   escape hatch is an explicit `with_key` per arm). Compose's plugin runs
   on IR after inlining, which is what closing this would take.
-- **A closure passed directly to a call named `with_key` carries no
-  definition-site identity of its own.** Every other closure defined in a
-  branch gets a definition-site shell (the `composableLambda` model: an
-  escaped closure composes under its own site wherever it runs), but
-  `with_key` content composes inside a group that already encodes the call
-  site, the explicit key, and the branch fold, so the extra shell is
-  provably redundant there. The exemption is by name, so a lookalike
-  `with_key` that stores its closure and runs it later composes that
-  content positionally; the API contract is that anything named `with_key`
-  taking content runs it synchronously.
+- **Composition reached only through a place path folds into the
+  surrounding context.** A `ref` pattern binds into the place, so a `let`
+  scrutinee that is a place expression keeps its structure; its value
+  sub-parts carry folds, but a composing `Deref` impl on the place chain
+  itself runs under the enclosing fold. The source stamp bounds the
+  damage: its slots resynchronize or reinitialize, never leak into other
+  code. A closure consumed-and-returned by a helper
+  (`store(make_pair(|| A(1)).0)`) is the same class.
+- **A node emitted raw into a branch is positional.** `emit_node` outside
+  any composable child reuses by type and generation at its cursor, as it
+  does on main; arms emitting the same node type at the same position
+  trade nodes on switch. Composable children are immune (their nodes live
+  in caller-keyed groups); stamping node records with a folded source is
+  the hardening if a real workload hits this.
 - **A reuse-retained scope inside a keyed wrapper recomposes fresh when the
   wrapper leaves composition.** Dispose-or-retain engages only when the
   detached root is itself the reuse scope; a `with_key` wrapper above it
-  hides it. This reproduces on origin/main and is independent of brackets —
-  both shell classes agree with main's behavior (pinned as
+  hides it. This reproduces on origin/main and is independent of branches
+  (pinned as
   `keyed_wrapper_retention_behaves_identically_in_both_shell_classes`);
   making retention descend into detached subtrees is filed as its own task.
-- **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
-  steal scans later same-site brackets linearly and the orphan pool is a
-  linear scan, so reversing N rows of
-  `if visible { crumb(); with_key(id, …) }` — N brackets of one row each —
-  costs Θ(N²) group traversal. Within a single bracket the keyed rows keep
-  the indexed sibling path inside their shell; shift-by-one — the toggle
-  case — hits the first later bracket and stays O(1) per row. The fix, if a
-  real workload hits this, is the same promotion to an index the in-parent
-  sibling search already does after 16 children.
 
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that

@@ -38,7 +38,7 @@ impl SlotWriteSession<'_> {
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
     ) -> ValueSlotId {
-        self.materialize_deferred_branch_shells();
+        init.mix_source(self.state.branch_fold());
         self.discard_stale_value_slot_frames();
         let Some(frame) = self.state.group_stack.last() else {
             return self.recover_value_slot_with_kind(kind, init);

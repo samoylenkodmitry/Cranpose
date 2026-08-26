@@ -4,7 +4,6 @@ use super::*;
 fn failed_retention_restore_validation_keeps_subtree_available() {
     let (_, detached, _) = detached_single_child_with_options(340, 341, None, false, true);
     let key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -31,7 +30,6 @@ fn failed_retention_restore_validation_keeps_subtree_available() {
 fn retention_validate_reports_empty_subtree_without_panicking() {
     let (harness, detached, _) = detached_single_child_with_options(342, 343, None, false, false);
     let key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -112,7 +110,6 @@ fn identity_snapshot_captures_active_and_retained_identities() {
         .map(PayloadIdentity::from)
         .collect::<Vec<_>>();
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -177,7 +174,6 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
     harness.finish_pass();
 
     let key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -201,7 +197,6 @@ fn retention_take_after_restore_preflight_keeps_subtree_when_preflight_panics() 
         detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
     let child_node = child_node.expect("test helper must record a child node");
     let key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -276,7 +271,6 @@ fn retained_anchor_restore_reactivates_same_anchor_tree_and_scopes() {
     assert_eq!(detached.groups[1].parent_anchor, child_anchor);
 
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -409,7 +403,6 @@ fn scope_index_lifecycle_survives_retain_restore_dispose_and_compaction() {
     let retained = retained.expect("target retained subtree must detach");
     assert_eq!(retained.groups[0].anchor, retained_anchor);
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: retained.root_key(),
     };
@@ -521,7 +514,6 @@ fn retention_insert_rejects_duplicate_key_without_replacing_existing_subtree() {
     let (harness, first_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
     let (_, duplicate_detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: first_detached.root_key(),
     };
@@ -552,7 +544,6 @@ fn retention_insert_rejects_root_key_mismatch() {
 
     let (_, detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: GroupKey::new(CHILD_KEY + 10, None, 0),
     };
@@ -575,7 +566,6 @@ fn retention_validate_rejects_active_retained_anchor() {
         .next()
         .expect("detached subtree must contain an anchor");
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -605,7 +595,6 @@ fn retention_validate_rejects_non_detached_retained_anchor() {
         .next()
         .expect("detached subtree must contain an anchor");
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -638,7 +627,6 @@ fn retention_validate_rejects_active_retained_payload_anchor() {
     let retained_payload_anchor = payload.anchor;
     let retained_payload_owner = payload.owner;
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -674,7 +662,6 @@ fn retention_validate_rejects_non_detached_retained_payload_anchor() {
         .expect("detached subtree must contain a payload")
         .anchor;
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -706,7 +693,6 @@ fn retention_validate_rejects_retained_scope_in_active_scope_index() {
         .next()
         .expect("detached subtree must contain an anchor");
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -737,7 +723,6 @@ fn retention_validate_rejects_active_retained_node() {
         detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
     let child_node = child_node.expect("test helper must record a child node");
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -769,7 +754,6 @@ fn retention_take_rejects_active_retained_node_before_restore() {
         detached_single_child_with_options(PARENT_KEY, CHILD_KEY, None, false, true);
     child_node.expect("test helper must record a child node");
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -803,7 +787,6 @@ fn retention_insert_rejects_retained_root_with_active_parent() {
     let (harness, mut detached) = detached_single_child(PARENT_KEY, CHILD_KEY);
     let parent_anchor = harness.table.groups[0].anchor;
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -991,7 +974,6 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
     harness.finish_pass();
 
     let retain_key = RetainKey {
-        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };

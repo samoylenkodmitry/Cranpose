@@ -1672,7 +1672,7 @@ fn duplicate_keyed_rows(rows: Vec<i32>) {
 }
 
 #[test]
-#[should_panic(expected = "duplicate explicit key")]
+#[should_panic(expected = "duplicate sibling group key")]
 fn duplicate_explicit_keys_across_brackets_of_one_site_panic_loudly() {
     reset_branch_probes();
     let mut composition = test_composition();
