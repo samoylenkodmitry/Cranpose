@@ -45,6 +45,14 @@ not sharing (`docs/slot_table_invariants.md`, `branch_group_tests`, and
 `robot_recomposition_lab` end to end). The remaining edges, each the price
 of running on names before expansion rather than on typed IR:
 
+- **A `let` scrutinee that is a place expression is never wrapped.** A
+  `ref` pattern binds into the place, so `if let Some(ref v) =
+  values[remember_index()]` keeps its indexing untouched and a composing
+  call inside the place composes into the parent. The value-expression
+  scrutinee gets its ride-along group; the place form is the price of
+  Rust's place/value distinction. A closure consumed-and-returned by a
+  helper (`store(make_pair(|| A(1)).0)`) is the same class: argument
+  position reads as inline consumption.
 - **A conditional expanded out of a `macro_rules!` body is never bracketed.**
   The attribute macro runs before function-like macros expand, so an `if`
   whose arms only exist after expansion keeps the old shared-slot behavior.

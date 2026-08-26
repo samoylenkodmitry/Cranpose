@@ -33,6 +33,8 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
         next_branch: 0,
         in_content_closure: false,
         uses_composer_alias: false,
+        branch_depth: 0,
+        closure_in_arg_position: false,
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
@@ -64,13 +66,26 @@ struct BranchGroupInjector<'a> {
     /// Whether any guard referenced the hygienic composer alias, which then
     /// must be bound in the body prologue.
     uses_composer_alias: bool,
+    /// How many conditional branches enclose the visit position. A content
+    /// closure defined inside a branch may be invoked after the branch guard
+    /// closes — `let render = if c { || A(1) } else { || A(2) }; render();` —
+    /// so its body gets a group anchored at the closure's own definition
+    /// site, carrying the branch identity to wherever it runs.
+    branch_depth: u32,
+    /// The closure being visited sits directly in call-argument position: it
+    /// is consumed by that call — run inline under the still-open branch
+    /// guard (content lambdas), or stored as a handler whose guards no-op —
+    /// so it needs no body group of its own.
+    closure_in_arg_position: bool,
 }
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
         let reaches = block_can_reach_composer(block);
         let deferred = reaches && block_is_fully_keyed(block);
+        self.branch_depth += 1;
         self.visit_block_mut(block);
+        self.branch_depth -= 1;
         if !reaches {
             return;
         }
@@ -85,7 +100,9 @@ impl BranchGroupInjector<'_> {
         }
         let reaches = expr_can_reach_composer(body);
         let deferred = reaches && expr_is_keyed_call(body);
+        self.branch_depth += 1;
         self.visit_expr_mut(body);
+        self.branch_depth -= 1;
         if !reaches {
             return;
         }
@@ -122,7 +139,7 @@ impl BranchGroupInjector<'_> {
             // branch body.
             Expr::Let(let_expr) => {
                 let scrutinee = &mut let_expr.expr;
-                let needs_group = expr_can_reach_composer(scrutinee);
+                let needs_group = expr_can_reach_composer(scrutinee) && !expr_is_place(scrutinee);
                 self.visit_expr_mut(scrutinee);
                 if needs_group {
                     let guard_expr = self.branch_guard_expr(scrutinee.span());
@@ -250,7 +267,22 @@ impl VisitMut for BranchGroupInjector<'_> {
             // this over-matches keeps its old behavior instead of breaking.
             Expr::Closure(closure) if expr_can_reach_composer(&closure.body) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
+                let was_arg = std::mem::replace(&mut self.closure_in_arg_position, false);
                 self.visit_expr_mut(&mut closure.body);
+                // A closure born in a branch can outlive the branch guard and
+                // compose at its call site; anchor its body to the closure's
+                // definition site so each branch's closure keeps its own
+                // slots. One sitting directly in call-argument position is
+                // consumed by that call and needs none; outside branches
+                // there is no sibling to collide with.
+                if self.branch_depth > 0 && !was_arg {
+                    let guard = self.branch_guard_stmt(closure.span(), false);
+                    let original = closure.body.clone();
+                    closure.body = syn::parse_quote! {{
+                        #guard
+                        #original
+                    }};
+                }
                 self.in_content_closure = previous;
             }
             // Not on this function's composition path: other closures may run
@@ -277,6 +309,24 @@ impl VisitMut for BranchGroupInjector<'_> {
                         self.wrap_condition(guard);
                     }
                     self.wrap_arm_body(&mut arm.body);
+                }
+            }
+            Expr::Call(call) => {
+                self.visit_expr_mut(&mut call.func);
+                for argument in &mut call.args {
+                    let flag = matches!(argument, Expr::Closure(_));
+                    let previous = std::mem::replace(&mut self.closure_in_arg_position, flag);
+                    self.visit_expr_mut(argument);
+                    self.closure_in_arg_position = previous;
+                }
+            }
+            Expr::MethodCall(method) => {
+                self.visit_expr_mut(&mut method.receiver);
+                for argument in &mut method.args {
+                    let flag = matches!(argument, Expr::Closure(_));
+                    let previous = std::mem::replace(&mut self.closure_in_arg_position, flag);
+                    self.visit_expr_mut(argument);
+                    self.closure_in_arg_position = previous;
                 }
             }
             // The repeat count is a const context; only the element repeats
@@ -553,6 +603,21 @@ fn method_name_composes_str(name: &str) -> bool {
 
 fn method_name_composes(name: &syn::Ident) -> bool {
     method_name_composes_str(&name.to_string())
+}
+
+/// Whether the expression is a place expression — a path, field access,
+/// index, or dereference (through parens). A `ref` pattern binds into the
+/// place, so a place scrutinee can never be replaced by a value-producing
+/// wrapper: `if let Some(ref v) = values[i()]` must keep indexing the
+/// vector, not move out of it.
+fn expr_is_place(expr: &Expr) -> bool {
+    match expr {
+        Expr::Path(_) | Expr::Field(_) | Expr::Index(_) => true,
+        Expr::Unary(unary) => matches!(unary.op, syn::UnOp::Deref(_)),
+        Expr::Paren(paren) => expr_is_place(&paren.expr),
+        Expr::Group(group) => expr_is_place(&group.expr),
+        _ => false,
+    }
 }
 
 /// Whether the expression contains a `let` outside closures — a match guard

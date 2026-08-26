@@ -1936,3 +1936,68 @@ fn a_composing_if_let_scrutinee_composes_inside_its_own_group() {
     assert_eq!((branch_inits(), branch_seen()), (1, 5));
     assert_composition_valid(&composition);
 }
+
+fn index_helper() -> usize {
+    0
+}
+
+#[composable]
+fn place_scrutinee_probe() {
+    let values: Vec<Option<String>> = vec![Some("row".to_string())];
+    // A place scrutinee with a `ref` binding must keep its place-ness: a
+    // value wrap would try to move the Option out of the vector (E0507).
+    if let Some(ref value) = values[index_helper()] {
+        let marker = remember_branch_marker(value.len() as i32);
+        BRANCH_SEEN.with(|seen| seen.set(marker));
+    }
+}
+
+#[test]
+fn a_place_scrutinee_with_a_ref_binding_still_compiles() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(57, place_scrutinee_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn closure_select_probe(cond: bool) {
+    let render: fn() = if cond {
+        || {
+            stateful_child(301);
+        }
+    } else {
+        || {
+            stateful_child(302);
+        }
+    };
+    render();
+}
+
+#[test]
+fn a_branch_selected_closure_carries_its_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(58, || closure_select_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 301);
+
+    // The closure composes at the call site, outside the branch guard; its
+    // body must carry identity from its definition site so the two branches'
+    // closures never share the child's state.
+    composition
+        .render(58, || closure_select_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        branch_seen(),
+        302,
+        "a branch-selected closure invoked later must not inherit the other branch's state"
+    );
+    assert_composition_valid(&composition);
+}

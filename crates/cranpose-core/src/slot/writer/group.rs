@@ -417,14 +417,20 @@ impl SlotWriteSession<'_> {
                 }
                 ActiveChildResolution::InsertNew => None,
             };
-            if previous_site.is_some_and(|previous| previous != site) {
-                self.materialize_deferred_branch_shells();
-                pass_through_site = None;
-                cursor = ChildCursor::new(
-                    self.state.current_parent_anchor(),
-                    self.state.current_child_cursor(),
-                );
-                resolution = Some(self.resolve_active_child(cursor, key));
+            match previous_site {
+                Some(previous) if previous != site => {
+                    self.materialize_deferred_branch_shells();
+                    pass_through_site = None;
+                    cursor = ChildCursor::new(
+                        self.state.current_parent_anchor(),
+                        self.state.current_child_cursor(),
+                    );
+                    resolution = Some(self.resolve_active_child(cursor, key));
+                }
+                // Already stamped with this site: the steady-state reuse of a
+                // keyed row. Skip the redundant write below.
+                Some(_) => pass_through_site = None,
+                None => {}
             }
         }
 

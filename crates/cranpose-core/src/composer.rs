@@ -206,6 +206,13 @@ impl ComposerRuntimeState {
         self.scope_registry.borrow().len()
     }
 
+    pub(crate) fn has_retained(&self, host: &Rc<SlotsHost>) -> bool {
+        self.retention_by_host
+            .borrow()
+            .get(&slots_storage_key(host))
+            .is_some_and(|manager| !manager.is_empty())
+    }
+
     pub(crate) fn take_retained(
         &self,
         host: &Rc<SlotsHost>,
@@ -1031,11 +1038,16 @@ impl Composer {
         let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
-        let (reserved_key, branch_path) = self.with_slot_session_mut(|slots| {
-            let reserved = slots.reserve_group_key(key);
-            (reserved, slots.current_branch_occurrence_path_key())
-        });
+        let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
         let host = self.active_slots_host();
+        // The fold walks the transparent chain per group open; with nothing
+        // retained — the overwhelmingly common state — the key is never
+        // compared, so skip the walk.
+        let branch_path = if self.core.shared_state.has_retained(&host) {
+            self.with_slot_session_mut(|slots| slots.current_branch_occurrence_path_key())
+        } else {
+            crate::slot::BRANCH_PATH_ROOT
+        };
         let restored = self.core.shared_state.take_retained(
             &host,
             RetainKey {
