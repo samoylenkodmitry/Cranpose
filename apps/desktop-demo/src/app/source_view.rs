@@ -44,6 +44,7 @@ pub(crate) fn source_path(tab: DemoTab) -> &'static str {
         DemoTab::WebFetch => "apps/desktop-demo/src/app/web_fetch.rs",
         DemoTab::LazyList => "apps/desktop-demo/src/app/lazy_list.rs",
         DemoTab::Mineswapper2 => "apps/desktop-demo/src/app/mineswapper2.rs",
+        DemoTab::RecompositionLab => "apps/desktop-demo/src/app/recomposition_lab.rs",
         DemoTab::HackerNews => "apps/desktop-demo/src/app/hacker_news.rs",
         DemoTab::Images => "apps/desktop-demo/src/app/images.rs",
         DemoTab::Text => "apps/desktop-demo/src/app/text_showcase.rs",

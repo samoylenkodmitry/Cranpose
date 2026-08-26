@@ -203,6 +203,11 @@ path = "robot-runners/robot_counter_conditional_text_top.rs"
 required-features = ["robot-app"]
 
 [[example]]
+name = "robot_recomposition_lab"
+path = "robot-runners/robot_recomposition_lab.rs"
+required-features = ["robot-app"]
+
+[[example]]
 name = "robot_tab_navigation"
 path = "robot-runners/robot_tab_navigation.rs"
 required-features = ["robot-app"]
