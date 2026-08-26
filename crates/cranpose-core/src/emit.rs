@@ -46,11 +46,14 @@ impl Composer {
         source: crate::Key,
         make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
     ) -> NodeId {
-        // Peek at the slot without advancing cursor
-        let (existing_id, existing_generation, type_matches, gen_matches, source_matches) = {
-            if let Some((id, slot_gen, slot_source)) =
-                self.with_slot_session_mut(|slots| slots.current_node_record())
-            {
+        let adopted = {
+            let mut skip = 0;
+            loop {
+                let Some((id, slot_gen)) = self
+                    .with_slot_session_mut(|slots| slots.peek_node_record_by_source(source, skip))
+                else {
+                    break None;
+                };
                 let (type_ok, gen_ok) = {
                     let mut applier = self.borrow_applier();
                     let gen_ok = applier.node_generation(id) == slot_gen;
@@ -60,37 +63,18 @@ impl Composer {
                     };
                     (type_ok, gen_ok)
                 };
-                let source_ok = self.with_slot_session_mut(|slots| slots.mixed_node_source(source))
-                    == slot_source;
-                if source_ok {
-                    (Some(id), Some(slot_gen), type_ok, gen_ok, true)
-                } else if let Some((moved_id, moved_gen)) =
-                    self.with_slot_session_mut(|slots| slots.resync_node_record_by_source(source))
-                {
-                    let (type_ok, gen_ok) = {
-                        let mut applier = self.borrow_applier();
-                        let gen_ok = applier.node_generation(moved_id) == moved_gen;
-                        let type_ok = match applier.get_mut(moved_id) {
-                            Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
-                            Err(_) => false,
-                        };
-                        (type_ok, gen_ok)
-                    };
-                    (Some(moved_id), Some(moved_gen), type_ok, gen_ok, true)
-                } else {
-                    (Some(id), Some(slot_gen), type_ok, gen_ok, false)
+                if type_ok && gen_ok {
+                    let committed = self.with_slot_session_mut(|slots| {
+                        slots.adopt_node_record_by_source(source, skip)
+                    });
+                    debug_assert_eq!(committed, Some((id, slot_gen)));
+                    break Some((id, slot_gen));
                 }
-            } else {
-                (None, None, false, false, false)
+                skip += 1;
             }
         };
 
-        // If we have a matching node with correct generation, advance cursor and reuse it
-        if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation)
-            && type_matches
-            && gen_matches
-            && source_matches
-        {
+        if let Some((id, slot_gen)) = adopted {
             let scope_debug = self
                 .current_recompose_scope()
                 .map(|scope| (scope.id(), debug_scope_label(scope.id())))

@@ -2660,6 +2660,62 @@ mod raw_node_arms {
     }
 }
 
+mod macro_emitted_nodes {
+    use super::*;
+
+    thread_local! {
+        pub(super) static BETA_BUILDS: Cell<i32> = const { Cell::new(0) };
+    }
+
+    pub(super) struct AlphaNode;
+
+    impl crate::Node for AlphaNode {}
+
+    pub(super) struct BetaNode;
+
+    impl crate::Node for BetaNode {}
+
+    macro_rules! emit_pair {
+        ($composer:expr, $show:expr) => {
+            if $show {
+                $composer.emit_node(|| AlphaNode);
+            }
+            $composer.emit_node(|| {
+                BETA_BUILDS.with(|count| count.set(count.get() + 1));
+                BetaNode
+            });
+        };
+    }
+
+    #[composable(no_skip)]
+    pub(super) fn probe(show_alpha: bool) {
+        let composer = with_current_composer(Clone::clone);
+        emit_pair!(composer, show_alpha);
+    }
+}
+
+#[test]
+fn a_source_match_with_the_wrong_type_still_resyncs_the_node() {
+    macro_emitted_nodes::BETA_BUILDS.with(|count| count.set(0));
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, show_alpha: bool| {
+        composition.render(108, || macro_emitted_nodes::probe(show_alpha))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!(macro_emitted_nodes::BETA_BUILDS.with(Cell::get), 1);
+
+    pass(&mut composition, false).expect("drop the first macro-emitted node");
+    assert_eq!(
+        macro_emitted_nodes::BETA_BUILDS.with(Cell::get),
+        1,
+        "the collapsed source matches the vanished node's record, but the type \
+         does not; resynchronization must scan on for the surviving node \
+         instead of rebuilding it"
+    );
+    assert_composition_valid(&composition);
+}
+
 #[test]
 fn raw_nodes_in_arms_do_not_trade_places() {
     raw_node_arms::NODE_LABELS.with(|labels| labels.borrow_mut().clear());
@@ -3225,6 +3281,47 @@ fn a_sync_closure_from_a_suspending_async_body_keeps_branch_identity() {
         (2, 88),
         "the async state machine stays uninstrumented for Send, but a sync \
          closure defined inside it composes later and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+macro_rules! harmless_note {
+    () => {
+        BRANCH_SEEN.with(|seen| seen.get())
+    };
+}
+
+#[composable]
+fn mixed_async_body_probe(flag: bool) {
+    poll_ready(async {
+        let _ = harmless_note!();
+        if flag {
+            let value = remember_branch_marker(201);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(202);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    });
+}
+
+#[test]
+fn a_harmless_macro_does_not_disable_the_rest_of_an_async_body() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(107, || mixed_async_body_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 201));
+
+    pass(&mut composition, false).expect("switch arms beside the macro");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 202),
+        "only the statement containing the opaque macro is suspension-suspect; \
+         the syntactically await-free conditional after it keeps its folds"
     );
     assert_composition_valid(&composition);
 }

@@ -42,6 +42,20 @@ impl VisitMut for SyncInteriors<'_, '_> {
     }
 }
 
+fn wants_sandwich(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::Local(local) => local.init.is_some(),
+        Stmt::Macro(invocation) => invocation.semi_token.is_some(),
+        _ => false,
+    }
+}
+
+fn stmt_suspends(stmt: &Stmt) -> bool {
+    let mut scan = AwaitScan { found: false };
+    scan.visit_stmt(stmt);
+    scan.found
+}
+
 fn composer_alias_ident() -> syn::Ident {
     syn::Ident::new("__cranpose_branch_composer", Span::mixed_site())
 }
@@ -67,13 +81,6 @@ impl BranchGroupInjector<'_> {
     }
 
     fn fold_local_statements(&mut self, block: &mut Block) {
-        fn wants_sandwich(stmt: &Stmt) -> bool {
-            match stmt {
-                Stmt::Local(local) => local.init.is_some(),
-                Stmt::Macro(invocation) => invocation.semi_token.is_some(),
-                _ => false,
-            }
-        }
         if !block.stmts.iter().any(wants_sandwich) {
             return;
         }
@@ -205,6 +212,37 @@ impl BranchGroupInjector<'_> {
         SyncInteriors { injector: self }.visit_expr_mut(expr);
     }
 
+    fn instrument_nonsuspending_statements(&mut self, block: &mut Block) {
+        let previous = std::mem::replace(&mut self.in_content_closure, true);
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        let mut rebuilt = Vec::with_capacity(block.stmts.len());
+        for mut stmt in block.stmts.drain(..) {
+            if stmt_suspends(&stmt) {
+                match &mut stmt {
+                    Stmt::Expr(expr, _) => self.instrument_sync_interiors(expr),
+                    Stmt::Local(local) => {
+                        if let Some(init) = &mut local.init {
+                            self.instrument_sync_interiors(&mut init.expr);
+                        }
+                    }
+                    _ => {}
+                }
+                rebuilt.push(stmt);
+                continue;
+            }
+            self.visit_stmt_mut(&mut stmt);
+            if wants_sandwich(&stmt) {
+                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(stmt);
+                rebuilt.push(syn::parse_quote! { drop(#guard); });
+            } else {
+                rebuilt.push(stmt);
+            }
+        }
+        block.stmts = rebuilt;
+        self.in_content_closure = previous;
+    }
+
     fn instrument_sync_interiors_block(&mut self, block: &mut Block) {
         SyncInteriors { injector: self }.visit_block_mut(block);
     }
@@ -225,7 +263,11 @@ impl BranchGroupInjector<'_> {
         });
         if !runs_during_composition || expands_itself {
             if signature.asyncness.is_some() && !expands_itself {
-                self.instrument_sync_interiors_block(block);
+                if block_contains_await(block) {
+                    self.instrument_nonsuspending_statements(block);
+                } else {
+                    self.instrument_sync_interiors_block(block);
+                }
             }
             return;
         }
@@ -263,7 +305,7 @@ impl VisitMut for BranchGroupInjector<'_> {
             }
             Expr::Async(async_block) => {
                 if block_contains_await(&async_block.block) {
-                    self.instrument_sync_interiors_block(&mut async_block.block);
+                    self.instrument_nonsuspending_statements(&mut async_block.block);
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);

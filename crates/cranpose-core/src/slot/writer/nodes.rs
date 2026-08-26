@@ -77,18 +77,49 @@ impl SlotWriteSession<'_> {
         self.state.mix_branch_fold(source)
     }
 
-    pub(crate) fn resync_node_record_by_source(
+    fn locate_node_record_by_source(
         &mut self,
         source: crate::Key,
-    ) -> Option<(NodeId, u32)> {
+        skip_matches: usize,
+    ) -> Option<(usize, usize, NodeId, u32)> {
         let mixed = self.state.mix_branch_fold(source);
         let frame = self.state.group_stack.last()?;
         let (group_anchor, cursor) = (frame.group_anchor, frame.node_cursor);
-        let (found, id, generation) =
+        let mut from = cursor;
+        let mut remaining = skip_matches;
+        loop {
+            let (found, id, generation) =
+                self.table
+                    .find_node_record_by_source(group_anchor, from, mixed)?;
+            if remaining == 0 {
+                return Some((found, cursor, id, generation));
+            }
+            remaining -= 1;
+            from = found + 1;
+        }
+    }
+
+    pub(crate) fn peek_node_record_by_source(
+        &mut self,
+        source: crate::Key,
+        skip_matches: usize,
+    ) -> Option<(NodeId, u32)> {
+        self.locate_node_record_by_source(source, skip_matches)
+            .map(|(_, _, id, generation)| (id, generation))
+    }
+
+    pub(crate) fn adopt_node_record_by_source(
+        &mut self,
+        source: crate::Key,
+        skip_matches: usize,
+    ) -> Option<(NodeId, u32)> {
+        let (found, cursor, id, generation) =
+            self.locate_node_record_by_source(source, skip_matches)?;
+        if found > cursor {
+            let group_anchor = self.state.group_stack.last()?.group_anchor;
             self.table
-                .find_node_record_by_source(group_anchor, cursor + 1, mixed)?;
-        self.table
-            .rotate_node_record_to_cursor(group_anchor, found, cursor);
+                .rotate_node_record_to_cursor(group_anchor, found, cursor);
+        }
         Some((id, generation))
     }
 

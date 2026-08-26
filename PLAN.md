@@ -131,10 +131,12 @@ typed IR:
   does not exist (pinned as
   `an_await_free_async_block_keeps_branch_identity`; a nested item's
   awaits belong to its own future and do not mark the block,
-  `a_dormant_async_item_does_not_mark_the_block_suspending`). A macro invocation inside an
-  async body is conservatively treated as suspending, since its expansion
-  is invisible and may await — under-instrumentation is the `Send`-safe
-  side. A body
+  `a_dormant_async_item_does_not_mark_the_block_suspending`). Inside a suspending body,
+  instrumentation is per statement: a statement containing an await or
+  an opaque macro invocation is left bare — its expansion may suspend,
+  and under-instrumentation is the `Send`-safe side — while the
+  syntactically suspension-free statements around it keep their folds
+  (`a_harmless_macro_does_not_disable_the_rest_of_an_async_body`). A body
   that awaits keeps its own statements untouched — a fold held across a
   suspension would poison `Send` — while the synchronous closures and
   functions it defines are instrumented normally, since their guards
