@@ -28,55 +28,42 @@ is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
 ### Branch groups: the edges the transform cannot reach
 
-Branch groups are in: every `if`/`else` branch, `match` arm, composing match
-guard, composing `if`-condition operand (each `&&`/`||` operand and `let`
-scrutinee individually, so short-circuiting cannot shift later slots) of a
+Branch groups are in: every `if`/`else` branch, `match` arm, match guard,
+`if`-condition operand (each `&&`/`||` operand and `let` scrutinee
+individually, so short-circuiting cannot shift later slots) of a
 `#[composable]` body — and of the content lambdas and executable nested
-items (`fn`s, local `impl` and trait methods, `mod` contents) it contains,
-classified by composer reachability (free calls anywhere including inside
-closures and value-macro arguments, `Composer`'s composing methods by name,
-non-value macros) — owns its composition slots, with keyed subtrees
-preserved across brackets. A branch that is syntactically only `with_key`
-calls reserves its bracket as a deferred shell: the real `with_key` passes
-through and keeps the unbracketed keyed sibling structure and cost, while a
-lookalike function of the same name and shape materializes the bracket on
-its first positional operation — the reserved-name failure mode is isolation,
-not sharing (`docs/slot_table_invariants.md`, `branch_group_tests`, and
+items (`fn`s, local `impl` and trait methods, `mod` contents) it contains —
+reserves its bracket unconditionally as a deferred shell. There is no
+reachability classifier: a branch that composes nothing costs a `Vec` push
+and pop, and the first slot operation inside a branch materializes the
+whole pending shell run in order, so identity is structural — keyed opens
+materialize like everything else, and branch versus tail occurrences of one
+keyed site are distinct groups, with keyed subtrees preserved across
+brackets (`docs/slot_table_invariants.md`, `branch_group_tests`, and
 `robot_recomposition_lab` end to end). The remaining edges, each the price
 of running on names before expansion rather than on typed IR:
 
-- **A `let` scrutinee that is a place expression is never wrapped.** A
-  `ref` pattern binds into the place, so `if let Some(ref v) =
-  values[remember_index()]` keeps its indexing untouched and a composing
-  call inside the place composes into the parent. The value-expression
-  scrutinee gets its ride-along group; the place form is the price of
-  Rust's place/value distinction. A closure consumed-and-returned by a
-  helper (`store(make_pair(|| A(1)).0)`) is the same class: argument
-  position reads as inline consumption.
+- **Composition reached only through a place path is never wrapped.** A
+  `ref` pattern binds into the place, so a `let` scrutinee that is a place
+  expression keeps its structure; its value sub-parts (an index expression,
+  a dereferenced value) get shells, but a composing `Deref` impl on the
+  place chain itself composes into the parent. A closure
+  consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`) is the
+  same class: argument position reads as inline consumption.
 - **A conditional expanded out of a `macro_rules!` body is never bracketed.**
   The attribute macro runs before function-like macros expand, so an `if`
   whose arms only exist after expansion keeps the old shared-slot behavior.
   Compose's plugin runs on IR after inlining, which is what closing this
   would take.
-- **An over-matched content closure that composes nothing pays for its
-  groups.** A closure the classifier flags (it contains free calls) whose
-  branches never compose gets real transparent groups when it runs during a
-  pass — one persistent record per executed branch site, bench-neutral in
-  the suite but linear in iteration count for a hot non-composing closure
-  inside a composable loop. The classifier cannot shrink (a snake_case
-  composable is indistinguishable from a snake_case helper); the fix, if a
-  real workload hits this, is extending the deferred-shell reservation the
-  fully-keyed branches already use to every branch, so a branch that
-  composes nothing costs a `Vec` push and pop.
 - **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
   steal scans later same-site brackets linearly and the orphan pool is a
   linear scan, so reversing N rows of
-  `if visible { crumb(); with_key(id, …) }` costs Θ(N²) group traversal. The
-  fully keyed form of that branch elides its bracket and keeps the indexed
-  sibling path; shift-by-one — the toggle case — hits the first later
-  bracket and stays O(1) per row. The fix, if a real workload hits this, is
-  the same promotion to an index the in-parent sibling search already does
-  after 16 children.
+  `if visible { crumb(); with_key(id, …) }` — N brackets of one row each —
+  costs Θ(N²) group traversal. Within a single bracket the keyed rows keep
+  the indexed sibling path inside their shell; shift-by-one — the toggle
+  case — hits the first later bracket and stays O(1) per row. The fix, if a
+  real workload hits this, is the same promotion to an index the in-parent
+  sibling search already does after 16 children.
 
 And identity across *data* is still the author's statement: one call site
 fed different values is one slot in Compose too, so a list screen that
