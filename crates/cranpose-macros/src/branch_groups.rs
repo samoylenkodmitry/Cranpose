@@ -73,7 +73,6 @@ impl BranchGroupInjector<'_> {
                 self.wrap_condition_inner(&mut binary.right);
             }
             Expr::Paren(paren) => self.wrap_condition_inner(&mut paren.expr),
-            Expr::Unary(unary) => self.wrap_condition_inner(&mut unary.expr),
             Expr::Let(let_expr) => {
                 let scrutinee = &mut let_expr.expr;
                 if expr_is_place(scrutinee) {

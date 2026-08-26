@@ -2819,3 +2819,54 @@ fn a_branch_selected_fn_item_keeps_its_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+struct NotProbe {
+    marker: i32,
+}
+
+impl NotProbe {
+    fn new(marker: i32) -> Self {
+        Self { marker }
+    }
+}
+
+impl std::ops::Not for NotProbe {
+    type Output = bool;
+
+    fn not(self) -> bool {
+        let value = remember(|| {
+            BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            self.marker
+        });
+        BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+        false
+    }
+}
+
+#[composable]
+fn unary_condition_probe(enabled: bool) {
+    if enabled && !NotProbe::new(1) {
+        BRANCH_LOG.with(|log| log.borrow_mut().push("on".to_string()));
+    }
+    let _ = !NotProbe::new(2);
+}
+
+#[test]
+fn a_composing_unary_in_a_condition_stays_inside_its_fold() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(87, || unary_condition_probe(enabled))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 2));
+
+    pass(&mut composition, false).expect("short-circuit the condition");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "the unconditional Not must keep its own slot when the condition's Not vanishes"
+    );
+    assert_composition_valid(&composition);
+}
