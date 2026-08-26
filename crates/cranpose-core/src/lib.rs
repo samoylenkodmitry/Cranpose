@@ -85,21 +85,26 @@ pub use slot::{
 pub use snapshot_state_observer::SnapshotStateObserver;
 
 /// Runs the provided closure inside a mutable snapshot and applies the result.
+///
 /// Use this function when you need to update `MutableState` from outside the
 /// composition or layout phase, typically in event handlers or async tasks.
+///
 /// # Why is this needed?
 /// Cranpose uses a snapshot system (MVCC) to isolate state changes. Modifications
 /// made to `MutableState` are only visible to the current thread's active snapshot.
 /// To make changes visible to the rest of the system (and trigger recomposition),
 /// they must be "applied" by committing the snapshot. This helper handles that
 /// lifecycle for you.
+///
 /// # Example
+///
 /// ```ignore
 /// // Inside a button click handler
 /// run_in_mutable_snapshot(|| {
 ///     count.set(count.value() + 1);
 /// });
 /// ```
+///
 /// # Important
 /// ALL UI event handlers (keyboard, mouse, touch, animations) that modify state
 /// MUST use this function or [`dispatch_ui_event`].
@@ -137,8 +142,10 @@ impl Drop for AppliedSnapshotFlagGuard {
 }
 
 /// Dispatches a UI event in a proper snapshot context.
+///
 /// This is a convenience wrapper around [`run_in_mutable_snapshot`] that returns
 /// `Option<T>` instead of `Result<T, &str>`.
+///
 /// # Example
 /// ```ignore
 /// // In a keyboard event handler:
@@ -385,6 +392,7 @@ pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> K
 }
 
 /// Stable identifier for a slot in the slot table.
+///
 /// Anchors provide positional stability: they maintain their identity even when
 /// the slot table is reorganized (e.g., during conditional rendering or group moves).
 /// This prevents effect states from being prematurely removed during recomposition.
@@ -1207,6 +1215,7 @@ pub trait Node: Any {
     /// registry updates or other side effects. Used during measurement when we
     /// need to establish parent connections for bubble_measure_dirty without
     /// causing the full attachment lifecycle.
+    ///
     /// Default implementation uses the normal parent-attachment hook.
     fn set_parent_for_bubbling(&mut self, parent: NodeId) {
         self.on_attached_to_parent(parent);
@@ -1226,6 +1235,7 @@ pub trait Node: Any {
     fn prepare_for_recycle(&mut self) {}
 
     /// Optionally provides a compact replacement box for this recycled shell.
+    ///
     /// Returning `Some` lets nodes move pooled survivors onto fresh compact
     /// storage so the recycle pool does not pin large spike-era allocations.
     fn rehouse_for_recycle(&self) -> Option<Box<dyn Node>> {
@@ -1233,6 +1243,7 @@ pub trait Node: Any {
     }
 
     /// Optionally moves a live node onto a fresh box during applier compaction.
+    ///
     /// This is used after large-majority teardowns where a small surviving live
     /// tree can otherwise pin allocator pages from a much larger spike-era node
     /// population. Implementations must preserve the node's live state.
@@ -1247,16 +1258,20 @@ pub trait Node: Any {
 }
 
 /// Unified API for bubbling layout dirty flags from a node to the root (Applier context).
+///
 /// This is the canonical function for dirty bubbling during the apply phase (structural changes).
 /// Call this after mutations like insert/remove/move that happen during apply.
+///
 /// # Behavior
 /// 1. Marks the starting node as needing layout
 /// 2. Walks up the parent chain, marking each ancestor
 /// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
 /// 4. Stops at the root (node with no parent)
+///
 /// # Performance
 /// This function is O(height) in the worst case, but typically O(1) due to early exit
 /// when encountering an already-dirty ancestor.
+///
 /// # Usage
 /// - Call from composer mutations (insert/remove/move) during apply phase
 /// - Call from applier-level operations that modify the tree structure
@@ -1265,8 +1280,10 @@ pub fn bubble_layout_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 }
 
 /// Unified API for bubbling measure dirty flags from a node to the root (Applier context).
+///
 /// Call this when a node's size may have changed (children added/removed, modifier changed).
 /// This ensures that measure_layout will increment the cache epoch and re-measure the subtree.
+///
 /// # Behavior
 /// 1. Marks the starting node as needing measure
 /// 2. Walks up the parent chain, marking each ancestor
@@ -1277,6 +1294,7 @@ pub fn bubble_measure_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 }
 
 /// Unified API for bubbling semantics dirty flags from a node to the root (Applier context).
+///
 /// This mirrors [`bubble_layout_dirty`] but toggles semantics-specific dirty
 /// flags instead of layout ones, allowing semantics updates to propagate during
 /// the apply phase without forcing layout work.
@@ -1285,6 +1303,7 @@ pub fn bubble_semantics_dirty(applier: &mut dyn Applier, node_id: NodeId) {
 }
 
 /// Schedules semantics bubbling for a node using the active composer if present.
+///
 /// This defers the work to the apply phase where we can safely mutate the
 /// applier tree without re-entrantly borrowing the composer during composition.
 pub fn queue_semantics_invalidation(node_id: NodeId) {
@@ -1294,19 +1313,24 @@ pub fn queue_semantics_invalidation(node_id: NodeId) {
 }
 
 /// Unified API for bubbling layout dirty flags from a node to the root (Composer context).
+///
 /// This is the canonical function for dirty bubbling during composition (property changes).
 /// Call this after property changes that happen during composition via with_node_mut.
+///
 /// # Behavior
 /// 1. Marks the starting node as needing layout
 /// 2. Walks up the parent chain, marking each ancestor
 /// 3. Stops when it reaches a node that's already dirty (O(1) optimization)
 /// 4. Stops at the root (node with no parent)
+///
 /// # Performance
 /// This function is O(height) in the worst case, but typically O(1) due to early exit
 /// when encountering an already-dirty ancestor.
+///
 /// # Type Requirements
 /// The node type N must implement Node (which includes mark_needs_layout, parent, etc.).
 /// Typically this will be LayoutNode or similar layout-aware node types.
+///
 /// # Usage
 /// - Call from property setters during composition (e.g., set_modifier, set_measure_policy)
 /// - Call from widget composition when layout-affecting state changes
@@ -1315,6 +1339,7 @@ pub fn bubble_layout_dirty_in_composer<N: Node + 'static>(node_id: NodeId) {
 }
 
 /// Unified API for bubbling measure dirty flags from a node to the root during composition.
+///
 /// This queues a dirty-bubble command on the active composer so measure invalidation
 /// runs during the apply phase, avoiding re-entrant applier borrows while widgets are
 /// mutating nodes via `with_node_mut`.
@@ -1332,6 +1357,7 @@ pub fn bubble_measure_dirty_in_composer(node_id: NodeId) {
 }
 
 /// Unified API for bubbling semantics dirty flags from a node to the root (Composer context).
+///
 /// This mirrors [`bubble_layout_dirty_in_composer`] but routes through the semantics
 /// dirty flag instead of the layout one. Modifier nodes can request semantics
 /// invalidations without triggering measure/layout work, and the runtime can
@@ -1586,9 +1612,11 @@ pub trait Applier: Any {
     fn node_generation(&self, id: NodeId) -> u32;
 
     /// Inserts a node with a pre-assigned ID.
+    ///
     /// This is used for virtual nodes whose IDs are allocated separately
     /// (e.g., via allocate_virtual_node_id()). Unlike `create()` which assigns
     /// a new ID, this method uses the provided ID.
+    ///
     /// Returns Ok(()) if successful, or an error if the ID is already in use.
     fn insert_with_id(&mut self, id: NodeId, node: Box<dyn Node>) -> Result<(), NodeError>;
 
