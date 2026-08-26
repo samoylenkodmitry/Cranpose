@@ -34,6 +34,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         branch_path: crate::slot::BRANCH_PATH_ROOT,
+        branch_occurrence_path: crate::slot::BRANCH_PATH_ROOT,
         groups: vec![GroupRecord {
             key: GroupKey::new(900, None, 0),
             parent_anchor: AnchorId::INVALID,
@@ -48,6 +49,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
             anchor: owner,
             scope_id: None,
             transparent: false,
+            shell_site: None,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {
@@ -75,6 +77,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
         branch_path: crate::slot::BRANCH_PATH_ROOT,
+        branch_occurrence_path: crate::slot::BRANCH_PATH_ROOT,
         groups: vec![GroupRecord {
             key: GroupKey::new(901, None, 0),
             parent_anchor: AnchorId::INVALID,
@@ -89,6 +92,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             anchor: owner,
             scope_id: None,
             transparent: false,
+            shell_site: None,
         }],
         payloads: Vec::new(),
         nodes: vec![NodeRecord {
@@ -632,6 +636,7 @@ fn restore_subtree_rejects_empty_detached_subtree_without_mutating_table() {
         payloads: Vec::new(),
         nodes: Vec::new(),
         branch_path: crate::slot::BRANCH_PATH_ROOT,
+        branch_occurrence_path: crate::slot::BRANCH_PATH_ROOT,
     };
     let restore_key = GroupKey::new(CHILD_KEY, None, 0);
     let restore = try_restore_detached_child(
@@ -657,6 +662,7 @@ fn empty_detached_subtree_root_scope_id_is_absent() {
         payloads: Vec::new(),
         nodes: Vec::new(),
         branch_path: crate::slot::BRANCH_PATH_ROOT,
+        branch_occurrence_path: crate::slot::BRANCH_PATH_ROOT,
     };
 
     assert_eq!(empty_subtree.root_scope_id(), None);

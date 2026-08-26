@@ -21,6 +21,29 @@ pub(super) struct GroupRecord {
     /// detachment reaches through it so each child decides its own retention
     /// fate instead of inheriting dispose-by-default from the bracket.
     pub(super) transparent: bool,
+    /// For an explicitly keyed group that passed through a deferred branch
+    /// shell: the shell's branch-site key. A `with_key` wrapper collapses the
+    /// location salt to one line, so this is what still distinguishes two
+    /// branches funneling the same key through it — a reuse arriving from a
+    /// different site materializes its bracket and composes fresh.
+    pub(super) shell_site: Option<crate::Key>,
+}
+
+impl SlotTable {
+    pub(in crate::slot) fn group_shell_site(&self, anchor: AnchorId) -> Option<crate::Key> {
+        self.active_group_index(anchor)
+            .and_then(|index| self.groups.get(index))
+            .and_then(|group| group.shell_site)
+    }
+
+    pub(in crate::slot) fn set_group_shell_site(&mut self, anchor: AnchorId, site: crate::Key) {
+        if let Some(record) = self
+            .active_group_index(anchor)
+            .and_then(|index| self.groups.get_mut(index))
+        {
+            record.shell_site = Some(site);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

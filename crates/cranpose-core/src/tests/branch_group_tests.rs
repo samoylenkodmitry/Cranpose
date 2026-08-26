@@ -1827,3 +1827,112 @@ fn an_if_let_scrutinee_keeps_its_temporaries_borrowable() {
     assert_eq!((branch_inits(), branch_seen()), (1, 3));
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn looped_retention_probe(rows: Vec<bool>) {
+    for on in rows {
+        if on {
+            retained_marker(9);
+        }
+    }
+}
+
+#[test]
+fn repeated_occurrences_of_one_branch_site_retain_independently() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(54, || looped_retention_probe(vec![true, true]))
+        .expect("initial composition");
+    assert_eq!(branch_inits(), 2);
+
+    composition
+        .render(54, || looped_retention_probe(vec![false, false]))
+        .expect("retain both occurrences");
+
+    composition
+        .render(54, || looped_retention_probe(vec![true, true]))
+        .expect("restore both occurrences");
+    assert_eq!(
+        branch_inits(),
+        2,
+        "two occurrences of one site retain two identities; neither is a duplicate"
+    );
+    assert_composition_valid(&composition);
+}
+
+mod delegating_with_key {
+    use super::*;
+
+    fn with_key<K: std::hash::Hash>(key: &K, content: impl FnOnce()) {
+        cranpose_core::with_key(key, content);
+    }
+
+    #[composable]
+    pub(super) fn probe(cond: bool) {
+        if cond {
+            with_key(&"dup", || {
+                let value = remember_branch_marker(1);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            });
+        } else {
+            with_key(&"dup", || {
+                let value = remember_branch_marker(2);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            });
+        }
+    }
+}
+
+#[test]
+fn a_delegating_with_key_lookalike_does_not_merge_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(55, || delegating_with_key::probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    // The wrapper is one `#[track_caller]` line, so the real `with_key`'s
+    // location salt no longer distinguishes the branches; the deferred shell
+    // must notice the keyed group arriving from a different branch site.
+    composition
+        .render(55, || delegating_with_key::probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "two branches funneling one key through a wrapper are still two identities"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn remember_opt() -> Option<i32> {
+    Some(remember_branch_marker(5))
+}
+
+#[composable]
+fn composing_scrutinee_probe() {
+    if let Some(value) = remember_opt().filter(|value| *value > 0) {
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn a_composing_if_let_scrutinee_composes_inside_its_own_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(56, composing_scrutinee_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 5));
+
+    composition
+        .render(56, composing_scrutinee_probe)
+        .expect("recompose");
+    assert_eq!((branch_inits(), branch_seen()), (1, 5));
+    assert_composition_valid(&composition);
+}

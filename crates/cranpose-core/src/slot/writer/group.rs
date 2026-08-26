@@ -173,12 +173,12 @@ impl SlotWriteSession<'_> {
         self.preview_group_key(seed)
     }
 
-    /// The branch-site path of the group about to be opened at the current
-    /// cursor: the fold of the transparent chain above it, or the root fold
-    /// when it sits under a real group.
-    pub(crate) fn current_branch_path_key(&self) -> crate::Key {
+    /// The occurrence identity of the branch path the group about to be
+    /// opened sits under — see [`SlotTable::branch_occurrence_path_key`]; the
+    /// root fold when it sits under a real group.
+    pub(crate) fn current_branch_occurrence_path_key(&self) -> crate::Key {
         self.table
-            .branch_path_key(self.state.current_parent_anchor())
+            .branch_occurrence_path_key(self.state.current_parent_anchor())
     }
 
     fn recover_malformed_group_start(
@@ -347,6 +347,14 @@ impl SlotWriteSession<'_> {
         shell.materialized
     }
 
+    /// The branch-site key of the innermost pending, unmaterialized shell at
+    /// the current level, if any.
+    fn pending_unmaterialized_shell_site(&self) -> Option<crate::Key> {
+        let shell = self.state.deferred_branch_shells.last()?;
+        (!shell.materialized && shell.parent == self.state.current_parent_anchor())
+            .then_some(shell.seed.static_key)
+    }
+
     /// Open every pending branch shell whose level the next operation is
     /// about to write into. Marked materialized before its `begin_group` so
     /// the recursive hook terminates.
@@ -375,13 +383,58 @@ impl SlotWriteSession<'_> {
         if key.explicit_key.is_none() {
             self.materialize_deferred_branch_shells();
         }
+        self.flush_payload_location_refreshes();
+        #[cfg(any(test, debug_assertions))]
+        self.state
+            .debug_assert_no_pending_payload_location_refreshes("begin_group");
+        self.discard_stale_group_frames();
+        let mut pass_through_site = if key.explicit_key.is_some() {
+            self.pending_unmaterialized_shell_site()
+        } else {
+            None
+        };
+        let mut cursor = ChildCursor::new(
+            self.state.current_parent_anchor(),
+            self.state.current_child_cursor(),
+        );
+        let mut resolution = restored
+            .is_none()
+            .then(|| self.resolve_active_child(cursor, key));
+
+        // A keyed group reused through a pending shell must have come from
+        // the same branch site. A `with_key` wrapper collapses the location
+        // salt onto one line, so two branches funneling one key through it
+        // would otherwise share identity — the exact failure branch groups
+        // exist to prevent. On conflict the shell materializes and the key
+        // composes fresh inside the bracket.
+        if let (Some(site), Some(probe)) = (pass_through_site, &resolution) {
+            let previous_site = match probe {
+                ActiveChildResolution::ReuseExpected { anchor } => {
+                    self.table.group_shell_site(*anchor)
+                }
+                ActiveChildResolution::MoveLaterSibling { root } => {
+                    self.table.group_shell_site(root.anchor())
+                }
+                ActiveChildResolution::InsertNew => None,
+            };
+            if previous_site.is_some_and(|previous| previous != site) {
+                self.materialize_deferred_branch_shells();
+                pass_through_site = None;
+                cursor = ChildCursor::new(
+                    self.state.current_parent_anchor(),
+                    self.state.current_child_cursor(),
+                );
+                resolution = Some(self.resolve_active_child(cursor, key));
+            }
+        }
+
         self.state.consume_group_key(key);
         // The per-frame duplicate check cannot see across sibling brackets of
         // one branch site, where the continuity machinery would let a later
         // shift silently adopt the duplicate's subtree. Be exactly as loud as
         // the frame-local check the fully keyed (elided) form hits.
         if key.explicit_key.is_some() {
-            let parent_anchor = self.state.current_parent_anchor();
+            let parent_anchor = cursor.parent();
             let parent_is_transparent = self
                 .table
                 .active_group_index(parent_anchor)
@@ -398,32 +451,37 @@ impl SlotWriteSession<'_> {
                 );
             }
         }
-        self.flush_payload_location_refreshes();
-        #[cfg(any(test, debug_assertions))]
-        self.state
-            .debug_assert_no_pending_payload_location_refreshes("begin_group");
-        self.discard_stale_group_frames();
-        let parent_anchor = self.state.current_parent_anchor();
-        let insert_index = self.state.current_child_cursor();
 
         if let Some(restored) = restored {
             if let Some(started) = self.restore_started_group(key, restored) {
+                self.stamp_shell_site(started.anchor, pass_through_site);
                 return started;
             }
         }
 
-        let cursor = ChildCursor::new(parent_anchor, insert_index);
-        let resolution = self.resolve_active_child(cursor, key);
+        let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
         if matches!(resolution, ActiveChildResolution::InsertNew) {
             if let Some(subtree) = self.claim_or_steal_keyed_subtree(key) {
                 if let Some(started) = self.adopt_started_group(key, subtree) {
+                    self.stamp_shell_site(started.anchor, pass_through_site);
                     return started;
                 }
             }
         }
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
-        self.open_started_group(started.anchor, started.kind)
-            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))
+        let opened = self
+            .open_started_group(started.anchor, started.kind)
+            .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor));
+        self.stamp_shell_site(opened.anchor, pass_through_site);
+        opened
+    }
+
+    /// Record which branch site's shell an explicitly keyed group passed
+    /// through, so a later reuse from a different site is recognized.
+    fn stamp_shell_site(&mut self, anchor: AnchorId, site: Option<crate::Key>) {
+        if let Some(site) = site {
+            self.table.set_group_shell_site(anchor, site);
+        }
     }
 
     pub(crate) fn end_group(&mut self) {

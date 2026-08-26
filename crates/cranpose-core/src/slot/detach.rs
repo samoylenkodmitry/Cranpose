@@ -154,6 +154,7 @@ impl SlotTable {
         // table, which is exactly now: the shell-dissolution recursion detaches
         // nested children before it dissolves their shells.
         let branch_path = self.branch_path_key(root_parent_anchor);
+        let branch_occurrence_path = self.branch_occurrence_path_key(root_parent_anchor);
         let Some(removed_group_range) =
             self.repair_group_subtree_range_at_index(root_index, "subtree detach")
         else {
@@ -165,6 +166,7 @@ impl SlotTable {
                 payloads: Vec::new(),
                 nodes: Vec::new(),
                 branch_path,
+                branch_occurrence_path,
             };
         };
         let root_subtree_len = removed_group_range.len();
@@ -177,6 +179,7 @@ impl SlotTable {
                 payloads: Vec::new(),
                 nodes: Vec::new(),
                 branch_path,
+                branch_occurrence_path,
             };
         };
         for group in &mut removed_groups {
@@ -207,6 +210,7 @@ impl SlotTable {
             payloads: removed_payloads,
             nodes: removed_nodes,
             branch_path,
+            branch_occurrence_path,
         };
         #[cfg(any(test, debug_assertions))]
         subtree
@@ -405,6 +409,25 @@ impl SlotTable {
     /// the same nested bracket path — a different conditional branch, at any
     /// depth, never claims it.
     pub(in crate::slot) fn branch_path_key(&self, anchor: AnchorId) -> crate::Key {
+        self.fold_transparent_chain(anchor, |record| record.key.static_key)
+    }
+
+    /// [`Self::branch_path_key`] with each bracket's ordinal mixed in: the
+    /// identity of one *occurrence* of the nested path. Keyed-move continuity
+    /// wants the site identity — a shifted occurrence must claim its
+    /// sibling's key — while retention wants the occurrence: two loop
+    /// occurrences of one site retain two subtrees.
+    pub(in crate::slot) fn branch_occurrence_path_key(&self, anchor: AnchorId) -> crate::Key {
+        self.fold_transparent_chain(anchor, |record| {
+            record.key.static_key ^ crate::Key::from(record.key.ordinal).rotate_left(17)
+        })
+    }
+
+    fn fold_transparent_chain(
+        &self,
+        anchor: AnchorId,
+        mut step: impl FnMut(&GroupRecord) -> crate::Key,
+    ) -> crate::Key {
         let mut chain: Vec<crate::Key> = Vec::new();
         let mut current = anchor;
         while let Some(record) = self
@@ -414,12 +437,12 @@ impl SlotTable {
             if !record.transparent {
                 break;
             }
-            chain.push(record.key.static_key);
+            chain.push(step(record));
             current = record.parent_anchor;
         }
         let mut folded: crate::Key = super::BRANCH_PATH_ROOT;
-        for static_key in chain.iter().rev() {
-            folded ^= *static_key;
+        for step_key in chain.iter().rev() {
+            folded ^= *step_key;
             folded = folded.wrapping_mul(0x0000_0100_0000_01b3);
         }
         folded

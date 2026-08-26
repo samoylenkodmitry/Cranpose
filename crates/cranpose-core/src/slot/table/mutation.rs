@@ -175,6 +175,7 @@ impl SlotTable {
                 anchor,
                 scope_id: None,
                 transparent: false,
+                shell_site: None,
             },
         );
         self.refresh_group_indexes_from(insert_index);

@@ -115,12 +115,21 @@ impl BranchGroupInjector<'_> {
             Expr::Unary(unary) => self.wrap_condition(&mut unary.expr),
             // A `let` scrutinee's temporaries live into the branch body —
             // that is what lets `if let Some(x) = make().first()` keep the
-            // borrow — so it can never be moved into a block. The first
-            // scrutinee of a condition always evaluates and is positionally
-            // stable without a group; a composing scrutinee of a later,
-            // conditionally evaluated let-chain operand stays an uncovered
-            // edge.
-            Expr::Let(let_expr) => self.visit_expr_mut(&mut let_expr.expr),
+            // borrow — so it can never be moved into a block. The guard rides
+            // along as one of those temporaries instead: a tuple holds the
+            // guard while the scrutinee's value is projected out, and the
+            // group closes when the `if let`'s temporaries drop, after the
+            // branch body.
+            Expr::Let(let_expr) => {
+                let scrutinee = &mut let_expr.expr;
+                let needs_group = expr_can_reach_composer(scrutinee);
+                self.visit_expr_mut(scrutinee);
+                if needs_group {
+                    let guard_expr = self.branch_guard_expr(scrutinee.span());
+                    let original = scrutinee.clone();
+                    **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
+                }
+            }
             leaf => {
                 let needs_group = expr_can_reach_composer(leaf) && !expr_contains_let(leaf);
                 self.visit_expr_mut(leaf);
@@ -173,6 +182,29 @@ impl BranchGroupInjector<'_> {
                 let #guard = #composer.#entry(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
+            }
+        }
+    }
+
+    /// The guard as a bare expression, for positions where a `let` statement
+    /// cannot go — a `let` scrutinee's tuple ride-along.
+    fn branch_guard_expr(&mut self, span: Span) -> Expr {
+        let branch = self.next_branch;
+        self.next_branch += 1;
+        let core_path = self.core_path;
+        if self.in_content_closure {
+            syn::parse_quote_spanned! {span=>
+                #core_path::__branch_group_scope(
+                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                )
+            }
+        } else {
+            self.uses_composer_alias = true;
+            let composer = composer_alias_ident();
+            syn::parse_quote_spanned! {span=>
+                #composer.__branch_group(
+                    #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                )
             }
         }
     }

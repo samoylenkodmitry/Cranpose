@@ -260,10 +260,13 @@ pub(crate) struct DetachedSubtree {
     pub(super) nodes: Vec<NodeRecord>,
     /// The branch-site path this subtree was detached from — the fold of the
     /// transparent chain above its original parent, computed while that chain
-    /// was still in the table. Parking and retention key on it, so a keyed or
-    /// retained subtree returns only to an occurrence of the same nested
-    /// bracket path.
+    /// was still in the table. Parking keys on it, so a keyed subtree moves
+    /// only between occurrences of the same nested bracket path.
     pub(crate) branch_path: crate::Key,
+    /// The site path with each bracket's ordinal mixed in: one occurrence's
+    /// identity. Retention keys on it, so two loop occurrences of one site
+    /// retain two subtrees instead of colliding.
+    pub(crate) branch_occurrence_path: crate::Key,
 }
 
 impl DetachedSubtree {
