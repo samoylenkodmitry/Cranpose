@@ -9548,21 +9548,21 @@ impl GpuRenderer {
                     returns,
                     &mut frame_encoder,
                 );
-                if result.is_ok() {
-                    if let Some((output_view, bind_group)) = output {
-                        match output_mode {
-                            OutputMode::Display => &self.output_converter,
-                            OutputMode::Screenshot => &self.screenshot_converter,
-                        }
-                        .encode(
-                            &self.device,
-                            frame_encoder.encoder(),
-                            output_view,
-                            bind_group,
-                            self.adapter_backend,
-                        );
-                        frame_encoder.record_pass();
+                if result.is_ok()
+                    && let Some((output_view, bind_group)) = output
+                {
+                    match output_mode {
+                        OutputMode::Display => &self.output_converter,
+                        OutputMode::Screenshot => &self.screenshot_converter,
                     }
+                    .encode(
+                        &self.device,
+                        frame_encoder.encoder(),
+                        output_view,
+                        bind_group,
+                        self.adapter_backend,
+                    );
+                    frame_encoder.record_pass();
                 }
                 let execution =
                     if result.is_ok() && frame_encoder.recorded_pass_count() > initial_pass_count {

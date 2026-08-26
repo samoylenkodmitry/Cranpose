@@ -213,10 +213,10 @@ pub use text::{
     measure_text_with_options_for_node, prepare_text_layout, prepare_text_layout_for_node,
     set_text_measurer,
 };
-pub use text_field_focus::has_focused_field;
 // Editable-state snapshot for platform IMEs (Android InputConnection, web
 // composition) - platform runtimes read it through the shell
 pub use text_field_focus::ImeEditorState;
+pub use text_field_focus::has_focused_field;
 pub use text_field_modifier_node::{TextFieldElement, TextFieldModifierNode, TextPanResolver};
 // Platform soft-keyboard bridge - platform runtimes install a handler so text
 // field focus changes can show/hide the on-screen keyboard

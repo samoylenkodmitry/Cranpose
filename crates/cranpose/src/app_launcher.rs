@@ -442,8 +442,8 @@ impl AppLauncher {
     ///
     /// ```no_run
     /// use cranpose::{
-    ///     text::{FontFamily, FontFile, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontFile, FontWeight},
     /// };
     ///
     /// let roboto = FontFamily::file_backed(vec![
@@ -472,8 +472,8 @@ impl AppLauncher {
     ///
     /// ```no_run
     /// use cranpose::{
-    ///     text::{FontFamily, FontStyle, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontStyle, FontWeight},
     /// };
     ///
     /// # fn load(bytes: Vec<u8>) {
@@ -512,8 +512,8 @@ impl AppLauncher {
     /// # #[cfg(target_os = "android")]
     /// # fn main(app: android_activity::AndroidApp) {
     /// use cranpose::{
-    ///     text::{FontFamily, FontStyle, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontStyle, FontWeight},
     /// };
     ///
     /// let launcher = AppLauncher::new().with_android_asset_font(

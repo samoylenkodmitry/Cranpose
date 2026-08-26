@@ -1831,14 +1831,14 @@ mod tests {
         query: &str,
         match_kind: SemanticTextMatchKind,
     ) -> Option<SemanticQueryResult> {
-        if let Some(text) = semantics_node_text(sem_node) {
-            if semantics_text_matches(text, query, match_kind) {
-                return Some(SemanticQueryResult {
-                    node_id: layout_box.node_id,
-                    bounds: bounds_from_layout_box(layout_box),
-                    text: Some(text.to_string()),
-                });
-            }
+        if let Some(text) = semantics_node_text(sem_node)
+            && semantics_text_matches(text, query, match_kind)
+        {
+            return Some(SemanticQueryResult {
+                node_id: layout_box.node_id,
+                bounds: bounds_from_layout_box(layout_box),
+                text: Some(text.to_string()),
+            });
         }
 
         sem_node

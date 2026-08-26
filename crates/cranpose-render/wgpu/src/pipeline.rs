@@ -1424,19 +1424,19 @@ pub(crate) fn push_translated_text_style_draws(
         text_clip,
     );
     let z_end = scene.current_z();
-    if z_end > z_start {
-        if let Some(surface_rect) = emitted_scene_bounds(scene, counts) {
-            scene.push_effect_layer_with_surface(
-                surface_rect,
-                text_clip,
-                None,
-                BlendMode::SrcOver,
-                1.0,
-                z_start,
-                z_end,
-                SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
-            );
-        }
+    if z_end > z_start
+        && let Some(surface_rect) = emitted_scene_bounds(scene, counts)
+    {
+        scene.push_effect_layer_with_surface(
+            surface_rect,
+            text_clip,
+            None,
+            BlendMode::SrcOver,
+            1.0,
+            z_start,
+            z_end,
+            SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
+        );
     }
 }
 

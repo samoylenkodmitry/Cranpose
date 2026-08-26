@@ -11,7 +11,8 @@ use crate::{
 
 fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> LayoutTree {
     let handle = composition.runtime_handle();
-    let layout = {
+
+    {
         let mut applier = composition.applier_mut();
         applier.set_runtime_handle(handle);
         let result = applier
@@ -25,8 +26,7 @@ fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) ->
             .expect("layout");
         applier.clear_runtime_handle();
         result
-    };
-    layout
+    }
 }
 
 #[test]

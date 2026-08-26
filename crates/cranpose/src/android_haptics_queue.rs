@@ -136,12 +136,12 @@ impl HapticQueue {
                 state.queue.push_back(command);
                 break;
             }
-            if matches!(command, HapticCommand::Waveform { .. }) {
-                if let Some(tail @ HapticCommand::Waveform { .. }) = state.queue.back_mut() {
-                    *tail = command;
-                    state.coalesced += 1;
-                    break;
-                }
+            if matches!(command, HapticCommand::Waveform { .. })
+                && let Some(tail @ HapticCommand::Waveform { .. }) = state.queue.back_mut()
+            {
+                *tail = command;
+                state.coalesced += 1;
+                break;
             }
             // A discrete effect must not be dropped and a waveform must not
             // jump past one: wait for the delivery thread to free a slot.

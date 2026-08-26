@@ -67,10 +67,10 @@ impl Notifier for IosNotifier {
         content.setTitle(&NSString::from_str(&request.title));
         content.setBody(&NSString::from_str(&request.body));
         content.setSound(Some(&UNNotificationSound::defaultSound()));
-        if let Some(link) = request.deeplink.as_deref() {
-            if let Ok(mut map) = deeplink_map().lock() {
-                map.insert(request.id.clone(), link.to_owned());
-            }
+        if let Some(link) = request.deeplink.as_deref()
+            && let Ok(mut map) = deeplink_map().lock()
+        {
+            map.insert(request.id.clone(), link.to_owned());
         }
 
         let id = NSString::from_str(&request.id);

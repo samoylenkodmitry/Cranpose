@@ -1882,10 +1882,10 @@ mod tests {
                         move |scope| {
                             let responder_slot = Rc::clone(&responder_slot);
                             scope.items(30, move |_index| {
-                                if responder_slot.borrow().is_none() {
-                                    if let Some(r) = local_bring_into_view_responder().current() {
-                                        *responder_slot.borrow_mut() = Some(r);
-                                    }
+                                if responder_slot.borrow().is_none()
+                                    && let Some(r) = local_bring_into_view_responder().current()
+                                {
+                                    *responder_slot.borrow_mut() = Some(r);
                                 }
                                 Box(
                                     Modifier::empty().size(Size {

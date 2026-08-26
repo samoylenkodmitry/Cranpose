@@ -104,10 +104,10 @@ struct IosMediaPlayer;
 fn configure_audio_session() {
     unsafe {
         let session = AVAudioSession::sharedInstance();
-        if let Some(category) = AVAudioSessionCategoryPlayback {
-            if let Err(error) = session.setCategory_error(category) {
-                log::warn!("cranpose: iOS audio session category refused: {error:?}");
-            }
+        if let Some(category) = AVAudioSessionCategoryPlayback
+            && let Err(error) = session.setCategory_error(category)
+        {
+            log::warn!("cranpose: iOS audio session category refused: {error:?}");
         }
     }
 }
@@ -488,12 +488,12 @@ impl MediaPlayer for IosMediaPlayer {
 
     fn stop(&self) {
         GENERATION.fetch_add(1, Ordering::AcqRel);
-        if let Ok(mut slot) = player_slot().lock() {
-            if let Some(holder) = slot.take() {
-                unsafe {
-                    holder.player.stop();
-                    holder.player.setDelegate(None);
-                }
+        if let Ok(mut slot) = player_slot().lock()
+            && let Some(holder) = slot.take()
+        {
+            unsafe {
+                holder.player.stop();
+                holder.player.setDelegate(None);
             }
         }
         unsafe {

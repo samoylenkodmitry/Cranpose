@@ -172,10 +172,10 @@ impl Camera for IosCamera {
     }
 
     fn lens(&self) -> Option<String> {
-        if let Ok(slot) = session_slot().lock() {
-            if let Some(holder) = slot.as_ref() {
-                return Some(unsafe { holder.device.uniqueID() }.to_string());
-            }
+        if let Ok(slot) = session_slot().lock()
+            && let Some(holder) = slot.as_ref()
+        {
+            return Some(unsafe { holder.device.uniqueID() }.to_string());
         }
         lens_slot().lock().ok().and_then(|slot| slot.clone())
     }
@@ -200,10 +200,10 @@ impl Camera for IosCamera {
     }
 
     fn has_flash(&self) -> bool {
-        if let Ok(slot) = session_slot().lock() {
-            if let Some(holder) = slot.as_ref() {
-                return unsafe { holder.device.hasFlash() };
-            }
+        if let Ok(slot) = session_slot().lock()
+            && let Some(holder) = slot.as_ref()
+        {
+            return unsafe { holder.device.hasFlash() };
         }
         back_lenses()
             .first()
@@ -220,10 +220,10 @@ impl Camera for IosCamera {
     }
 
     fn stop(&self) {
-        if let Ok(mut slot) = session_slot().lock() {
-            if let Some(holder) = slot.take() {
-                unsafe { holder.session.stopRunning() };
-            }
+        if let Ok(mut slot) = session_slot().lock()
+            && let Some(holder) = slot.take()
+        {
+            unsafe { holder.session.stopRunning() };
         }
         FRAME_SEQUENCE.store(0, std::sync::atomic::Ordering::Release);
     }
@@ -298,12 +298,11 @@ define_class!(
             if let Some(frame) = frame_from_sample(sample_buffer) {
                 // The framework keeps the newest frame and hands it to whoever
                 // is observing; the parked buffer here is only the recycling.
-                if let Some(old) = cranpose_services::latest_camera_frame() {
-                    if let Ok(mut pool) = buffer_pool().lock() {
-                        if pool.len() < 3 {
-                            pool.push(old.bytes);
-                        }
-                    }
+                if let Some(old) = cranpose_services::latest_camera_frame()
+                    && let Ok(mut pool) = buffer_pool().lock()
+                    && pool.len() < 3
+                {
+                    pool.push(old.bytes);
                 }
                 cranpose_services::publish_camera_frame(frame);
             }
@@ -349,10 +348,10 @@ define_class!(
             } else {
                 unsafe { photo.fileDataRepresentation() }.map(|data| data.to_vec())
             };
-            if let Ok(mut slot) = photo_result_slot().lock() {
-                if let Some(sender) = slot.take() {
-                    let _ = sender.send(jpeg);
-                }
+            if let Ok(mut slot) = photo_result_slot().lock()
+                && let Some(sender) = slot.take()
+            {
+                let _ = sender.send(jpeg);
             }
         }
     }

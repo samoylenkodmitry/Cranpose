@@ -1,5 +1,7 @@
-use std::collections::BTreeMap;
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock, PoisonError},
+};
 
 fn overrides() -> &'static Mutex<BTreeMap<&'static str, String>> {
     static OVERRIDES: OnceLock<Mutex<BTreeMap<&'static str, String>>> = OnceLock::new();

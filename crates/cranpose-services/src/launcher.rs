@@ -12,7 +12,7 @@
 //!
 //! ```rust,no_run
 //! use cranpose_macros::composable;
-//! use cranpose_services::{launcher::rememberOpenFileLauncher, FilePickerOptions};
+//! use cranpose_services::{FilePickerOptions, launcher::rememberOpenFileLauncher};
 //!
 //! #[composable]
 //! fn ImportButton() {

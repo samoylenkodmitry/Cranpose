@@ -435,10 +435,10 @@ fn set_analysis_running(browser: &mut Browser, enabled: bool) -> bool {
         return false;
     };
     if !enabled {
-        if let Some(graph) = browser.graph.as_mut() {
-            if let Some(timer) = graph.timer.take() {
-                window.clear_interval_with_handle(timer);
-            }
+        if let Some(graph) = browser.graph.as_mut()
+            && let Some(timer) = graph.timer.take()
+        {
+            window.clear_interval_with_handle(timer);
         }
         return true;
     }

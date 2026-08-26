@@ -239,10 +239,10 @@ fn selection_draw_command_created_when_selected() {
         let expected_width =
             crate::text::measure_text(&crate::text::AnnotatedString::from("Hello"), &style).width;
         let selection_rect = primitives.iter().find_map(|primitive| {
-            if let cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } = primitive {
-                if (rect.width - expected_width).abs() < 1.0 {
-                    return Some(rect);
-                }
+            if let cranpose_ui_graphics::DrawPrimitive::Rect { rect, .. } = primitive
+                && (rect.width - expected_width).abs() < 1.0
+            {
+                return Some(rect);
             }
             None
         });

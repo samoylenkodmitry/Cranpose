@@ -752,17 +752,15 @@ pub async fn run(
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
             // Get pasted text from clipboardData (synchronous!)
-            if let Some(data) = event.clipboard_data() {
-                if let Ok(text) = data.get_data("text/plain") {
-                    if !text.is_empty() {
-                        if let Ok(mut app_mut) = app.try_borrow_mut() {
-                            if app_mut.on_paste(&text) {
-                                event.prevent_default();
-                            }
-                            request_frame();
-                        }
-                    }
+            if let Some(data) = event.clipboard_data()
+                && let Ok(text) = data.get_data("text/plain")
+                && !text.is_empty()
+                && let Ok(mut app_mut) = app.try_borrow_mut()
+            {
+                if app_mut.on_paste(&text) {
+                    event.prevent_default();
                 }
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         document.add_event_listener_with_callback("paste", closure.as_ref().unchecked_ref())?;
@@ -774,15 +772,15 @@ pub async fn run(
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                if let Some(text) = app_mut.on_copy() {
-                    // Put copied text into the clipboard via the event
-                    if let Some(data) = event.clipboard_data() {
-                        let _ = data.set_data("text/plain", &text);
-                        event.prevent_default();
-                    }
-                    request_frame();
+            if let Ok(mut app_mut) = app.try_borrow_mut()
+                && let Some(text) = app_mut.on_copy()
+            {
+                // Put copied text into the clipboard via the event
+                if let Some(data) = event.clipboard_data() {
+                    let _ = data.set_data("text/plain", &text);
+                    event.prevent_default();
                 }
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         document.add_event_listener_with_callback("copy", closure.as_ref().unchecked_ref())?;
@@ -794,15 +792,15 @@ pub async fn run(
         let app = app.clone();
         let request_frame = request_frame.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::ClipboardEvent| {
-            if let Ok(mut app_mut) = app.try_borrow_mut() {
-                if let Some(text) = app_mut.on_cut() {
-                    // Put cut text into the clipboard via the event
-                    if let Some(data) = event.clipboard_data() {
-                        let _ = data.set_data("text/plain", &text);
-                        event.prevent_default();
-                    }
-                    request_frame();
+            if let Ok(mut app_mut) = app.try_borrow_mut()
+                && let Some(text) = app_mut.on_cut()
+            {
+                // Put cut text into the clipboard via the event
+                if let Some(data) = event.clipboard_data() {
+                    let _ = data.set_data("text/plain", &text);
+                    event.prevent_default();
                 }
+                request_frame();
             }
         }) as Box<dyn FnMut(_)>);
         document.add_event_listener_with_callback("cut", closure.as_ref().unchecked_ref())?;
@@ -868,12 +866,12 @@ pub async fn run(
         let surface_dirty = surface_dirty.clone();
         let request_frame = request_frame.clone();
         Rc::new(move |requested: Option<(f32, f32)>| {
-            if let Some((requested_width, requested_height)) = requested {
-                if let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>() {
-                    let style = html_element.style();
-                    let _ = style.set_property("width", &format!("{requested_width}px"));
-                    let _ = style.set_property("height", &format!("{requested_height}px"));
-                }
+            if let Some((requested_width, requested_height)) = requested
+                && let Some(html_element) = canvas.dyn_ref::<web_sys::HtmlElement>()
+            {
+                let style = html_element.style();
+                let _ = style.set_property("width", &format!("{requested_width}px"));
+                let _ = style.set_property("height", &format!("{requested_height}px"));
             }
 
             let scale_factor = window.device_pixel_ratio();
@@ -954,13 +952,12 @@ pub async fn run(
     *render_loop.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         frame_pending_for_loop.set(false);
         let update_result = app.borrow_mut().update();
-        if let Ok(mut app_mut) = app.try_borrow_mut() {
-            if let Err(error) = accessibility_for_loop
+        if let Ok(mut app_mut) = app.try_borrow_mut()
+            && let Err(error) = accessibility_for_loop
                 .borrow_mut()
                 .sync(&document_for_loop, &mut app_mut)
-            {
-                log::error!("web accessibility sync failed: {error:?}");
-            }
+        {
+            log::error!("web accessibility sync failed: {error:?}");
         }
 
         // Present when the surface still owes its first (or post-reconfigure)

@@ -447,11 +447,11 @@ pub fn clear_transient_scroll_motion_contexts() {
 #[cfg(test)]
 pub(crate) fn layout_frame_arena_placement_scratch_count() -> usize {
     let context = require_current_app_context("layout frame arena access");
-    let count = context
+
+    context
         .layout_frame_arena
         .borrow()
-        .available_placement_scratch_count();
-    count
+        .available_placement_scratch_count()
 }
 
 pub(crate) fn with_layout_node_registry<R>(

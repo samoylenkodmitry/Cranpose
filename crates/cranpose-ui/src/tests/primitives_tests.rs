@@ -213,8 +213,8 @@ fn capture_subcompose_child_constraints(
     drop(composer);
     restore_measure_composer(slots, &mut temp_applier, slots_host, applier_host);
     *applier_guard = temp_applier;
-    let captured_constraints = captured.borrow().clone();
-    captured_constraints
+
+    captured.borrow().clone()
 }
 
 fn render_texts(

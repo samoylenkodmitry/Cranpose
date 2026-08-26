@@ -63,10 +63,10 @@ impl ShareSheet for IosShareSheet {
         // iPad presents the sheet in a popover, which requires a source view or
         // it raises at runtime. Anchor it to the root view.
         let presented: &UIViewController = &controller;
-        if let Some(popover) = presented.popoverPresentationController() {
-            if let Some(view) = root.view() {
-                popover.setSourceView(Some(&view));
-            }
+        if let Some(popover) = presented.popoverPresentationController()
+            && let Some(view) = root.view()
+        {
+            popover.setSourceView(Some(&view));
         }
 
         root.presentViewController_animated_completion(presented, true, None);

@@ -2113,14 +2113,14 @@ fn collect_forbidden_time_source_offenders_from_source(
         }
     }
 
-    if !pending_use.is_empty() {
-        if let Some(reason) = forbidden_std_time_import_reason(&pending_use) {
-            offenders.push(format!(
-                "{}:{}: {reason}",
-                relative.display(),
-                pending_use_start_line
-            ));
-        }
+    if !pending_use.is_empty()
+        && let Some(reason) = forbidden_std_time_import_reason(&pending_use)
+    {
+        offenders.push(format!(
+            "{}:{}: {reason}",
+            relative.display(),
+            pending_use_start_line
+        ));
     }
 }
 

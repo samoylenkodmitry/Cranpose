@@ -2960,7 +2960,7 @@ fn next_marker(enabled: bool, marker: i32) -> Option<i32> {
 
 #[composable]
 fn while_let_scrutinee_probe(mut count: usize) {
-    while let Some(_) = next_marker(count > 0, 10) {
+    while let Some(_marker) = next_marker(count > 0, 10) {
         count -= 1;
     }
     let tail = next_marker(true, 20).expect("the tail always composes");

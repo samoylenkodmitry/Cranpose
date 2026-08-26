@@ -77,7 +77,7 @@ fn settings_spec() -> WearScalingLazyColumnSpec {
 /// A list of fixed-height rows, so the geometry under test is the list's and
 /// not the text measurer's.
 fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> TestComposition {
-    let composition = run_test_composition(move || {
+    run_test_composition(move || {
         crate::set_density(PX);
         let state = rememberWearScalingListState(CentreAnchor::default());
         LAST_STATE.with(|cell| *cell.borrow_mut() = Some(state));
@@ -99,8 +99,7 @@ fn compose_fixed_rows(heights: Vec<f32>, spec: WearScalingLazyColumnSpec) -> Tes
                 );
             },
         );
-    });
-    composition
+    })
 }
 
 use crate::widgets::wear::rememberWearScalingListState;

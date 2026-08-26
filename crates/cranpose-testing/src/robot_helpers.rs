@@ -52,15 +52,15 @@ impl SemanticElementLike for SemanticElement {
 /// # Returns
 /// Some((x, y, width, height)) if found, None otherwise.
 pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if let Some(ref t) = elem.text {
-        if t.contains(text) {
-            return Some((
-                elem.bounds.x,
-                elem.bounds.y,
-                elem.bounds.width,
-                elem.bounds.height,
-            ));
-        }
+    if let Some(ref t) = elem.text
+        && t.contains(text)
+    {
+        return Some((
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        ));
     }
     for child in &elem.children {
         if let Some(pos) = find_text(child, text) {
@@ -74,15 +74,15 @@ pub fn find_text(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f
 ///
 /// Useful when partial matches might be ambiguous.
 pub fn find_text_exact(elem: &SemanticElement, text: &str) -> Option<(f32, f32, f32, f32)> {
-    if let Some(ref t) = elem.text {
-        if t == text {
-            return Some((
-                elem.bounds.x,
-                elem.bounds.y,
-                elem.bounds.width,
-                elem.bounds.height,
-            ));
-        }
+    if let Some(ref t) = elem.text
+        && t == text
+    {
+        return Some((
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+        ));
     }
     for child in &elem.children {
         if let Some(pos) = find_text_exact(child, text) {
@@ -165,16 +165,16 @@ pub fn find_text_by_prefix(
     elem: &SemanticElement,
     prefix: &str,
 ) -> Option<(f32, f32, f32, f32, String)> {
-    if let Some(ref t) = elem.text {
-        if t.starts_with(prefix) {
-            return Some((
-                elem.bounds.x,
-                elem.bounds.y,
-                elem.bounds.width,
-                elem.bounds.height,
-                t.clone(),
-            ));
-        }
+    if let Some(ref t) = elem.text
+        && t.starts_with(prefix)
+    {
+        return Some((
+            elem.bounds.x,
+            elem.bounds.y,
+            elem.bounds.width,
+            elem.bounds.height,
+            t.clone(),
+        ));
     }
     for child in &elem.children {
         if let Some(result) = find_text_by_prefix(child, prefix) {
@@ -338,10 +338,10 @@ fn rect_bounds_close(left: RectBounds, right: RectBounds) -> bool {
 /// Returns the element containing the text.
 pub fn find_by_text_recursive(elements: &[SemanticElement], text: &str) -> Option<SemanticElement> {
     for elem in elements {
-        if let Some(ref elem_text) = elem.text {
-            if elem_text.contains(text) {
-                return Some(elem.clone());
-            }
+        if let Some(ref elem_text) = elem.text
+            && elem_text.contains(text)
+        {
+            return Some(elem.clone());
         }
         if let Some(found) = find_by_text_recursive(&elem.children, text) {
             return Some(found);
@@ -526,10 +526,10 @@ pub fn collect_text_prefix_counts(
     counts: &mut HashMap<String, usize>,
 ) {
     for elem in elements {
-        if let Some(text) = elem.text.as_deref() {
-            if text.starts_with(prefix) {
-                *counts.entry(text.to_string()).or_insert(0) += 1;
-            }
+        if let Some(text) = elem.text.as_deref()
+            && text.starts_with(prefix)
+        {
+            *counts.entry(text.to_string()).or_insert(0) += 1;
         }
         collect_text_prefix_counts(&elem.children, prefix, counts);
     }
@@ -598,19 +598,18 @@ pub fn detect_tab_axis(bounds: &[LabeledRect]) -> Option<TabAxis> {
 }
 
 pub fn root_bounds(robot: &cranpose::Robot) -> Option<RectBounds> {
-    if let Ok(screenshot) = robot.screenshot() {
-        if screenshot.logical_width.is_finite()
-            && screenshot.logical_width > 0.0
-            && screenshot.logical_height.is_finite()
-            && screenshot.logical_height > 0.0
-        {
-            return Some((
-                0.0,
-                0.0,
-                screenshot.logical_width,
-                screenshot.logical_height,
-            ));
-        }
+    if let Ok(screenshot) = robot.screenshot()
+        && screenshot.logical_width.is_finite()
+        && screenshot.logical_width > 0.0
+        && screenshot.logical_height.is_finite()
+        && screenshot.logical_height > 0.0
+    {
+        return Some((
+            0.0,
+            0.0,
+            screenshot.logical_width,
+            screenshot.logical_height,
+        ));
     }
 
     let semantics = robot.get_semantics().ok()?;
