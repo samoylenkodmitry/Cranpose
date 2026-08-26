@@ -131,28 +131,28 @@ impl SlotWriteSession<'_> {
         }
     }
 
-    /// Keyed continuity across branch brackets: an explicit key that would
-    /// otherwise insert fresh may claim the identical key parked by an
-    /// already-finished bracket of the same owner, or steal it out of a later
-    /// bracket from the same branch site that has not composed yet. Both are
-    /// the same shifted-by-one list; without this, hiding one row rebuilds
-    /// every keyed row behind it and loses their state.
+    /// Keyed continuity across branch brackets of one branch site: an
+    /// explicit key that would otherwise insert fresh may claim the identical
+    /// key parked by an already-finished bracket of the same site and owner,
+    /// or steal it out of a later same-site bracket that has not composed
+    /// yet. Both are the same shifted-by-one list; without this, hiding one
+    /// row rebuilds every keyed row behind it and loses their state. A key
+    /// arriving under a *different* branch site — or under no bracket at
+    /// all — gets neither: branch isolation wins over the key.
     fn claim_or_steal_keyed_subtree(&mut self, key: GroupKey) -> Option<DetachedSubtree> {
         key.explicit_key?;
         let parent_anchor = self.state.current_parent_anchor();
-        if self.state.has_orphaned_keyed() {
-            let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
-            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, key) {
-                return Some(subtree);
-            }
-        }
-        let parent_is_transparent = self
+        let branch_site = self
             .table
             .active_group_index(parent_anchor)
             .and_then(|index| self.table.groups.get(index))
-            .is_some_and(|group| group.transparent);
-        if !parent_is_transparent {
-            return None;
+            .filter(|group| group.transparent)
+            .map(|group| group.key.static_key)?;
+        if self.state.has_orphaned_keyed() {
+            let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
+            if let Some(subtree) = self.state.claim_orphaned_keyed(owner, branch_site, key) {
+                return Some(subtree);
+            }
         }
         self.table
             .steal_keyed_subtree_from_later_transparent_siblings(parent_anchor, key)

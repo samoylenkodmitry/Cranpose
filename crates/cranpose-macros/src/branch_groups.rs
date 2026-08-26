@@ -392,20 +392,22 @@ fn expr_is_keyed_call(expr: &Expr) -> bool {
     !expr_can_reach_composer(&args[0])
 }
 
-/// Whether raw macro tokens contain what looks like a free-function call: an
-/// identifier immediately followed by a parenthesized group, not reached
-/// through `.`. Macro arguments are token soup to a proc macro — a
-/// snake_case composable in `format!("{}", stateful_label(1))` is
-/// indistinguishable from any helper by name — so every free-call shape
-/// counts. Over-matching costs a branch at most an empty bracket; missing a
-/// composable would silently share its slots across branches.
+/// Whether raw macro tokens contain what looks like a composing call: an
+/// identifier immediately followed by a parenthesized group — any identifier
+/// when reached as a free call, a composing-named one (`.remember(…)`,
+/// `.use_state(…)`) when reached through `.`. Macro arguments are token soup
+/// to a proc macro — a snake_case composable in
+/// `format!("{}", stateful_label(1))` is indistinguishable from any helper
+/// by name — so every free-call shape counts. Over-matching costs a branch
+/// at most an empty bracket; missing a composable would silently share its
+/// slots across branches.
 fn tokens_contain_free_call(tokens: &TokenStream2) -> bool {
     let mut previous_was_dot = false;
     let mut call_candidate = false;
     for tree in tokens.clone() {
         match &tree {
-            proc_macro2::TokenTree::Ident(_) => {
-                call_candidate = !previous_was_dot;
+            proc_macro2::TokenTree::Ident(ident) => {
+                call_candidate = !previous_was_dot || method_name_composes_str(&ident.to_string());
                 previous_was_dot = false;
             }
             proc_macro2::TokenTree::Group(group) => {
@@ -477,28 +479,36 @@ fn macro_is_value_shaped(path: &syn::Path) -> bool {
     )
 }
 
-/// The composing surface of `Composer`, recognized by method name. Prefixes
-/// keep the list stable across the `remember*`, `with_group*`,
-/// `mutable_state*` and `subcompose*` families; ordinary methods —
-/// `.to_string()`, `.with(…)`, `.get()` — stay inert. A CamelCase method is
-/// treated as composing for the same reason a CamelCase free call is.
-fn method_name_composes(name: &syn::Ident) -> bool {
-    const COMPOSING_METHOD_PREFIXES: &[&str] = &[
-        "remember",
-        "with_group",
-        "with_key",
-        "with_slot_value",
-        "use_value_slot",
-        "mutable_state",
-        "subcompose",
-        "cranpose_with_reuse",
-        "install",
-    ];
-    let name = name.to_string();
+/// The composing surface of `Composer`, recognized by method-name prefix:
+/// the `remember*`, `with_group*`, `with_key`, `with_slot_value*`, `use_*`
+/// (`use_state`, `use_value_slot`), `emit_*` (`emit_node`,
+/// `emit_recyclable_node`), `mutable_state*` and `subcompose*` families plus
+/// `install` and `cranpose_with_reuse`. Ordinary methods — `.to_string()`,
+/// `.with(…)`, `.get()` — stay inert.
+const COMPOSING_METHOD_PREFIXES: &[&str] = &[
+    "remember",
+    "with_group",
+    "with_key",
+    "with_slot_value",
+    "use_",
+    "emit_",
+    "mutable_state",
+    "subcompose",
+    "cranpose_with_reuse",
+    "install",
+];
+
+/// Whether a method of this name can compose. A CamelCase method is treated
+/// as composing for the same reason a CamelCase free call is.
+fn method_name_composes_str(name: &str) -> bool {
     COMPOSING_METHOD_PREFIXES
         .iter()
         .any(|prefix| name.starts_with(prefix))
         || name.chars().next().is_some_and(char::is_uppercase)
+}
+
+fn method_name_composes(name: &syn::Ident) -> bool {
+    method_name_composes_str(&name.to_string())
 }
 
 /// Whether the expression contains a `let` outside closures — a match guard

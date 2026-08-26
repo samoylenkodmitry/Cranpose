@@ -1414,3 +1414,133 @@ fn a_snake_case_composable_inside_a_value_macro_gets_a_branch_group() {
     );
     assert_composition_valid(&composition);
 }
+
+fn keyed_pool_marker(key: i32) {
+    with_key(&key, || {
+        let value = remember_branch_marker(key);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    });
+}
+
+#[composable]
+fn cross_branch_pool_probe(first_key: i32, second: bool) {
+    if first_key != 0 {
+        let _anchor = remember(|| 0_i32);
+        keyed_pool_marker(first_key);
+    }
+    if second {
+        let _anchor = remember(|| 0_i32);
+        keyed_pool_marker(1);
+    }
+}
+
+#[test]
+fn a_parked_keyed_subtree_stays_within_its_branch_site() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(42, || cross_branch_pool_probe(1, false))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    // The first branch re-keys from 1 to 2 and parks key 1; the second branch
+    // then asks for key 1 from the same helper line. Branch isolation must
+    // win: the parked subtree belongs to the first branch's site.
+    composition
+        .render(42, || cross_branch_pool_probe(2, true))
+        .expect("re-key the first branch and enable the second");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (3, 1),
+        "a subtree parked by one branch site must not be claimed by another"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn method_state_branch_probe(cond: bool) {
+    let composer = with_current_composer(Clone::clone);
+    if cond {
+        let state = composer.use_state(|| {
+            BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            1
+        });
+        BRANCH_SEEN.with(|seen| seen.set(state.value()));
+    } else {
+        let state = composer.use_state(|| {
+            BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            2
+        });
+        BRANCH_SEEN.with(|seen| seen.set(state.value()));
+    }
+}
+
+#[test]
+fn branches_composing_through_use_state_own_their_state() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(43, || method_state_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(43, || method_state_branch_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "`composer.use_state` writes a slot; the branch needs its bracket"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn value_macro_method_probe(cond: bool) {
+    let composer = with_current_composer(Clone::clone);
+    let label = if cond {
+        format!(
+            "{}",
+            composer
+                .remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    1_i32
+                })
+                .with(|value| *value)
+        )
+    } else {
+        format!(
+            "{}",
+            composer
+                .remember(|| {
+                    BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                    2_i32
+                })
+                .with(|value| *value)
+        )
+    };
+    BRANCH_SEEN.with(|seen| seen.set(label.parse().unwrap_or(-1)));
+}
+
+#[test]
+fn a_composing_method_inside_a_value_macro_gets_a_branch_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(44, || value_macro_method_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .render(44, || value_macro_method_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "`composer.remember` inside `format!` still composes; the branch needs its bracket"
+    );
+    assert_composition_valid(&composition);
+}
