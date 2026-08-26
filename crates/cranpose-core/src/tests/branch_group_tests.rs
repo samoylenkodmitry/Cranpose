@@ -2355,20 +2355,18 @@ fn a_deref_place_scrutinee_keeps_its_binding_usable() {
 }
 
 #[composable]
-#[allow(clippy::needless_late_init)]
 fn escaped_closure_probe(cond: bool) {
-    let render: Box<dyn Fn()>;
-    if cond {
-        render = boxed_render(|| {
+    let render: Box<dyn Fn()> = if cond {
+        boxed_render(|| {
             let value = remember_branch_marker(81);
             BRANCH_SEEN.with(|seen| seen.set(value));
-        });
+        })
     } else {
-        render = boxed_render(|| {
+        boxed_render(|| {
             let value = remember_branch_marker(82);
             BRANCH_SEEN.with(|seen| seen.set(value));
-        });
-    }
+        })
+    };
     render();
 }
 
