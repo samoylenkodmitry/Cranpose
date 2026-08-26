@@ -1169,3 +1169,23 @@ over ssh) runs the suite; `:116`+ are xvfb instances that also work for
 correctness but present in software. And do not `git pull` the remote clone
 while its previous chain is still running — same mid-run source-edit trap
 as locally, one machine removed.
+
+## pkill -f over ssh kills its own session
+
+`ssh host "pkill -f 'some_pattern'; ...launch commands..."` dies silently
+when any later text in the same remote command matches the pattern: the
+remote login shell's cmdline contains the entire command string, pkill
+matches the parent shell and kills it before the launch runs. Bracketing
+one char (`pattern` → `patter[n]`) protects only the pkill argument
+itself, not a plain occurrence in the payload. Keep kill and launch in
+two separate ssh invocations; three launch attempts died this way before
+the cause surfaced.
+
+## cargo test --lib green does not mean the workspace is green
+
+`cargo test -p <crate> --profile ci --lib` skips doctests entirely; a
+`#[composable]` doctest in `crates/cranpose/src/_docs/` broke on CI while
+every local lib suite passed. Doctests also need the workspace-unified
+feature set: `cargo test -p cranpose --doc` alone invents a featureless
+`AppLauncher` without `try_run` and fails on a phantom error. The gate
+that matches CI is `cargo test --profile ci --workspace`.
