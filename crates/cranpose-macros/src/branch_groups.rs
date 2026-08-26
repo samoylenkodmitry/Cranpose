@@ -30,8 +30,9 @@ struct SyncInteriors<'a, 'b> {
 impl VisitMut for SyncInteriors<'_, '_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
-            Expr::Closure(_) | Expr::Async(_) => self.injector.visit_expr_mut(expr),
-            Expr::Const(_) => {}
+            Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {
+                self.injector.visit_expr_mut(expr)
+            }
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }
@@ -269,7 +270,9 @@ impl VisitMut for BranchGroupInjector<'_> {
                 self.wrap_block(&mut async_block.block);
                 self.in_content_closure = previous;
             }
-            Expr::Const(_) => {}
+            Expr::Const(const_block) => {
+                self.instrument_sync_interiors_block(&mut const_block.block);
+            }
             Expr::If(expr_if) => {
                 self.wrap_condition(&mut expr_if.cond);
                 self.wrap_block(&mut expr_if.then_branch);
@@ -358,17 +361,31 @@ impl VisitMut for BranchGroupInjector<'_> {
             }
             syn::Item::Impl(item_impl) => {
                 for impl_item in &mut item_impl.items {
-                    if let syn::ImplItem::Fn(method) = impl_item {
-                        self.visit_nested_fn(&method.sig, &method.attrs, &mut method.block);
+                    match impl_item {
+                        syn::ImplItem::Fn(method) => {
+                            self.visit_nested_fn(&method.sig, &method.attrs, &mut method.block);
+                        }
+                        syn::ImplItem::Const(assoc_const) => {
+                            self.instrument_sync_interiors(&mut assoc_const.expr);
+                        }
+                        _ => {}
                     }
                 }
             }
             syn::Item::Trait(item_trait) => {
                 for trait_item in &mut item_trait.items {
-                    if let syn::TraitItem::Fn(method) = trait_item
-                        && let Some(default_body) = &mut method.default
-                    {
-                        self.visit_nested_fn(&method.sig, &method.attrs, default_body);
+                    match trait_item {
+                        syn::TraitItem::Fn(method) => {
+                            if let Some(default_body) = &mut method.default {
+                                self.visit_nested_fn(&method.sig, &method.attrs, default_body);
+                            }
+                        }
+                        syn::TraitItem::Const(assoc_const) => {
+                            if let Some((_, default)) = &mut assoc_const.default {
+                                self.instrument_sync_interiors(default);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

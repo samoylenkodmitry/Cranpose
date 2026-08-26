@@ -115,8 +115,9 @@ typed IR:
   leaves initializer temporaries, `let`-`else`, and coercions exactly as
   written (pinned as `a_let_bound_erased_call_keeps_its_own_identity`).
   What remains collapsed is several erased invocations inside one
-  statement, which vanish and adopt positionally; the escape is
-  `with_key`. Compose keys every invocation site in its compiler plugin;
+  statement, which vanish and adopt positionally (pinned as
+  `erased_calls_inside_one_statement_are_positional_by_construction`);
+  the escape is `with_key`. Compose keys every invocation site in its compiler plugin;
   a runtime fold per call was tried and each wrapper shape violates a
   different language contract — blocks change statement-temporary
   lifetimes, a generic identity fn hardens operator inference, match

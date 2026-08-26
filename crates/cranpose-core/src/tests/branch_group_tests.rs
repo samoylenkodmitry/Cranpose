@@ -3303,6 +3303,110 @@ fn a_static_item_closure_keeps_branch_identity() {
     assert_composition_valid(&composition);
 }
 
+#[composable]
+fn inline_const_closure_probe(flag: bool) {
+    let render: fn(bool) = const {
+        fn render(flag: bool) {
+            if flag {
+                let value = remember_branch_marker(95);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(96);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        }
+        render
+    };
+    render(flag);
+}
+
+#[test]
+fn an_inline_const_defined_callable_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(104, || inline_const_closure_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 95));
+
+    pass(&mut composition, false).expect("switch arms in the const-defined fn");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 96),
+        "an inline const evaluates at compile time, but the fn it yields runs \
+         during composition and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn assoc_const_closure_probe(flag: bool) {
+    struct Local;
+    impl Local {
+        const RENDER: fn(bool) = |flag| {
+            if flag {
+                let value = remember_branch_marker(97);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(98);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        };
+    }
+    Local::RENDER(flag);
+}
+
+#[test]
+fn an_associated_const_closure_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(105, || assoc_const_closure_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 97));
+
+    pass(&mut composition, false).expect("switch arms in the associated const closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 98),
+        "an associated const initializer stays const, but the closure it holds \
+         composes at runtime and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn erased_pair_in_one_statement_probe(first: Option<i32>, second: Option<i32>) {
+    let page: fn(i32) = CountingPage;
+    let _pair = (first.map(page), second.map(page));
+}
+
+#[test]
+fn erased_calls_inside_one_statement_are_positional_by_construction() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
+        composition.render(106, || erased_pair_in_one_statement_probe(first, Some(7)))
+    };
+
+    pass(&mut composition, Some(3)).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, None).expect("drop the first call of the pair");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 71),
+        "two erased calls inside one statement share the collapsed shim caller \
+         and one fold: the survivor adopts the vanished instance, the documented \
+         floor of caller erasure; the escape is with_key around either call"
+    );
+    assert_composition_valid(&composition);
+}
+
 macro_rules! maybe_remember {
     ($enabled:expr) => {
         if $enabled {
