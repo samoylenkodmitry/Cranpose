@@ -49,11 +49,15 @@ represented structurally:
   by a forward scan for their `(type, source)` identity instead of
   reinitializing, so neighbors keep state across branch cardinality
   changes.
-- A `#[composable]` fn is `#[track_caller]` and keys its group by the
-  caller's location: every call site is its own identity, Compose's
-  positional-key parity. `emit_node` is `#[track_caller]` the same way,
-  so a raw node record carries a folded source and an arm can never adopt
-  another arm's node.
+- A `#[composable]` fn is `#[track_caller]` and keys its group by its
+  definition location mixed with the caller's location
+  (`composable_identity_key`, definition key cached in a per-fn static):
+  every call site is its own identity, Compose's positional-key parity,
+  and two different composables selected through one collapsed call site
+  — a fn pointer, a macro-expanded router — still key apart because
+  their definitions differ. `emit_node` is `#[track_caller]` the same
+  way, so a raw node record carries a folded source and an arm can never
+  adopt another arm's node.
 
 Branch departure needs no special lifecycle: an arm's groups and slots are
 ordinary unvisited content, detached and dispose-or-retained exactly as
@@ -62,11 +66,16 @@ before branches existed (`docs/slot_table_invariants.md`,
 edges, each the price of running on names before expansion rather than on
 typed IR:
 
-- **A conditional expanded out of a `macro_rules!` body shares its slots.**
-  The attribute macro runs before function-like macros expand, and
-  `Location::caller()` for code inside an expansion collapses to the
-  invocation site, so neither folds nor caller keys nor slot stamps can
-  tell the expanded arms apart (pinned as
+- **A conditional expanded out of a `macro_rules!` body shares its slots
+  unless the arms call different composables.** The attribute macro runs
+  before function-like macros expand, and `Location::caller()` for code
+  inside an expansion collapses to the invocation site, so folds and
+  caller keys cannot tell the expanded arms apart. The definition half of
+  `composable_identity_key` still separates arms that route to different
+  composables
+  (`two_composables_selected_through_one_macro_call_site_stay_distinct`);
+  what remains collapsed is one composable called with different
+  arguments across arms, and raw `remember` slots in the arms (pinned as
   `a_macro_rules_conditional_shares_slots_by_construction` and
   `a_macro_rules_conditional_collapses_composable_caller_identity`; the
   escape hatch is an explicit `with_key` per arm). Compose's plugin runs

@@ -7,8 +7,9 @@
 //! #![allow(non_snake_case)]
 //! use cranpose::prelude::*;
 //! # use cranpose::{
-//! #     debug_label_current_scope, location_key, with_current_composer, CallbackHolder,
-//! #     Composer, ParamState, ReturnSlot,
+//! #     __branch_group_scope_deferred, branch_location_key, caller_location_key,
+//! #     composable_identity_key, debug_label_current_scope, location_key,
+//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
 //! # };
 //!
 //! #[composable]
@@ -43,8 +44,9 @@
 //! #![allow(non_snake_case)]
 //! use cranpose::prelude::*;
 //! # use cranpose::{
-//! #     debug_label_current_scope, location_key, with_current_composer, CallbackHolder,
-//! #     Composer, ParamState, ReturnSlot,
+//! #     __branch_group_scope_deferred, branch_location_key, caller_location_key,
+//! #     composable_identity_key, debug_label_current_scope, location_key,
+//! #     with_current_composer, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
 //! # };
 //!
 //! #[composable]

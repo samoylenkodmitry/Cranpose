@@ -353,7 +353,8 @@ pub fn caller_location_key() -> Key {
 #[doc(hidden)]
 #[track_caller]
 pub fn composable_identity_key(definition: Key) -> Key {
-    (definition ^ caller_location_key()).wrapping_mul(0x0000_0100_0000_01b3)
+    (definition.wrapping_mul(0x0000_0100_0000_01b3) ^ caller_location_key())
+        .wrapping_mul(0x0000_0100_0000_01b3)
 }
 
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {

@@ -2910,3 +2910,39 @@ fn two_composables_selected_through_one_call_site_stay_distinct() {
     );
     assert_composition_valid(&composition);
 }
+
+macro_rules! page_route {
+    ($first:expr) => {
+        if $first {
+            PageA();
+        } else {
+            PageB();
+        }
+    };
+}
+
+#[composable]
+fn macro_routed_page_probe(first: bool) {
+    page_route!(first);
+}
+
+#[test]
+fn two_composables_selected_through_one_macro_call_site_stay_distinct() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
+        composition.render(89, || macro_routed_page_probe(first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 61));
+
+    pass(&mut composition, false).expect("switch pages through the macro");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 62),
+        "span collapse makes both calls report one caller; the definition key must \
+         still separate PageB from PageA"
+    );
+    assert_composition_valid(&composition);
+}

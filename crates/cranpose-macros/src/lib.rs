@@ -10,7 +10,6 @@ mod branch_groups;
 /// For generic type parameters (e.g., `F` where F: FnMut()), we need to check the bounds.
 fn is_fn_like_type(ty: &Type) -> bool {
     match ty {
-        // impl FnMut(...) + 'static, impl Fn(...), etc.
         Type::ImplTrait(impl_trait) => impl_trait.bounds.iter().any(|bound| {
             if let syn::TypeParamBound::Trait(trait_bound) = bound {
                 let path = &trait_bound.path;
@@ -21,7 +20,6 @@ fn is_fn_like_type(ty: &Type) -> bool {
             }
             false
         }),
-        // Box<dyn FnMut(...)>
         Type::Path(type_path) => {
             if let Some(segment) = type_path.path.segments.last() {
                 if segment.ident == "Box" {
@@ -47,7 +45,6 @@ fn is_fn_like_type(ty: &Type) -> bool {
             }
             false
         }
-        // bare fn(...) -> ...
         Type::BareFn(_) => true,
         _ => false,
     }
@@ -55,7 +52,6 @@ fn is_fn_like_type(ty: &Type) -> bool {
 
 /// Check if a generic type parameter has Fn-like bounds by looking at the where clause and bounds
 fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
-    // Extract the ident for Type::Path that might be a generic param
     let type_ident = match ty {
         Type::Path(type_path) if type_path.path.segments.len() == 1 => {
             &type_path.path.segments[0].ident
@@ -63,11 +59,9 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
         _ => return false,
     };
 
-    // Check if it's a type parameter with Fn bounds
     for param in &generics.params {
         if let syn::GenericParam::Type(type_param) = param {
             if type_param.ident == *type_ident {
-                // Check the bounds on the type parameter
                 for bound in &type_param.bounds {
                     if let syn::TypeParamBound::Trait(trait_bound) = bound {
                         if let Some(segment) = trait_bound.path.segments.last() {
@@ -82,7 +76,6 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
         }
     }
 
-    // Also check where clause
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
             if let syn::WherePredicate::Type(pred) = predicate {
@@ -317,9 +310,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let helper_block = original_block.clone();
     let recompose_block = original_block.clone();
     let key_expr = quote! { __cranpose_caller_key };
-    let caller_key_stmt = quote! { let __cranpose_caller_key = #core_path::caller_location_key(); };
+    let caller_key_stmt = quote! {
+        let __cranpose_caller_key = #core_path::composable_identity_key({
+            static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
+                ::std::sync::OnceLock::new();
+            *__CRANPOSE_DEFINITION_KEY
+                .get_or_init(|| #core_path::location_key(file!(), line!(), column!()))
+        });
+    };
 
-    // Rebinds will be generated later in the helper_body context where we have access to slots
     let rebinds_for_no_skip: Vec<_> = param_info
         .iter()
         .map(|info| {
@@ -360,8 +359,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Check if any params are impl Trait that we can't store in a slot.
-    // Zero-arg Fn-like impl traits (impl Fn() + 'static) are handled via CallbackHolder.
     let has_unhandled_impl_trait = param_info
         .iter()
         .any(|info| info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty));
@@ -373,11 +370,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         );
         let generics = func.sig.generics.clone();
 
-        // Callback params are type-erased to `Box<dyn FnMut()>` at the public
-        // fn boundary so the generated helper/recompose bodies compile once
-        // per composable instead of once per caller closure type. The holder
-        // boxes callbacks anyway, so this moves an existing allocation, it
-        // does not add one.
         let param_erased: Vec<bool> = param_info
             .iter()
             .map(|info| {
@@ -388,8 +380,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        // Generic params that only ever appear as the type of an erased
-        // callback param can be dropped from the helper/recompose fns.
         let mut strippable: std::collections::HashSet<String> = param_info
             .iter()
             .zip(&param_erased)
@@ -397,9 +387,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .filter_map(|(info, _)| type_bare_generic_ident(&info.ty))
             .map(Ident::to_string)
             .collect();
-        // Fixpoint: a candidate kept because it is used elsewhere re-exposes
-        // its own bounds/predicates, which may in turn mention another
-        // candidate.
         loop {
             use quote::ToTokens;
             let mut used_elsewhere: Vec<TokenStream2> = Vec::new();
@@ -452,9 +439,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let (impl_generics, ty_generics, where_clause) = helper_generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
 
-        // Helper function signature: all params except unhandled impl Trait.
-        // Erased callback params arrive pre-boxed; other zero-arg Fn impl
-        // traits are included as anonymous generics.
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
@@ -472,7 +456,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        // Separate Fn-like params from regular params
         let param_state_slots: Vec<Ident> = (0..param_info.len())
             .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::call_site()))
             .collect();
@@ -482,7 +465,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .zip(param_state_slots.iter())
             .zip(&param_erased)
             .map(|((info, slot_ident), erased)| {
-                // Zero-arg Fn impl traits and generic Fn params → CallbackHolder
                 if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
                     || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
                 {
@@ -504,7 +486,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         __changed = true;
                     }
                 } else if info.is_impl_trait {
-                    // Non-Fn impl trait – cannot store, always mark changed
                     quote! { __changed = true; }
                 } else {
                     let ident = &info.ident;
@@ -757,9 +738,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         };
 
-        // Wrapper args: pass all params except unhandled impl Trait on initial
-        // call; erased callback params are boxed here, at the only generic
-        // boundary that remains.
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
