@@ -300,7 +300,11 @@ pub(crate) fn remember_test_value<T: 'static>(
     state: &mut crate::slot::SlotWriteSessionState,
     init: impl FnOnce() -> T,
 ) -> Owned<T> {
-    with_test_slot_lifecycle(|lifecycle| slots.write_session(lifecycle, state).remember(init))
+    with_test_slot_lifecycle(|lifecycle| {
+        slots
+            .write_session(lifecycle, state)
+            .remember(crate::slot::BRANCH_PATH_ROOT, init)
+    })
 }
 
 pub(crate) fn end_test_group(

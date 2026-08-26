@@ -9,8 +9,10 @@ use crate::{
     },
 };
 
+#[track_caller]
 pub fn remember<T: 'static>(init: impl FnOnce() -> T) -> Owned<T> {
-    composer_context::with_composer(|composer| composer.remember(init))
+    let source = crate::caller_location_key();
+    composer_context::with_composer(|composer| composer.remember_at(source, init))
 }
 
 /// Like [`remember`], but recomputes whenever `key` changes.
@@ -68,10 +70,14 @@ where
 ///     remember { mutableStateOf(newValue) }.apply { value = newValue }
 /// ```
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberUpdatedState<T: Clone + 'static>(value: T) -> MutableState<T> {
+    let source = crate::caller_location_key();
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let state = composer.remember(|| OwnedMutableState::with_runtime(value.clone(), runtime));
+        let state = composer.remember_at(source, || {
+            OwnedMutableState::with_runtime(value.clone(), runtime)
+        });
         state.with(|s| {
             s.set(value);
             s.handle()
@@ -228,31 +234,39 @@ where
 /// }
 /// ```
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberMutableStateOf<T: Clone + PartialEq + 'static>(
     init: impl FnOnce() -> T,
 ) -> MutableState<T> {
+    let source = crate::caller_location_key();
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(|| OwnedMutableState::with_runtime_structural_eq(init(), runtime))
+            .remember_at(source, || {
+                OwnedMutableState::with_runtime_structural_eq(init(), runtime)
+            })
             .with(|state| state.handle())
     })
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberMutableStateOfNeverEqual<T: Clone + 'static>(
     init: impl FnOnce() -> T,
 ) -> MutableState<T> {
+    let source = crate::caller_location_key();
     composer_context::with_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(|| OwnedMutableState::with_runtime(init(), runtime))
+            .remember_at(source, || OwnedMutableState::with_runtime(init(), runtime))
             .with(|state| state.handle())
     })
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> State<T> {
+    let source = crate::caller_location_key();
     composer_context::with_composer(|composer| {
         let key = location_key(file!(), line!(), column!());
         composer.with_group(key, |composer| {
@@ -262,8 +276,9 @@ pub fn derivedStateOf<T: 'static + Clone>(compute: impl Fn() -> T + 'static) -> 
                 .unwrap_or(true);
             let runtime = composer.runtime_handle();
             let compute_rc: Rc<dyn Fn() -> T> = Rc::new(compute);
-            let derived =
-                composer.remember(|| DerivedState::new(runtime.clone(), compute_rc.clone()));
+            let derived = composer.remember_at(source, || {
+                DerivedState::new(runtime.clone(), compute_rc.clone())
+            });
             derived.update(|derived| {
                 derived.set_compute(compute_rc.clone());
                 if should_recompute {

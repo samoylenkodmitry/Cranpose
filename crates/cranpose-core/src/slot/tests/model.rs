@@ -535,12 +535,16 @@ fn use_model_payload_slot(
     value: &ModelPayloadValue,
 ) -> ValueSlotId {
     match value {
-        ModelPayloadValue::I32(value) => {
-            session.value_slot_with_kind(PayloadKind::Internal, || *value)
-        }
-        ModelPayloadValue::U32(value) => {
-            session.value_slot_with_kind(PayloadKind::Internal, || *value)
-        }
+        ModelPayloadValue::I32(value) => session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || *value,
+        ),
+        ModelPayloadValue::U32(value) => session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || *value,
+        ),
     }
 }
 

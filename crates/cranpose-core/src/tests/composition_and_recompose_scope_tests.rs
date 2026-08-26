@@ -1451,9 +1451,10 @@ fn retained_scope_stays_inactive_until_restored() {
         }
     }
 
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("initial composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_branch, observed))
+    };
+    pass(&mut composition).expect("initial composition");
     assert_composition_valid(&composition);
 
     let initial_snapshot = composition.debug_slot_snapshot();
@@ -1489,9 +1490,7 @@ fn retained_scope_stays_inactive_until_restored() {
     );
 
     show_branch.set_value(false);
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("hide branch render");
+    pass(&mut composition).expect("hide branch render");
     assert_composition_valid(&composition);
 
     let hidden_snapshot = composition.debug_slot_snapshot();
@@ -1557,9 +1556,7 @@ fn retained_scope_stays_inactive_until_restored() {
     );
 
     show_branch.set_value(true);
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("restore retained branch");
+    pass(&mut composition).expect("restore retained branch");
     assert_composition_valid(&composition);
 
     let restored_snapshot = composition.debug_slot_snapshot();
@@ -1633,9 +1630,10 @@ fn restored_retained_scope_processes_forced_recompose() {
         }
     }
 
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("initial composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_branch))
+    };
+    pass(&mut composition).expect("initial composition");
     assert_composition_valid(&composition);
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
 
@@ -1645,17 +1643,13 @@ fn restored_retained_scope_processes_forced_recompose() {
     assert!(initial_scope.is_active());
 
     show_branch.set_value(false);
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("hide retained branch");
+    pass(&mut composition).expect("hide retained branch");
     assert_composition_valid(&composition);
     assert!(!initial_scope.is_active());
     assert_eq!(composition.debug_slot_snapshot().retained_scope_count, 1);
 
     show_branch.set_value(true);
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("restore retained branch");
+    pass(&mut composition).expect("restore retained branch");
     assert_composition_valid(&composition);
 
     let restored_scope = CAPTURED_SCOPE
@@ -3794,9 +3788,10 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
         });
     }
 
-    composition
-        .render(root_key, || root(show_first))
-        .expect("initial keyed composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_first))
+    };
+    pass(&mut composition).expect("initial keyed composition");
 
     let second = SECOND_SLOT
         .with(|cell| cell.borrow().clone())
@@ -3804,9 +3799,7 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
     second.replace(99);
 
     show_first.set_value(false);
-    composition
-        .render(root_key, || root(show_first))
-        .expect("hide first keyed branch");
+    pass(&mut composition).expect("hide first keyed branch");
 
     let second_after = SECOND_SLOT
         .with(|cell| cell.borrow().clone())
@@ -3848,9 +3841,10 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
         });
     }
 
-    composition
-        .render(root_key, || root(show_children))
-        .expect("initial retained sibling composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_children))
+    };
+    pass(&mut composition).expect("initial retained sibling composition");
 
     CAPTURED.with(|slots| {
         let slots = slots.borrow();
@@ -3860,14 +3854,10 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
     });
 
     show_children.set_value(false);
-    composition
-        .render(root_key, || root(show_children))
-        .expect("hide retained siblings");
+    pass(&mut composition).expect("hide retained siblings");
 
     show_children.set_value(true);
-    composition
-        .render(root_key, || root(show_children))
-        .expect("restore retained siblings");
+    pass(&mut composition).expect("restore retained siblings");
 
     let restored = CAPTURED.with(|slots| {
         slots
@@ -4272,18 +4262,17 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
     let value = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
+    let mut content = || {
+        Root(value);
+    };
     composition
-        .render(root_key, || {
-            Root(value);
-        })
+        .render(root_key, &mut content)
         .expect("initial render");
     let root_id = ROOT_ID.with(|slot| slot.get()).expect("root id");
 
     composition.request_root_render();
     composition
-        .reconcile(root_key, || {
-            Root(value);
-        })
+        .reconcile(root_key, &mut content)
         .expect("forced root replay");
     assert_eq!(root_raw_parent(&mut composition, root_id), None);
 

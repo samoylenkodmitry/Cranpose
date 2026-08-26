@@ -154,6 +154,7 @@ mod tests {
             anchor: payload_anchor,
             type_id: TypeId::of::<i32>(),
             type_name: std::any::type_name::<i32>(),
+            source: crate::slot::BRANCH_PATH_ROOT,
             kind: PayloadKind::Internal,
             value: Box::new(0_i32),
             fresh: None,

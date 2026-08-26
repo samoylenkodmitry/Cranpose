@@ -43,22 +43,38 @@ itself, so branch versus tail occurrences of one keyed site are distinct
 groups while keyed rows keep their flat indexed sibling structure and
 toggle cost, with keyed subtrees preserved across materialized brackets
 (`docs/slot_table_invariants.md`, `branch_group_tests`, and
-`robot_recomposition_lab` end to end). The remaining edges, each the price
-of running on names before expansion rather than on typed IR:
+`robot_recomposition_lab` end to end).
 
-- **Composition reached only through a place path is never wrapped.** A
-  `ref` pattern binds into the place, so a `let` scrutinee that is a place
-  expression keeps its structure; its value sub-parts (an index expression,
-  a dereferenced value) get shells, but a composing `Deref` impl on the
-  place chain itself composes into the parent. A closure
+Two location layers back the brackets. A `#[composable]` fn is
+`#[track_caller]` and keys its group by the caller's location, so every
+call site is its own identity — Compose's positional-key parity — and a
+composable called from two places never shares state. Every value slot is
+stamped with the source location of the API call that created it
+(`remember`, `use_state`, the state hooks — captured before the session
+borrow and threaded through), and a slot whose stamp does not match the
+incoming source reinitializes instead of being adopted: a slot written by
+one piece of code can never be silently inherited by another, whatever
+control-flow shape put them at the same cursor. The remaining edges, each
+the price of running on names before expansion rather than on typed IR:
+
+- **Composition reached only through a place path composes into the
+  parent's bracket.** A `ref` pattern binds into the place, so a `let`
+  scrutinee that is a place expression keeps its structure; its value
+  sub-parts (an index expression, a dereferenced value) get shells, but a
+  composing `Deref` impl on the place chain itself runs unbracketed. The
+  source stamp bounds the damage: the slots it writes can shift position
+  but can never be adopted by other code. A closure
   consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`) is the
   same class: argument position reads as inline consumption.
-- **A conditional expanded out of a `macro_rules!` body is never bracketed.**
-  The attribute macro runs before function-like macros expand, so an `if`
-  whose arms only exist after expansion keeps the old shared-slot behavior
-  (pinned as `a_macro_rules_conditional_shares_slots_by_construction`).
-  Compose's plugin runs on IR after inlining, which is what closing this
-  would take.
+- **A conditional expanded out of a `macro_rules!` body is never bracketed,
+  and locations cannot substitute.** The attribute macro runs before
+  function-like macros expand, and `Location::caller()` for code inside an
+  expansion collapses to the invocation site, so neither brackets nor
+  caller keys nor slot stamps can tell the expanded arms apart (pinned as
+  `a_macro_rules_conditional_shares_slots_by_construction` and
+  `a_macro_rules_conditional_collapses_composable_caller_identity`; the
+  escape hatch is an explicit `with_key` per arm). Compose's plugin runs
+  on IR after inlining, which is what closing this would take.
 - **A closure passed directly to a call named `with_key` carries no
   definition-site identity of its own.** Every other closure defined in a
   branch gets a definition-site shell (the `composableLambda` model: an

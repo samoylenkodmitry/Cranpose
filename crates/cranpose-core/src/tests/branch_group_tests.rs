@@ -47,24 +47,21 @@ fn if_branch_remember_probe(cond: bool) {
 fn an_if_branch_owns_its_remembered_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(1, || if_branch_remember_probe(value))
+    };
 
-    composition
-        .render(1, || if_branch_remember_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(1, || if_branch_remember_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
         "the else branch must not inherit the then branch's remember slot"
     );
 
-    composition
-        .render(1, || if_branch_remember_probe(true))
-        .expect("switch back to the then branch");
+    pass(&mut composition, true).expect("switch back to the then branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (3, 1),
@@ -130,15 +127,14 @@ fn branches_calling_the_same_child(cond: bool) {
 fn the_same_child_in_both_branches_gets_per_branch_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(3, || branches_calling_the_same_child(value))
+    };
 
-    composition
-        .render(3, || branches_calling_the_same_child(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 100);
 
-    composition
-        .render(3, || branches_calling_the_same_child(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         200,
@@ -204,15 +200,14 @@ fn branch_effect_probe(cond: bool) {
 fn a_branch_switch_disposes_the_effects_of_the_departed_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(5, || branch_effect_probe(value))
+    };
 
-    composition
-        .render(5, || branch_effect_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_log(), vec!["then:start".to_string()]);
 
-    composition
-        .render(5, || branch_effect_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     let log = branch_log();
     assert!(
         log.contains(&"then:dispose".to_string()),
@@ -250,9 +245,10 @@ fn no_branch_probe() {
 fn a_value_only_conditional_adds_no_group() {
     reset_branch_probes();
     let mut with_branch = test_composition();
-    with_branch
-        .render(6, || value_only_branch_probe(true))
-        .expect("compose the value-only branch probe");
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(6, || value_only_branch_probe(value))
+    };
+    pass(&mut with_branch, true).expect("compose the value-only branch probe");
     let with_branch_groups = with_branch.debug_dump_slot_table_groups().len();
 
     let mut without_branch = test_composition();
@@ -266,9 +262,7 @@ fn a_value_only_conditional_adds_no_group() {
         "a conditional whose branches cannot reach the composer must not open groups"
     );
 
-    with_branch
-        .render(6, || value_only_branch_probe(false))
-        .expect("flip the value-only branch");
+    pass(&mut with_branch, false).expect("flip the value-only branch");
     assert_eq!(branch_seen(), 8 + "off 8".len() as i32);
     assert_composition_valid(&with_branch);
 }
@@ -287,14 +281,13 @@ fn format_arg_probe(cond: bool) {
 fn a_composable_call_inside_a_value_macro_still_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(16, || format_arg_probe(value))
+    };
 
-    composition
-        .render(16, || format_arg_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_inits(), 1);
-    composition
-        .render(16, || format_arg_probe(false))
-        .expect("switch the format-arg branch");
+    pass(&mut composition, false).expect("switch the format-arg branch");
     assert_eq!(
         (branch_inits(), branch_log().last().cloned()),
         (2, Some("b42".to_string())),
@@ -319,16 +312,15 @@ fn early_return_probe(cond: bool) {
 fn an_early_return_branch_keeps_the_slot_table_balanced() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(7, || early_return_probe(value))
+    };
 
-    composition
-        .render(7, || early_return_probe(true))
-        .expect("compose the early-return branch");
+    pass(&mut composition, true).expect("compose the early-return branch");
     assert_eq!((branch_inits(), branch_seen()), (1, 7));
     assert_composition_valid(&composition);
 
-    composition
-        .render(7, || early_return_probe(false))
-        .expect("compose past the early return");
+    pass(&mut composition, false).expect("compose past the early return");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 8),
@@ -336,9 +328,7 @@ fn an_early_return_branch_keeps_the_slot_table_balanced() {
     );
     assert_composition_valid(&composition);
 
-    composition
-        .render(7, || early_return_probe(true))
-        .expect("return to the early-return branch");
+    pass(&mut composition, true).expect("return to the early-return branch");
     assert_eq!((branch_inits(), branch_seen()), (3, 7));
     assert_composition_valid(&composition);
 }
@@ -478,13 +468,12 @@ fn closure_branch_probe(cond: bool) {
 fn conditionals_inside_plain_closures_are_left_alone() {
     reset_branch_probes();
     let mut composition = test_composition();
-    composition
-        .render(11, || closure_branch_probe(true))
-        .expect("compose the closure probe");
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(11, || closure_branch_probe(value))
+    };
+    pass(&mut composition, true).expect("compose the closure probe");
     assert_eq!(branch_seen(), 1);
-    composition
-        .render(11, || closure_branch_probe(false))
-        .expect("flip the closure probe");
+    pass(&mut composition, false).expect("flip the closure probe");
     assert_eq!(branch_seen(), 2);
     assert_composition_valid(&composition);
 }
@@ -519,24 +508,21 @@ fn content_closure_branch_probe(cond: bool) {
 fn content_closure_branches_own_their_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(13, || content_closure_branch_probe(value))
+    };
 
-    composition
-        .render(13, || content_closure_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1000));
 
-    composition
-        .render(13, || content_closure_branch_probe(false))
-        .expect("switch the content closure's branch");
+    pass(&mut composition, false).expect("switch the content closure's branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2000),
         "a branch inside a content closure must own its slots"
     );
 
-    composition
-        .render(13, || content_closure_branch_probe(true))
-        .expect("switch back");
+    pass(&mut composition, true).expect("switch back");
     assert_eq!((branch_inits(), branch_seen()), (3, 1000));
     assert_composition_valid(&composition);
 }
@@ -562,15 +548,14 @@ fn indexed_closure_branch_probe(cond: bool) {
 fn an_argument_taking_content_closure_gets_branch_groups_too() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(15, || indexed_closure_branch_probe(value))
+    };
 
-    composition
-        .render(15, || indexed_closure_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 3007));
 
-    composition
-        .render(15, || indexed_closure_branch_probe(false))
-        .expect("switch the indexed content branch");
+    pass(&mut composition, false).expect("switch the indexed content branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 4007),
@@ -596,24 +581,21 @@ fn composing_key_argument_probe(cond: bool) {
 fn a_composing_key_argument_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(20, || composing_key_argument_probe(value))
+    };
 
-    composition
-        .render(20, || composing_key_argument_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_inits(), 1);
 
-    composition
-        .render(20, || composing_key_argument_probe(false))
-        .expect("switch the branch");
+    pass(&mut composition, false).expect("switch the branch");
     assert_eq!(
         branch_inits(),
         2,
         "a remember evaluated inside the key argument must not be shared across branches"
     );
 
-    composition
-        .render(20, || composing_key_argument_probe(true))
-        .expect("switch back");
+    pass(&mut composition, true).expect("switch back");
     assert_eq!(branch_inits(), 3);
     assert_composition_valid(&composition);
 }
@@ -633,15 +615,14 @@ fn snake_case_closure_branch_probe(cond: bool) {
 fn snake_case_composables_inside_content_closures_get_branch_groups() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(21, || snake_case_closure_branch_probe(value))
+    };
 
-    composition
-        .render(21, || snake_case_closure_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 7100);
 
-    composition
-        .render(21, || snake_case_closure_branch_probe(false))
-        .expect("switch the branch");
+    pass(&mut composition, false).expect("switch the branch");
     assert_eq!(
         branch_seen(),
         7200,
@@ -744,20 +725,15 @@ fn keyed_values() -> Vec<(u64, i32)> {
 fn keyed_state_survives_a_front_removal_across_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, rows: Vec<(u64, bool)>| {
+        composition.render(17, || keyed_visibility_probe(rows.clone()))
+    };
 
-    composition
-        .render(17, || {
-            keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
-        })
-        .expect("initial composition");
+    pass(&mut composition, vec![(1, true), (2, true), (3, true)]).expect("initial composition");
     assert_eq!(branch_inits(), 3);
     assert_eq!(keyed_values(), vec![(1, 1), (2, 2), (3, 3)]);
 
-    composition
-        .render(17, || {
-            keyed_visibility_probe(vec![(1, false), (2, true), (3, true)])
-        })
-        .expect("hide the first row");
+    pass(&mut composition, vec![(1, false), (2, true), (3, true)]).expect("hide the first row");
     assert_eq!(
         (branch_inits(), keyed_values()),
         (3, vec![(2, 2), (3, 3)]),
@@ -765,10 +741,7 @@ fn keyed_state_survives_a_front_removal_across_branch_shells() {
     );
     assert_composition_valid(&composition);
 
-    composition
-        .render(17, || {
-            keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
-        })
+    pass(&mut composition, vec![(1, true), (2, true), (3, true)])
         .expect("show the first row again");
     assert_eq!(
         (branch_inits(), keyed_values()),
@@ -800,20 +773,15 @@ fn mixed_keyed_visibility_probe(rows: Vec<(u64, bool)>) {
 fn keyed_state_survives_a_front_removal_across_branch_brackets() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, rows: Vec<(u64, bool)>| {
+        composition.render(19, || mixed_keyed_visibility_probe(rows.clone()))
+    };
 
-    composition
-        .render(19, || {
-            mixed_keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
-        })
-        .expect("initial composition");
+    pass(&mut composition, vec![(1, true), (2, true), (3, true)]).expect("initial composition");
     assert_eq!(branch_inits(), 3);
     assert_eq!(keyed_values(), vec![(1, 1), (2, 2), (3, 3)]);
 
-    composition
-        .render(19, || {
-            mixed_keyed_visibility_probe(vec![(1, false), (2, true), (3, true)])
-        })
-        .expect("hide the first row");
+    pass(&mut composition, vec![(1, false), (2, true), (3, true)]).expect("hide the first row");
     assert_eq!(
         (branch_inits(), keyed_values()),
         (3, vec![(2, 2), (3, 3)]),
@@ -821,10 +789,7 @@ fn keyed_state_survives_a_front_removal_across_branch_brackets() {
     );
     assert_composition_valid(&composition);
 
-    composition
-        .render(19, || {
-            mixed_keyed_visibility_probe(vec![(1, true), (2, true), (3, true)])
-        })
+    pass(&mut composition, vec![(1, true), (2, true), (3, true)])
         .expect("show the first row again");
     assert_eq!(
         (branch_inits(), keyed_values()),
@@ -838,15 +803,14 @@ fn keyed_state_survives_a_front_removal_across_branch_brackets() {
 fn keyed_state_follows_a_reorder_across_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<(u64, bool)>| {
+        composition.render(18, || keyed_visibility_probe(value.clone()))
+    };
 
-    composition
-        .render(18, || keyed_visibility_probe(vec![(1, true), (2, true)]))
-        .expect("initial composition");
+    pass(&mut composition, vec![(1, true), (2, true)]).expect("initial composition");
     assert_eq!(keyed_values(), vec![(1, 1), (2, 2)]);
 
-    composition
-        .render(18, || keyed_visibility_probe(vec![(2, true), (1, true)]))
-        .expect("swap the rows");
+    pass(&mut composition, vec![(2, true), (1, true)]).expect("swap the rows");
     assert_eq!(
         (branch_inits(), keyed_values()),
         (2, vec![(2, 2), (1, 1)]),
@@ -879,15 +843,14 @@ fn loop_branch_probe(flags: Vec<bool>) {
 fn branches_inside_a_loop_key_per_occurrence() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<bool>| {
+        composition.render(12, || loop_branch_probe(value.clone()))
+    };
 
-    composition
-        .render(12, || loop_branch_probe(vec![true, true]))
-        .expect("compose two then-branches");
+    pass(&mut composition, vec![true, true]).expect("compose two then-branches");
     assert_eq!(branch_log(), vec!["t1".to_string(), "t2".to_string()]);
 
-    composition
-        .render(12, || loop_branch_probe(vec![true, false]))
-        .expect("flip the second iteration");
+    pass(&mut composition, vec![true, false]).expect("flip the second iteration");
     assert_eq!(
         branch_log(),
         vec!["t1".to_string(), "e3".to_string()],
@@ -918,15 +881,14 @@ fn method_call_branch_probe(cond: bool) {
 fn branches_composing_only_through_composer_methods_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(30, || method_call_branch_probe(value))
+    };
 
-    composition
-        .render(30, || method_call_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(30, || method_call_branch_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -949,24 +911,21 @@ fn guard_composition_probe(route: u8) {
 fn match_guards_own_their_composition_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: u8| {
+        composition.render(31, || guard_composition_probe(value))
+    };
 
-    composition
-        .render(31, || guard_composition_probe(0))
-        .expect("compose the first guard");
+    pass(&mut composition, 0).expect("compose the first guard");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(31, || guard_composition_probe(1))
-        .expect("switch to the second guard");
+    pass(&mut composition, 1).expect("switch to the second guard");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
         "the second guard must not be handed the first guard's remember slot"
     );
 
-    composition
-        .render(31, || guard_composition_probe(0))
-        .expect("switch back to the first guard");
+    pass(&mut composition, 0).expect("switch back to the first guard");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (3, 1),
@@ -1008,15 +967,14 @@ mod fake_arity_with_key {
 fn a_lookalike_with_key_of_different_arity_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(32, || fake_arity_with_key::probe(value))
+    };
 
-    composition
-        .render(32, || fake_arity_with_key::probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 7));
 
-    composition
-        .render(32, || fake_arity_with_key::probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 8),
@@ -1043,15 +1001,14 @@ fn local_fn_branch_probe(cond: bool) {
 fn conditionals_inside_local_functions_own_their_branches() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(33, || local_fn_branch_probe(value))
+    };
 
-    composition
-        .render(33, || local_fn_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(33, || local_fn_branch_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1096,15 +1053,14 @@ fn method_keyed_arg_probe(cond: bool) {
 fn a_key_argument_composing_through_methods_keeps_the_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(34, || method_keyed_arg_probe(value))
+    };
 
-    composition
-        .render(34, || method_keyed_arg_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 101));
 
-    composition
-        .render(34, || method_keyed_arg_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (4, 202),
@@ -1136,15 +1092,14 @@ fn closure_through_method_probe(cond: bool) {
 fn branches_composing_through_method_call_closures_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(35, || closure_through_method_probe(value))
+    };
 
-    composition
-        .render(35, || closure_through_method_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(35, || closure_through_method_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1169,15 +1124,14 @@ fn composing_condition_probe(enabled: bool) {
 fn a_composing_if_condition_owns_its_slots() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(36, || composing_condition_probe(value))
+    };
 
-    composition
-        .render(36, || composing_condition_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 99));
 
-    composition
-        .render(36, || composing_condition_probe(false))
-        .expect("short-circuit the condition");
+    pass(&mut composition, false).expect("short-circuit the condition");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 99),
@@ -1207,15 +1161,14 @@ fn impl_method_branch_probe(cond: bool) {
 fn conditionals_inside_local_impl_methods_own_their_branches() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(37, || impl_method_branch_probe(value))
+    };
 
-    composition
-        .render(37, || impl_method_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(37, || impl_method_branch_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1240,15 +1193,14 @@ fn composer_shadowing_probe(cond: bool) {
 fn a_user_binding_named_like_the_composer_is_not_broken_by_guards() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(38, || composer_shadowing_probe(value))
+    };
 
-    composition
-        .render(38, || composer_shadowing_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 7));
 
-    composition
-        .render(38, || composer_shadowing_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!((branch_inits(), branch_seen()), (2, 8));
     assert_composition_valid(&composition);
 }
@@ -1280,15 +1232,14 @@ mod fake_shape_with_key {
 fn a_lookalike_with_key_of_the_real_shape_still_gets_a_bracket() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(39, || fake_shape_with_key::probe(value))
+    };
 
-    composition
-        .render(39, || fake_shape_with_key::probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(39, || fake_shape_with_key::probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1317,15 +1268,14 @@ fn keyed_via_helper_probe(cond: bool) {
 fn an_explicit_key_does_not_carry_state_across_branch_sites() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(40, || keyed_via_helper_probe(value))
+    };
 
-    composition
-        .render(40, || keyed_via_helper_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(40, || keyed_via_helper_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1353,15 +1303,14 @@ fn value_macro_snake_probe(cond: bool) {
 fn a_snake_case_composable_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(41, || value_macro_snake_probe(value))
+    };
 
-    composition
-        .render(41, || value_macro_snake_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(41, || value_macro_snake_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1393,15 +1342,14 @@ fn cross_branch_pool_probe(first_key: i32, second: bool) {
 fn a_parked_keyed_subtree_stays_within_its_branch_site() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, (arg0, arg1): (i32, bool)| {
+        composition.render(42, || cross_branch_pool_probe(arg0, arg1))
+    };
 
-    composition
-        .render(42, || cross_branch_pool_probe(1, false))
-        .expect("initial composition");
+    pass(&mut composition, (1, false)).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(42, || cross_branch_pool_probe(2, true))
-        .expect("re-key the first branch and enable the second");
+    pass(&mut composition, (2, true)).expect("re-key the first branch and enable the second");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (3, 1),
@@ -1432,15 +1380,14 @@ fn method_state_branch_probe(cond: bool) {
 fn branches_composing_through_use_state_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(43, || method_state_branch_probe(value))
+    };
 
-    composition
-        .render(43, || method_state_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(43, || method_state_branch_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1480,15 +1427,14 @@ fn value_macro_method_probe(cond: bool) {
 fn a_composing_method_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(44, || value_macro_method_probe(value))
+    };
 
-    composition
-        .render(44, || value_macro_method_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(44, || value_macro_method_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1519,15 +1465,14 @@ mod deferred_shell_ordinals {
 fn a_materialized_shell_keeps_group_ordinals_consistent() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(45, || deferred_shell_ordinals::probe(value))
+    };
 
-    composition
-        .render(45, || deferred_shell_ordinals::probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 1);
 
-    composition
-        .render(45, || deferred_shell_ordinals::probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         2,
@@ -1604,15 +1549,14 @@ fn nested_bracket_rows(rows: Vec<i32>) {
 fn keyed_state_survives_a_front_removal_through_nested_brackets() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<i32>| {
+        composition.render(47, || nested_bracket_rows(value.clone()))
+    };
 
-    composition
-        .render(47, || nested_bracket_rows(vec![1, 2]))
-        .expect("initial composition");
+    pass(&mut composition, vec![1, 2]).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 2));
 
-    composition
-        .render(47, || nested_bracket_rows(vec![2]))
-        .expect("remove the front row");
+    pass(&mut composition, vec![2]).expect("remove the front row");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1635,15 +1579,14 @@ fn value_macro_paren_callee_probe(cond: bool) {
 fn a_parenthesized_callee_inside_a_value_macro_gets_a_branch_group() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(48, || value_macro_paren_callee_probe(value))
+    };
 
-    composition
-        .render(48, || value_macro_paren_callee_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(48, || value_macro_paren_callee_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1656,15 +1599,14 @@ fn a_parenthesized_callee_inside_a_value_macro_gets_a_branch_group() {
 fn a_key_flattened_out_of_a_skipped_inner_bracket_keeps_its_path() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<i32>| {
+        composition.render(50, || nested_bracket_rows(value.clone()))
+    };
 
-    composition
-        .render(50, || nested_bracket_rows(vec![1, 2]))
-        .expect("initial composition");
+    pass(&mut composition, vec![1, 2]).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 2));
 
-    composition
-        .render(50, || nested_bracket_rows(vec![-1, 1]))
-        .expect("skip the inner branch of the first occurrence");
+    pass(&mut composition, vec![-1, 1]).expect("skip the inner branch of the first occurrence");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 1),
@@ -1700,19 +1642,16 @@ fn dual_retention_probe(first: bool, second: bool) {
 fn both_branches_retain_the_same_reuse_child_without_colliding() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, (first, second)| {
+        composition.render(51, || dual_retention_probe(first, second))
+    };
 
-    composition
-        .render(51, || dual_retention_probe(true, true))
-        .expect("initial composition");
+    pass(&mut composition, (true, true)).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (2, 2));
 
-    composition
-        .render(51, || dual_retention_probe(false, false))
-        .expect("retain both children");
+    pass(&mut composition, (false, false)).expect("retain both children");
 
-    composition
-        .render(51, || dual_retention_probe(true, true))
-        .expect("restore both children");
+    pass(&mut composition, (true, true)).expect("restore both children");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1778,19 +1717,16 @@ fn looped_retention_probe(rows: Vec<bool>) {
 fn repeated_occurrences_of_one_branch_site_retain_independently() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: Vec<bool>| {
+        composition.render(54, || looped_retention_probe(value.clone()))
+    };
 
-    composition
-        .render(54, || looped_retention_probe(vec![true, true]))
-        .expect("initial composition");
+    pass(&mut composition, vec![true, true]).expect("initial composition");
     assert_eq!(branch_inits(), 2);
 
-    composition
-        .render(54, || looped_retention_probe(vec![false, false]))
-        .expect("retain both occurrences");
+    pass(&mut composition, vec![false, false]).expect("retain both occurrences");
 
-    composition
-        .render(54, || looped_retention_probe(vec![true, true]))
-        .expect("restore both occurrences");
+    pass(&mut composition, vec![true, true]).expect("restore both occurrences");
     assert_eq!(
         branch_inits(),
         2,
@@ -1826,15 +1762,14 @@ mod delegating_with_key {
 fn a_delegating_with_key_lookalike_does_not_merge_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(55, || delegating_with_key::probe(value))
+    };
 
-    composition
-        .render(55, || delegating_with_key::probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(55, || delegating_with_key::probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -1914,15 +1849,14 @@ fn closure_select_probe(cond: bool) {
 fn a_branch_selected_closure_carries_its_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(58, || closure_select_probe(value))
+    };
 
-    composition
-        .render(58, || closure_select_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 301);
 
-    composition
-        .render(58, || closure_select_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         302,
@@ -1952,15 +1886,14 @@ fn transitive_method_probe(cond: bool) {
 fn branches_composing_through_arbitrary_methods_own_their_state() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(59, || transitive_method_probe(value))
+    };
 
-    composition
-        .render(59, || transitive_method_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 401);
 
-    composition
-        .render(59, || transitive_method_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         402,
@@ -2024,15 +1957,14 @@ fn nested_shell_provenance_probe(cond: bool) {
 fn nested_pending_shells_fold_into_keyed_provenance() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(61, || nested_shell_provenance_probe(value))
+    };
 
-    composition
-        .render(61, || nested_shell_provenance_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 501);
 
-    composition
-        .render(61, || nested_shell_provenance_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         502,
@@ -2063,15 +1995,14 @@ fn boxed_closure_probe(cond: bool) {
 fn a_branch_tail_closure_through_a_helper_keeps_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(62, || boxed_closure_probe(value))
+    };
 
-    composition
-        .render(62, || boxed_closure_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!(branch_seen(), 601);
 
-    composition
-        .render(62, || boxed_closure_probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         branch_seen(),
         602,
@@ -2138,15 +2069,14 @@ mod shadowed_format {
 fn a_shadowed_value_macro_still_brackets_its_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(64, || shadowed_format::probe(value))
+    };
 
-    composition
-        .render(64, || shadowed_format::probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 701));
 
-    composition
-        .render(64, || shadowed_format::probe(false))
-        .expect("switch to the else branch");
+    pass(&mut composition, false).expect("switch to the else branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 702),
@@ -2174,24 +2104,21 @@ fn nested_shell_probe(first: bool) {
 fn a_helper_branch_called_from_both_arms_keeps_the_outer_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(65, || nested_shell_probe(value))
+    };
 
-    composition
-        .render(65, || nested_shell_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(65, || nested_shell_probe(false))
-        .expect("switch to the else arm");
+    pass(&mut composition, false).expect("switch to the else arm");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
         "the helper's inner branch must nest inside the outer arm's shell, not replace it"
     );
 
-    composition
-        .render(65, || nested_shell_probe(true))
-        .expect("switch back to the then arm");
+    pass(&mut composition, true).expect("switch back to the then arm");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (3, 1),
@@ -2220,24 +2147,21 @@ fn keyed_provenance_probe(flag: bool) {
 fn a_keyed_group_does_not_cross_between_branch_and_tail_occurrences() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(66, || keyed_provenance_probe(value))
+    };
 
-    composition
-        .render(66, || keyed_provenance_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(66, || keyed_provenance_probe(false))
-        .expect("switch to the tail occurrence");
+    pass(&mut composition, false).expect("switch to the tail occurrence");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
         "the unbracketed tail call must not adopt the branch occurrence's keyed state"
     );
 
-    composition
-        .render(66, || keyed_provenance_probe(true))
-        .expect("switch back to the branch occurrence");
+    pass(&mut composition, true).expect("switch back to the branch occurrence");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (3, 1),
@@ -2272,15 +2196,14 @@ fn operator_branch_probe(first: bool) {
 fn an_operator_that_composes_still_gets_branch_shells() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(67, || operator_branch_probe(value))
+    };
 
-    composition
-        .render(67, || operator_branch_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 1));
 
-    composition
-        .render(67, || operator_branch_probe(false))
-        .expect("switch to the else arm");
+    pass(&mut composition, false).expect("switch to the else arm");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 2),
@@ -2306,24 +2229,21 @@ fn unkeyed_neighbor_probe(inner: bool) {
 fn a_keyed_identity_survives_an_unkeyed_neighbor_toggling() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(68, || unkeyed_neighbor_probe(value))
+    };
 
-    composition
-        .render(68, || unkeyed_neighbor_probe(false))
-        .expect("initial composition");
+    pass(&mut composition, false).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 70));
 
-    composition
-        .render(68, || unkeyed_neighbor_probe(true))
-        .expect("the neighbor branch materializes the bracket");
+    pass(&mut composition, true).expect("the neighbor branch materializes the bracket");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (1, 70),
         "a neighbor's remember must not move the keyed subtree's identity"
     );
 
-    composition
-        .render(68, || unkeyed_neighbor_probe(false))
-        .expect("the neighbor branch leaves again");
+    pass(&mut composition, false).expect("the neighbor branch leaves again");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (1, 70),
@@ -2374,15 +2294,14 @@ fn escaped_closure_probe(cond: bool) {
 fn a_branch_selected_boxed_closure_keeps_its_branch_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(70, || escaped_closure_probe(value))
+    };
 
-    composition
-        .render(70, || escaped_closure_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 81));
 
-    composition
-        .render(70, || escaped_closure_probe(false))
-        .expect("switch to the else arm's closure");
+    pass(&mut composition, false).expect("switch to the else arm's closure");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 82),
@@ -2412,21 +2331,22 @@ fn macro_rules_probe(cond: bool) {
 fn a_macro_rules_conditional_shares_slots_by_construction() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(71, || macro_rules_probe(value))
+    };
 
-    composition
-        .render(71, || macro_rules_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 91));
 
-    composition
-        .render(71, || macro_rules_probe(false))
-        .expect("switch arms inside the macro expansion");
+    pass(&mut composition, false).expect("switch arms inside the macro expansion");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (1, 91),
         "arms born from macro_rules expansion share one slot: the attribute \
-         macro runs before function-like macros expand, so this boundary is \
-         structural; key such content explicitly with with_key"
+         macro runs before function-like macros expand, and caller locations \
+         inside an expansion collapse to the invocation site, so neither \
+         brackets nor slot stamps can tell the arms apart; key such content \
+         explicitly with with_key"
     );
     assert_composition_valid(&composition);
 }
@@ -2448,15 +2368,14 @@ fn cross_branch_invoked_closure_probe(use_first: bool) {
 fn a_stored_closure_composes_fresh_per_invoking_branch() {
     reset_branch_probes();
     let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(72, || cross_branch_invoked_closure_probe(value))
+    };
 
-    composition
-        .render(72, || cross_branch_invoked_closure_probe(true))
-        .expect("initial composition");
+    pass(&mut composition, true).expect("initial composition");
     assert_eq!((branch_inits(), branch_seen()), (1, 101));
 
-    composition
-        .render(72, || cross_branch_invoked_closure_probe(false))
-        .expect("invoke the same closure from the other branch");
+    pass(&mut composition, false).expect("invoke the same closure from the other branch");
     assert_eq!(
         (branch_inits(), branch_seen()),
         (2, 101),
@@ -2594,6 +2513,90 @@ fn invalidation_inside_a_folded_keyed_bracket_recomposes_in_place() {
         (branch_inits(), branch_seen()),
         (1, 1),
         "targeted recomposition must reuse the folded keyed group, not remake it"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn located_composable_macro_probe(cond: bool) {
+    macro_rules! shared_child_route {
+        ($cond:expr) => {
+            if $cond {
+                stateful_child(201);
+            } else {
+                stateful_child(202);
+            }
+        };
+    }
+    shared_child_route!(cond);
+}
+
+#[test]
+fn a_macro_rules_conditional_collapses_composable_caller_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(79, || located_composable_macro_probe(value))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!(branch_seen(), 201);
+
+    pass(&mut composition, false).expect("switch arms inside the macro expansion");
+    assert_eq!(
+        branch_seen(),
+        201,
+        "a composable called from both expanded arms is one collapsed identity: \
+         track_caller locations inside a macro_rules expansion resolve to the \
+         invocation site, the same boundary the arms-share pin documents"
+    );
+    assert_composition_valid(&composition);
+}
+
+struct ComposingHolder {
+    value: Option<i32>,
+}
+
+impl std::ops::Deref for ComposingHolder {
+    type Target = Option<i32>;
+
+    fn deref(&self) -> &Option<i32> {
+        let _ = remember(|| 0_i32);
+        &self.value
+    }
+}
+
+#[composable]
+fn deref_composing_probe(enabled: bool) {
+    let holder = ComposingHolder { value: Some(4) };
+    if enabled {
+        if let Some(value) = *holder {
+            BRANCH_LOG.with(|log| log.borrow_mut().push(format!("deref {value}")));
+        }
+    }
+    let tail = remember(|| {
+        BRANCH_INITS.with(|count| count.set(count.get() + 1));
+        7_i32
+    });
+    BRANCH_SEEN.with(|seen| seen.set(tail.with(|value| *value)));
+}
+
+#[test]
+fn a_composing_deref_slot_is_not_adopted_by_a_following_remember() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, value: bool| {
+        composition.render(80, || deref_composing_probe(value))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 7));
+
+    pass(&mut composition, false).expect("the composing deref stops running");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 7),
+        "the tail remember must keep its own slot, not inherit the deref's"
     );
     assert_composition_valid(&composition);
 }

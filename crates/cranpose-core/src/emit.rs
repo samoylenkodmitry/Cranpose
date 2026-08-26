@@ -29,10 +29,14 @@ impl Composer {
         self.commands_mut().push(Command::RemoveNode { id: old_id });
     }
 
+    #[track_caller]
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
+        let source = crate::caller_location_key();
         let runtime = self.runtime_handle();
         let state = self.with_slot_session_mut(|slots| {
-            slots.remember(|| OwnedMutableState::with_runtime(init(), runtime.clone()))
+            slots.remember(source, || {
+                OwnedMutableState::with_runtime(init(), runtime.clone())
+            })
         });
         state.with(|state| state.handle())
     }

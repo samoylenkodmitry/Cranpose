@@ -343,6 +343,13 @@ fn avalanche_location_key(mut value: u64) -> u64 {
     value ^ (value >> 33)
 }
 
+#[doc(hidden)]
+#[track_caller]
+pub fn caller_location_key() -> Key {
+    let caller = std::panic::Location::caller();
+    location_key(caller.file(), caller.line(), caller.column())
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let key = source_location_key(file, line, column);
     #[cfg(test)]

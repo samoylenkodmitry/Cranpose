@@ -13,7 +13,11 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
         begin_unkeyed(session, PARENT_KEY, None);
         for explicit_key in 0..CHILD_COUNT {
             begin_keyed(session, CHILD_KEY, explicit_key, None);
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, || explicit_key as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || explicit_key as i32,
+            );
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
             session.end_group();
@@ -35,7 +39,11 @@ fn perf_large_keyed_reorder_avoids_identity_rebuilds() {
                 child.kind,
                 GroupStartKind::Moved | GroupStartKind::Reused
             ));
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || -1_i32,
+            );
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
             session.end_group();
@@ -155,7 +163,11 @@ fn perf_retained_restore_refreshes_only_restored_payload_range() {
         let child = begin_unkeyed(session, CHILD_KEY, Some(restored));
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(child.scope_id, Some(CHILD_SCOPE));
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -196,12 +208,20 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let child_slot = session.value_slot_with_kind(PayloadKind::Internal, || 77_i32);
+        let child_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 77_i32,
+        );
         session.record_node_with_parent(CHILD_NODE, 1, None);
         for index in 0..GRANDCHILD_COUNT {
             let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
             session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE_BASE + index as ScopeId);
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
             session.record_node_with_parent(
                 GRANDCHILD_NODE_BASE + index as NodeId,
                 1,
@@ -264,7 +284,11 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(child.anchor, child_anchor);
         assert_eq!(child.scope_id, Some(CHILD_SCOPE));
-        let restored_child_slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let restored_child_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         assert_eq!(restored_child_slot, child_slot);
         assert_eq!(
             session.record_node_with_parent(CHILD_NODE, 1, None),
@@ -280,7 +304,11 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
                 grandchild.scope_id,
                 Some(GRANDCHILD_SCOPE_BASE + index as ScopeId)
             );
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || -(index as i32));
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || -(index as i32),
+            );
             assert_eq!(
                 session.record_node_with_parent(
                     GRANDCHILD_NODE_BASE + index as NodeId,
@@ -357,7 +385,11 @@ fn perf_mass_conditional_removal_batches_anchor_refresh() {
         begin_unkeyed(session, PARENT_KEY, None);
         for explicit_key in 0..CHILD_COUNT {
             begin_keyed(session, CHILD_KEY, explicit_key, None);
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, || explicit_key as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || explicit_key as i32,
+            );
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
             session.end_group();
@@ -428,14 +460,22 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
 
         let retained = begin_unkeyed(session, RETAINED_KEY, None);
         session.set_group_scope(retained.group, RETAINED_SCOPE);
-        let retained_slot = session.value_slot_with_kind(PayloadKind::Internal, || 901_i32);
+        let retained_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 901_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
         begin_unkeyed(session, TAIL_KEY, None);
         for index in 0..TAIL_PAYLOAD_COUNT {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
         }
         for index in 0..TAIL_NODE_COUNT {
             session.record_node_with_parent(TAIL_NODE_BASE + index as NodeId, 1, None);
@@ -459,7 +499,11 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         let tail = begin_unkeyed(session, TAIL_KEY, None);
         assert_eq!(tail.kind, GroupStartKind::Moved);
         for index in 0..MID_TAIL_PAYLOAD_COUNT {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
         }
         for index in 0..MID_TAIL_NODE_COUNT {
             assert_eq!(
@@ -522,7 +566,11 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         let tail = begin_unkeyed(session, TAIL_KEY, None);
         assert_eq!(tail.kind, GroupStartKind::Reused);
         for index in 0..KEPT_TAIL_PAYLOAD_COUNT {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
         }
         for index in 0..KEPT_TAIL_NODE_COUNT {
             assert_eq!(
@@ -585,7 +633,11 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         let retained = begin_unkeyed(session, RETAINED_KEY, Some(restored));
         assert_eq!(retained.kind, GroupStartKind::Restored);
         assert_eq!(retained.scope_id, Some(RETAINED_SCOPE));
-        let restored_slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let restored_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         assert_eq!(restored_slot, retained_slot);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -594,7 +646,11 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         let tail = begin_unkeyed(session, TAIL_KEY, None);
         assert_eq!(tail.kind, GroupStartKind::Reused);
         for index in 0..KEPT_TAIL_PAYLOAD_COUNT {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
         }
         for index in 0..KEPT_TAIL_NODE_COUNT {
             assert_eq!(
@@ -636,7 +692,11 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
             let child = begin_keyed(session, CHILD_KEY, explicit_key, None);
             if explicit_key == KEPT_EXPLICIT_KEY {
                 session.set_group_scope(child.group, CHILD_SCOPE);
-                let _ = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+                let _ = session.value_slot_with_kind(
+                    PayloadKind::Internal,
+                    crate::slot::BRANCH_PATH_ROOT,
+                    || 1_i32,
+                );
             }
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -655,7 +715,11 @@ fn perf_storage_compaction_does_not_rebuild_scope_index() {
         assert_eq!(parent.anchor, parent_anchor);
         let child = begin_keyed(session, CHILD_KEY, KEPT_EXPLICIT_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 2_i32,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();

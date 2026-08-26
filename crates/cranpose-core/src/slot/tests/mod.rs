@@ -249,7 +249,11 @@ fn detached_single_child_with_options(
             session.set_group_scope(child.group, scope_id);
         }
         if record_child_payload {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 17_i32,
+            );
         }
         if let (Some(node_id), Some(generation)) = (child_node, child_generation) {
             session.record_node_with_parent(node_id, generation, None);
@@ -344,7 +348,11 @@ fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, group_key, None);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 17_i32,
+        );
         session.record_node_with_parent(31, 1, None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -406,7 +414,10 @@ fn exercise_slot_write_session_surface(
     assert_eq!(started.kind, GroupStartKind::Inserted);
     slots.set_group_scope(started.group, scope_id);
 
-    let slot = slots.value_slot_with_kind(PayloadKind::Internal, || 7_i32);
+    let slot =
+        slots.value_slot_with_kind(PayloadKind::Internal, crate::slot::BRANCH_PATH_ROOT, || {
+            7_i32
+        });
 
     let recorded = slots.record_node_with_parent(55, 1, None);
     assert_eq!(

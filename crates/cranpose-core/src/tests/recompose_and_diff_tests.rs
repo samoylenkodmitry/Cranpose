@@ -280,19 +280,18 @@ fn disposable_effect_reacts_to_key_changes() {
     DISPOSABLE_EFFECT_LOG.with(|log| log.borrow_mut().clear());
     DISPOSABLE_STATE.with(|slot| *slot.borrow_mut() = None);
     let key = location_key(file!(), line!(), column!());
-    composition
-        .render(key, || {
-            disposable_effect_host();
-        })
-        .expect("render succeeds");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition
+            .render(key, || {
+                disposable_effect_host();
+            })
+            .expect("render succeeds");
+    };
+    pass(&mut composition);
     DISPOSABLE_EFFECT_LOG.with(|log| {
         assert_eq!(&*log.borrow(), &["start"]);
     });
-    composition
-        .render(key, || {
-            disposable_effect_host();
-        })
-        .expect("render succeeds");
+    pass(&mut composition);
     DISPOSABLE_EFFECT_LOG.with(|log| {
         assert_eq!(&*log.borrow(), &["start"]);
     });
@@ -301,11 +300,7 @@ fn disposable_effect_reacts_to_key_changes() {
             state.set_value(1);
         }
     });
-    composition
-        .render(key, || {
-            disposable_effect_host();
-        })
-        .expect("render succeeds");
+    pass(&mut composition);
     DISPOSABLE_EFFECT_LOG.with(|log| {
         assert_eq!(&*log.borrow(), &["start", "dispose", "start"]);
     });
@@ -740,26 +735,14 @@ fn composable_skips_when_inputs_unchanged() {
     let mut composition = test_composition();
     let key = location_key(file!(), line!(), column!());
 
-    composition
-        .render(key, || {
-            counted_text(1);
-        })
-        .expect("render succeeds");
-    INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
-
-    composition
-        .render(key, || {
-            counted_text(1);
-        })
-        .expect("render succeeds");
-    INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
-
-    composition
-        .render(key, || {
-            counted_text(2);
-        })
-        .expect("render succeeds");
-    INVOCATIONS.with(|calls| assert_eq!(calls.get(), 2));
+    for (input, expected_calls) in [(1, 1), (1, 1), (2, 2)] {
+        composition
+            .render(key, || {
+                counted_text(input);
+            })
+            .expect("render succeeds");
+        INVOCATIONS.with(|calls| assert_eq!(calls.get(), expected_calls));
+    }
 }
 
 #[test]
@@ -776,10 +759,11 @@ fn unit_return_composable_skips_without_return_value_slot() {
 
     let mut composition = test_composition();
     let key = location_key(file!(), line!(), column!());
+    let pass = |composition: &mut crate::Composition<crate::MemoryApplier>| {
+        composition.render(key, || unit_leaf(1))
+    };
 
-    composition
-        .render(key, || unit_leaf(1))
-        .expect("initial unit render");
+    pass(&mut composition).expect("initial unit render");
 
     let all_slots = composition.debug_dump_slot_entries();
     let value_count = all_slots
@@ -803,9 +787,7 @@ fn unit_return_composable_skips_without_return_value_slot() {
     );
     UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 
-    composition
-        .render(key, || unit_leaf(1))
-        .expect("skip render succeeds");
+    pass(&mut composition).expect("skip render succeeds");
 
     UNIT_INVOCATIONS.with(|calls| assert_eq!(calls.get(), 1));
 }

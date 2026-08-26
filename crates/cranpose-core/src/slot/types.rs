@@ -180,6 +180,7 @@ pub(super) struct PayloadRecord {
     pub(super) anchor: PayloadAnchor,
     pub(super) type_id: TypeId,
     pub(super) type_name: &'static str,
+    pub(super) source: crate::Key,
     pub(super) kind: PayloadKind,
     pub(super) value: Box<dyn Any>,
     pub(super) fresh: Option<fn() -> Box<dyn Any>>,

@@ -62,7 +62,11 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        child_slot = Some(session.value_slot_with_kind(PayloadKind::Internal, || 17_i32));
+        child_slot = Some(session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 17_i32,
+        ));
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -964,7 +968,7 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _remembered = session.remember(|| 91_i32);
+        let _remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 91_i32);
         session.record_node_with_parent(child_id, child_generation, None);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
@@ -1072,7 +1076,11 @@ fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
     harness.begin_pass(SlotPassMode::Compose);
     let root_slot = harness.session(|session| {
         begin_unkeyed(session, ROOT_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 73_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 73_i32,
+        );
         session.record_node_with_parent(ROOT_NODE, 1, None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());

@@ -154,7 +154,11 @@ fn keyed_sibling_move_repairs_malformed_payload_and_node_lengths_before_reorder(
         session.end_group();
 
         let second = begin_unkeyed(session, SECOND_CHILD_KEY, None);
-        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 81_i32);
+        let second_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 81_i32,
+        );
         assert_eq!(
             session.record_node_with_parent(second_node, second_node_generation, None),
             NodeSlotUpdate::Inserted {

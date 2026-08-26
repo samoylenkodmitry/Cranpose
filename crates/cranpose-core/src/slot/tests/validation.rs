@@ -245,8 +245,16 @@ fn validate_reports_duplicate_payload_anchor_structurally() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, 492, None);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 1_i32,
+        );
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 2_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -309,6 +317,7 @@ fn validate_reports_payload_count_mismatch_structurally() {
         anchor: extra_anchor,
         type_id: TypeId::of::<i32>(),
         type_name: std::any::type_name::<i32>(),
+        source: crate::slot::BRANCH_PATH_ROOT,
         kind: super::PayloadKind::Internal,
         value: Box::new(0_i32),
         fresh: None,
@@ -484,7 +493,11 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
             let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
             if explicit_key == KEPT_EXPLICIT_KEY {
                 session.set_group_scope(child.group, CHILD_SCOPE);
-                let _ = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
+                let _ = session.value_slot_with_kind(
+                    PayloadKind::Internal,
+                    crate::slot::BRANCH_PATH_ROOT,
+                    || 1_i32,
+                );
                 session.record_node_with_parent(CHILD_NODE, 1, None);
             }
             let result = session.finish_group_body();
@@ -504,7 +517,11 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
         assert_eq!(parent.anchor, parent_anchor);
         let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 2_i32,
+        );
         session.record_node_with_parent(CHILD_NODE, 1, None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -668,7 +685,11 @@ fn compact_payload_storage_preserves_active_value_slots() {
         for explicit_key in 0..GROUP_COUNT as Key {
             let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
             assert_eq!(child.kind, GroupStartKind::Inserted);
-            let slot = session.value_slot_with_kind(PayloadKind::Internal, || explicit_key as i32);
+            let slot = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || explicit_key as i32,
+            );
             if explicit_key == KEPT_EXPLICIT_KEY {
                 retained_slot = Some(slot);
             }
@@ -697,7 +718,11 @@ fn compact_payload_storage_preserves_active_value_slots() {
 
         let child = begin_keyed(session, CHILD_STATIC_KEY, KEPT_EXPLICIT_KEY, None);
         assert_eq!(child.kind, GroupStartKind::Moved);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -744,8 +769,11 @@ fn compact_payload_storage_preserves_retained_value_slots() {
         for explicit_key in 0..GROUP_COUNT as Key {
             let child = begin_keyed(session, CHILD_STATIC_KEY, explicit_key, None);
             assert_eq!(child.kind, GroupStartKind::Inserted);
-            let slot =
-                session.value_slot_with_kind(PayloadKind::Internal, || (explicit_key as i32) * 10);
+            let slot = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || (explicit_key as i32) * 10,
+            );
             if explicit_key == RETAINED_EXPLICIT_KEY {
                 retained_slot = Some(slot);
             }
@@ -850,10 +878,18 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
     harness.begin_pass(SlotPassMode::Compose);
     let parent_anchor = harness.session(|session| {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
 
         begin_unkeyed(session, CHILD_KEY, None);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 20_i32,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -943,19 +979,31 @@ fn disposed_identities_reuse_only_after_generation_bump() {
         let parent = begin_unkeyed(session, PARENT_KEY, None);
 
         let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
-        let active_slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let active_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
         let retained = begin_keyed(session, CHILD_STATIC_KEY, RETAINED_KEY, None);
-        let retained_slot = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let retained_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 20_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
 
         let disposed = begin_keyed(session, CHILD_STATIC_KEY, DISPOSED_KEY, None);
-        let disposed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let disposed_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 30_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -982,7 +1030,11 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
         let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
         assert_eq!(active.anchor, active_anchor);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         assert_eq!(slot, active_slot);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -1038,7 +1090,11 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
         let active = begin_keyed(session, CHILD_STATIC_KEY, ACTIVE_KEY, None);
         assert_eq!(active.anchor, active_anchor);
-        let active_slot_after = session.value_slot_with_kind(PayloadKind::Internal, || -1_i32);
+        let active_slot_after = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || -1_i32,
+        );
         assert_eq!(active_slot_after, active_slot);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -1046,7 +1102,11 @@ fn disposed_identities_reuse_only_after_generation_bump() {
 
         let new_child = begin_keyed(session, CHILD_STATIC_KEY, NEW_KEY, None);
         assert_eq!(new_child.kind, GroupStartKind::Inserted);
-        let new_slot = session.value_slot_with_kind(PayloadKind::Internal, || 40_i32);
+        let new_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 40_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -1085,7 +1145,11 @@ fn disposed_identities_reuse_only_after_generation_bump() {
     harness.begin_pass(SlotPassMode::Compose);
     let reused_payload_slot = harness.session(|session| {
         begin_unkeyed(session, PARENT_KEY + 1, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 50_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 50_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();

@@ -70,7 +70,11 @@ fn first_composition_records_group_value_and_node() {
     let slot = harness.session(|session| {
         let started = begin_unkeyed(session, 1, None);
         assert_eq!(started.kind, GroupStartKind::Inserted);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 41_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 41_i32,
+        );
         session.record_node_with_parent(7, 1, None);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -107,7 +111,11 @@ fn removing_many_payloads_requests_compaction() {
         let started = begin_unkeyed(session, GROUP_KEY, None);
         assert_eq!(started.kind, GroupStartKind::Inserted);
         for index in 0..PAYLOAD_COUNT {
-            let _ = session.value_slot_with_kind(PayloadKind::Internal, move || index as i32);
+            let _ = session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                move || index as i32,
+            );
         }
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -195,8 +203,16 @@ fn value_slots_without_active_group_record_recovery_groups() {
 
     let (first, second) = harness.session(|session| {
         (
-            session.value_slot_with_kind(PayloadKind::Internal, || 11_i32),
-            session.value_slot_with_kind(PayloadKind::Internal, || 22_i32),
+            session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 11_i32,
+            ),
+            session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 22_i32,
+            ),
         )
     });
     harness.finish_pass();
@@ -210,8 +226,16 @@ fn value_slots_without_active_group_record_recovery_groups() {
     harness.begin_pass(SlotPassMode::Compose);
     let (first_again, second_again) = harness.session(|session| {
         (
-            session.value_slot_with_kind(PayloadKind::Internal, || 111_i32),
-            session.value_slot_with_kind(PayloadKind::Internal, || 222_i32),
+            session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 111_i32,
+            ),
+            session.value_slot_with_kind(
+                PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 222_i32,
+            ),
         )
     });
     harness.finish_pass();
@@ -237,12 +261,20 @@ fn debug_snapshot_reports_active_groups_anchors_and_scopes() {
     harness.session(|session| {
         let root = begin_unkeyed(session, ROOT_KEY, None);
         session.set_group_scope(root.group, ROOT_SCOPE);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 7_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 7_i32,
+        );
         session.record_node_with_parent(11, 1, None);
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _ = session.value_slot_with_kind(PayloadKind::Internal, || 9_i32);
+        let _ = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 9_i32,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();

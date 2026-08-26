@@ -1350,52 +1350,77 @@ impl Composer {
         }
     }
 
+    #[track_caller]
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Remember, init)
+        self.remember_at(crate::caller_location_key(), init)
     }
 
+    pub(crate) fn remember_at<T: 'static>(
+        &self,
+        source: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        self.with_slot_session_mut(|slots| {
+            slots.remember_with_kind(PayloadKind::Remember, source, init)
+        })
+    }
+
+    #[track_caller]
     pub(crate) fn remember_internal<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
         self.remember_with_kind(PayloadKind::Internal, init)
     }
 
+    #[track_caller]
     pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
-        self.with_slot_session_mut(|slots| slots.remember_effect::<T>())
+        let source = crate::caller_location_key();
+        self.with_slot_session_mut(|slots| slots.remember_effect::<T>(source))
     }
 
+    #[track_caller]
     fn remember_with_kind<T: 'static>(
         &self,
         kind: PayloadKind,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        self.with_slot_session_mut(|slots| slots.remember_with_kind(kind, init))
+        let source = crate::caller_location_key();
+        self.with_slot_session_mut(|slots| slots.remember_with_kind(kind, source, init))
     }
 
+    #[track_caller]
     pub fn use_value_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Internal, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Internal, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 
     #[doc(hidden)]
+    #[track_caller]
     pub fn __use_param_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Param, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Param, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 
     #[doc(hidden)]
+    #[track_caller]
     pub fn __use_return_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Return, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Return, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 

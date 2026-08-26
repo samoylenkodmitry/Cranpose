@@ -684,6 +684,7 @@ mod tests {
                 anchor,
                 type_id: std::any::TypeId::of::<i32>(),
                 type_name: std::any::type_name::<i32>(),
+                source: crate::slot::BRANCH_PATH_ROOT,
                 kind: crate::slot::PayloadKind::Internal,
                 value: Box::new(value),
                 fresh: None,

@@ -310,12 +310,14 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     branch_groups::inject_branch_groups(&core_path, &mut func.block);
+    func.attrs.push(syn::parse_quote!(#[track_caller]));
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
     let recompose_block = original_block.clone();
-    let key_expr = quote! { #core_path::location_key(file!(), line!(), column!()) };
+    let key_expr = quote! { __cranpose_caller_key };
+    let caller_key_stmt = quote! { let __cranpose_caller_key = #core_path::caller_location_key(); };
 
     // Rebinds will be generated later in the helper_body context where we have access to slots
     let rebinds_for_no_skip: Vec<_> = param_info
@@ -775,6 +777,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let wrapped = quote!({
+            #caller_key_stmt
             #core_path::with_current_composer(|__composer: &#core_path::Composer| {
                 __composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
                     #helper_ident(__composer #(, #wrapper_args)*)
@@ -789,6 +792,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
     } else {
         let wrapped = quote!({
+            #caller_key_stmt
             #core_path::with_current_composer(|__outer_composer: &#core_path::Composer| {
                 __outer_composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
                     #core_path::debug_label_current_scope(stringify!(#scope_label_ident));

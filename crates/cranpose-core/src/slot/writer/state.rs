@@ -411,7 +411,11 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(key, None);
-            let _ = session.value_slot_with_kind(crate::slot::PayloadKind::Internal, || 17_i32);
+            let _ = session.value_slot_with_kind(
+                crate::slot::PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 17_i32,
+            );
             session.record_node_with_parent(31, 1, None);
         }
 
