@@ -1,9 +1,9 @@
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use syn::{
+    Block, Expr, Stmt,
     spanned::Spanned,
     visit::Visit,
     visit_mut::{self, VisitMut},
-    Block, Expr, Stmt,
 };
 
 pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) {
@@ -64,6 +64,64 @@ impl BranchGroupInjector<'_> {
 
     fn wrap_condition(&mut self, condition: &mut Expr) {
         self.wrap_condition_inner(condition);
+        if !matches!(condition, Expr::Let(_)) {
+            self.inject_before_first_chain_let(condition);
+        }
+    }
+
+    fn synthetic_chain_let(&mut self, span: Span) -> Expr {
+        let guard_expr = self.branch_guard_expr(span);
+        let ident = syn::Ident::new("__cranpose_chain_fold_guard", span);
+        let pat: syn::Pat = syn::Pat::Ident(syn::PatIdent {
+            attrs: Vec::new(),
+            by_ref: None,
+            mutability: None,
+            ident,
+            subpat: None,
+        });
+        Expr::Let(syn::ExprLet {
+            attrs: Vec::new(),
+            let_token: syn::token::Let(span),
+            pat: Box::new(pat),
+            eq_token: syn::token::Eq(span),
+            expr: Box::new(guard_expr),
+        })
+    }
+
+    fn inject_before_first_chain_let(&mut self, expr: &mut Expr) -> bool {
+        match expr {
+            Expr::Let(_) => {
+                let span = expr.span();
+                let synthetic = self.synthetic_chain_let(span);
+                let original = expr.clone();
+                *expr = Expr::Binary(syn::ExprBinary {
+                    attrs: Vec::new(),
+                    left: Box::new(synthetic),
+                    op: syn::BinOp::And(syn::token::AndAnd(span)),
+                    right: Box::new(original),
+                });
+                true
+            }
+            Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_)) => {
+                if self.inject_before_first_chain_let(&mut binary.left) {
+                    return true;
+                }
+                if matches!(&*binary.right, Expr::Let(_)) {
+                    let span = binary.right.span();
+                    let synthetic = self.synthetic_chain_let(span);
+                    let original_left = binary.left.clone();
+                    *binary.left = Expr::Binary(syn::ExprBinary {
+                        attrs: Vec::new(),
+                        left: original_left,
+                        op: syn::BinOp::And(syn::token::AndAnd(span)),
+                        right: Box::new(synthetic),
+                    });
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
     }
 
     fn wrap_condition_inner(&mut self, condition: &mut Expr) {
@@ -281,10 +339,10 @@ impl VisitMut for BranchGroupInjector<'_> {
             }
             syn::Item::Trait(item_trait) => {
                 for trait_item in &mut item_trait.items {
-                    if let syn::TraitItem::Fn(method) = trait_item {
-                        if let Some(default_body) = &mut method.default {
-                            self.visit_nested_fn(&method.sig, &method.attrs, default_body);
-                        }
+                    if let syn::TraitItem::Fn(method) = trait_item
+                        && let Some(default_body) = &mut method.default
+                    {
+                        self.visit_nested_fn(&method.sig, &method.attrs, default_body);
                     }
                 }
             }

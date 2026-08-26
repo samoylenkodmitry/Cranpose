@@ -1,0 +1,15 @@
+[package]
+name = "cranpose-e2024-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+cranpose-core = { path = "../cranpose-core" }
+cranpose-macros = { path = "../cranpose-macros" }

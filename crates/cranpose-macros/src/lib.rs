@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
-use syn::{parse_macro_input, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type};
+use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
 
 mod branch_groups;
 
@@ -21,27 +21,24 @@ fn is_fn_like_type(ty: &Type) -> bool {
             false
         }),
         Type::Path(type_path) => {
-            if let Some(segment) = type_path.path.segments.last() {
-                if segment.ident == "Box" {
-                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                        if let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) =
-                            args.args.first()
-                        {
-                            return trait_obj.bounds.iter().any(|bound| {
-                                if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                                    let path = &trait_bound.path;
-                                    if let Some(segment) = path.segments.last() {
-                                        let ident_str = segment.ident.to_string();
-                                        return ident_str == "FnMut"
-                                            || ident_str == "Fn"
-                                            || ident_str == "FnOnce";
-                                    }
-                                }
-                                false
-                            });
+            if let Some(segment) = type_path.path.segments.last()
+                && segment.ident == "Box"
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                && let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) =
+                    args.args.first()
+            {
+                return trait_obj.bounds.iter().any(|bound| {
+                    if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                        let path = &trait_bound.path;
+                        if let Some(segment) = path.segments.last() {
+                            let ident_str = segment.ident.to_string();
+                            return ident_str == "FnMut"
+                                || ident_str == "Fn"
+                                || ident_str == "FnOnce";
                         }
                     }
-                }
+                    false
+                });
             }
             false
         }
@@ -60,16 +57,16 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
     };
 
     for param in &generics.params {
-        if let syn::GenericParam::Type(type_param) = param {
-            if type_param.ident == *type_ident {
-                for bound in &type_param.bounds {
-                    if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                        if let Some(segment) = trait_bound.path.segments.last() {
-                            let ident_str = segment.ident.to_string();
-                            if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
-                                return true;
-                            }
-                        }
+        if let syn::GenericParam::Type(type_param) = param
+            && type_param.ident == *type_ident
+        {
+            for bound in &type_param.bounds {
+                if let syn::TypeParamBound::Trait(trait_bound) = bound
+                    && let Some(segment) = trait_bound.path.segments.last()
+                {
+                    let ident_str = segment.ident.to_string();
+                    if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
+                        return true;
                     }
                 }
             }
@@ -78,23 +75,18 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
 
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
-            if let syn::WherePredicate::Type(pred) = predicate {
-                if let Type::Path(bounded_type) = &pred.bounded_ty {
-                    if bounded_type.path.segments.len() == 1
-                        && bounded_type.path.segments[0].ident == *type_ident
+            if let syn::WherePredicate::Type(pred) = predicate
+                && let Type::Path(bounded_type) = &pred.bounded_ty
+                && bounded_type.path.segments.len() == 1
+                && bounded_type.path.segments[0].ident == *type_ident
+            {
+                for bound in &pred.bounds {
+                    if let syn::TypeParamBound::Trait(trait_bound) = bound
+                        && let Some(segment) = trait_bound.path.segments.last()
                     {
-                        for bound in &pred.bounds {
-                            if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                                if let Some(segment) = trait_bound.path.segments.last() {
-                                    let ident_str = segment.ident.to_string();
-                                    if ident_str == "FnMut"
-                                        || ident_str == "Fn"
-                                        || ident_str == "FnOnce"
-                                    {
-                                        return true;
-                                    }
-                                }
-                            }
+                        let ident_str = segment.ident.to_string();
+                        if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
+                            return true;
                         }
                     }
                 }
@@ -116,14 +108,14 @@ fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
 fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     if let Type::ImplTrait(impl_trait) = ty {
         impl_trait.bounds.iter().any(|bound| {
-            if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                if let Some(segment) = trait_bound.path.segments.last() {
-                    let ident_str = segment.ident.to_string();
-                    if ident_str == "Fn" || ident_str == "FnMut" {
-                        if let syn::PathArguments::Parenthesized(args) = &segment.arguments {
-                            return args.inputs.is_empty();
-                        }
-                    }
+            if let syn::TypeParamBound::Trait(trait_bound) = bound
+                && let Some(segment) = trait_bound.path.segments.last()
+            {
+                let ident_str = segment.ident.to_string();
+                if (ident_str == "Fn" || ident_str == "FnMut")
+                    && let syn::PathArguments::Parenthesized(args) = &segment.arguments
+                {
+                    return args.inputs.is_empty();
                 }
             }
             false
@@ -178,10 +170,10 @@ fn filter_generics(
             .clone()
             .into_iter()
             .filter(|predicate| {
-                if let syn::WherePredicate::Type(pred) = predicate {
-                    if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
-                        return !strip.contains(&ident.to_string());
-                    }
+                if let syn::WherePredicate::Type(pred) = predicate
+                    && let Some(ident) = type_bare_generic_ident(&pred.bounded_ty)
+                {
+                    return !strip.contains(&ident.to_string());
                 }
                 true
             })
@@ -414,12 +406,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             if let Some(where_clause) = &generics.where_clause {
                 for predicate in &where_clause.predicates {
-                    if let syn::WherePredicate::Type(pred) = predicate {
-                        if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
-                            if strippable.contains(&ident.to_string()) {
-                                continue;
-                            }
-                        }
+                    if let syn::WherePredicate::Type(pred) = predicate
+                        && let Some(ident) = type_bare_generic_ident(&pred.bounded_ty)
+                        && strippable.contains(&ident.to_string())
+                    {
+                        continue;
                     }
                     used_elsewhere.push(predicate.to_token_stream());
                 }

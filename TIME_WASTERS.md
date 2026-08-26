@@ -1189,3 +1189,13 @@ every local lib suite passed. Doctests also need the workspace-unified
 feature set: `cargo test -p cranpose --doc` alone invents a featureless
 `AppLauncher` without `try_run` and fails on a phantom error. The gate
 that matches CI is `cargo test --profile ci --workspace`.
+
+## Fabricated proc-macro tokens carry the macro crate's edition
+
+rustc gates edition-specific syntax (let chains) by the edition of the
+crate that fabricated the tokens, not by the spans stamped on them:
+building synthetic `let`-chain nodes with user-file spans still fails
+"let chains are only allowed in Rust 2024" while the proc-macro crate is
+edition 2021. Passed-through user tokens keep their own edition. To emit
+newer syntax than the workspace edition, bump the proc-macro crate's
+edition alone.

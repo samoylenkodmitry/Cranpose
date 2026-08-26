@@ -84,10 +84,18 @@ typed IR:
   surrounding context.** A `ref` pattern binds into the place, so a `let`
   scrutinee that is a place expression keeps its structure; its value
   sub-parts carry folds, but a composing `Deref` impl on the place chain
-  itself runs under the enclosing fold. The source stamp bounds the
-  damage: its slots resynchronize or reinitialize, never leak into other
-  code. A closure consumed-and-returned by a helper
-  (`store(make_pair(|| A(1)).0)`) is the same class.
+  itself runs under the enclosing fold. A bare `if let` scrutinee is
+  always evaluated with its statement, so it vanishes only with its
+  context and cannot alias. The one place-path evaluation that can
+  vanish alone — a scrutinee behind a short-circuiting `&&` in an
+  edition-2024 `let` chain — is covered by a synthetic irrefutable
+  chain-`let` binding a fold guard, injected before the chain's first
+  `let`; the binding lives through the remaining scrutinees and the arm,
+  and the place syntax is untouched (pinned in
+  `crates/cranpose-e2024-tests`, which exists because the rest of the
+  workspace is edition 2021 and cannot parse chains). A closure
+  consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`)
+  still folds into the surrounding context, bounded by source stamps.
 - **A reuse-retained scope inside a keyed wrapper recomposes fresh when the
   wrapper leaves composition.** Dispose-or-retain engages only when the
   detached root is itself the reuse scope; a `with_key` wrapper above it
