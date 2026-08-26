@@ -1800,3 +1800,30 @@ fn duplicate_explicit_keys_across_brackets_of_one_site_panic_loudly() {
     // shift silently adopt the other row's state.
     let _ = composition.render(52, || duplicate_keyed_rows(vec![1, 2]));
 }
+
+fn branch_labels() -> Vec<String> {
+    vec!["row".to_string()]
+}
+
+#[composable]
+fn scrutinee_borrow_probe() {
+    // The scrutinee's temporary collection must stay alive into the branch
+    // body: wrapping the scrutinee in a guard block would end the borrow at
+    // the block and this function would not compile.
+    if let Some(label) = branch_labels().first() {
+        let value = remember_branch_marker(label.len() as i32);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn an_if_let_scrutinee_keeps_its_temporaries_borrowable() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(53, scrutinee_borrow_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+    assert_composition_valid(&composition);
+}

@@ -113,7 +113,14 @@ impl BranchGroupInjector<'_> {
             }
             Expr::Paren(paren) => self.wrap_condition(&mut paren.expr),
             Expr::Unary(unary) => self.wrap_condition(&mut unary.expr),
-            Expr::Let(let_expr) => self.wrap_condition(&mut let_expr.expr),
+            // A `let` scrutinee's temporaries live into the branch body —
+            // that is what lets `if let Some(x) = make().first()` keep the
+            // borrow — so it can never be moved into a block. The first
+            // scrutinee of a condition always evaluates and is positionally
+            // stable without a group; a composing scrutinee of a later,
+            // conditionally evaluated let-chain operand stays an uncovered
+            // edge.
+            Expr::Let(let_expr) => self.visit_expr_mut(&mut let_expr.expr),
             leaf => {
                 let needs_group = expr_can_reach_composer(leaf) && !expr_contains_let(leaf);
                 self.visit_expr_mut(leaf);
