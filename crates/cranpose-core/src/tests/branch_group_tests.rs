@@ -599,6 +599,107 @@ fn an_argument_taking_content_closure_gets_branch_groups_too() {
     assert_composition_valid(&composition);
 }
 
+fn remembered_key_marker(marker: i32) -> i32 {
+    remember_branch_marker(marker)
+}
+
+#[composable]
+fn composing_key_argument_probe(cond: bool) {
+    // The key argument itself composes, so this branch cannot elide its
+    // bracket: `remembered_key_marker` runs before `with_key`'s group opens
+    // and would share a slot across branches without one.
+    if cond {
+        cranpose_core::with_key(&remembered_key_marker(61), || {});
+    } else {
+        cranpose_core::with_key(&remembered_key_marker(62), || {});
+    }
+}
+
+#[test]
+fn a_composing_key_argument_keeps_the_bracket() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(20, || composing_key_argument_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_inits(), 1);
+
+    composition
+        .render(20, || composing_key_argument_probe(false))
+        .expect("switch the branch");
+    assert_eq!(
+        branch_inits(),
+        2,
+        "a remember evaluated inside the key argument must not be shared across branches"
+    );
+
+    composition
+        .render(20, || composing_key_argument_probe(true))
+        .expect("switch back");
+    assert_eq!(branch_inits(), 3);
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn snake_case_closure_branch_probe(cond: bool) {
+    content_host(move || {
+        // `stateful_child` is snake_case: the closure classifier must key on
+        // reachability, not naming convention.
+        if cond {
+            stateful_child(7100);
+        } else {
+            stateful_child(7200);
+        }
+    });
+}
+
+#[test]
+fn snake_case_composables_inside_content_closures_get_branch_groups() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(21, || snake_case_closure_branch_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 7100);
+
+    composition
+        .render(21, || snake_case_closure_branch_probe(false))
+        .expect("switch the branch");
+    assert_eq!(
+        branch_seen(),
+        7200,
+        "a snake_case composable in a content closure must still get per-branch state"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn guard_name_collision_probe(cond: bool) {
+    if cond {
+        // The macro's own guard binding uses mixed_site hygiene, so this
+        // user binding of the same name stays visible to user code.
+        let __cranpose_branch_group_guard = 41;
+        let value = remember_branch_marker(__cranpose_branch_group_guard);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    } else {
+        let value = remember_branch_marker(42);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn a_user_binding_named_like_the_guard_is_not_shadowed() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    composition
+        .render(22, || guard_name_collision_probe(true))
+        .expect("compose with the colliding binding");
+    assert_eq!(branch_seen(), 41);
+    assert_composition_valid(&composition);
+}
+
 #[allow(non_snake_case)]
 fn PlainCamelHelper(value: i32) -> i32 {
     value

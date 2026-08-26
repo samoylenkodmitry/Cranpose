@@ -26,19 +26,33 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### A branch that composes only through names the macro cannot see
+### Branch groups: two edges the transform cannot reach
 
 Branch groups are in: every `if`/`else` branch and `match` arm of a
-`#[composable]` body — and of the content lambdas handed to composables —
-owns its composition slots, with keyed subtrees preserved across brackets
+`#[composable]` body — and of the content lambdas handed to composables,
+classified by reachability rather than naming — owns its composition slots,
+with keyed subtrees preserved across brackets
 (`docs/slot_table_invariants.md`, `branch_group_tests`, and
-`robot_recomposition_lab` end to end). What remains is the classifier's
-blind spot: a closure whose branches compose only through a snake_case
-helper that itself calls composables keeps the old shared-slot behavior,
-because a proc macro sees names, not types. In the direct body there is no
-such hole. And identity across *data* is still the author's statement: one
-call site fed different values is one slot in Compose too, so a list screen
-that renders per-route content keys it with `cranpose_core::with_key`, as
+`robot_recomposition_lab` end to end). Two edges remain:
+
+- **A conditional expanded out of a `macro_rules!` body is never bracketed.**
+  The attribute macro runs before function-like macros expand, so an `if`
+  whose arms only exist after expansion keeps the old shared-slot behavior.
+  Compose's plugin runs on IR after inlining, which is what closing this
+  would take.
+- **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
+  steal scans later same-site brackets linearly and the orphan pool is a
+  linear scan, so reversing N rows of
+  `if visible { crumb(); with_key(id, …) }` costs Θ(N²) group traversal. The
+  fully keyed form of that branch elides its bracket and keeps the indexed
+  sibling path; shift-by-one — the toggle case — hits the first later
+  bracket and stays O(1) per row. The fix, if a real workload hits this, is
+  the same promotion to an index the in-parent sibling search already does
+  after 16 children.
+
+And identity across *data* is still the author's statement: one call site
+fed different values is one slot in Compose too, so a list screen that
+renders per-route content keys it with `cranpose_core::with_key`, as
 CranOrbit's router does.
 
 ## Limits that are correct, and surprising

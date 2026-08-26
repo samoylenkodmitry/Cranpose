@@ -21,11 +21,11 @@ use syn::{
 
 /// Wrap every conditional branch of `block` in a branch group.
 ///
-/// The composition path includes content lambdas — closures that call
-/// composables — whose guards resolve the composer through the thread-local
-/// context. Closures without composable-shaped calls, `async` blocks, `const`
-/// blocks and nested items are left alone: their code does not run while this
-/// function composes.
+/// The composition path includes content lambdas — closures whose bodies
+/// could reach the composer — whose guards resolve the composer through the
+/// thread-local context. Closures that cannot reach it, `async` blocks,
+/// `const` blocks and nested items are left alone: their code does not run
+/// while this function composes.
 pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) {
     let mut injector = BranchGroupInjector {
         core_path,
@@ -75,20 +75,23 @@ impl BranchGroupInjector<'_> {
 
     /// The guard binding carries a leading underscore so an otherwise empty
     /// branch does not warn, while still living to the end of the branch —
-    /// `let _ = …` would drop the group immediately.
+    /// `let _ = …` would drop the group immediately. The identifier uses
+    /// `mixed_site` hygiene, so user code can never see it and a user binding
+    /// of the same name is never shadowed.
     fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
-                let __cranpose_branch_group_guard = #core_path::__branch_group_scope(
+                let #guard = #core_path::__branch_group_scope(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
             }
         } else {
             syn::parse_quote_spanned! {span=>
-                let __cranpose_branch_group_guard = __composer.__branch_group(
+                let #guard = __composer.__branch_group(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
             }
@@ -99,15 +102,15 @@ impl BranchGroupInjector<'_> {
 impl VisitMut for BranchGroupInjector<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
-            // A closure that calls composables is a content lambda — plain
-            // content, a lazy item's `|index| …`, a scope builder: its
-            // branches compose and need groups like the direct body's. Its
-            // guards resolve the composer through the thread-local context,
-            // which yields `None` outside an active composition pass, so a
-            // closure this misclassifies (an event handler that happens to
-            // call a CamelCase constructor) keeps its old behavior instead
-            // of breaking.
-            Expr::Closure(closure) if expr_calls_composable(&closure.body) => {
+            // A closure that could reach the composer — any free call or
+            // non-value macro in its body, the same rule branches use — is
+            // treated as a content lambda: plain content, a lazy item's
+            // `|index| …`, a scope builder. Its branches compose and need
+            // groups like the direct body's. Guards inside closures resolve
+            // the composer through the thread-local context, which yields
+            // `None` outside an active composition pass, so an event handler
+            // this over-matches keeps its old behavior instead of breaking.
+            Expr::Closure(closure) if closure_can_reach_composer(&closure.body) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 self.visit_expr_mut(&mut closure.body);
                 self.in_content_closure = previous;
@@ -188,13 +191,19 @@ impl VisitMut for BranchGroupInjector<'_> {
 /// `DisposableEffect!` and friends grouped. Closures, async and const blocks
 /// and nested items are skipped for the same reason the transform skips them.
 fn block_can_reach_composer(block: &Block) -> bool {
-    let mut scan = ComposerReachScan { found: false };
+    let mut scan = ComposerReachScan {
+        found: false,
+        through_closures: false,
+    };
     scan.visit_block(block);
     scan.found
 }
 
 fn expr_can_reach_composer(expr: &Expr) -> bool {
-    let mut scan = ComposerReachScan { found: false };
+    let mut scan = ComposerReachScan {
+        found: false,
+        through_closures: false,
+    };
     scan.visit_expr(expr);
     scan.found
 }
@@ -217,83 +226,54 @@ fn block_is_fully_keyed(block: &Block) -> bool {
 
 fn expr_is_keyed_call(expr: &Expr) -> bool {
     let callee_is_with_key = |name: &syn::Ident| name == "with_key";
-    match expr {
+    let (receiver_composes, args) = match expr {
         Expr::Call(call) => match call.func.as_ref() {
-            Expr::Path(path) => path
-                .path
-                .segments
-                .last()
-                .is_some_and(|segment| callee_is_with_key(&segment.ident)),
-            _ => false,
+            Expr::Path(path)
+                if path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| callee_is_with_key(&segment.ident)) =>
+            {
+                (false, &call.args)
+            }
+            _ => return false,
         },
-        Expr::MethodCall(method) => callee_is_with_key(&method.method),
-        _ => false,
+        Expr::MethodCall(method) if callee_is_with_key(&method.method) => {
+            (expr_can_reach_composer(&method.receiver), &method.args)
+        }
+        _ => return false,
+    };
+    if receiver_composes {
+        return false;
     }
-}
-
-/// Whether an expression contains a direct call shaped like composition: a
-/// call or macro whose name is CamelCase (the repo reserves CamelCase for
-/// `#[composable]` functions) or a `remember*` hook. This classifies content
-/// closures; a false positive only costs a no-op guard, a false negative
-/// keeps the pre-transform behavior.
-fn expr_calls_composable(expr: &Expr) -> bool {
-    let mut scan = ComposableCallScan { found: false };
-    scan.visit_expr(expr);
-    scan.found
-}
-
-struct ComposableCallScan {
-    found: bool,
-}
-
-fn path_is_composable_shaped(path: &syn::Path) -> bool {
-    let Some(segment) = path.segments.last() else {
+    // Only the content closure runs inside the keyed group. The key — and a
+    // method receiver — evaluate in the surrounding group first, so an
+    // argument that could compose (`with_key(&remembered_key(1), …)`) still
+    // needs the branch bracket for its identity: no elision then.
+    let Some(content) = args.last() else {
         return false;
     };
-    let name = segment.ident.to_string();
-    name.chars().next().is_some_and(char::is_uppercase) || name.starts_with("remember")
+    if !matches!(content, Expr::Closure(_)) {
+        return false;
+    }
+    args.iter()
+        .take(args.len() - 1)
+        .all(|argument| !expr_can_reach_composer(argument))
 }
 
-impl<'ast> Visit<'ast> for ComposableCallScan {
-    fn visit_expr(&mut self, expr: &'ast Expr) {
-        if self.found {
-            return;
-        }
-        match expr {
-            Expr::Call(call) => {
-                if let Expr::Path(path) = call.func.as_ref() {
-                    if path_is_composable_shaped(&path.path) {
-                        self.found = true;
-                        return;
-                    }
-                }
-                syn::visit::visit_expr_call(self, call);
-            }
-            Expr::Macro(expr_macro) => {
-                if path_is_composable_shaped(&expr_macro.mac.path)
-                    || tokens_contain_composable_call(&expr_macro.mac.tokens)
-                {
-                    self.found = true;
-                }
-            }
-            _ => syn::visit::visit_expr(self, expr),
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if self.found {
-            return;
-        }
-        if let Stmt::Macro(stmt_macro) = stmt {
-            if path_is_composable_shaped(&stmt_macro.mac.path)
-                || tokens_contain_composable_call(&stmt_macro.mac.tokens)
-            {
-                self.found = true;
-            }
-            return;
-        }
-        syn::visit::visit_stmt(self, stmt);
-    }
+/// Whether a closure's body could reach the composer — the same rule branches
+/// use, except nested closures are scanned through: a closure whose only
+/// composition sits inside an inner closure still needs the transform to
+/// descend into it. A false positive only costs a no-op guard; a false
+/// negative keeps the pre-transform behavior.
+fn closure_can_reach_composer(body: &Expr) -> bool {
+    let mut scan = ComposerReachScan {
+        found: false,
+        through_closures: true,
+    };
+    scan.visit_expr(body);
+    scan.found
 }
 
 /// Whether raw macro tokens contain what looks like a composable call: a
@@ -374,6 +354,9 @@ fn macro_is_value_shaped(path: &syn::Path) -> bool {
 
 struct ComposerReachScan {
     found: bool,
+    /// Branch filters stop at closure boundaries (a closure defined in a
+    /// branch does not run there); closure classification scans through them.
+    through_closures: bool,
 }
 
 impl<'ast> Visit<'ast> for ComposerReachScan {
@@ -382,6 +365,9 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
             return;
         }
         match expr {
+            Expr::Closure(closure) if self.through_closures => {
+                self.visit_expr(&closure.body);
+            }
             Expr::Closure(_) | Expr::Async(_) | Expr::Const(_) => {}
             Expr::Call(_) => self.found = true,
             Expr::Macro(expr_macro) => {
