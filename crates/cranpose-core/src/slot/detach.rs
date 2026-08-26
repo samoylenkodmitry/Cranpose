@@ -150,6 +150,10 @@ impl SlotTable {
         // extract payload and node segments, clear active indexes, refresh the
         // active suffix when requested, then shrink ancestor spans.
         let root_parent_anchor = self.groups[root_index].parent_anchor;
+        // The path is only computable while the parent chain is still in the
+        // table, which is exactly now: the shell-dissolution recursion detaches
+        // nested children before it dissolves their shells.
+        let branch_path = self.branch_path_key(root_parent_anchor);
         let Some(removed_group_range) =
             self.repair_group_subtree_range_at_index(root_index, "subtree detach")
         else {
@@ -160,6 +164,7 @@ impl SlotTable {
                 groups: Vec::new(),
                 payloads: Vec::new(),
                 nodes: Vec::new(),
+                branch_path,
             };
         };
         let root_subtree_len = removed_group_range.len();
@@ -171,6 +176,7 @@ impl SlotTable {
                 groups: removed_groups,
                 payloads: Vec::new(),
                 nodes: Vec::new(),
+                branch_path,
             };
         };
         for group in &mut removed_groups {
@@ -200,6 +206,7 @@ impl SlotTable {
             groups: removed_groups,
             payloads: removed_payloads,
             nodes: removed_nodes,
+            branch_path,
         };
         #[cfg(any(test, debug_assertions))]
         subtree
@@ -255,6 +262,13 @@ impl SlotTable {
                 .get(cursor.index())
                 .is_some_and(|group| group.transparent && group.subtree_len > 1)
             {
+                // Earlier removals in this loop shift the suffix left while
+                // the anchor index map refresh is deferred; the recursion
+                // below resolves this shell and its children through that
+                // map, so bring it up to date from the shell's position
+                // first. A second sibling shell dissolved whole here is a
+                // retained child silently disposed inside it.
+                self.refresh_group_indexes_from(cursor.index());
                 let shell_children = ChildCursor::new(child_anchor, cursor.index() + 1);
                 if self.repair_child_cursor_parent_subtree(shell_children, "branch shell detach") {
                     self.detach_children_at_cursor_into(shell_children, detached);
@@ -403,7 +417,7 @@ impl SlotTable {
             chain.push(record.key.static_key);
             current = record.parent_anchor;
         }
-        let mut folded: crate::Key = 0xcbf2_9ce4_8422_2325;
+        let mut folded: crate::Key = super::BRANCH_PATH_ROOT;
         for static_key in chain.iter().rev() {
             folded ^= *static_key;
             folded = folded.wrapping_mul(0x0000_0100_0000_01b3);

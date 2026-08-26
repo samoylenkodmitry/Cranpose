@@ -54,7 +54,7 @@ pub(in crate::slot) use types::collect_root_node_ids_from_records_into;
 pub(crate) use types::{
     ActiveGroupId, ActiveSubtreeRoot, ChildCursor, DetachedSubtree, FinishGroupResult, GroupKey,
     GroupKeySeed, GroupStart, GroupStartKind, NodeLifecycle, NodeSlotUpdate, PayloadAnchor,
-    PayloadKind, SlotPassMode, ValueSlotId,
+    PayloadKind, SlotPassMode, ValueSlotId, BRANCH_PATH_ROOT,
 };
 use types::{NodeRecord, PayloadRecord};
 #[cfg(any(test, debug_assertions))]

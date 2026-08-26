@@ -2,7 +2,10 @@ use super::{
     super::{DetachedSubtree, GroupKey, GroupKeySeed, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
-use crate::{collections::map::HashMap, AnchorId};
+use crate::{
+    collections::map::{HashMap, HashSet},
+    AnchorId,
+};
 
 /// A branch bracket a fully-keyed conditional branch reserved without opening.
 /// The real `with_key` opens an explicitly keyed child that carries its own
@@ -42,6 +45,10 @@ pub(crate) struct SlotWriteSessionState {
     rejected_restore_subtrees: Vec<DetachedSubtree>,
     pub(in crate::slot) orphaned_keyed: Vec<OrphanedKeyedSubtree>,
     pub(in crate::slot) deferred_branch_shells: Vec<DeferredBranchShell>,
+    /// Explicit keys begun under a transparent bracket this pass, keyed by
+    /// (owner, branch path, key): the cross-bracket duplicate check the
+    /// per-frame `insert_seen` cannot perform.
+    pub(in crate::slot) seen_cross_bracket_explicit_keys: HashSet<(AnchorId, crate::Key, GroupKey)>,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -82,6 +89,7 @@ impl SlotWriteSessionState {
             );
             self.deferred_branch_shells.clear();
         }
+        self.seen_cross_bracket_explicit_keys.clear();
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
         self.removed_group_count = 0;

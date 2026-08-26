@@ -1031,13 +1031,17 @@ impl Composer {
         let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
-        let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
+        let (reserved_key, branch_path) = self.with_slot_session_mut(|slots| {
+            let reserved = slots.reserve_group_key(key);
+            (reserved, slots.current_branch_path_key())
+        });
         let host = self.active_slots_host();
         let restored = self.core.shared_state.take_retained(
             &host,
             RetainKey {
                 parent_scope: parent_scope_id,
                 key: reserved_key,
+                branch_path,
             },
             |subtree| {
                 self.with_slot_session_mut(|slots| {
@@ -1260,11 +1264,13 @@ impl Composer {
                 });
             }
         }
+        let branch_path = subtree.branch_path;
         let evicted = self.core.shared_state.insert_retained(
             slots_host,
             RetainKey {
                 parent_scope,
                 key: root_key,
+                branch_path,
             },
             subtree,
         );

@@ -33,6 +33,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
     const NODE_ID: NodeId = 77;
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         groups: vec![GroupRecord {
             key: GroupKey::new(900, None, 0),
             parent_anchor: AnchorId::INVALID,
@@ -73,6 +74,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
     const NODE_ID: NodeId = 88;
     let owner = AnchorId::new(1);
     let subtree = DetachedSubtree {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         groups: vec![GroupRecord {
             key: GroupKey::new(901, None, 0),
             parent_anchor: AnchorId::INVALID,
@@ -518,6 +520,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     assert_eq!(harness.table.groups[2].key.static_key, CHILD_C_KEY);
 
     let retain_key = RetainKey {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -628,6 +631,7 @@ fn restore_subtree_rejects_empty_detached_subtree_without_mutating_table() {
         groups: Vec::new(),
         payloads: Vec::new(),
         nodes: Vec::new(),
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
     };
     let restore_key = GroupKey::new(CHILD_KEY, None, 0);
     let restore = try_restore_detached_child(
@@ -652,6 +656,7 @@ fn empty_detached_subtree_root_scope_id_is_absent() {
         groups: Vec::new(),
         payloads: Vec::new(),
         nodes: Vec::new(),
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
     };
 
     assert_eq!(empty_subtree.root_scope_id(), None);

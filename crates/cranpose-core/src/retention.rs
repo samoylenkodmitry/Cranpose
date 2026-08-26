@@ -72,6 +72,11 @@ impl Default for RetentionPolicy {
 pub(crate) struct RetainKey {
     pub(crate) parent_scope: Option<ScopeId>,
     pub(crate) key: GroupKey,
+    /// The branch-site path the subtree lived under (see
+    /// [`crate::slot::DetachedSubtree::branch_path`]): two branch sites
+    /// retaining the same child key are two identities, and each restores at
+    /// its own site.
+    pub(crate) branch_path: crate::Key,
 }
 
 pub(crate) struct RetainedGroup {

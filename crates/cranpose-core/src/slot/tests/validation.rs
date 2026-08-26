@@ -597,6 +597,7 @@ fn compact_anchor_registry_storage_preserves_retained_group_anchors() {
     );
 
     let retain_key = RetainKey {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: retained.root_key(),
     };
@@ -788,6 +789,7 @@ fn compact_payload_storage_preserves_retained_value_slots() {
     harness.lifecycle.flush_pending_drops();
     let retained = retained.expect("target child subtree must detach");
     let retain_key = RetainKey {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: retained.root_key(),
     };
@@ -875,6 +877,7 @@ fn compact_payload_storage_preserves_retained_payload_uniqueness() {
     harness.finish_pass();
 
     let retain_key = RetainKey {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: detached.root_key(),
     };
@@ -1005,6 +1008,7 @@ fn disposed_identities_reuse_only_after_generation_bump() {
     harness.lifecycle.flush_pending_drops();
 
     let retain_key = RetainKey {
+        branch_path: crate::slot::BRANCH_PATH_ROOT,
         parent_scope: None,
         key: retained
             .as_ref()

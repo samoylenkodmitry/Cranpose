@@ -1703,3 +1703,100 @@ fn a_parenthesized_callee_inside_a_value_macro_gets_a_branch_group() {
     );
     assert_composition_valid(&composition);
 }
+
+#[test]
+fn a_key_flattened_out_of_a_skipped_inner_bracket_keeps_its_path() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(50, || nested_bracket_rows(vec![1, 2]))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 2));
+
+    // The first occurrence still enters the outer branch but skips its inner
+    // one, so key 1 is flattened out of the skipped inner bracket at the
+    // outer finish; the second occurrence asks for it under outer → inner.
+    // The park must remember the key's true nested path.
+    composition
+        .render(50, || nested_bracket_rows(vec![-1, 1]))
+        .expect("skip the inner branch of the first occurrence");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 1),
+        "a key parked out of a nested bracket must be claimable under its full path"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn retained_marker(marker: i32) {
+    with_current_composer(|composer| {
+        let key = location_key(file!(), line!(), column!());
+        composer.cranpose_with_reuse(key, RecomposeOptions::default(), |composer| {
+            let value = composer.remember(|| {
+                BRANCH_INITS.with(|count| count.set(count.get() + 1));
+                marker
+            });
+            BRANCH_SEEN.with(|seen| seen.set(value.with(|value| *value)));
+        });
+    });
+}
+
+#[composable]
+fn dual_retention_probe(first: bool, second: bool) {
+    if first {
+        retained_marker(1);
+    }
+    if second {
+        retained_marker(2);
+    }
+}
+
+#[test]
+fn both_branches_retain_the_same_reuse_child_without_colliding() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(51, || dual_retention_probe(true, true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 2));
+
+    composition
+        .render(51, || dual_retention_probe(false, false))
+        .expect("retain both children");
+
+    composition
+        .render(51, || dual_retention_probe(true, true))
+        .expect("restore both children");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 2),
+        "each branch site's retained child must come back; the second must not be \
+         rejected as a duplicate of the first"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn duplicate_keyed_rows(rows: Vec<i32>) {
+    for row in rows {
+        if row != 0 {
+            let _crumb = remember(|| 0_i32);
+            keyed_pool_marker(1);
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "duplicate explicit key")]
+fn duplicate_explicit_keys_across_brackets_of_one_site_panic_loudly() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    // Two simultaneously visible occurrences of one branch site using the
+    // same explicit key: the fully keyed form panics on the duplicate, and
+    // the bracketed form must be exactly as loud rather than letting a later
+    // shift silently adopt the other row's state.
+    let _ = composition.render(52, || duplicate_keyed_rows(vec![1, 2]));
+}

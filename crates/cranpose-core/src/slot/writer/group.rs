@@ -173,6 +173,14 @@ impl SlotWriteSession<'_> {
         self.preview_group_key(seed)
     }
 
+    /// The branch-site path of the group about to be opened at the current
+    /// cursor: the fold of the transparent chain above it, or the root fold
+    /// when it sits under a real group.
+    pub(crate) fn current_branch_path_key(&self) -> crate::Key {
+        self.table
+            .branch_path_key(self.state.current_parent_anchor())
+    }
+
     fn recover_malformed_group_start(
         &mut self,
         key: GroupKey,
@@ -368,6 +376,28 @@ impl SlotWriteSession<'_> {
             self.materialize_deferred_branch_shells();
         }
         self.state.consume_group_key(key);
+        // The per-frame duplicate check cannot see across sibling brackets of
+        // one branch site, where the continuity machinery would let a later
+        // shift silently adopt the duplicate's subtree. Be exactly as loud as
+        // the frame-local check the fully keyed (elided) form hits.
+        if key.explicit_key.is_some() {
+            let parent_anchor = self.state.current_parent_anchor();
+            let parent_is_transparent = self
+                .table
+                .active_group_index(parent_anchor)
+                .and_then(|index| self.table.groups.get(index))
+                .is_some_and(|group| group.transparent);
+            if parent_is_transparent {
+                let owner = self.table.nearest_non_transparent_ancestor(parent_anchor);
+                let branch_path = self.table.branch_path_key(parent_anchor);
+                assert!(
+                    self.state
+                        .seen_cross_bracket_explicit_keys
+                        .insert((owner, branch_path, key)),
+                    "duplicate explicit key across branch brackets of one site: {key:?}",
+                );
+            }
+        }
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
