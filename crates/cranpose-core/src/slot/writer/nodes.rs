@@ -77,6 +77,21 @@ impl SlotWriteSession<'_> {
         self.state.mix_branch_fold(source)
     }
 
+    pub(crate) fn resync_node_record_by_source(
+        &mut self,
+        source: crate::Key,
+    ) -> Option<(NodeId, u32)> {
+        let mixed = self.state.mix_branch_fold(source);
+        let frame = self.state.group_stack.last()?;
+        let (group_anchor, cursor) = (frame.group_anchor, frame.node_cursor);
+        let (found, id, generation) =
+            self.table
+                .find_node_record_by_source(group_anchor, cursor + 1, mixed)?;
+        self.table
+            .rotate_node_record_to_cursor(group_anchor, found, cursor);
+        Some((id, generation))
+    }
+
     pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32, crate::Key)> {
         let frame = self.state.group_stack.last()?;
         self.table

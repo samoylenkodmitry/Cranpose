@@ -197,6 +197,8 @@ impl BranchGroupInjector<'_> {
         }
         let previous = std::mem::replace(&mut self.in_content_closure, true);
         self.visit_block_mut(block);
+        let guard = self.branch_guard_stmt(block.brace_token.span.join());
+        block.stmts.insert(0, guard);
         self.in_content_closure = previous;
     }
 }
@@ -207,14 +209,12 @@ impl VisitMut for BranchGroupInjector<'_> {
             Expr::Closure(closure) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 self.visit_expr_mut(&mut closure.body);
-                if self.branch_depth > 0 {
-                    let guard = self.branch_guard_stmt(closure.span());
-                    let original = closure.body.clone();
-                    closure.body = syn::parse_quote! {{
-                        #guard
-                        #original
-                    }};
-                }
+                let guard = self.branch_guard_stmt(closure.span());
+                let original = closure.body.clone();
+                closure.body = syn::parse_quote! {{
+                    #guard
+                    #original
+                }};
                 self.in_content_closure = previous;
             }
             Expr::Async(_) | Expr::Const(_) => {}

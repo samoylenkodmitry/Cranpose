@@ -51,15 +51,35 @@ impl Composer {
             if let Some((id, slot_gen, slot_source)) =
                 self.with_slot_session_mut(|slots| slots.current_node_record())
             {
-                let mut applier = self.borrow_applier();
-                let gen_ok = applier.node_generation(id) == slot_gen;
-                let type_ok = match applier.get_mut(id) {
-                    Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
-                    Err(_) => false,
+                let (type_ok, gen_ok) = {
+                    let mut applier = self.borrow_applier();
+                    let gen_ok = applier.node_generation(id) == slot_gen;
+                    let type_ok = match applier.get_mut(id) {
+                        Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
+                        Err(_) => false,
+                    };
+                    (type_ok, gen_ok)
                 };
                 let source_ok = self.with_slot_session_mut(|slots| slots.mixed_node_source(source))
                     == slot_source;
-                (Some(id), Some(slot_gen), type_ok, gen_ok, source_ok)
+                if source_ok {
+                    (Some(id), Some(slot_gen), type_ok, gen_ok, true)
+                } else if let Some((moved_id, moved_gen)) =
+                    self.with_slot_session_mut(|slots| slots.resync_node_record_by_source(source))
+                {
+                    let (type_ok, gen_ok) = {
+                        let mut applier = self.borrow_applier();
+                        let gen_ok = applier.node_generation(moved_id) == moved_gen;
+                        let type_ok = match applier.get_mut(moved_id) {
+                            Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
+                            Err(_) => false,
+                        };
+                        (type_ok, gen_ok)
+                    };
+                    (Some(moved_id), Some(moved_gen), type_ok, gen_ok, true)
+                } else {
+                    (Some(id), Some(slot_gen), type_ok, gen_ok, false)
+                }
             } else {
                 (None, None, false, false, false)
             }

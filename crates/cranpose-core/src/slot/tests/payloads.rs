@@ -751,7 +751,7 @@ fn read_value_type_mismatch_panics_consistently() {
 }
 
 #[test]
-fn value_slot_type_replacement_advances_generation() {
+fn value_slot_type_change_inserts_fresh_and_trims_the_stale_slot() {
     const GROUP_KEY: Key = 16;
 
     let mut harness = SlotHarness::new();
@@ -786,11 +786,8 @@ fn value_slot_type_replacement_advances_generation() {
     });
     harness.finish_pass();
 
-    assert_eq!(replacement_slot.anchor().id(), old_slot.anchor().id());
-    assert_ne!(
-        replacement_slot.anchor().generation(),
-        old_slot.anchor().generation()
-    );
+    assert_ne!(replacement_slot.anchor(), old_slot.anchor());
+    assert_eq!(harness.table.group_payload_len_at(0), 1);
     assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

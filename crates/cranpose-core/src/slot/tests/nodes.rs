@@ -316,7 +316,7 @@ fn record_node_reports_explicit_insert_and_reuse() {
 }
 
 #[test]
-fn record_node_reports_explicit_id_replacement() {
+fn record_node_inserts_on_id_change_and_trims_the_stale_record() {
     const GROUP_KEY: Key = 366;
 
     let mut harness = SlotHarness::new();
@@ -348,22 +348,26 @@ fn record_node_reports_explicit_id_replacement() {
         let recorded = session.record_node_with_parent(12, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
-            NodeSlotUpdate::Replaced {
-                old_id: 11,
-                old_generation: 1,
-                new_id: 12,
-                new_generation: 1,
+            NodeSlotUpdate::Inserted {
+                id: 12,
+                generation: 1,
             },
-            "replacing the node at the current cursor must report an explicit replacement",
+            "a different node id at the cursor inserts; the stale record is trimmed at finish",
         );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
+        assert_eq!(
+            result.direct_nodes,
+            vec![11],
+            "the stale node must leave through the finish tail trim",
+        );
         session.end_group();
     });
     harness.finish_pass();
 
     assert_eq!(harness.table.group_node_record_at(0, 0).id, 12);
     assert_eq!(harness.table.group_node_record_at(0, 0).generation, 1);
+    assert_eq!(harness.table.group_node_len_at(0), 1);
 }
 
 #[test]

@@ -299,22 +299,6 @@ impl PayloadAnchorRegistry {
 
         Ok(())
     }
-
-    pub(super) fn bump_generation(&mut self, anchor: PayloadAnchor) -> Option<PayloadAnchor> {
-        let slot = self.storage.slot_mut(anchor.id())?;
-        if slot.generation != anchor.generation() {
-            return None;
-        }
-        let Some(next_generation) = anchor.generation().checked_add(1) else {
-            log::error!(
-                "slot table cannot bump payload anchor {anchor:?}: generation counter overflow"
-            );
-            return None;
-        };
-        slot.generation = next_generation;
-        Some(anchor.with_generation(next_generation))
-    }
-
     pub(super) fn invalidate(&mut self, anchor: PayloadAnchor) -> bool {
         let Some(slot) = self.storage.slot(anchor.id()) else {
             return false;

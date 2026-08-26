@@ -91,6 +91,14 @@ pub(crate) struct PayloadAnchor {
 }
 
 impl PayloadAnchor {
+    #[cfg(test)]
+    pub(crate) fn with_generation(self, generation: u32) -> Self {
+        Self {
+            id: self.id,
+            generation,
+        }
+    }
+
     pub(crate) const INVALID: Self = Self {
         id: 0,
         generation: 0,
@@ -109,13 +117,6 @@ impl PayloadAnchor {
 
     pub(crate) fn generation(self) -> u32 {
         self.generation
-    }
-
-    pub(crate) fn with_generation(self, generation: u32) -> Self {
-        Self {
-            id: self.id,
-            generation,
-        }
     }
 }
 

@@ -973,15 +973,25 @@ fn apply_model_operation(
                     let node_update =
                         session.record_node_with_parent(node.node_id, node.generation, None, crate::slot::BRANCH_PATH_ROOT);
                     match previous_node {
-                        Some(previous_node) if replacing_node => assert_eq!(
+                        Some(previous_node) if replacing_node && previous_node.node_id == node.node_id => {
+                            assert_eq!(
+                                node_update,
+                                NodeSlotUpdate::Replaced {
+                                    old_id: previous_node.node_id,
+                                    old_generation: previous_node.generation,
+                                    new_id: node.node_id,
+                                    new_generation: node.generation,
+                                },
+                                "a generation bump must report explicit replacement for key {key}",
+                            )
+                        }
+                        Some(_) if replacing_node => assert_eq!(
                             node_update,
-                            NodeSlotUpdate::Replaced {
-                                old_id: previous_node.node_id,
-                                old_generation: previous_node.generation,
-                                new_id: node.node_id,
-                                new_generation: node.generation,
+                            NodeSlotUpdate::Inserted {
+                                id: node.node_id,
+                                generation: node.generation,
                             },
-                            "node replacement must report explicit lifecycle update for key {key}",
+                            "a new node id inserts; the stale record leaves at finish for key {key}",
                         ),
                         Some(previous_node) => assert_eq!(
                             node_update,

@@ -2683,3 +2683,139 @@ fn raw_nodes_in_arms_do_not_trade_places() {
     });
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn branch_entry_probe(enabled: bool) {
+    if enabled {
+        let value = remember_branch_marker(41);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+    let tail = remember(|| {
+        BRANCH_INITS.with(|count| count.set(count.get() + 1));
+        42_i32
+    });
+    BRANCH_LOG.with(|log| {
+        log.borrow_mut()
+            .push(format!("tail {}", tail.with(|value| *value)))
+    });
+}
+
+#[test]
+fn an_appearing_branch_inserts_before_the_tail_slot() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(84, || branch_entry_probe(enabled))
+    };
+
+    pass(&mut composition, false).expect("initial composition");
+    assert_eq!(branch_inits(), 1);
+
+    pass(&mut composition, true).expect("the branch appears");
+    assert_eq!(
+        branch_inits(),
+        2,
+        "the appearing branch must insert its slot, not destroy the tail's"
+    );
+
+    pass(&mut composition, false).expect("the branch leaves again");
+    assert_eq!(
+        branch_inits(),
+        2,
+        "the tail slot survives the branch in both directions"
+    );
+    assert_composition_valid(&composition);
+}
+
+mod node_entry {
+    use super::*;
+
+    thread_local! {
+        pub(super) static TAIL_BUILDS: Cell<usize> = const { Cell::new(0) };
+        pub(super) static BRANCH_BUILDS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) struct EntryNode;
+
+    impl crate::Node for EntryNode {}
+
+    #[composable(no_skip)]
+    pub(super) fn probe(enabled: bool) {
+        let composer = with_current_composer(Clone::clone);
+        if enabled {
+            composer.emit_node(|| {
+                BRANCH_BUILDS.with(|count| count.set(count.get() + 1));
+                EntryNode
+            });
+        }
+        composer.emit_node(|| {
+            TAIL_BUILDS.with(|count| count.set(count.get() + 1));
+            EntryNode
+        });
+    }
+}
+
+#[test]
+fn an_appearing_branch_node_does_not_remount_the_tail_node() {
+    node_entry::TAIL_BUILDS.with(|count| count.set(0));
+    node_entry::BRANCH_BUILDS.with(|count| count.set(0));
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(85, || node_entry::probe(enabled))
+    };
+
+    pass(&mut composition, false).expect("initial composition");
+    assert_eq!(node_entry::TAIL_BUILDS.with(Cell::get), 1);
+
+    pass(&mut composition, true).expect("the branch node appears");
+    assert_eq!(
+        (
+            node_entry::BRANCH_BUILDS.with(Cell::get),
+            node_entry::TAIL_BUILDS.with(Cell::get)
+        ),
+        (1, 1),
+        "the appearing branch node must not unmount and rebuild the tail node"
+    );
+
+    pass(&mut composition, false).expect("the branch node leaves");
+    assert_eq!(
+        node_entry::TAIL_BUILDS.with(Cell::get),
+        1,
+        "the tail node survives the branch in both directions"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn nested_fn_escape_probe(first: bool) {
+    fn arm_a() {
+        let value = remember_branch_marker(51);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+    fn arm_b() {
+        let value = remember_branch_marker(52);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+    let selected: fn() = if first { arm_a } else { arm_b };
+    selected();
+}
+
+#[test]
+fn a_branch_selected_fn_item_keeps_its_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
+        composition.render(86, || nested_fn_escape_probe(first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 51));
+
+    pass(&mut composition, false).expect("switch to the other fn item");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 52),
+        "a fn item selected per arm must compose its own state"
+    );
+    assert_composition_valid(&composition);
+}

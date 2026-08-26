@@ -68,6 +68,7 @@ impl<'a> PayloadInit<'a> {
     }
 }
 
+#[cfg(test)]
 fn replace_payload_record(
     record: &mut PayloadRecord,
     kind: PayloadKind,
@@ -217,12 +218,6 @@ impl SlotTable {
         };
         &self.payloads[range.as_range()]
     }
-
-    pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
-        self.group_payload_record_at(group_index, payload_index)
-            .owner
-    }
-
     pub(super) fn payload_anchor_at(
         &self,
         group_index: usize,
@@ -230,6 +225,12 @@ impl SlotTable {
     ) -> PayloadAnchor {
         self.group_payload_record_at(group_index, payload_index)
             .anchor
+    }
+
+    #[cfg(test)]
+    pub(super) fn payload_owner_at(&self, group_index: usize, payload_index: usize) -> AnchorId {
+        self.group_payload_record_at(group_index, payload_index)
+            .owner
     }
 
     fn payload_value_type_matches(
@@ -393,45 +394,6 @@ impl SlotTable {
             .kind = kind;
     }
 
-    fn replace_payload_identity(
-        &mut self,
-        group_index: usize,
-        payload_index: usize,
-        kind: PayloadKind,
-        init: &mut PayloadInit<'_>,
-    ) -> Option<(PayloadAnchor, Box<dyn std::any::Any>)> {
-        let old_anchor = self.payload_anchor_at(group_index, payload_index);
-        let anchor = match self.payload_anchors.bump_generation(old_anchor) {
-            Some(anchor) => anchor,
-            None if self.payload_anchors.active_location(old_anchor).is_none() => {
-                log::error!(
-                    "slot table replaced stale payload anchor record {old_anchor:?} with a fresh anchor"
-                );
-                self.allocate_payload_anchor()
-                    .unwrap_or(PayloadAnchor::INVALID)
-            }
-            None => {
-                log::error!(
-                    "slot table rejected value payload replacement because active payload anchor {old_anchor:?} could not advance generation"
-                );
-                return None;
-            }
-        };
-        if anchor == PayloadAnchor::INVALID {
-            log::error!(
-                "slot table rejected value payload replacement because payload anchor ids are exhausted"
-            );
-            return None;
-        }
-        let owner = self.payload_owner_at(group_index, payload_index);
-        let record = self.group_payload_record_at_mut(group_index, payload_index);
-        record.anchor = anchor;
-        let old_value = replace_payload_record(record, kind, init);
-        self.payload_anchors
-            .set_active(anchor, owner, payload_index);
-        Some((anchor, old_value))
-    }
-
     pub(super) fn use_value_payload_at_cursor(
         &mut self,
         owner: AnchorId,
@@ -476,8 +438,18 @@ impl SlotTable {
                 self.update_payload_kind(group_index, payload_index, kind);
                 (anchor, None)
             } else {
-                match self.replace_payload_identity(group_index, payload_index, kind, init) {
-                    Some((anchor, old_value)) => (anchor, Some(DeferredDrop::payload(old_value))),
+                match self.insert_value_payload_internal(
+                    owner,
+                    group_index,
+                    payload_index,
+                    kind,
+                    init,
+                    false,
+                ) {
+                    Some(anchor) => {
+                        self.refresh_group_payload_anchor_locations(owner, payload_index);
+                        (anchor, None)
+                    }
                     None => (PayloadAnchor::INVALID, None),
                 }
             }

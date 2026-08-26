@@ -179,16 +179,21 @@ impl SlotTable {
         let generation = record.generation;
         if node_index < node_len {
             let existing = *self.group_node_record_at(group_index, node_index);
-            *self.group_node_record_at_mut(group_index, node_index) = record;
-            if existing.id == id && existing.generation == generation {
-                NodeSlotUpdate::Reused { id, generation }
-            } else {
-                NodeSlotUpdate::Replaced {
-                    old_id: existing.id,
-                    old_generation: existing.generation,
-                    new_id: id,
-                    new_generation: generation,
+            if existing.id == id {
+                *self.group_node_record_at_mut(group_index, node_index) = record;
+                if existing.generation == generation {
+                    NodeSlotUpdate::Reused { id, generation }
+                } else {
+                    NodeSlotUpdate::Replaced {
+                        old_id: existing.id,
+                        old_generation: existing.generation,
+                        new_id: id,
+                        new_generation: generation,
+                    }
                 }
+            } else {
+                self.insert_group_node(group_index, node_index, record);
+                NodeSlotUpdate::Inserted { id, generation }
             }
         } else {
             self.insert_group_node(group_index, node_index, record);
@@ -228,6 +233,33 @@ impl SlotTable {
         }
 
         update
+    }
+
+    pub(super) fn find_node_record_by_source(
+        &self,
+        owner: AnchorId,
+        from_index: usize,
+        source: crate::Key,
+    ) -> Option<(usize, NodeId, u32)> {
+        let group_index = self.active_group_index(owner)?;
+        let records = self.group_node_records_at(group_index);
+        (from_index..records.len()).find_map(|index| {
+            let record = &records[index];
+            (record.source == source).then_some((index, record.id, record.generation))
+        })
+    }
+
+    pub(super) fn rotate_node_record_to_cursor(
+        &mut self,
+        owner: AnchorId,
+        found_index: usize,
+        cursor_index: usize,
+    ) {
+        let Some(group_index) = self.active_group_index(owner) else {
+            return;
+        };
+        let start = self.group_node_start_at(group_index);
+        self.nodes[start + cursor_index..=start + found_index].rotate_right(1);
     }
 
     pub(super) fn node_identity_at_cursor(

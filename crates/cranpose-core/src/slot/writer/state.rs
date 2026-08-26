@@ -6,6 +6,7 @@ use crate::{collections::map::HashMap, AnchorId};
 
 pub(in crate::slot) struct BranchFoldEntry {
     key: crate::Key,
+    prev_fold: Option<crate::Key>,
     live: bool,
 }
 
@@ -152,9 +153,15 @@ impl SlotWriteSessionState {
     }
 
     pub(crate) fn push_branch_fold(&mut self, key: crate::Key) -> usize {
-        self.branch_fold_entries
-            .push(BranchFoldEntry { key, live: true });
-        self.branch_fold = None;
+        let prev_fold = self.branch_fold;
+        if let Some(fold) = prev_fold {
+            self.branch_fold = Some((fold ^ key).wrapping_mul(0x0000_0100_0000_01b3));
+        }
+        self.branch_fold_entries.push(BranchFoldEntry {
+            key,
+            prev_fold,
+            live: true,
+        });
         self.branch_fold_entries.len() - 1
     }
 
@@ -167,6 +174,22 @@ impl SlotWriteSessionState {
     }
 
     pub(crate) fn close_branch_fold(&mut self, token: usize) {
+        if token + 1 == self.branch_fold_entries.len() {
+            let entry = self
+                .branch_fold_entries
+                .pop()
+                .expect("length checked above");
+            self.branch_fold = entry.prev_fold;
+            while self
+                .branch_fold_entries
+                .last()
+                .is_some_and(|entry| !entry.live)
+            {
+                self.branch_fold_entries.pop();
+                self.branch_fold = None;
+            }
+            return;
+        }
         let Some(entry) = self.branch_fold_entries.get_mut(token) else {
             log::error!(
                 "branch fold {token} closed past depth {}",
@@ -175,13 +198,6 @@ impl SlotWriteSessionState {
             return;
         };
         entry.live = false;
-        while self
-            .branch_fold_entries
-            .last()
-            .is_some_and(|entry| !entry.live)
-        {
-            self.branch_fold_entries.pop();
-        }
         self.branch_fold = None;
     }
 
