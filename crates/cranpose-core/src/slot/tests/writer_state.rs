@@ -19,9 +19,9 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_A_KEY, None);
-        session.record_node_with_parent(10, 1, None);
+        session.record_node_with_parent(10, 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.record_node_with_parent(20, 1, Some(10));
+        session.record_node_with_parent(20, 1, Some(10), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -30,7 +30,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.end_group();
 
         begin_unkeyed(session, CHILD_B_KEY, None);
-        session.record_node_with_parent(30, 1, None);
+        session.record_node_with_parent(30, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -263,9 +263,14 @@ fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
 
     harness.table.groups[1].parent_anchor = AnchorId::new(99_999);
 
-    let update = harness
-        .table
-        .record_node_at_cursor(child_anchor, 0, 42, None, 1);
+    let update = harness.table.record_node_at_cursor(
+        child_anchor,
+        0,
+        42,
+        None,
+        1,
+        crate::slot::BRANCH_PATH_ROOT,
+    );
 
     assert_eq!(
         update,
@@ -431,9 +436,9 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(41, 1, None);
+        session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.record_node_with_parent(42, 1, Some(41));
+        session.record_node_with_parent(42, 1, Some(41), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();

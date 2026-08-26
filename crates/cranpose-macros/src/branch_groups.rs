@@ -238,6 +238,17 @@ impl VisitMut for BranchGroupInjector<'_> {
                     self.wrap_arm_body(&mut arm.body);
                 }
             }
+            Expr::ForLoop(for_loop) => {
+                self.visit_expr_mut(&mut for_loop.expr);
+                self.wrap_block(&mut for_loop.body);
+            }
+            Expr::While(while_loop) => {
+                self.wrap_condition(&mut while_loop.cond);
+                self.wrap_block(&mut while_loop.body);
+            }
+            Expr::Loop(loop_expr) => {
+                self.wrap_block(&mut loop_expr.body);
+            }
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
             _ => visit_mut::visit_expr_mut(self, expr),
         }

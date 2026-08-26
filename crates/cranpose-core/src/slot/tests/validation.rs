@@ -498,7 +498,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
                     crate::slot::BRANCH_PATH_ROOT,
                     || 1_i32,
                 );
-                session.record_node_with_parent(CHILD_NODE, 1, None);
+                session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
             }
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -522,7 +522,7 @@ fn compact_anchor_registry_storage_preserves_active_cross_references() {
             crate::slot::BRANCH_PATH_ROOT,
             || 2_i32,
         );
-        session.record_node_with_parent(CHILD_NODE, 1, None);
+        session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -1193,6 +1193,7 @@ fn validate_reports_duplicate_node_id_structurally() {
         id: node,
         parent_id: None,
         generation: 2,
+        source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: super::NodeLifecycle::Active,
     });
     table.groups[0].node_len = 2;
@@ -1264,6 +1265,7 @@ fn validate_reports_node_count_mismatch_structurally() {
         id: 999,
         parent_id: None,
         generation: 1,
+        source: crate::slot::BRANCH_PATH_ROOT,
         lifecycle: super::NodeLifecycle::Active,
     });
 

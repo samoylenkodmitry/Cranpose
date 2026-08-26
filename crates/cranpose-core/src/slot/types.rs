@@ -213,6 +213,7 @@ pub(super) struct NodeRecord {
     pub(super) id: NodeId,
     pub(super) parent_id: Option<NodeId>,
     pub(super) generation: u32,
+    pub(super) source: crate::Key,
     pub(super) lifecycle: NodeLifecycle,
 }
 

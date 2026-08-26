@@ -964,8 +964,8 @@ fn recomposition_removes_tail_payloads_and_nodes_together() {
             crate::slot::BRANCH_PATH_ROOT,
             || 2_i32,
         );
-        session.record_node_with_parent(FIRST_NODE, 1, None);
-        session.record_node_with_parent(SECOND_NODE, 1, None);
+        session.record_node_with_parent(FIRST_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(SECOND_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         assert!(result.direct_nodes.is_empty());
@@ -983,7 +983,8 @@ fn recomposition_removes_tail_payloads_and_nodes_together() {
             || 0_i32,
         );
         assert_eq!(first_slot_after, first_slot);
-        let recorded = session.record_node_with_parent(FIRST_NODE, 1, None);
+        let recorded =
+            session.record_node_with_parent(FIRST_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Reused {

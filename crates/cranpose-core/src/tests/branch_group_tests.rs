@@ -2600,3 +2600,86 @@ fn a_composing_deref_slot_is_not_adopted_by_a_following_remember() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn loop_boundary_probe(count: usize) {
+    for _ in 0..count {
+        let value = remember_branch_marker(31);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+    let tail = remember_branch_marker(32);
+    BRANCH_LOG.with(|log| log.borrow_mut().push(format!("tail {tail}")));
+}
+
+#[test]
+fn a_loop_body_slot_is_not_adopted_by_the_call_after_the_loop() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, count: usize| {
+        composition.render(82, || loop_boundary_probe(count))
+    };
+
+    pass(&mut composition, 1).expect("initial composition");
+    assert_eq!(branch_inits(), 2);
+    assert_eq!(branch_log(), vec!["tail 32"]);
+
+    pass(&mut composition, 0).expect("the loop empties");
+    assert_eq!(
+        (branch_inits(), branch_log().last().cloned()),
+        (2, Some("tail 32".to_string())),
+        "the tail call must keep its own slot when the loop body vanishes"
+    );
+    assert_composition_valid(&composition);
+}
+
+mod raw_node_arms {
+    use super::*;
+
+    thread_local! {
+        pub(super) static NODE_LABELS: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(super) struct LabeledNode;
+
+    impl crate::Node for LabeledNode {}
+
+    #[composable(no_skip)]
+    pub(super) fn probe(first: bool) {
+        let composer = with_current_composer(Clone::clone);
+        if first {
+            composer.emit_node(|| {
+                NODE_LABELS.with(|labels| labels.borrow_mut().push("A"));
+                LabeledNode
+            });
+        } else {
+            composer.emit_node(|| {
+                NODE_LABELS.with(|labels| labels.borrow_mut().push("B"));
+                LabeledNode
+            });
+        }
+    }
+}
+
+#[test]
+fn raw_nodes_in_arms_do_not_trade_places() {
+    raw_node_arms::NODE_LABELS.with(|labels| labels.borrow_mut().clear());
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
+        composition.render(83, || raw_node_arms::probe(first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    raw_node_arms::NODE_LABELS.with(|labels| {
+        assert_eq!(&*labels.borrow(), &["A"]);
+    });
+
+    pass(&mut composition, false).expect("switch to the else arm");
+    raw_node_arms::NODE_LABELS.with(|labels| {
+        assert_eq!(
+            &*labels.borrow(),
+            &["A", "B"],
+            "the else arm must build its own node, not adopt the then arm's"
+        );
+    });
+    assert_composition_valid(&composition);
+}

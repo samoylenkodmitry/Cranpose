@@ -21,14 +21,15 @@ fn subcompose_reuses_nodes_across_calls() {
     let mut applier = test_applier();
     let mut state = SubcomposeState::default();
     let first_id;
+    fn content(composer: &Composer) -> NodeId {
+        composer.emit_node(|| TestDummyNode)
+    }
 
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
-        let (_, first_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode)
-        });
+        let (_, first_nodes) = composer.subcompose(&mut state, SlotId::new(7), content);
         assert_eq!(first_nodes.len(), 1);
         first_id = first_nodes[0];
         drop(composer);
@@ -39,9 +40,7 @@ fn subcompose_reuses_nodes_across_calls() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
-        let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode)
-        });
+        let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), content);
         assert_eq!(second_nodes.len(), 1);
         assert_eq!(second_nodes[0], first_id);
         drop(composer);

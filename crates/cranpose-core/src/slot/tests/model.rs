@@ -971,7 +971,7 @@ fn apply_model_operation(
                         }
                     };
                     let node_update =
-                        session.record_node_with_parent(node.node_id, node.generation, None);
+                        session.record_node_with_parent(node.node_id, node.generation, None, crate::slot::BRANCH_PATH_ROOT);
                     match previous_node {
                         Some(previous_node) if replacing_node => assert_eq!(
                             node_update,

@@ -43,11 +43,12 @@ impl Composer {
 
     fn emit_node_box<N: Node + 'static>(
         &self,
+        source: crate::Key,
         make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
     ) -> NodeId {
         // Peek at the slot without advancing cursor
-        let (existing_id, existing_generation, type_matches, gen_matches) = {
-            if let Some((id, slot_gen)) =
+        let (existing_id, existing_generation, type_matches, gen_matches, source_matches) = {
+            if let Some((id, slot_gen, slot_source)) =
                 self.with_slot_session_mut(|slots| slots.current_node_record())
             {
                 let mut applier = self.borrow_applier();
@@ -56,15 +57,17 @@ impl Composer {
                     Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
                     Err(_) => false,
                 };
-                (Some(id), Some(slot_gen), type_ok, gen_ok)
+                let source_ok = self.with_slot_session_mut(|slots| slots.mixed_node_source(source))
+                    == slot_source;
+                (Some(id), Some(slot_gen), type_ok, gen_ok, source_ok)
             } else {
-                (None, None, false, false)
+                (None, None, false, false, false)
             }
         };
 
         // If we have a matching node with correct generation, advance cursor and reuse it
         if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation) {
-            if type_matches && gen_matches {
+            if type_matches && gen_matches && source_matches {
                 let scope_debug = self
                     .current_recompose_scope()
                     .map(|scope| (scope.id(), debug_scope_label(scope.id())))
@@ -80,7 +83,7 @@ impl Composer {
                 self.attach_to_parent(id);
                 let parent_id = self.recorded_node_parent(id);
                 let recorded = self.with_slot_session_mut(|slots| {
-                    slots.record_node_with_parent(id, slot_gen, parent_id)
+                    slots.record_node_with_parent(id, slot_gen, parent_id, source)
                 });
                 match recorded {
                     NodeSlotUpdate::Reused {
@@ -151,8 +154,9 @@ impl Composer {
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         let parent_id = self.recorded_node_parent(id);
-        let recorded =
-            self.with_slot_session_mut(|slots| slots.record_node_with_parent(id, gen, parent_id));
+        let recorded = self.with_slot_session_mut(|slots| {
+            slots.record_node_with_parent(id, gen, parent_id, source)
+        });
         match recorded {
             NodeSlotUpdate::Inserted {
                 id: recorded_id,
@@ -182,16 +186,20 @@ impl Composer {
         id
     }
 
+    #[track_caller]
     pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
-        self.emit_node_box::<N>(|_| EmittedNode::Fresh(Box::new(init())))
+        let source = crate::caller_location_key();
+        self.emit_node_box::<N>(source, |_| EmittedNode::Fresh(Box::new(init())))
     }
 
+    #[track_caller]
     pub fn emit_recyclable_node<N: Node + 'static>(
         &self,
         init: impl FnOnce() -> N,
         reset: impl FnOnce(&mut N),
     ) -> NodeId {
-        self.emit_node_box::<N>(|applier| {
+        let source = crate::caller_location_key();
+        self.emit_node_box::<N>(source, |applier| {
             let key = TypeId::of::<N>();
             if let Some(mut recycled) = applier.take_recycled_node(key) {
                 if let Some(typed) = recycled.node_mut().as_any_mut().downcast_mut::<N>() {

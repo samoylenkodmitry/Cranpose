@@ -212,7 +212,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
             crate::slot::BRANCH_PATH_ROOT,
             || 77_i32,
         );
-        session.record_node_with_parent(CHILD_NODE, 1, None);
+        session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         for index in 0..GRANDCHILD_COUNT {
             let grandchild = begin_keyed(session, GRANDCHILD_KEY, index as Key, None);
             session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE_BASE + index as ScopeId);
@@ -225,6 +225,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
                 GRANDCHILD_NODE_BASE + index as NodeId,
                 1,
                 Some(CHILD_NODE),
+                crate::slot::BRANCH_PATH_ROOT,
             );
             let result = session.finish_group_body();
             assert!(result.detached_children.is_empty());
@@ -289,7 +290,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
         );
         assert_eq!(restored_child_slot, child_slot);
         assert_eq!(
-            session.record_node_with_parent(CHILD_NODE, 1, None),
+            session.record_node_with_parent(CHILD_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT),
             NodeSlotUpdate::Reused {
                 id: CHILD_NODE,
                 generation: 1,
@@ -312,6 +313,7 @@ fn perf_large_retained_subtree_restore_preserves_exact_ranges() {
                     GRANDCHILD_NODE_BASE + index as NodeId,
                     1,
                     Some(CHILD_NODE),
+                    crate::slot::BRANCH_PATH_ROOT,
                 ),
                 NodeSlotUpdate::Reused {
                     id: GRANDCHILD_NODE_BASE + index as NodeId,
@@ -476,7 +478,12 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
             );
         }
         for index in 0..TAIL_NODE_COUNT {
-            session.record_node_with_parent(TAIL_NODE_BASE + index as NodeId, 1, None);
+            session.record_node_with_parent(
+                TAIL_NODE_BASE + index as NodeId,
+                1,
+                None,
+                crate::slot::BRANCH_PATH_ROOT,
+            );
         }
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
@@ -505,7 +512,12 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         }
         for index in 0..MID_TAIL_NODE_COUNT {
             assert_eq!(
-                session.record_node_with_parent(TAIL_NODE_BASE + index as NodeId, 1, None),
+                session.record_node_with_parent(
+                    TAIL_NODE_BASE + index as NodeId,
+                    1,
+                    None,
+                    crate::slot::BRANCH_PATH_ROOT
+                ),
                 NodeSlotUpdate::Reused {
                     id: TAIL_NODE_BASE + index as NodeId,
                     generation: 1,
@@ -571,7 +583,12 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         }
         for index in 0..KEPT_TAIL_NODE_COUNT {
             assert_eq!(
-                session.record_node_with_parent(TAIL_NODE_BASE + index as NodeId, 1, None),
+                session.record_node_with_parent(
+                    TAIL_NODE_BASE + index as NodeId,
+                    1,
+                    None,
+                    crate::slot::BRANCH_PATH_ROOT
+                ),
                 NodeSlotUpdate::Reused {
                     id: TAIL_NODE_BASE + index as NodeId,
                     generation: 1,
@@ -651,7 +668,12 @@ fn perf_repeated_tail_removal_requests_compaction_and_preserves_retained_payload
         }
         for index in 0..KEPT_TAIL_NODE_COUNT {
             assert_eq!(
-                session.record_node_with_parent(TAIL_NODE_BASE + index as NodeId, 1, None),
+                session.record_node_with_parent(
+                    TAIL_NODE_BASE + index as NodeId,
+                    1,
+                    None,
+                    crate::slot::BRANCH_PATH_ROOT
+                ),
                 NodeSlotUpdate::Reused {
                     id: TAIL_NODE_BASE + index as NodeId,
                     generation: 1,

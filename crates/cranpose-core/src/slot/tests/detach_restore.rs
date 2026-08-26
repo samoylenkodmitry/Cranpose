@@ -53,6 +53,7 @@ fn immediate_detached_subtree_disposal_propagates_remove_failure() {
             id: NODE_ID,
             parent_id: None,
             generation: 0,
+            source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,
         }],
     };
@@ -92,6 +93,7 @@ fn detached_subtree_root_node_metadata_falls_back_to_all_nodes() {
             id: NODE_ID,
             parent_id: Some(NODE_ID),
             generation: 0,
+            source: crate::slot::BRANCH_PATH_ROOT,
             lifecycle: NodeLifecycle::RetainedDetached,
         }],
     };
@@ -123,7 +125,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
             crate::slot::BRANCH_PATH_ROOT,
             || 70_i32,
         );
-        session.record_node_with_parent(21, 1, None);
+        session.record_node_with_parent(21, 1, None, crate::slot::BRANCH_PATH_ROOT);
 
         let grandchild = begin_unkeyed(session, GRANDCHILD_KEY, None);
         session.set_group_scope(grandchild.group, GRANDCHILD_SCOPE);
@@ -132,7 +134,7 @@ fn detach_restore_preserves_nested_payloads_and_scopes() {
             crate::slot::BRANCH_PATH_ROOT,
             || 110_i32,
         );
-        session.record_node_with_parent(22, 1, None);
+        session.record_node_with_parent(22, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -266,7 +268,7 @@ fn detach_repairs_corrupt_child_payload_and_node_lengths() {
             crate::slot::BRANCH_PATH_ROOT,
             || 11_i32,
         );
-        session.record_node_with_parent(42, 1, None);
+        session.record_node_with_parent(42, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -488,7 +490,7 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
             crate::slot::BRANCH_PATH_ROOT,
             || 64_i32,
         );
-        session.record_node_with_parent(CHILD_B_NODE, 1, None);
+        session.record_node_with_parent(CHILD_B_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -571,7 +573,12 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
                 || 0_i32,
             );
             let restored_node = session.current_node_record();
-            let recorded = session.record_node_with_parent(CHILD_B_NODE, 1, None);
+            let recorded = session.record_node_with_parent(
+                CHILD_B_NODE,
+                1,
+                None,
+                crate::slot::BRANCH_PATH_ROOT,
+            );
             assert_eq!(
                 recorded,
                 NodeSlotUpdate::Reused {
@@ -599,7 +606,10 @@ fn middle_subtree_detach_and_retained_restore_preserve_payloads_nodes_and_scopes
     assert_eq!(restored_kind, GroupStartKind::Restored);
     assert_eq!(restored_scope, Some(CHILD_B_SCOPE));
     assert_eq!(restored_slot, child_b_slot);
-    assert_eq!(restored_node, Some((CHILD_B_NODE, 1)));
+    assert_eq!(
+        restored_node,
+        Some((CHILD_B_NODE, 1, crate::slot::BRANCH_PATH_ROOT))
+    );
     assert_eq!(*harness.table.read_value::<i32>(child_b_slot), 128);
     assert_eq!(
         harness.table.scope_index_anchor(CHILD_B_SCOPE),
@@ -706,7 +716,7 @@ fn removing_conditional_child_returns_detached_subtree() {
             crate::slot::BRANCH_PATH_ROOT,
             || 17_i32,
         );
-        session.record_node_with_parent(41, 1, None);
+        session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();

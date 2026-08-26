@@ -160,7 +160,12 @@ fn keyed_sibling_move_repairs_malformed_payload_and_node_lengths_before_reorder(
             || 81_i32,
         );
         assert_eq!(
-            session.record_node_with_parent(second_node, second_node_generation, None),
+            session.record_node_with_parent(
+                second_node,
+                second_node_generation,
+                None,
+                crate::slot::BRANCH_PATH_ROOT
+            ),
             NodeSlotUpdate::Inserted {
                 id: second_node,
                 generation: second_node_generation,

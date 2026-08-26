@@ -256,7 +256,12 @@ fn detached_single_child_with_options(
             );
         }
         if let (Some(node_id), Some(generation)) = (child_node, child_generation) {
-            session.record_node_with_parent(node_id, generation, None);
+            session.record_node_with_parent(
+                node_id,
+                generation,
+                None,
+                crate::slot::BRANCH_PATH_ROOT,
+            );
         }
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
@@ -353,7 +358,7 @@ fn composed_group_with_value_and_node_table(group_key: Key) -> SlotTable {
             crate::slot::BRANCH_PATH_ROOT,
             || 17_i32,
         );
-        session.record_node_with_parent(31, 1, None);
+        session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -419,7 +424,7 @@ fn exercise_slot_write_session_surface(
             7_i32
         });
 
-    let recorded = slots.record_node_with_parent(55, 1, None);
+    let recorded = slots.record_node_with_parent(55, 1, None, crate::slot::BRANCH_PATH_ROOT);
     assert_eq!(
         recorded,
         NodeSlotUpdate::Inserted {

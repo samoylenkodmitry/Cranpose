@@ -50,7 +50,9 @@ impl SlotWriteSession<'_> {
         id: NodeId,
         generation: u32,
         parent_id: Option<NodeId>,
+        source: crate::Key,
     ) -> NodeSlotUpdate {
+        let source = self.state.mix_branch_fold(source);
         let Some(frame) = self.state.group_stack.last_mut() else {
             log::error!(
                 "slot writer record_node_with_parent called with an empty group stack; id={id}"
@@ -64,13 +66,18 @@ impl SlotWriteSession<'_> {
             id,
             parent_id,
             generation,
+            source,
         );
 
         frame.advance_node_cursor();
         result
     }
 
-    pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32)> {
+    pub(crate) fn mixed_node_source(&mut self, source: crate::Key) -> crate::Key {
+        self.state.mix_branch_fold(source)
+    }
+
+    pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32, crate::Key)> {
         let frame = self.state.group_stack.last()?;
         self.table
             .node_identity_at_cursor(frame.group_anchor, frame.node_cursor)

@@ -29,10 +29,10 @@ is quietly wrong sends work to the wrong places for as long as nobody reads it.
 ### Branch groups: fold-only identity
 
 Every conditional site of a `#[composable]` body — `if`/`else` branch,
-`match` arm and guard, each `&&`/`||` condition operand and `let`
-scrutinee, and every closure or executable nested item defined inside a
-branch — pushes an RAII **branch fold**: a location key on a per-pass
-stack. Nothing ever materializes; a guard costs a push and a pop, and
+`match` arm and guard, `for`/`while`/`loop` body, each `&&`/`||`
+condition operand and `let` scrutinee, and every closure or executable
+nested item defined inside a branch — pushes an RAII **branch fold**: a
+location key on a per-pass stack. Nothing ever materializes; a guard costs a push and a pop, and
 closing folds in any order is safe (entries are marked dead and trimmed).
 Branch identity is mixed into every slot identity instead of being
 represented structurally:
@@ -51,7 +51,9 @@ represented structurally:
   changes.
 - A `#[composable]` fn is `#[track_caller]` and keys its group by the
   caller's location: every call site is its own identity, Compose's
-  positional-key parity.
+  positional-key parity. `emit_node` is `#[track_caller]` the same way,
+  so a raw node record carries a folded source and an arm can never adopt
+  another arm's node.
 
 Branch departure needs no special lifecycle: an arm's groups and slots are
 ordinary unvisited content, detached and dispose-or-retained exactly as
@@ -77,12 +79,6 @@ typed IR:
   damage: its slots resynchronize or reinitialize, never leak into other
   code. A closure consumed-and-returned by a helper
   (`store(make_pair(|| A(1)).0)`) is the same class.
-- **A node emitted raw into a branch is positional.** `emit_node` outside
-  any composable child reuses by type and generation at its cursor, as it
-  does on main; arms emitting the same node type at the same position
-  trade nodes on switch. Composable children are immune (their nodes live
-  in caller-keyed groups); stamping node records with a folded source is
-  the hardening if a real workload hits this.
 - **A reuse-retained scope inside a keyed wrapper recomposes fresh when the
   wrapper leaves composition.** Dispose-or-retain engages only when the
   detached root is itself the reuse scope; a `with_key` wrapper above it

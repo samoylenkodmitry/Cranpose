@@ -377,7 +377,7 @@ mod tests {
                 crate::slot::BRANCH_PATH_ROOT,
                 || 17_i32,
             );
-            session.record_node_with_parent(31, 1, None);
+            session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
         }
 
         assert_eq!(state.group_stack[0].old_payload_len, 0);
@@ -435,7 +435,7 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(key, None);
-            session.record_node_with_parent(31, 1, None);
+            session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
             let _ = session.finish_group_body();
             session.end_group();
         }
