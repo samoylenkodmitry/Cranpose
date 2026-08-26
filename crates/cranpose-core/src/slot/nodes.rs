@@ -262,6 +262,7 @@ impl SlotTable {
         self.nodes[start + cursor_index..=start + found_index].rotate_right(1);
     }
 
+    #[cfg(test)]
     pub(super) fn node_identity_at_cursor(
         &self,
         owner: AnchorId,

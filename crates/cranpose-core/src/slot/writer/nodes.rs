@@ -73,10 +73,6 @@ impl SlotWriteSession<'_> {
         result
     }
 
-    pub(crate) fn mixed_node_source(&mut self, source: crate::Key) -> crate::Key {
-        self.state.mix_branch_fold(source)
-    }
-
     fn locate_node_record_by_source(
         &mut self,
         source: crate::Key,
@@ -123,6 +119,7 @@ impl SlotWriteSession<'_> {
         Some((id, generation))
     }
 
+    #[cfg(test)]
     pub(crate) fn current_node_record(&mut self) -> Option<(NodeId, u32, crate::Key)> {
         let frame = self.state.group_stack.last()?;
         self.table
