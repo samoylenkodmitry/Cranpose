@@ -1,7 +1,7 @@
 use cranpose_core::NodeId;
 use cranpose_ui::{
-    text::{AnnotatedString, Shadow, SpanStyle, TextDecoration},
     TextLayoutOptions, TextStyle,
+    text::{AnnotatedString, Shadow, SpanStyle, TextDecoration},
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawPrimitive, GraphicsLayer, Point, Rect, Stroke,

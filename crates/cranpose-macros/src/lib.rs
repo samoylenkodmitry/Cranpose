@@ -304,10 +304,17 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let key_expr = quote! { __cranpose_caller_key };
     let caller_key_stmt = quote! {
         let __cranpose_caller_key = #core_path::composable_identity_key({
+            struct __CranposeDefinitionMarker;
             static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
                 ::std::sync::OnceLock::new();
-            *__CRANPOSE_DEFINITION_KEY
-                .get_or_init(|| #core_path::location_key(file!(), line!(), column!()))
+            *__CRANPOSE_DEFINITION_KEY.get_or_init(|| {
+                #core_path::composable_definition_key(
+                    file!(),
+                    line!(),
+                    column!(),
+                    ::std::any::TypeId::of::<__CranposeDefinitionMarker>(),
+                )
+            })
         });
     };
 

@@ -4,11 +4,11 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_services::{
-    clear_launcher_state, clear_platform_file_picker, set_platform_file_picker, BytesContent,
-    ContentFolderRef, ContentHandle, FilePicker, FilePickerError, FilePickerOptions,
-    LauncherResult, PickerFuture, RecoveredPick,
+    BytesContent, ContentFolderRef, ContentHandle, FilePicker, FilePickerError, FilePickerOptions,
+    LauncherResult, PickerFuture, RecoveredPick, clear_launcher_state, clear_platform_file_picker,
+    set_platform_file_picker,
 };
 
 /// A picker whose chooser never resolves in this process, and which instead

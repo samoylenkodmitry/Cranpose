@@ -1,6 +1,6 @@
 use super::super::{
-    collect_root_node_ids_from_records_into, NodeRecord, NodeSlotUpdate, SlotTable,
-    SlotWriteSession,
+    NodeRecord, NodeSlotUpdate, SlotTable, SlotWriteSession,
+    collect_root_node_ids_from_records_into,
 };
 use crate::{AnchorId, NodeId};
 

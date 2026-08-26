@@ -19,7 +19,7 @@ use crate::{
     composable,
     layout::core::{Alignment, Measurable},
     modifier::{Modifier, Rect, Size},
-    nine_patch::{nine_patch_quads, tile_quads, NinePatchInsets, PatchFill, PatchQuad},
+    nine_patch::{NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_quads},
     widgets::Layout,
 };
 

@@ -1,9 +1,8 @@
 use cranpose_ui::{
-    prepare_text_layout, set_text_measurer,
+    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextMeasurer, TextMetrics,
+    TextOverflow, TextStyle, prepare_text_layout, set_text_measurer,
     text::{Hyphens, TextUnit},
     text_layout_result::TextLayoutResult,
-    AppContext, ParagraphStyle, SpanStyle, TextLayoutOptions, TextMeasurer, TextMetrics,
-    TextOverflow, TextStyle,
 };
 
 struct ContractMeasurer;

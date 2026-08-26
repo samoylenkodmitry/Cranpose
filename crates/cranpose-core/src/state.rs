@@ -13,16 +13,16 @@ use std::{
 };
 
 use crate::{
+    RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId, StateId,
     collections::map::{HashMap, HashSet},
     debug_trace::debug_record_scope_invalidation,
     runtime,
     snapshot_id_set::{SnapshotId, SnapshotIdSet},
     snapshot_pinning::lowest_pinned_snapshot,
     snapshot_v2::{
-        advance_global_snapshot, allocate_record_id, current_snapshot, AnySnapshot, GlobalSnapshot,
+        AnySnapshot, GlobalSnapshot, advance_global_snapshot, allocate_record_id, current_snapshot,
     },
-    with_current_composer_opt, RecomposeScope, RecomposeScopeInner, RuntimeHandle, ScopeId,
-    StateId,
+    with_current_composer_opt,
 };
 
 pub(crate) const PREEXISTING_SNAPSHOT_ID: SnapshotId = 1;

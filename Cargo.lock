@@ -1012,14 +1012,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cranpose-e2024-tests"
-version = "0.0.0"
-dependencies = [
- "cranpose-core",
- "cranpose-macros",
-]
-
-[[package]]
 name = "cranpose-foundation"
 version = "0.1.101"
 dependencies = [

@@ -272,11 +272,7 @@ impl FrameIntervalStats {
 }
 
 fn fps_from_avg_ms(avg_ms: f32) -> f32 {
-    if avg_ms > 0.0 {
-        1000.0 / avg_ms
-    } else {
-        0.0
-    }
+    if avg_ms > 0.0 { 1000.0 / avg_ms } else { 0.0 }
 }
 
 fn nearest_rank_percentile(sorted_samples: &[f32], percentile: usize) -> f32 {
@@ -342,7 +338,7 @@ pub struct FpsStats {
 mod tests {
     use std::time::Duration;
 
-    use super::{nearest_rank_percentile, FpsMonitor, FpsTracker};
+    use super::{FpsMonitor, FpsTracker, nearest_rank_percentile};
 
     #[test]
     fn monitors_do_not_share_recomposition_or_frame_counts() {

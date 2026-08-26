@@ -1,8 +1,7 @@
 use super::{
     super::{DetachedSubtree, GroupKey, GroupRecord, PayloadAnchor, PayloadRecord},
-    anchors,
-    groups::{validate_slot_tree, SlotTreeChecks, SlotTreeView},
-    SlotInvariantError, SlotTreeContext,
+    SlotInvariantError, SlotTreeContext, anchors,
+    groups::{SlotTreeChecks, SlotTreeView, validate_slot_tree},
 };
 use crate::collections::map::HashSet;
 

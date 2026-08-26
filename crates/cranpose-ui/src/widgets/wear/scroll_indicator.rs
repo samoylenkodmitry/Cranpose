@@ -22,12 +22,12 @@ use crate::{
     composable,
     modifier::{Brush, Color, Modifier, Point},
     round_scroll_indicator::{
-        indicator_arc, indicator_segments, scaling_list_geometry, IndicatorGeometry, IndicatorPart,
-        IndicatorSegment,
+        IndicatorGeometry, IndicatorPart, IndicatorSegment, indicator_arc, indicator_segments,
+        scaling_list_geometry,
     },
     widgets::{
-        wear::{scaling_list::WearScalingListState, theme::WearColors},
         Canvas,
+        wear::{scaling_list::WearScalingListState, theme::WearColors},
     },
 };
 

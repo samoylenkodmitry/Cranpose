@@ -100,10 +100,12 @@ fn payload_cleanup_with_stale_owner_anchor_does_not_panic() {
 
     harness.table.anchors.mark_detached(owner);
 
-    assert!(harness
-        .table
-        .remove_payload_tail_at_cursor(owner, 0)
-        .is_empty());
+    assert!(
+        harness
+            .table
+            .remove_payload_tail_at_cursor(owner, 0)
+            .is_empty()
+    );
     harness
         .table
         .refresh_group_payload_anchor_locations(owner, 0);

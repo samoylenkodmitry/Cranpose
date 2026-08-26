@@ -2,7 +2,7 @@ use super::{
     super::{AnchorState, GroupKey, GroupRecord, SlotTable},
     SlotInvariantError,
 };
-use crate::{collections::map::HashSet, AnchorId};
+use crate::{AnchorId, collections::map::HashSet};
 
 pub(super) fn validate_active_group_anchor(
     table: &SlotTable,

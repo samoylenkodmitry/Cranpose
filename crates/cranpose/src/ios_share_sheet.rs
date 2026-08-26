@@ -8,8 +8,8 @@
 
 use std::rc::Rc;
 
-use cranpose_services::{set_platform_share_sheet, ShareContent, ShareError, ShareSheet};
-use objc2::{runtime::AnyObject, MainThreadMarker, MainThreadOnly};
+use cranpose_services::{ShareContent, ShareError, ShareSheet, set_platform_share_sheet};
+use objc2::{MainThreadMarker, MainThreadOnly, runtime::AnyObject};
 use objc2_foundation::{NSArray, NSString, NSTemporaryDirectory, NSURL};
 use objc2_ui_kit::{UIActivityViewController, UIViewController};
 

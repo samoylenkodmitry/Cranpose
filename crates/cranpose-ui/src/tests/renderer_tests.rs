@@ -1,12 +1,12 @@
-use cranpose_core::{location_key, MemoryApplier, SlotId};
+use cranpose_core::{MemoryApplier, SlotId, location_key};
 
 use super::*;
 use crate::{
+    Composition, Placement, SubcomposeLayoutScope, SubcomposeMeasureScope,
     layout::LayoutEngine,
     modifier::{Brush, Color, Modifier},
     primitives::{Column, ColumnSpec, SubcomposeLayout, Text},
     text::TextStyle,
-    Composition, Placement, SubcomposeLayoutScope, SubcomposeMeasureScope,
 };
 
 fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> LayoutTree {
@@ -362,8 +362,10 @@ fn renderer_renders_subcompose_background() {
         RenderOp::Primitive { node_id, .. } => assert_eq!(*node_id, root),
         other => panic!("unexpected first op: {other:?}"),
     }
-    assert!(scene
-        .operations()
-        .iter()
-        .any(|op| matches!(op, RenderOp::Text { value, .. } if value == "Subcomposed")));
+    assert!(
+        scene
+            .operations()
+            .iter()
+            .any(|op| matches!(op, RenderOp::Text { value, .. } if value == "Subcomposed"))
+    );
 }

@@ -8,21 +8,20 @@
 #![allow(unsafe_code)]
 
 use std::{
-    sync::{mpsc, Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, mpsc},
     time::Duration,
 };
 
 use block2::RcBlock;
 use cranpose_services::{
-    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill,
-    FlashMode, FrameFormat,
+    Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill, FlashMode, FrameFormat,
+    set_platform_camera,
 };
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::{
-    define_class, msg_send,
+    AllocAnyThread, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Bool, ProtocolObject},
-    AllocAnyThread,
 };
 use objc2_av_foundation::{
     AVCaptureAutoFocusRangeRestriction, AVCaptureConnection, AVCaptureDevice,
@@ -40,9 +39,9 @@ use objc2_av_foundation::{
 };
 use objc2_core_media::CMSampleBuffer;
 use objc2_core_video::{
-    kCVPixelBufferPixelFormatTypeKey, CVBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddress,
-    CVPixelBufferGetBytesPerRow, CVPixelBufferGetHeight, CVPixelBufferGetWidth,
-    CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
+    CVBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddress, CVPixelBufferGetBytesPerRow,
+    CVPixelBufferGetHeight, CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress,
+    CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress, kCVPixelBufferPixelFormatTypeKey,
 };
 use objc2_foundation::{
     NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSString,

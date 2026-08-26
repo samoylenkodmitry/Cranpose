@@ -458,11 +458,13 @@ mod tests {
     fn modifiers_any_is_true_when_any_field_is_set() {
         assert!(!Modifiers::NONE.any());
         assert!(!Modifiers::default().any());
-        assert!(Modifiers {
-            shift: true,
-            ..Modifiers::NONE
-        }
-        .any());
+        assert!(
+            Modifiers {
+                shift: true,
+                ..Modifiers::NONE
+            }
+            .any()
+        );
     }
 
     #[test]

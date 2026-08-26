@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use jni::{
+    Env, EnvUnowned, JavaVM, Outcome,
     objects::{JClass, JObject, JString},
     sys::{jfloat, jint, jlong},
-    Env, EnvUnowned, JavaVM, Outcome,
 };
 use ndk::native_window::NativeWindow;
 
@@ -151,7 +151,7 @@ fn push_overlay_event_for_handle(handle: jlong, event: AndroidOverlayWindowEvent
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayCreateFailed<
     'local,
 >(
@@ -174,7 +174,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceChanged<
     'local,
 >(
@@ -228,7 +228,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlaySurfaceDestroyed(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -238,7 +238,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayPointer(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -261,7 +261,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOve
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeOverlayWindow_nativeOverlayReleaseQueue(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,

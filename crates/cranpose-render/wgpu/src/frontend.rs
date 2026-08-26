@@ -20,6 +20,7 @@ use cranpose_ui_graphics::Rect;
 use web_time::Instant;
 
 use crate::{
+    TextSystemState,
     frame_packet::{
         FramePacket, PacketRoot, RenderReturns, ReplayConfirmation, ReplayFrameOps,
         RootSurfacePacket,
@@ -29,17 +30,16 @@ use crate::{
         collect_layer_contents_with_translation_context_and_text_layout, lower_layer_node,
     },
     render::{
-        direct_root_child_underlays_are_supported, instant_ms, should_log_wgpu_render_stage,
-        RETAINED_LAYER_REQUIREMENTS_CAPACITY,
+        RETAINED_LAYER_REQUIREMENTS_CAPACITY, direct_root_child_underlays_are_supported,
+        instant_ms, should_log_wgpu_render_stage,
     },
     scene::{CompositorScene, Scene, SceneCapacityHint},
     surface_executor::{layer_surface_translation_context, root_direct_scene_events_are_supported},
     surface_plan::{
-        effective_surface_requirements, layer_surface_requirements_cached,
-        root_can_render_directly_cached, LayerSurfaceRequirements, TranslationRenderContext,
+        LayerSurfaceRequirements, TranslationRenderContext, effective_surface_requirements,
+        layer_surface_requirements_cached, root_can_render_directly_cached,
     },
     surface_requirements::SurfaceRequirement,
-    TextSystemState,
 };
 
 /// Direct scenes kept for recycling: one per packet that can be in flight
@@ -461,7 +461,7 @@ mod tests {
     use cranpose_ui_graphics::GraphicsLayer;
 
     use super::*;
-    use crate::{test_support::layer_node, WgpuTextSystem};
+    use crate::{WgpuTextSystem, test_support::layer_node};
 
     fn frontend() -> RendererFrontend {
         let text_system = WgpuTextSystem::from_fonts(&[]);

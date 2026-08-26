@@ -1,11 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_animation::{
-    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+    AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 use cranpose_core::{
-    location_key, with_current_composer, Composition, MemoryApplier, MutableState, Node, NodeError,
-    SnapshotStateObserver, State,
+    Composition, MemoryApplier, MutableState, Node, NodeError, SnapshotStateObserver, State,
+    location_key, with_current_composer,
 };
 
 #[derive(Default)]

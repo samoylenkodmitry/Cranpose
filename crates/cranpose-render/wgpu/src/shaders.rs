@@ -124,7 +124,7 @@ mod tests {
         assert_ne!(blit_shader(), projective_blit_shader());
     }
 
-    use naga::{back::glsl, ShaderStage};
+    use naga::{ShaderStage, back::glsl};
 
     fn validate_wgsl_module(source: &str) -> Result<(), String> {
         let module = naga::front::wgsl::parse_str(source)

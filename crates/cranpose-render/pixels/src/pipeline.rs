@@ -2,32 +2,31 @@ use std::rc::Rc;
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
+    Brush,
     graph::{
         LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform, RenderGraph,
         RenderNode, TextPrimitiveNode,
     },
     graph_scene::RenderDiagnostics,
-    hit_graph::{collect_hits_from_graph as collect_common_hits, HitGraphSink},
+    hit_graph::{HitGraphSink, collect_hits_from_graph as collect_common_hits},
     layer_composition::local_content_layer,
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_affine_to_rect, apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
-        draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
         DrawPrimitiveSink, ImageDrawParams, PrimitiveClipSpace, ShapeDrawParams, TextDrawParams,
+        draw_shape_params_for_primitive, emit_draw_primitive, resolve_clip, resolve_primitive_clip,
     },
-    Brush,
 };
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
-use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
-use cranpose_ui::{
-    measure_text,
-    text::{TextDecoration, TextStyle},
-    LayoutBox, TextLayoutOptions,
-};
+use cranpose_ui::text::{ResolvedTextDirection, TextAlign, resolve_text_direction};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
+use cranpose_ui::{
+    LayoutBox, TextLayoutOptions, measure_text,
+    text::{TextDecoration, TextStyle},
+};
 use cranpose_ui_graphics::{
     BlendMode, Color, CompositingStrategy, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect,
     RenderEffect, RoundedCornerShape,

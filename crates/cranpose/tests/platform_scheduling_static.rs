@@ -22,8 +22,7 @@ fn strip_xml_comments(source: &str) -> String {
 }
 
 /// The one place the Cranpose native build is configured.
-const CRANPOSE_GRADLE_PLUGIN: &str =
-    "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
+const CRANPOSE_GRADLE_PLUGIN: &str = "crates/cranpose/android/cranpose-gradle-plugin/src/main/kotlin/dev/cranpose/gradle/CranposeAndroidPlugin.kt";
 
 /// Where the plugin reads a service's manifest fragment from, by service name.
 fn cranpose_manifest(service: &str) -> String {
@@ -109,8 +108,9 @@ fn ci_architecture_budget_runs_required_gates() {
     );
     assert!(
         justfile.contains("cargo xtask dependency-budget --strict --explain")
-            && justfile
-                .contains("cargo xtask dependency-budget --strict --slice desktop-platform --explain")
+            && justfile.contains(
+                "cargo xtask dependency-budget --strict --slice desktop-platform --explain"
+            )
             && justfile.contains(
                 "cargo xtask dependency-budget --strict --slice optional-features --explain"
             ),
@@ -632,7 +632,8 @@ fn android_launch_arguments_reach_the_service_registry() {
     assert!(
         java_source.contains("public String cranposeEncodeLaunchArguments()")
             && java_source.contains("ApplicationInfo.FLAG_DEBUGGABLE")
-            && java_source.contains("private static native void nativeOnLaunchArguments(String payload);")
+            && java_source
+                .contains("private static native void nativeOnLaunchArguments(String payload);")
             && java_source.contains("nativeOnLaunchArguments(cranposeEncodeLaunchArguments());"),
         "CranposeActivity should encode the launching intent's extras with the debuggable flag and re-push them from onNewIntent; a NativeActivity has no other way to see them"
     );
@@ -689,9 +690,9 @@ fn android_play_billing_reaches_the_purchase_registry() {
         "querying products, buying and restoring should each be one non-blocking JNI call into the Java bridge"
     );
     assert!(
-        backend_source
-            .contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot")
-            && backend_source.contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent")
+        backend_source.contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot")
+            && backend_source
+                .contains("Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent")
             && backend_source.contains("wake_native_loop()"),
         "store answers arrive on Play Billing worker threads and must be parked for the native loop, which is woken so the frame that reads them happens"
     );
@@ -840,7 +841,8 @@ fn android_native_input_is_drained_on_input_available_event() {
         "Android NativeActivity input must be drained from MainEvent::InputAvailable so every input event reaches finish_event before the platform ANR timeout"
     );
     assert!(
-        !source.contains("println!(\n                                                    \"[TOUCH]")
+        !source
+            .contains("println!(\n                                                    \"[TOUCH]")
             && !source.contains("println!(\"[TOUCH]"),
         "Android input acknowledgement must not perform synchronous stdout logging in the event-finish path"
     );
@@ -1400,7 +1402,7 @@ fn unsafe_code_stays_in_reviewed_platform_boundary_modules() {
         // symbol is API 30+, so it must not be linked) and the call through
         // it.
         "android_display.rs",
-        // The entry-point macro: the `#[no_mangle]` in the expansion it writes
+        // The entry-point macro: the `#[unsafe(no_mangle)]` in the expansion it writes
         // is the symbol `NativeActivity` resolves after loading the library.
         "android_entry.rs",
         // The display refresh-rate vote: `dlsym`/`dlopen` resolution of the
@@ -1620,7 +1622,7 @@ fn workspace_ffi_boundaries_are_explicit() {
         // symbol is API 30+, so it must not be linked) and the call through
         // it.
         "crates/cranpose/src/android_display.rs",
-        // The entry-point macro: one `#[no_mangle]` in the expansion it writes,
+        // The entry-point macro: one `#[unsafe(no_mangle)]` in the expansion it writes,
         // which is the symbol `NativeActivity` resolves after loading the
         // library. It replaced the same attribute in every application.
         "crates/cranpose/src/android_entry.rs",
@@ -1973,7 +1975,7 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
         // `apps/isolated-demo` is its own workspace, so it cannot inherit
         // `[workspace.lints]` and still carries the crate-root attribute. The
         // attribute names the lint; it is not an FFI boundary.
-        (trimmed.contains("unsafe") || trimmed.contains("#[no_mangle]"))
+        (trimmed.contains("unsafe") || trimmed.contains("#[unsafe(no_mangle)]"))
             && trimmed != "#![deny(unsafe_code)]"
     })
 }
@@ -2533,10 +2535,10 @@ fn the_android_host_takes_its_log_tag_from_the_launcher() {
 /// No application writes the Android entry point by hand.
 ///
 /// It cost every application the same four lines — an `unsafe_code` allowance
-/// for the export attribute, a `#[no_mangle]` it must not misspell, a
+/// for the export attribute, a `#[unsafe(no_mangle)]` it must not misspell, a
 /// dependency on `android_activity` for nothing but a parameter type, and a
 /// `target_os` guard — none of which is about the application. It is one macro
-/// now, and the `#[no_mangle]` lives in one reviewed module rather than in
+/// now, and the `#[unsafe(no_mangle)]` lives in one reviewed module rather than in
 /// every consumer.
 #[test]
 fn applications_declare_their_android_entry_through_the_macro() {

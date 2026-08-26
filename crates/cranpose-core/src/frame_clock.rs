@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::{
-    runtime::{FrameCallbackKind, RuntimeHandle},
     FrameCallbackId,
+    runtime::{FrameCallbackKind, RuntimeHandle},
 };
 
 #[derive(Clone)]
@@ -198,7 +198,7 @@ impl Drop for FrameCallbackRegistration {
 #[cfg(test)]
 mod tests {
     use std::{
-        panic::{catch_unwind, AssertUnwindSafe},
+        panic::{AssertUnwindSafe, catch_unwind},
         sync::Arc,
         task::{Context, Poll, Wake, Waker},
     };

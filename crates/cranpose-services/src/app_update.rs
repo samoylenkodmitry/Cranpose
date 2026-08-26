@@ -7,8 +7,8 @@
 //! to compute it wrongly, and one of them will be the one nobody tested.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
 use sha2::{Digest, Sha256};
@@ -305,9 +305,7 @@ pub enum AppUpdateError {
     #[error("the release feed published a digest that cannot be checked: {0}")]
     MalformedDigest(String),
     /// What arrived is not what the release feed promised.
-    #[error(
-        "the downloaded package does not match its digest (expected {expected}, got {actual})"
-    )]
+    #[error("the downloaded package does not match its digest (expected {expected}, got {actual})")]
     VerificationFailed {
         /// The digest the release feed published.
         expected: String,

@@ -8,8 +8,8 @@
 //! unsupported, and the app simply runs only while foregrounded.
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicUsize, Ordering},
 };
 
 /// Marks periods of important work so the platform grants background running
@@ -64,20 +64,20 @@ impl Drop for BackgroundWorkLease {
             return;
         }
         self.active = false;
-        if ACTIVE_LEASES.fetch_sub(1, Ordering::AcqRel) == 1 {
-            if let Some(activity) = background_activity() {
-                activity.set_active(false);
-            }
+        if ACTIVE_LEASES.fetch_sub(1, Ordering::AcqRel) == 1
+            && let Some(activity) = background_activity()
+        {
+            activity.set_active(false);
         }
     }
 }
 
 /// Acquires background execution for one independent operation.
 pub fn acquire_background_work() -> BackgroundWorkLease {
-    if ACTIVE_LEASES.fetch_add(1, Ordering::AcqRel) == 0 {
-        if let Some(activity) = background_activity() {
-            activity.set_active(true);
-        }
+    if ACTIVE_LEASES.fetch_add(1, Ordering::AcqRel) == 0
+        && let Some(activity) = background_activity()
+    {
+        activity.set_active(true);
     }
     BackgroundWorkLease { active: true }
 }

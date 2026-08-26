@@ -2,8 +2,8 @@
 
 use std::rc::Rc;
 
-use cranpose_services::{set_platform_app_info, AppInfo};
-use objc2_foundation::{ns_string, NSBundle, NSString};
+use cranpose_services::{AppInfo, set_platform_app_info};
+use objc2_foundation::{NSBundle, NSString, ns_string};
 
 struct IosAppInfo {
     version_name: Option<String>,

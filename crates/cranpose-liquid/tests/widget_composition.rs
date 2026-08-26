@@ -15,7 +15,7 @@ use std::{cell::Cell, rc::Rc};
 
 use cranpose_foundation::text::TextFieldState;
 use cranpose_liquid::prelude::*;
-use cranpose_ui::{run_test_composition, widgets::popup::PopupHost, Modifier};
+use cranpose_ui::{Modifier, run_test_composition, widgets::popup::PopupHost};
 use cranpose_ui_graphics::Color;
 
 /// Runs `content` inside a Liquid theme.

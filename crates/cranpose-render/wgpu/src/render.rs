@@ -8,14 +8,14 @@ use std::{
     hash::{Hash, Hasher},
     ops::Range,
     rc::Rc,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     time::Duration,
 };
 
 use bytemuck::{Pod, Zeroable};
 #[cfg(any(not(target_arch = "wasm32"), test))]
 use cranpose_core::collections::map::HashMap;
-use cranpose_core::{hash::default as default_hash, NodeId};
+use cranpose_core::{NodeId, hash::default as default_hash};
 #[cfg(test)]
 use cranpose_render_common::graph::{
     CachePolicy, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
@@ -29,11 +29,11 @@ use cranpose_render_common::{
     graph::quad_bounds,
     raster_cache::LayerRasterCacheKey,
     software_text_raster::{
+        SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey, SoftwareGlyphAtlasPlacement,
+        SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
         collect_solid_text_atlas_run, measure_text_with_font,
         rasterize_annotated_text_to_image_with_glyph_cache,
-        rasterize_text_to_image_with_glyph_cache, SoftwareGlyphAtlasGlyph, SoftwareGlyphAtlasKey,
-        SoftwareGlyphAtlasPlacement, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-        SoftwareTextFontSet,
+        rasterize_text_to_image_with_glyph_cache,
     },
 };
 #[cfg(test)]
@@ -52,15 +52,15 @@ use crate::effect_renderer::{PreparedProjectiveComposite, ProjectiveCompositeIte
 use crate::lazy_resource::LazyGpuResource;
 #[cfg(test)]
 use crate::normalized_scene::{
-    build_scene_window, collect_layer_contents, collect_layer_contents_with_translation_context,
-    filtered_effect_layer_index, scene_bounds, SceneWindowSource,
+    SceneWindowSource, build_scene_window, collect_layer_contents,
+    collect_layer_contents_with_translation_context, filtered_effect_layer_index, scene_bounds,
 };
 #[cfg(test)]
 use crate::normalized_scene::{estimate_layer_surface_rect, motion_stable_capture_bounds};
 #[cfg(not(target_arch = "wasm32"))]
 use crate::segment_surface::{
-    Affine2, CaptureRect, SegmentSurfaceCache, SegmentSurfaceDecision, SegmentSurfaceKey,
-    SEGMENT_CAPTURE_SLOTS, SEGMENT_CAPTURE_UNIFORM_STRIDE,
+    Affine2, CaptureRect, SEGMENT_CAPTURE_SLOTS, SEGMENT_CAPTURE_UNIFORM_STRIDE,
+    SegmentSurfaceCache, SegmentSurfaceDecision, SegmentSurfaceKey,
 };
 #[cfg(test)]
 use crate::surface_executor::surface_target_size;
@@ -70,19 +70,20 @@ use crate::surface_executor::{clamp_effect_surface_scale, visible_layer_rect};
 use crate::surface_plan::root_can_render_directly_cached;
 #[cfg(test)]
 use crate::surface_plan::{
-    composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-    direct_translation, effect_layer_target_scale, layer_contains_descendant_backdrop,
-    layer_surface_requirements, layer_surface_requirements_cached, layer_surface_scale,
-    layer_surface_target_scale, layer_uses_external_backdrop_input, TranslatedContentAxes,
+    TranslatedContentAxes, composite_sample_mode_for_effect_layer,
+    composite_sample_mode_for_requirements, direct_translation, effect_layer_target_scale,
+    layer_contains_descendant_backdrop, layer_surface_requirements,
+    layer_surface_requirements_cached, layer_surface_scale, layer_surface_target_scale,
+    layer_uses_external_backdrop_input,
 };
 #[cfg(test)]
 use crate::surface_requirements::SurfaceRequirement;
 use crate::{
-    display_clip,
+    DebugCpuAllocationStats, display_clip,
     effect_renderer::{
-        projective_dest_bounds_rect, CompositeBatchItem, CompositeSampleMode, EffectRenderer,
-        EffectScratchTargetProvider, ProjectiveSurfaceComposite, RoundedCompositeMask,
-        ShaderCompositeBatchItem,
+        CompositeBatchItem, CompositeSampleMode, EffectRenderer, EffectScratchTargetProvider,
+        ProjectiveSurfaceComposite, RoundedCompositeMask, ShaderCompositeBatchItem,
+        projective_dest_bounds_rect,
     },
     frame_graph::{
         FrameCommandRecorder, FrameTextureDescriptor, WgpuFrameGraph, WgpuFrameGraphExecutor,
@@ -92,11 +93,11 @@ use crate::{
     },
     gpu_stats,
     gpu_stats::gpu_stats_enabled,
-    layer_events::{collect_effect_ranges, collect_layer_events, LayerEvent, LayerEventKind},
+    layer_events::{LayerEvent, LayerEventKind, collect_effect_ranges, collect_layer_events},
     layer_surface_cache::LayerSurfaceCache,
     lazy_resource::PassPipeline,
-    normalized_scene::{translate_quad, ChildLayerComposite, CollectedLayer},
-    offscreen::{composition_bytes_per_pixel, OffscreenTarget, COMPOSITION_FORMAT},
+    normalized_scene::{ChildLayerComposite, CollectedLayer, translate_quad},
+    offscreen::{COMPOSITION_FORMAT, OffscreenTarget, composition_bytes_per_pixel},
     output_conversion::OutputConverter,
     pipeline::push_layer_shadow,
     rect_to_quad,
@@ -106,6 +107,7 @@ use crate::{
     },
     shaders,
     surface_executor::{
+        DevicePixelBounds, LayerSurfaceTexture, SurfaceExecutionBackend,
         apply_backdrop_layer_to_target as execute_apply_backdrop_layer_to_target,
         axis_aligned_quad_rect, backdrop_underlay_is_covered_by_local_content,
         canonicalize_device_coordinate, canonicalized_scaled_quad, canonicalized_scaled_rect,
@@ -115,12 +117,10 @@ use crate::{
         render_layer_surface as execute_render_layer_surface,
         render_root_direct as execute_render_root_direct, root_direct_scene_events_are_supported,
         scaled_quad, snap_delta_for_anchor, snap_motion_stable_dest_quad,
-        translation_stable_anchored_device_pixel_bounds, DevicePixelBounds, LayerSurfaceTexture,
-        SurfaceExecutionBackend,
+        translation_stable_anchored_device_pixel_bounds,
     },
     surface_plan::{LayerSurfaceRequest, TranslationRenderContext},
     surface_requirements::SurfaceRequirementSet,
-    DebugCpuAllocationStats,
 };
 
 /// Must equal the `array<ShapeData, N>` literal in `shape.wgsl`: on wasm the
@@ -343,10 +343,10 @@ static SEGMENT_DIAG_LINES: AtomicUsize = AtomicUsize::new(0);
 fn wgpu_render_stage_telemetry_threshold_ms() -> Option<f64> {
     static THRESHOLD_MS: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
     *THRESHOLD_MS.get_or_init(|| {
-        let explicit = std::env::var("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
-            .ok()
-            .and_then(|value| value.parse::<f64>().ok())
-            .filter(|value| value.is_finite() && *value >= 0.0);
+        let explicit =
+            crate::debug_toggles::debug_toggle("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|value| value.is_finite() && *value >= 0.0);
         explicit.or_else(|| {
             std::env::var_os("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY")
                 .is_some()
@@ -608,15 +608,14 @@ impl TextLineIndexCache {
 
     fn line_starts(&mut self, text: &Arc<cranpose_ui::text::RenderString>) -> Rc<[usize]> {
         let key = TextLineIndexCacheKey(Arc::as_ptr(text) as usize);
-        if let Some(cached) = self.entries.get(&key) {
-            if cached.len == text.text.len()
-                && cached
-                    .text
-                    .upgrade()
-                    .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
-            {
-                return cached.starts.clone();
-            }
+        if let Some(cached) = self.entries.get(&key)
+            && cached.len == text.text.len()
+            && cached
+                .text
+                .upgrade()
+                .is_some_and(|cached_text| Arc::ptr_eq(&cached_text, text))
+        {
+            return cached.starts.clone();
         }
 
         let starts = Rc::<[usize]>::from(line_start_offsets(text.text.as_str()));
@@ -1523,7 +1522,7 @@ pub(crate) fn create_render_pipeline_logged<'a>(
 /// keeps first-use creation as the only compile path.
 #[cfg(not(target_arch = "wasm32"))]
 fn pipeline_prewarm_enabled() -> bool {
-    std::env::var("CRANPOSE_PIPELINE_PREWARM").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_PREWARM").as_deref() != Some("0")
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2845,7 +2844,10 @@ fn arc_mesh_enabled() -> bool {
     // ([`rim_mesh_band`], +9 fps, default on). A retry that could earn
     // default-on: split a meshed slot's draw so passthrough shapes stay
     // instanced and only gate-passing shapes take the mesh.
-    matches!(std::env::var("CRANPOSE_ARC_MESH").as_deref(), Ok("1"))
+    matches!(
+        crate::debug_toggles::debug_toggle("CRANPOSE_ARC_MESH").as_deref(),
+        Some("1")
+    )
 }
 
 /// Dilation applied to the band's half-thickness before meshing, in capture
@@ -2938,7 +2940,9 @@ const RETAINED_MESH_MIN_PX2_RANGE: std::ops::RangeInclusive<usize> = 1024..=2621
 /// per capture like [`arc_mesh_enabled`] — captures are rare.
 #[cfg(not(target_arch = "wasm32"))]
 fn retained_mesh_min_px2() -> f64 {
-    parse_retained_mesh_min_px2(std::env::var("CRANPOSE_RETAINED_MESH_PX2").ok().as_deref())
+    parse_retained_mesh_min_px2(
+        crate::debug_toggles::debug_toggle("CRANPOSE_RETAINED_MESH_PX2").as_deref(),
+    )
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -3042,7 +3046,10 @@ fn arc_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
 /// Read once per fused-chunk prepare (cheap), not per shape.
 #[cfg(not(target_arch = "wasm32"))]
 fn rim_mesh_enabled() -> bool {
-    !matches!(std::env::var("CRANPOSE_RIM_MESH").as_deref(), Ok("0"))
+    !matches!(
+        crate::debug_toggles::debug_toggle("CRANPOSE_RIM_MESH").as_deref(),
+        Some("0")
+    )
 }
 
 /// Fixed capacity of the per-frame transient rim mesh vertex buffer, in
@@ -3215,7 +3222,10 @@ fn rim_mesh_band(shape: &ShapeData) -> Option<ArcMeshBand> {
 /// cost is one `env::var` per frame.
 #[cfg(not(target_arch = "wasm32"))]
 fn static_span_enabled() -> bool {
-    !matches!(std::env::var("CRANPOSE_STATIC_SPAN").as_deref(), Ok("0"))
+    !matches!(
+        crate::debug_toggles::debug_toggle("CRANPOSE_STATIC_SPAN").as_deref(),
+        Some("0")
+    )
 }
 
 /// Upper bound on how many leading shapes one span may cover. The target
@@ -3894,7 +3904,7 @@ fn quad_shoelace_area(shape: &ShapeData) -> f64 {
 pub(crate) fn fill_area_diag_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(
-        || matches!(std::env::var("CRANPOSE_FILL_DIAG").as_deref(), Ok(value) if value != "0"),
+        || matches!(crate::debug_toggles::debug_toggle("CRANPOSE_FILL_DIAG").as_deref(), Some(value) if value != "0"),
     )
 }
 
@@ -4807,7 +4817,7 @@ impl ReplaySlotStore {
 /// rebuild. Read per partition — the parity harness flips it between passes.
 #[cfg(not(target_arch = "wasm32"))]
 fn retained_bundles_enabled() -> bool {
-    std::env::var("CRANPOSE_RETAINED_BUNDLES").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_RETAINED_BUNDLES").as_deref() != Some("0")
 }
 
 /// Kill switch for instanced ordinary-shape quads: default ON,
@@ -4819,7 +4829,7 @@ fn retained_bundles_enabled() -> bool {
 /// let a cached bundle replay a selection the direct path no longer makes.
 #[cfg(not(target_arch = "wasm32"))]
 fn instanced_quads_enabled() -> bool {
-    std::env::var("CRANPOSE_INSTANCED_QUADS").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_INSTANCED_QUADS").as_deref() != Some("0")
 }
 
 /// Trimmed-varying solid pipelines: default OFF, `CRANPOSE_SOLID_TRIM_VARYINGS=1`
@@ -4835,7 +4845,7 @@ fn instanced_quads_enabled() -> bool {
 /// reverted in 371dd06a) died on a watch undiagnosed, so the trim ships dark
 /// until a Vulkan-validated device session clears it.
 fn solid_trim_varyings_enabled() -> bool {
-    std::env::var("CRANPOSE_SOLID_TRIM_VARYINGS").as_deref() == Ok("1")
+    crate::debug_toggles::debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS").as_deref() == Some("1")
 }
 
 /// Kill switch for surviving uncaptured device errors: default ON,
@@ -4847,7 +4857,7 @@ fn solid_trim_varyings_enabled() -> bool {
 /// logging past it. Read once, at [`GpuRenderer`] construction, where the
 /// handler is installed; it changes nothing off the error path.
 fn survive_gpu_errors_enabled() -> bool {
-    std::env::var("CRANPOSE_SURVIVE_GPU_ERRORS").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_SURVIVE_GPU_ERRORS").as_deref() != Some("0")
 }
 
 /// Kill switch for the display clip region cull: default ON wherever the
@@ -4871,7 +4881,7 @@ fn survive_gpu_errors_enabled() -> bool {
 /// measured win on some device class, not an assumption.
 #[cfg(not(target_arch = "wasm32"))]
 fn display_clip_cull_enabled() -> bool {
-    std::env::var("CRANPOSE_ROUND_CULL").as_deref() == Ok("1")
+    crate::debug_toggles::debug_toggle("CRANPOSE_ROUND_CULL").as_deref() == Some("1")
 }
 
 /// The index pattern of one instanced quad: the exact triangle pair
@@ -6900,12 +6910,12 @@ impl GpuRenderer {
     ) -> Option<wgpu::TextureView> {
         let region = self.display_clip.visible_region;
         let key = ((width, height), region);
-        if let Some((cached_key, resources)) = &self.display_clip.resources {
-            if *cached_key == key {
-                return resources
-                    .as_ref()
-                    .map(|resources| resources.depth_view.clone());
-            }
+        if let Some((cached_key, resources)) = &self.display_clip.resources
+            && *cached_key == key
+        {
+            return resources
+                .as_ref()
+                .map(|resources| resources.depth_view.clone());
         }
         let built = display_clip::tessellate_complement(region, width, height).map(|mesh| {
             let occluder_vertex_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -7414,10 +7424,11 @@ impl GpuRenderer {
     }
 
     fn take_composition_target(&mut self, width: u32, height: u32) -> CompositionTarget {
-        if let Some(target) = self.composition_target.take() {
-            if target.target.width == width && target.target.height == height {
-                return target;
-            }
+        if let Some(target) = self.composition_target.take()
+            && target.target.width == width
+            && target.target.height == height
+        {
+            return target;
         }
         let target = OffscreenTarget::new(&self.device, self.composition_format, width, height);
         let output_bind_group = self.output_converter.bind_group(&self.device, &target.view);
@@ -8046,66 +8057,63 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
             dest_viewport,
             supported_blend_mode(blend_mode),
             sample_mode,
-        ) {
-            if let (
-                RenderEffect::Blur {
-                    radius_x,
-                    radius_y,
-                    edge_treatment,
-                },
-                RenderEffect::Shader { shader },
-            ) = (first.as_ref(), second.as_ref())
-            {
-                if *radius_x > 0.0 || *radius_y > 0.0 {
-                    let device = self.renderer.device.clone();
-                    let (scratch_width, scratch_height) = crate::effect_renderer::blur_scratch_size(
-                        *radius_x,
-                        *radius_y,
-                        source.width,
-                        source.height,
-                    );
-                    let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
-                        "Blur Rounded Mask Scratch",
-                        scratch_width,
-                        scratch_height,
-                    );
-                    let scratch = self
-                        .recorder
-                        .acquire_transient_offscreen(&device, scratch_descriptor);
-                    let fused = self
-                        .renderer
-                        .effect_renderer
-                        .encode_blur_then_rounded_mask_src_over_to_view(
-                            self.recorder,
-                            &device,
-                            source,
-                            &scratch,
-                            dest_view,
-                            *radius_x,
-                            *radius_y,
-                            *edge_treatment,
-                            shader,
-                            effect_rect,
-                            load_op,
-                            scissor,
-                            viewport,
-                        );
-                    if fused {
-                        self.recorder.record_passes(2);
-                        self.renderer.effect_renderer.record_blur_pass();
-                        self.renderer
-                            .effect_renderer
-                            .debug_effects
-                            .set(self.renderer.effect_renderer.debug_effects.get() + 1);
-                        self.renderer.effect_renderer.record_composite_pass();
-                        self.recorder
-                            .release_transient_offscreen(scratch_descriptor, scratch);
-                        return Ok(());
-                    }
-                    self.recorder
-                        .release_transient_offscreen(scratch_descriptor, scratch);
-                }
+        ) && let (
+            RenderEffect::Blur {
+                radius_x,
+                radius_y,
+                edge_treatment,
+            },
+            RenderEffect::Shader { shader },
+        ) = (first.as_ref(), second.as_ref())
+            && (*radius_x > 0.0 || *radius_y > 0.0)
+        {
+            let device = self.renderer.device.clone();
+            let (scratch_width, scratch_height) = crate::effect_renderer::blur_scratch_size(
+                *radius_x,
+                *radius_y,
+                source.width,
+                source.height,
+            );
+            let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
+                "Blur Rounded Mask Scratch",
+                scratch_width,
+                scratch_height,
+            );
+            let scratch = self
+                .recorder
+                .acquire_transient_offscreen(&device, scratch_descriptor);
+            let fused = self
+                .renderer
+                .effect_renderer
+                .encode_blur_then_rounded_mask_src_over_to_view(
+                    self.recorder,
+                    &device,
+                    source,
+                    &scratch,
+                    dest_view,
+                    *radius_x,
+                    *radius_y,
+                    *edge_treatment,
+                    shader,
+                    effect_rect,
+                    load_op,
+                    scissor,
+                    viewport,
+                );
+            if fused {
+                self.recorder.record_passes(2);
+                self.renderer.effect_renderer.record_blur_pass();
+                self.renderer
+                    .effect_renderer
+                    .debug_effects
+                    .set(self.renderer.effect_renderer.debug_effects.get() + 1);
+                self.renderer.effect_renderer.record_composite_pass();
+                self.recorder
+                    .release_transient_offscreen(scratch_descriptor, scratch);
+                return Ok(());
             }
+            self.recorder
+                .release_transient_offscreen(scratch_descriptor, scratch);
         }
         if let Some((first_effect, shader, viewport)) = direct_shader_tail_composite(
             effect,
@@ -8114,19 +8122,17 @@ impl<C: FrameCommandRecorder> RecordingSurfaceBackend<'_, '_, C> {
             dest_viewport,
             sample_mode,
             (source.width, source.height),
-        ) {
-            if self.record_effect_with_direct_shader_tail_composite(
-                source,
-                first_effect,
-                shader,
-                effect_rect,
-                dest_view,
-                load_op,
-                scissor,
-                viewport,
-            )? {
-                return Ok(());
-            }
+        ) && self.record_effect_with_direct_shader_tail_composite(
+            source,
+            first_effect,
+            shader,
+            effect_rect,
+            dest_view,
+            load_op,
+            scissor,
+            viewport,
+        )? {
+            return Ok(());
         }
         let device = self.renderer.device.clone();
         let scratch_descriptor = self.renderer.transient_offscreen_descriptor(
@@ -9605,17 +9611,17 @@ impl GpuRenderer {
         #[cfg(not(target_arch = "wasm32"))]
         let mut packet = packet;
         #[cfg(not(target_arch = "wasm32"))]
-        if !packet.replay_preconsumed {
-            if let PacketRoot::Direct(root) = &packet.root {
-                let ops = std::mem::take(&mut packet.replay);
-                let (ack, recycled) = self.consume_replay_ops(
-                    ops,
-                    &root.scene.shapes,
-                    &root.scene.brushes,
-                    packet.root_scale,
-                );
-                returns.ack = Some((ack, recycled));
-            }
+        if !packet.replay_preconsumed
+            && let PacketRoot::Direct(root) = &packet.root
+        {
+            let ops = std::mem::take(&mut packet.replay);
+            let (ack, recycled) = self.consume_replay_ops(
+                ops,
+                &root.scene.shapes,
+                &root.scene.brushes,
+                packet.root_scale,
+            );
+            returns.ack = Some((ack, recycled));
         }
 
         let FramePacket {
@@ -9663,17 +9669,17 @@ impl GpuRenderer {
                         Err(error)
                     }
                 };
-                if result.is_ok() {
-                    if let Some(overlay) = overlay {
-                        Self::render_overlay_packet(
-                            &mut backend,
-                            surface_view,
-                            overlay,
-                            width,
-                            height,
-                            root_scale,
-                        )?;
-                    }
+                if result.is_ok()
+                    && let Some(overlay) = overlay
+                {
+                    Self::render_overlay_packet(
+                        &mut backend,
+                        surface_view,
+                        overlay,
+                        width,
+                        height,
+                        root_scale,
+                    )?;
                 }
                 let after_direct_render = Instant::now();
                 if let Some(total_ms) =
@@ -11451,16 +11457,16 @@ impl GpuRenderer {
                                     },
                                 );
                                 for (_, item) in &ordered_items[start..end] {
-                                    if let SegmentDrawItem::Retained(index) = item {
-                                        if let Some(retained) = retained_draws.get(*index) {
-                                            self.draw_retained_batch(
-                                                &mut render_pass,
-                                                retained,
-                                                *index,
-                                                width,
-                                                height,
-                                            );
-                                        }
+                                    if let SegmentDrawItem::Retained(index) = item
+                                        && let Some(retained) = retained_draws.get(*index)
+                                    {
+                                        self.draw_retained_batch(
+                                            &mut render_pass,
+                                            retained,
+                                            *index,
+                                            width,
+                                            height,
+                                        );
                                     }
                                 }
                             }
@@ -11899,8 +11905,9 @@ impl GpuRenderer {
         let bounds_h = device_bounds.height;
         let pixel_radius = shadow.blur_radius * root_scale;
 
-        if shadow.texts.is_empty() && !shadow.shapes.is_empty() {
-            if let Some(plan) = shape_shadow_surface_plan(
+        if shadow.texts.is_empty()
+            && !shadow.shapes.is_empty()
+            && let Some(plan) = shape_shadow_surface_plan(
                 &shadow.shapes,
                 shadow.clip,
                 shadow.blur_radius,
@@ -11908,21 +11915,20 @@ impl GpuRenderer {
                 height,
                 root_scale,
                 self.max_texture_dim(),
-            ) {
-                if self.encode_shape_only_blurred_shadow_draw(
-                    frame_encoder,
-                    target_view,
-                    shadow,
-                    plan.source_device_bounds,
-                    plan.pixel_radius,
-                    plan.processing_scissor,
-                    width,
-                    height,
-                    root_scale,
-                ) {
-                    return;
-                }
-            }
+            )
+            && self.encode_shape_only_blurred_shadow_draw(
+                frame_encoder,
+                target_view,
+                shadow,
+                plan.source_device_bounds,
+                plan.pixel_radius,
+                plan.processing_scissor,
+                width,
+                height,
+                root_scale,
+            )
+        {
+            return;
         }
 
         if !shadow.texts.is_empty() {
@@ -15052,17 +15058,17 @@ impl GpuRenderer {
                         &mut generated_quads,
                     ) {
                         Ok(quads) => {
-                            if let Some(collect_ms) = miss_collect_ms {
-                                if text_glyph_run_diag_enabled() {
-                                    log::warn!(
-                                        "[text-glyph-run-diag] visible=false glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
-                                        quads.len(),
-                                        miss_cached_glyphs,
-                                        miss_new_glyphs,
-                                        collect_ms,
-                                        instant_ms(prepare_start, Instant::now()),
-                                    );
-                                }
+                            if let Some(collect_ms) = miss_collect_ms
+                                && text_glyph_run_diag_enabled()
+                            {
+                                log::warn!(
+                                    "[text-glyph-run-diag] visible=false glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
+                                    quads.len(),
+                                    miss_cached_glyphs,
+                                    miss_new_glyphs,
+                                    collect_ms,
+                                    instant_ms(prepare_start, Instant::now()),
+                                );
                             }
                             quads
                         }
@@ -15094,22 +15100,21 @@ impl GpuRenderer {
             };
 
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(quad_run) = cached_quad_run.as_ref() {
-                if should_use_retained_text_glyph_run(quad_run.len(), source_draw.clip)
-                    && self.emit_retained_text_glyph_run_if_ready(
-                        run_key,
-                        quad_run.as_ref(),
-                        source_draw.clip,
-                        viewport,
-                        source_raster_rect,
-                        scissor,
-                        staged_uploads,
-                        glyph_cmds,
-                    )
-                {
-                    emitted_glyphs = emitted_glyphs.saturating_add(quad_run.len());
-                    continue;
-                }
+            if let Some(quad_run) = cached_quad_run.as_ref()
+                && should_use_retained_text_glyph_run(quad_run.len(), source_draw.clip)
+                && self.emit_retained_text_glyph_run_if_ready(
+                    run_key,
+                    quad_run.as_ref(),
+                    source_draw.clip,
+                    viewport,
+                    source_raster_rect,
+                    scissor,
+                    staged_uploads,
+                    glyph_cmds,
+                )
+            {
+                emitted_glyphs = emitted_glyphs.saturating_add(quad_run.len());
+                continue;
             }
 
             let index_start = image_indices.len() as u32;
@@ -15142,17 +15147,17 @@ impl GpuRenderer {
                     self.scratch_text_glyph_quads = generated_quads;
                     return Ok(false);
                 };
-                if let Some(collect_ms) = miss_collect_ms {
-                    if text_glyph_run_diag_enabled() {
-                        log::warn!(
-                            "[text-glyph-run-diag] visible=true glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
-                            quad_run.len(),
-                            miss_cached_glyphs,
-                            miss_new_glyphs,
-                            collect_ms,
-                            instant_ms(prepare_start, Instant::now()),
-                        );
-                    }
+                if let Some(collect_ms) = miss_collect_ms
+                    && text_glyph_run_diag_enabled()
+                {
+                    log::warn!(
+                        "[text-glyph-run-diag] visible=true glyphs={} cached={} new={} collect_ms={:.2} prepare_ms={:.2}",
+                        quad_run.len(),
+                        miss_cached_glyphs,
+                        miss_new_glyphs,
+                        collect_ms,
+                        instant_ms(prepare_start, Instant::now()),
+                    );
                 }
                 emitted_glyphs = emitted_glyphs.saturating_add(self.append_text_glyph_quad_run(
                     source_raster_rect,
@@ -15339,12 +15344,12 @@ impl GpuRenderer {
                 "[text-glyph-prewarm-diag] texts={text_items} candidates={candidates} admitted={admitted_candidates} cached={already_prepared} skipped_unbounded={skipped_unbounded} skipped_budget={skipped_budget} visible={visible} outside={outside} dynamic={dynamic_motion} missing={missing_geometry}"
             );
         }
-        if admitted_candidates > 0 {
-            if let Some(total_ms) = should_log_wgpu_render_stage(prewarm_start, Instant::now()) {
-                log::warn!(
-                    "[wgpu-render-stage:text-glyph-prewarm] total_ms={total_ms:.2} candidates={candidates} admitted={admitted_candidates} cached={already_prepared} skipped_unbounded={skipped_unbounded} skipped_budget={skipped_budget}"
-                );
-            }
+        if admitted_candidates > 0
+            && let Some(total_ms) = should_log_wgpu_render_stage(prewarm_start, Instant::now())
+        {
+            log::warn!(
+                "[wgpu-render-stage:text-glyph-prewarm] total_ms={total_ms:.2} candidates={candidates} admitted={admitted_candidates} cached={already_prepared} skipped_unbounded={skipped_unbounded} skipped_budget={skipped_budget}"
+            );
         }
         Ok(())
     }
@@ -17214,19 +17219,19 @@ mod shape_batch_limits_tests {
 
 #[cfg(test)]
 mod tests {
-    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
+    use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
     use cranpose_render_common::{
         graph::{DrawPrimitiveNode, IsolationReasons, TextPrimitiveNode},
         raster_cache::LayerRasterCacheHashes,
         scene_builder::build_graph_from_applier,
     };
     use cranpose_ui::{
+        LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text, TextLayoutOptions,
+        TextStyle,
         text::{
             AnnotatedString, BaselineShift, RangeStyle, Shadow, SpanStyle, TextDecoration,
             TextDrawStyle, TextGeometricTransform, TextMotion, TextUnit,
         },
-        LayoutEngine, LazyColumn, LazyColumnSpec, Modifier, Size, Text, TextLayoutOptions,
-        TextStyle,
     };
     use cranpose_ui_graphics::{
         Brush, Color, CornerRadii, DrawPrimitive, Rect, RenderEffect, RoundedCornerShape,
@@ -20664,12 +20669,16 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
-        assert!(!requirements
-            .surface_requirements
-            .has_isolating_requirement());
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .has_isolating_requirement()
+        );
     }
 
     #[test]
@@ -20851,7 +20860,7 @@ mod tests {
         use cranpose_render_common::{
             graph::DrawPrimitiveNode,
             layer_composition::local_content_layer_for,
-            primitive_emit::{resolve_primitive_clip, PrimitiveClipSpace},
+            primitive_emit::{PrimitiveClipSpace, resolve_primitive_clip},
         };
         use cranpose_ui_graphics::{CornerRadii, Stroke};
 
@@ -21069,9 +21078,11 @@ mod tests {
         );
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::TextMaterialMask));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::TextMaterialMask)
+        );
         assert_eq!(
             composite_sample_mode_for_requirements(false, false, requirements),
             CompositeSampleMode::Linear
@@ -21093,9 +21104,11 @@ mod tests {
         );
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::TextMaterialMask));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::TextMaterialMask)
+        );
         assert_eq!(
             composite_sample_mode_for_requirements(true, false, requirements),
             CompositeSampleMode::Box4
@@ -21792,12 +21805,16 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert_eq!(requirements.direct_translation, Some(Point::default()));
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MixedDirectContent));
-        assert!(!requirements
-            .surface_requirements
-            .has_isolating_requirement());
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MixedDirectContent)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .has_isolating_requirement()
+        );
     }
 
     #[test]
@@ -22060,12 +22077,16 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MixedDirectContent));
-        assert!(!requirements
-            .surface_requirements
-            .has_isolating_requirement());
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MixedDirectContent)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .has_isolating_requirement()
+        );
     }
 
     #[test]
@@ -23506,10 +23527,11 @@ mod tests {
         for pair in diag.slack_top.windows(2) {
             assert!(pair[0].drawn_px2 - pair[0].lit_px2 >= pair[1].drawn_px2 - pair[1].lit_px2);
         }
-        assert!(diag
-            .slack_top
-            .iter()
-            .all(|entry| entry.drawn_px2 - entry.lit_px2 > 2000.0 - 100.0));
+        assert!(
+            diag.slack_top
+                .iter()
+                .all(|entry| entry.drawn_px2 - entry.lit_px2 > 2000.0 - 100.0)
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -23641,9 +23663,11 @@ mod tests {
             storage.data_binding_type(),
             wgpu::BufferBindingType::Storage { read_only: true }
         );
-        assert!(storage
-            .data_buffer_usage()
-            .contains(wgpu::BufferUsages::STORAGE));
+        assert!(
+            storage
+                .data_buffer_usage()
+                .contains(wgpu::BufferUsages::STORAGE)
+        );
 
         // Uniform mode keeps its start-at-the-cap invariant: a uniform
         // binding smaller than the shader's fixed array fails validation.
@@ -23660,9 +23684,11 @@ mod tests {
             uniform.data_binding_type(),
             wgpu::BufferBindingType::Uniform
         );
-        assert!(uniform
-            .data_buffer_usage()
-            .contains(wgpu::BufferUsages::UNIFORM));
+        assert!(
+            uniform
+                .data_buffer_usage()
+                .contains(wgpu::BufferUsages::UNIFORM)
+        );
     }
 
     #[test]
@@ -23818,13 +23844,13 @@ mod tests {
     fn solid_trim_flag_reads_the_documented_variable() {
         // The parity suite's trimmed arms set exactly this variable; a name
         // drift here would leave them silently comparing full against full.
-        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
         assert!(!solid_trim_varyings_enabled(), "the trim must default OFF");
-        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "1");
+        crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", Some("1"));
         assert!(solid_trim_varyings_enabled());
-        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "0");
+        crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", Some("0"));
         assert!(!solid_trim_varyings_enabled());
-        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        crate::debug_toggles::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
     }
 
     #[test]

@@ -16,9 +16,9 @@ pub use modifier::*;
 #[allow(unused_imports)]
 pub use modifier_helpers::*;
 pub use nodes::input::{
-    rotary_scroll_pixels_from_detents, Modifiers, PointerButton, PointerButtons, PointerEvent,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, Modifiers, PointerButton, PointerButtons, PointerEvent,
     PointerEventKind, PointerId, PointerPhase, PointerSource, RotaryScrollEvent,
-    RotaryStepAccumulator, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+    RotaryStepAccumulator, rotary_scroll_pixels_from_detents,
 };
 pub use velocity_tracker::VelocityTracker1D;
 

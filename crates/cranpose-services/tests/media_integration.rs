@@ -12,13 +12,13 @@ use std::{
 };
 
 use cranpose_services::{
-    audio_focus, clear_platform_media_player, current_media_item, media_capabilities, media_volume,
-    observe_audio_focus, observe_media_commands, observe_playback_progress, observe_playback_state,
-    open_media, pause_media, play_media, playback_progress, playback_state, publish_audio_focus,
+    AudioFocus, DUCKED_GAIN, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata,
+    MediaPlayer, PlaybackProgress, PlaybackState, audio_focus, clear_platform_media_player,
+    current_media_item, media_capabilities, media_volume, observe_audio_focus,
+    observe_media_commands, observe_playback_progress, observe_playback_state, open_media,
+    pause_media, play_media, playback_progress, playback_state, publish_audio_focus,
     publish_media_command, publish_playback_progress, publish_playback_state,
     set_media_analysis_enabled, set_media_volume, set_platform_media_player, stop_media,
-    AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaPlayer,
-    PlaybackProgress, PlaybackState, DUCKED_GAIN,
 };
 
 /// One media session exists per process, so these tests take turns with it.

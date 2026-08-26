@@ -18,7 +18,7 @@
 //! `Density` converts to and from device pixels and does the rounding on
 //! the pixel side, which is the only side where rounding means anything.
 
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 
 use crate::{
     font_scale::FontScaleCurve,
@@ -237,7 +237,7 @@ mod tests {
     fn a_provided_density_reaches_the_content_and_ends_with_it() {
         use std::{cell::Cell, rc::Rc};
 
-        use cranpose_core::{location_key, Composition, MemoryApplier};
+        use cranpose_core::{Composition, MemoryApplier, location_key};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let outer = Rc::new(Cell::new(0.0_f32));

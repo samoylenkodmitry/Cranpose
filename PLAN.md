@@ -91,9 +91,8 @@ typed IR:
   edition-2024 `let` chain — is covered by a synthetic irrefutable
   chain-`let` binding a fold guard, injected before the chain's first
   `let`; the binding lives through the remaining scrutinees and the arm,
-  and the place syntax is untouched (pinned in
-  `crates/cranpose-e2024-tests`, which exists because the rest of the
-  workspace is edition 2021 and cannot parse chains). A closure
+  and the place syntax is untouched (pinned as
+  `a_short_circuited_place_deref_does_not_leak_into_a_later_deref`). A closure
   consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`)
   still folds into the surrounding context, bounded by source stamps.
 - **A reuse-retained scope inside a keyed wrapper recomposes fresh when the

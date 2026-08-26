@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use cranpose_services::{media::uri_for_path, publish_incoming_content, IncomingContent};
+use cranpose_services::{IncomingContent, media::uri_for_path, publish_incoming_content};
 
 /// Publishes one file as incoming content.
 ///

@@ -6,22 +6,22 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_macros::composable;
 use cranpose_ui::{
+    Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, SemanticsWidgetRole, Size,
     text::{FontWeight, SpanStyle, TextStyle},
     widgets::{
         Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Column, ColumnSpec, Row,
         RowSpec, Text,
     },
-    Brush, Color, CornerRadii, Modifier, PointerInputScope, Rect, SemanticsWidgetRole, Size,
 };
 use cranpose_ui_layout::{Alignment, HorizontalAlignment, VerticalAlignment};
 
 use crate::{
     material::{
-        neutral_surface_lift, neutral_surface_tint, Glass, GlassDynamics, GlassMorph, GlassShadow,
-        LiquidModifierExt,
+        Glass, GlassDynamics, GlassMorph, GlassShadow, LiquidModifierExt, neutral_surface_lift,
+        neutral_surface_tint,
     },
     motion::LiquidMotion,
-    theme::{liquid_colors, liquid_typography, LiquidTypography},
+    theme::{LiquidTypography, liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };
 
@@ -424,11 +424,7 @@ fn tab_lens_node_top(node_height: f32) -> f32 {
 }
 
 fn tab_bar_accessory_gap(has_accessory: bool) -> f32 {
-    if has_accessory {
-        ACCESSORY_GAP
-    } else {
-        0.0
-    }
+    if has_accessory { ACCESSORY_GAP } else { 0.0 }
 }
 
 fn accessory_surfaces_touch(edge_gap: f32) -> bool {
@@ -1140,9 +1136,11 @@ mod tests {
         // A clear glass so the covered icon shows through, recolored and
         // fringed (light-mode reference recording): a milkier tint washed
         // the content to white.
-        assert!(glass
-            .tint
-            .is_some_and(|tint| { tint.r() < 0.05 && (0.055..=0.065).contains(&tint.a()) }));
+        assert!(
+            glass
+                .tint
+                .is_some_and(|tint| { tint.r() < 0.05 && (0.055..=0.065).contains(&tint.a()) })
+        );
         assert_eq!(glass.adaptive_frost, 0.0);
     }
 

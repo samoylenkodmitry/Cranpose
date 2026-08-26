@@ -1,6 +1,7 @@
 //! Common rendering contracts shared between renderer backends.
 
 pub mod bounded_lru_cache;
+pub mod debug_toggles;
 pub mod dev_overlay;
 
 /// The frame background every renderer clears to (linear values; sRGB

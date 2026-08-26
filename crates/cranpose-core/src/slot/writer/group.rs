@@ -269,10 +269,10 @@ impl SlotWriteSession<'_> {
 
         self.state.consume_group_key(key);
 
-        if let Some(restored) = restored {
-            if let Some(started) = self.restore_started_group(key, restored) {
-                return started;
-            }
+        if let Some(restored) = restored
+            && let Some(started) = self.restore_started_group(key, restored)
+        {
+            return started;
         }
 
         let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));

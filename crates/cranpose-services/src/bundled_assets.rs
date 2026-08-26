@@ -218,7 +218,7 @@ impl<R: std::io::Read + Send> BundledAssetReader for StreamingAssetReader<R> {
                     return Err(BundledAssetError::ReadFailed {
                         path: self.path.clone(),
                         message: error.to_string(),
-                    })
+                    });
                 }
             }
         }

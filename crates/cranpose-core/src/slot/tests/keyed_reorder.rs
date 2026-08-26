@@ -891,10 +891,10 @@ fn unkeyed_siblings_follow_positional_identity() {
     harness.finish_pass();
 
     assert_eq!(
-            *harness.table.read_value::<i32>(remaining_slot),
-            101,
-            "unkeyed duplicate siblings must follow positional identity, not the removed sibling's previous state",
-        );
+        *harness.table.read_value::<i32>(remaining_slot),
+        101,
+        "unkeyed duplicate siblings must follow positional identity, not the removed sibling's previous state",
+    );
 }
 
 #[test]

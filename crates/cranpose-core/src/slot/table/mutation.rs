@@ -1,7 +1,7 @@
 use super::{
     super::{
-        checked_u32_delta, checked_usize_to_u32, try_checked_u32_delta, ActiveSubtreeRoot,
-        CheckedU32Delta, ChildCursor, GroupKey, GroupRecord,
+        ActiveSubtreeRoot, CheckedU32Delta, ChildCursor, GroupKey, GroupRecord, checked_u32_delta,
+        checked_usize_to_u32, try_checked_u32_delta,
     },
     SlotTable,
 };

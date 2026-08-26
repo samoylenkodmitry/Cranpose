@@ -6,15 +6,14 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{mutableStateOf, remember, rememberMutableStateOf, MutableState, SideEffect};
+use cranpose_core::{MutableState, SideEffect, mutableStateOf, remember, rememberMutableStateOf};
 use cranpose_foundation::PointerId;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    rememberMutableInteractionSource,
+    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsWidgetRole,
+    Size, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle, TextUnit},
     widgets::{Box, BoxSpec, Column, ColumnSpec, PopupDismissableWhen, Row, RowSpec, Text},
-    Modifier, PointerEventKind, PointerInputScope, PressInteractionPress, SemanticsWidgetRole,
-    Size,
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer, Point, Rect, RenderEffect};
 use cranpose_ui_layout::VerticalAlignment;

@@ -3,8 +3,8 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, AtomicU8, Ordering},
         Arc, Mutex, OnceLock,
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
 };
 

@@ -11,8 +11,8 @@ use std::{collections::VecDeque, fmt, rc::Rc};
 use smallvec::SmallVec;
 
 use crate::{
-    collections::map::{HashMap, HashSet},
     CallbackHolder, NodeId, RecomposeScope, SlotTable, SlotsHost,
+    collections::map::{HashMap, HashSet},
 };
 
 pub type DebugSlotGroup = (usize, crate::Key, Option<usize>, usize);
@@ -704,12 +704,12 @@ impl SubcomposeState {
 
         let content_type = self.slot_content_types.get(&slot_id).copied();
 
-        if let Some(ct) = content_type {
-            if let Some((old_slot, node_id)) = self.take_compatible_typed_reusable(ct, slot_id) {
-                self.decrement_reusable_slot(old_slot);
-                self.move_node_to_slot(node_id, old_slot, slot_id);
-                return Some(node_id);
-            }
+        if let Some(ct) = content_type
+            && let Some((old_slot, node_id)) = self.take_compatible_typed_reusable(ct, slot_id)
+        {
+            self.decrement_reusable_slot(old_slot);
+            self.move_node_to_slot(node_id, old_slot, slot_id);
+            return Some(node_id);
         }
 
         let exact_reactivation_slots = &self.exact_reactivation_slots;
@@ -722,12 +722,12 @@ impl SubcomposeState {
                     && policy.are_compatible(*existing_slot, slot_id)
             });
 
-        if let Some(index) = position {
-            if let Some((old_slot, node_id)) = self.reusable_nodes_untyped.remove(index) {
-                self.decrement_reusable_slot(old_slot);
-                self.move_node_to_slot(node_id, old_slot, slot_id);
-                return Some(node_id);
-            }
+        if let Some(index) = position
+            && let Some((old_slot, node_id)) = self.reusable_nodes_untyped.remove(index)
+        {
+            self.decrement_reusable_slot(old_slot);
+            self.move_node_to_slot(node_id, old_slot, slot_id);
+            return Some(node_id);
         }
 
         None
@@ -788,11 +788,10 @@ impl SubcomposeState {
             .reusable_nodes_untyped
             .iter()
             .position(|(_, n)| *n == node_id)
+            && let Some((slot, _)) = self.reusable_nodes_untyped.remove(position)
         {
-            if let Some((slot, _)) = self.reusable_nodes_untyped.remove(position) {
-                self.decrement_reusable_slot(slot);
-                return Some(slot);
-            }
+            self.decrement_reusable_slot(slot);
+            return Some(slot);
         }
         None
     }

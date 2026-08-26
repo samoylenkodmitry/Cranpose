@@ -51,9 +51,9 @@ pub mod ring;
 
 use std::sync::{Arc, OnceLock};
 
-use cranpose_services::{set_platform_audio, AudioPlayerRef};
+use cranpose_services::{AudioPlayerRef, set_platform_audio};
 pub use engine::AudioEngine;
-pub use mixer::{RenderStatus, IDLE_GRACE_SECONDS, MAX_CLIPS, MAX_VOICES};
+pub use mixer::{IDLE_GRACE_SECONDS, MAX_CLIPS, MAX_VOICES, RenderStatus};
 
 static INSTALLED_ENGINE: OnceLock<Arc<AudioEngine>> = OnceLock::new();
 

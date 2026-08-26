@@ -6,7 +6,7 @@ use cranpose_ui::Point;
 use cranpose_ui_graphics::{Rect, RoundedCornerShape};
 
 use crate::{
-    graph::{quad_bounds, LayerNode, ProjectiveTransform, RenderNode},
+    graph::{LayerNode, ProjectiveTransform, RenderNode, quad_bounds},
     graph_scene::{HitClip, HitGeometry},
     primitive_emit::resolve_clip,
 };

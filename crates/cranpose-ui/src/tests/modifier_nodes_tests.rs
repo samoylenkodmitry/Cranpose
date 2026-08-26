@@ -5,14 +5,14 @@ use std::{
 };
 
 use cranpose_foundation::{
-    modifier_element, BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton,
-    PointerButtons, PointerEvent, PointerEventKind,
+    BasicModifierNodeContext, ModifierNodeChain, NodeCapabilities, PointerButton, PointerButtons,
+    PointerEvent, PointerEventKind, modifier_element,
 };
 use cranpose_ui_layout::Placeable;
 
 use super::*;
 use crate::modifier::{
-    collect_modifier_slices, collect_slices_from_modifier, Modifier, PointerInputScope,
+    Modifier, PointerInputScope, collect_modifier_slices, collect_slices_from_modifier,
 };
 
 #[test]

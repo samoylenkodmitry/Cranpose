@@ -8,15 +8,15 @@ use std::{
     sync::Arc,
 };
 
-use cranpose_app_shell::{default_root_key, AppShell, PlatformFrameDriver, PointerSource};
+use cranpose_app_shell::{AppShell, PlatformFrameDriver, PointerSource, default_root_key};
 use cranpose_platform_web::WebPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::{JsCast, prelude::*};
 use web_sys::{HtmlCanvasElement, PointerEvent, WheelEvent};
 
 use crate::{
     app_launcher::AppSettings,
-    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
 };
 
 /// The `requestAnimationFrame` callback, rebuilt once at startup and swapped
@@ -641,11 +641,7 @@ pub async fn run(
             // Filter out long key names like "Shift", "Control", etc.
             let text = {
                 let key = event.key();
-                if key.len() == 1 {
-                    key
-                } else {
-                    String::new()
-                }
+                if key.len() == 1 { key } else { String::new() }
             };
 
             let key_event = KeyEvent {

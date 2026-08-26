@@ -47,13 +47,13 @@ mod transparent;
 #[cfg(test)]
 mod integration_tests;
 
-pub use global::{advance_global_snapshot, GlobalSnapshot};
+pub use global::{GlobalSnapshot, advance_global_snapshot};
 pub use mutable::MutableSnapshot;
 pub use nested::{NestedMutableSnapshot, NestedReadonlySnapshot};
 pub use readonly::ReadonlySnapshot;
-pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
 #[cfg(test)]
-pub(crate) use runtime::{reset_runtime_for_tests, TestRuntimeGuard};
+pub(crate) use runtime::{TestRuntimeGuard, reset_runtime_for_tests};
+pub(crate) use runtime::{allocate_snapshot, close_snapshot, with_runtime};
 pub use transparent::{TransparentObserverMutableSnapshot, TransparentObserverSnapshot};
 
 /// Observer that is called when a state object is read.

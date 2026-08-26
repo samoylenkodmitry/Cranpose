@@ -1,6 +1,6 @@
-use cranpose_core::{location_key, MemoryApplier};
-use cranpose_ui::{composable, Composition, Modifier, Text, TextStyle};
-use criterion::{criterion_group, criterion_main, Criterion};
+use cranpose_core::{MemoryApplier, location_key};
+use cranpose_ui::{Composition, Modifier, Text, TextStyle, composable};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 #[composable]
 fn static_label(label: &'static str) {

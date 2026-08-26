@@ -1,9 +1,9 @@
 use std::any::TypeId;
 
 use crate::{
-    debug_scope_label, slot::NodeSlotUpdate, Applier, ChildList, Command, CommandQueue, Composer,
-    DirtyBubble, EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState,
-    ParentAttachMode, ParentFrame,
+    Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
+    Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
+    slot::NodeSlotUpdate,
 };
 
 impl Composer {
@@ -86,58 +86,60 @@ impl Composer {
         };
 
         // If we have a matching node with correct generation, advance cursor and reuse it
-        if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation) {
-            if type_matches && gen_matches && source_matches {
-                let scope_debug = self
-                    .current_recompose_scope()
-                    .map(|scope| (scope.id(), debug_scope_label(scope.id())))
-                    .unwrap_or((0, None));
-                log::trace!(
-                    target: "cranpose::compose::emit",
-                    "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
-                    std::any::type_name::<N>(),
-                    scope_debug.0,
-                    scope_debug.1,
-                );
-                self.commands_mut().push(Command::update_node::<N>(id));
-                self.attach_to_parent(id);
-                let parent_id = self.recorded_node_parent(id);
-                let recorded = self.with_slot_session_mut(|slots| {
-                    slots.record_node_with_parent(id, slot_gen, parent_id, source)
-                });
-                match recorded {
-                    NodeSlotUpdate::Reused {
-                        id: recorded_id,
-                        generation,
-                    } => {
-                        debug_assert_eq!(recorded_id, id);
-                        debug_assert_eq!(generation, slot_gen);
-                    }
-                    NodeSlotUpdate::Inserted { .. } => {
-                        log::warn!(
-                            target: "cranpose::compose::emit",
-                            "slot writer inserted node #{id} while reusing the same node identity",
-                        );
-                    }
-                    NodeSlotUpdate::Replaced {
-                        old_id,
-                        old_generation,
-                        ..
-                    } => {
-                        log::warn!(
-                            target: "cranpose::compose::emit",
-                            "slot writer replaced node #{old_id} while reusing node #{id}",
-                        );
-                        self.queue_replaced_slot_node_removal(old_id, old_generation);
-                    }
+        if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation)
+            && type_matches
+            && gen_matches
+            && source_matches
+        {
+            let scope_debug = self
+                .current_recompose_scope()
+                .map(|scope| (scope.id(), debug_scope_label(scope.id())))
+                .unwrap_or((0, None));
+            log::trace!(
+                target: "cranpose::compose::emit",
+                "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
+                std::any::type_name::<N>(),
+                scope_debug.0,
+                scope_debug.1,
+            );
+            self.commands_mut().push(Command::update_node::<N>(id));
+            self.attach_to_parent(id);
+            let parent_id = self.recorded_node_parent(id);
+            let recorded = self.with_slot_session_mut(|slots| {
+                slots.record_node_with_parent(id, slot_gen, parent_id, source)
+            });
+            match recorded {
+                NodeSlotUpdate::Reused {
+                    id: recorded_id,
+                    generation,
+                } => {
+                    debug_assert_eq!(recorded_id, id);
+                    debug_assert_eq!(generation, slot_gen);
                 }
-                self.core.last_node_reused.set(Some(true));
-                return id;
+                NodeSlotUpdate::Inserted { .. } => {
+                    log::warn!(
+                        target: "cranpose::compose::emit",
+                        "slot writer inserted node #{id} while reusing the same node identity",
+                    );
+                }
+                NodeSlotUpdate::Replaced {
+                    old_id,
+                    old_generation,
+                    ..
+                } => {
+                    log::warn!(
+                        target: "cranpose::compose::emit",
+                        "slot writer replaced node #{old_id} while reusing node #{id}",
+                    );
+                    self.queue_replaced_slot_node_removal(old_id, old_generation);
+                }
             }
+            self.core.last_node_reused.set(Some(true));
+            return id;
         }
 
         // Type mismatch, stale generation, or no node: create new node
-        let (id, gen) = {
+        let (id, generation) = {
             let mut applier = self.borrow_applier();
             let emitted = make_node(&mut *applier);
             let id = match emitted {
@@ -155,8 +157,8 @@ impl Composer {
                     insertion.id
                 }
             };
-            let gen = applier.node_generation(id);
-            (id, gen)
+            let generation = applier.node_generation(id);
+            (id, generation)
         };
         let scope_debug = self
             .current_recompose_scope()
@@ -166,7 +168,7 @@ impl Composer {
             target: "cranpose::compose::emit",
             "creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
             id,
-            gen,
+            generation,
             std::any::type_name::<N>(),
             scope_debug.0,
             scope_debug.1,
@@ -175,15 +177,15 @@ impl Composer {
         self.attach_to_parent(id);
         let parent_id = self.recorded_node_parent(id);
         let recorded = self.with_slot_session_mut(|slots| {
-            slots.record_node_with_parent(id, gen, parent_id, source)
+            slots.record_node_with_parent(id, generation, parent_id, source)
         });
         match recorded {
             NodeSlotUpdate::Inserted {
                 id: recorded_id,
-                generation,
+                generation: recorded_generation,
             } => {
                 debug_assert_eq!(recorded_id, id);
-                debug_assert_eq!(generation, gen);
+                debug_assert_eq!(recorded_generation, generation);
             }
             NodeSlotUpdate::Replaced {
                 old_id,
@@ -192,7 +194,7 @@ impl Composer {
                 new_generation,
             } => {
                 debug_assert_eq!(new_id, id);
-                debug_assert_eq!(new_generation, gen);
+                debug_assert_eq!(new_generation, generation);
                 self.queue_replaced_slot_node_removal(old_id, old_generation);
             }
             NodeSlotUpdate::Reused { .. } => {

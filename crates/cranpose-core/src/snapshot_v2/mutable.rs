@@ -5,7 +5,7 @@ use std::{rc::Rc, sync::Arc};
 use super::*;
 use crate::{
     collections::map::HashMap,
-    state::{StateRecord, PREEXISTING_SNAPSHOT_ID},
+    state::{PREEXISTING_SNAPSHOT_ID, StateRecord},
 };
 
 pub(super) fn find_record_by_id(

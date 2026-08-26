@@ -25,23 +25,23 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
 use block2::RcBlock;
 use cranpose_services::{
-    publish_audio_focus, publish_media_command, publish_playback_progress, publish_playback_state,
-    set_platform_media_player, AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem,
-    MediaMetadata, MediaPlayer, PlaybackProgress, PlaybackState,
+    AudioFocus, MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaPlayer,
+    PlaybackProgress, PlaybackState, publish_audio_focus, publish_media_command,
+    publish_playback_progress, publish_playback_state, set_platform_media_player,
 };
 use objc2::{
-    define_class, msg_send,
+    AllocAnyThread, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, ProtocolObject},
-    sel, AllocAnyThread,
+    sel,
 };
 use objc2_avf_audio::{
     AVAudioPlayer, AVAudioPlayerDelegate, AVAudioSession, AVAudioSessionCategoryPlayback,
@@ -358,18 +358,20 @@ fn start_progress_thread() {
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let spawned = std::thread::Builder::new()
         .name("cranpose-media-progress".to_string())
-        .spawn(move || loop {
-            std::thread::sleep(PROGRESS_INTERVAL);
-            if GENERATION.load(Ordering::Acquire) != generation {
-                return;
+        .spawn(move || {
+            loop {
+                std::thread::sleep(PROGRESS_INTERVAL);
+                if GENERATION.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                // Read and release before publishing: an observer reacting to the
+                // position calls straight back into the transport, and would meet
+                // this lock on the way in.
+                let Some((position, duration)) = observe_position() else {
+                    return;
+                };
+                publish_playback_progress(progress_at(position, duration));
             }
-            // Read and release before publishing: an observer reacting to the
-            // position calls straight back into the transport, and would meet
-            // this lock on the way in.
-            let Some((position, duration)) = observe_position() else {
-                return;
-            };
-            publish_playback_progress(progress_at(position, duration));
         });
     if let Err(error) = spawned {
         log::warn!("cranpose: no iOS media progress thread: {error}");

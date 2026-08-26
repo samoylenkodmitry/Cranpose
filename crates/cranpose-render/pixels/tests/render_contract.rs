@@ -1,7 +1,7 @@
 use cranpose_render_common::render_contract::{
-    RenderedFrame, SharedRenderCase, ALL_SHARED_RENDER_CASES,
+    ALL_SHARED_RENDER_CASES, RenderedFrame, SharedRenderCase,
 };
-use cranpose_render_pixels::{draw_scene, Scene};
+use cranpose_render_pixels::{Scene, draw_scene};
 
 #[test]
 fn pixels_warning_state_is_scene_owned() {

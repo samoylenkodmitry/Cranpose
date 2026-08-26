@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_ui_graphics::{BlurredEdgeTreatment, Dp, GraphicsLayer, LayerShape, RenderEffect};
 
-use super::{inspector_metadata, Modifier};
+use super::{Modifier, inspector_metadata};
 use crate::modifier_nodes::LazyGraphicsLayerElement;
 
 impl Modifier {

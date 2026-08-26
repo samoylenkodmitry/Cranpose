@@ -65,13 +65,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer,
@@ -260,45 +260,43 @@ fn render_sequence(renderer: &mut support::LockedRenderer, graphs: &[RenderGraph
 }
 
 fn clear_env() {
-    std::env::remove_var("CRANPOSE_ARC_MESH");
-    std::env::remove_var("CRANPOSE_RETAINED_MESH_PX2");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
-    std::env::remove_var("CRANPOSE_STATIC_SPAN");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_MESH_PX2", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", None);
 }
 
 #[test]
 fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
     // Latched at construction — must be set before the renderer exists.
-    std::env::set_var("CRANPOSE_INSTANCED_QUADS", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
-            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
             eprintln!("skipping sized retained mesh parity: headless WGPU init failed: {err}");
             return;
         }
     };
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
-    std::env::set_var("CRANPOSE_STATIC_SPAN", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", Some("0"));
 
     let graphs_quad = build_sequence(7);
     let graphs_mesh = build_sequence(8);
     let graphs_gated = build_sequence(9);
 
     // Warm passes: each arm captures its own slots under its own regime.
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let _capture_quad = render_sequence(&mut renderer, &graphs_quad);
-    std::env::set_var("CRANPOSE_ARC_MESH", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let _capture_mesh = render_sequence(&mut renderer, &graphs_mesh);
 
     // Same-position control passes (the discipline `command_feed_parity`
     // documents: never compare a pre-retention pass against a later one).
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let quad_frames = render_sequence(&mut renderer, &graphs_quad);
-    std::env::set_var("CRANPOSE_ARC_MESH", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let mesh_frames = render_sequence(&mut renderer, &graphs_mesh);
 
     // (b) + (c): the gate's exact engagement. Only the mesh arm's slots
@@ -331,10 +329,10 @@ fn size_gated_retained_mesh_holds_identity_parity_and_gates_per_threshold() {
     // the threshold, the capture meshes nothing, and a slot that meshed
     // nothing keeps no mesh buffers — so neither the slot count nor the
     // engagement counters move.
-    std::env::set_var("CRANPOSE_RETAINED_MESH_PX2", "262144");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_MESH_PX2", Some("262144"));
     let _capture_gated = render_sequence(&mut renderer, &graphs_gated);
     let _gated_frames = render_sequence(&mut renderer, &graphs_gated);
-    std::env::remove_var("CRANPOSE_RETAINED_MESH_PX2");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_MESH_PX2", None);
     let (mesh_slots_after, total_slots_after) = renderer.replay_slot_mesh_stats();
     assert_eq!(
         mesh_slots_after, mesh_slots,

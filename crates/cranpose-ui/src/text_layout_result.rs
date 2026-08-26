@@ -142,11 +142,7 @@ impl TextLayoutResult {
                 } else {
                     let before = self.glyph_x_positions[i - 1];
                     let after = self.glyph_x_positions[i];
-                    if (x - before) < (after - x) {
-                        i - 1
-                    } else {
-                        i
-                    }
+                    if (x - before) < (after - x) { i - 1 } else { i }
                 }
             }
         };

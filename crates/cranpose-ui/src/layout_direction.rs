@@ -5,7 +5,7 @@
 //! direction — a code block, a phone number, a language picker — without
 //! reversing the rest of the interface with it.
 
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 
 /// Which side of the interface is the start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -85,7 +85,7 @@ mod tests {
     fn a_provided_direction_reaches_the_content_and_ends_with_it() {
         use std::{cell::Cell, rc::Rc};
 
-        use cranpose_core::{location_key, Composition, MemoryApplier};
+        use cranpose_core::{Composition, MemoryApplier, location_key};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let outer = Rc::new(Cell::new(LayoutDirection::Rtl));
@@ -126,7 +126,7 @@ mod tests {
     fn the_composition_local_is_one_instance_per_thread() {
         use std::{cell::Cell, rc::Rc};
 
-        use cranpose_core::{location_key, Composition, MemoryApplier};
+        use cranpose_core::{Composition, MemoryApplier, location_key};
 
         // Two calls that returned different locals would each carry their own
         // value, and a provision made through one would be invisible to the

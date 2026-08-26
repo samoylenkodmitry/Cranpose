@@ -245,9 +245,11 @@ fn recycling_skipped_slot_restores_cursor_exact_activation() {
     state.begin_pass();
 
     assert_eq!(state.activate_current_active_slot(SlotId::new(1)), None);
-    assert!(state
-        .recycle_active_slots_where(|slot_id| slot_id.raw() < 1)
-        .is_empty());
+    assert!(
+        state
+            .recycle_active_slots_where(|slot_id| slot_id.raw() < 1)
+            .is_empty()
+    );
 
     assert_eq!(
         state.activate_current_active_slot(SlotId::new(1)),

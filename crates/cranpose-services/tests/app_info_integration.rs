@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use cranpose_services::{
-    app_info, build_version, clear_platform_app_info, set_platform_app_info, version_name, AppInfo,
+    AppInfo, app_info, build_version, clear_platform_app_info, set_platform_app_info, version_name,
 };
 
 struct PackagedIdentity;

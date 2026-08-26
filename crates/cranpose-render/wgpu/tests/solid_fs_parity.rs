@@ -26,12 +26,12 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
-    Renderer,
 };
 use cranpose_render_wgpu::DisplayVisibleRegion;
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
@@ -247,9 +247,9 @@ fn capture_trim_arm() -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let flat = render_arm(&mut renderer, &graph_for(false));
     let mixed = render_arm(&mut renderer, &graph_for(true));
     renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
-    std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
     let culled = render_arm(&mut renderer, &graph_for(false));
-    std::env::remove_var("CRANPOSE_ROUND_CULL");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
     renderer.set_display_visible_region(DisplayVisibleRegion::Full);
     Some((flat, culled, mixed))
 }
@@ -289,10 +289,10 @@ fn assert_no_byte_moved(label: &str, full: &[u8], trimmed: &[u8]) {
 #[test]
 fn trimmed_varyings_do_not_move_a_byte() {
     for instanced in ["0", "1"] {
-        std::env::set_var("CRANPOSE_INSTANCED_QUADS", instanced);
-        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some(instanced));
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
         let Some((full_flat, full_culled, full_mixed)) = capture_trim_arm() else {
-            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
             return;
         };
         // The culled capture must actually have culled something, or its
@@ -302,10 +302,10 @@ fn trimmed_varyings_do_not_move_a_byte() {
             "instanced={instanced}: the display-clip cull never engaged"
         );
 
-        std::env::set_var("CRANPOSE_SOLID_TRIM_VARYINGS", "1");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", Some("1"));
         let trimmed = capture_trim_arm();
-        std::env::remove_var("CRANPOSE_SOLID_TRIM_VARYINGS");
-        std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SOLID_TRIM_VARYINGS", None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
         let (trim_flat, trim_culled, trim_mixed) =
             trimmed.expect("headless WGPU init failed mid-suite");
 

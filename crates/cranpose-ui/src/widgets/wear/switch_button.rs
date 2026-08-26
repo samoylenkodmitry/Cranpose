@@ -29,8 +29,8 @@ use crate::{
     density::Density,
     modifier::{Brush, Color, CornerRadii, Modifier, Point, Rect},
     widgets::{
-        wear::theme::{WearColors, WearTextStyle},
         Layout, Text,
+        wear::theme::{WearColors, WearTextStyle},
     },
 };
 

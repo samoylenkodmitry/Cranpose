@@ -1,16 +1,16 @@
 use std::{any::TypeId, mem};
 
 use super::{
-    segments::{
-        extract_subtree_segment, group_segment_len, group_segment_range_checked,
-        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
-        move_subtree_segment_to_earlier_group, remove_group_segment_range,
-        repair_group_segment_start_and_len_to_storage, restore_subtree_segment, PayloadSegment,
-    },
     DeferredDrop, GroupPayloadRange, GroupRange, GroupRecord, PayloadAnchor, PayloadKind,
     PayloadRange, PayloadRecord, SlotTable, SlotWriteSessionState, ValueSlotId,
+    segments::{
+        PayloadSegment, extract_subtree_segment, group_segment_len, group_segment_range_checked,
+        group_segment_start, group_segment_subrange_at, insert_group_segment_item,
+        move_subtree_segment_to_earlier_group, remove_group_segment_range,
+        repair_group_segment_start_and_len_to_storage, restore_subtree_segment,
+    },
 };
-use crate::{retention::RetentionManager, AnchorId};
+use crate::{AnchorId, retention::RetentionManager};
 
 #[derive(Clone, Copy)]
 pub(in crate::slot) struct PayloadLocationRefresh {

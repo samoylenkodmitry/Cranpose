@@ -3,8 +3,8 @@ mod support;
 use std::path::{Path, PathBuf};
 
 use cranpose_render_common::{
-    render_contract::{RenderedFrame, ALL_SHARED_RENDER_CASES},
     Renderer,
+    render_contract::{ALL_SHARED_RENDER_CASES, RenderedFrame},
 };
 
 fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -452,7 +452,8 @@ fn render_effect_scratch_is_owned_by_frame_recorder() {
     );
     assert!(
         render_source.contains("acquire_recorded_effect_scratch_targets(")
-            && render_source.contains("let mut effect_scratch_refs = effect_scratch_targets.refs();")
+            && render_source
+                .contains("let mut effect_scratch_refs = effect_scratch_targets.refs();")
             && render_source.contains("effect_scratch_refs.assert_consumed()?;")
             && render_source.contains("effect_scratch_targets.release_into(self.recorder);"),
         "combined effect composite paths must wire declared scratch targets through frame recording"
@@ -645,7 +646,8 @@ fn effect_layer_axis_aligned_composite_records_effect_and_composite_together() {
             && render_source.contains("encode_effect(")
             && render_source
                 .contains("encode_composite_to_view_scissored_with_alpha_and_mask_and_blend_mode(")
-            && render_source.contains("self.recorder.record_passes(effect_passes.saturating_add(1));"),
+            && render_source
+                .contains("self.recorder.record_passes(effect_passes.saturating_add(1));"),
         "combined render-effect composite path must record effect and final composite into the frame recorder"
     );
     assert!(
@@ -687,7 +689,8 @@ fn cached_text_glyph_runs_recover_missing_gpu_atlas_entries() {
     );
     assert!(
         render_source.contains("fn glyph_atlas_entry_for_placement(")
-            && render_source.contains("self.text_glyph_mask_cache.atlas_glyph_for_placement(glyph)")
+            && render_source
+                .contains("self.text_glyph_mask_cache.atlas_glyph_for_placement(glyph)")
             && render_source.contains("self.glyph_atlas_entry_for(&upload_glyph)"),
         "WGPU text glyph cache hits with missing atlas entries must upload from retained masks instead of falling back to text images"
     );
@@ -804,7 +807,8 @@ fn transformed_shader_layer_records_shader_and_projective_composite_together() {
         "transformed deferred shader layers must not allocate a caller-owned intermediate before projective composite"
     );
     assert!(
-        !surface_executor_source.contains("let intermediate = backend.acquire_offscreen(source.width, source.height);"),
+        !surface_executor_source
+            .contains("let intermediate = backend.acquire_offscreen(source.width, source.height);"),
         "transformed deferred shader layers must not split shader and projective composite into separate submissions"
     );
     assert!(
@@ -900,9 +904,8 @@ fn projective_backdrop_copies_record_as_ordered_surface_graph() {
     );
     assert!(
         surface_executor_source.contains("copy_projective_backdrop_inputs_to_view")
-            && surface_executor_source.contains(
-                "backend.composite_surface_batch_to_view(\n            dest_view,",
-            ),
+            && surface_executor_source
+                .contains("backend.composite_surface_batch_to_view(\n            dest_view,",),
         "axis-aligned backdrop snapshot copies must be recorded through one backend surface-batch graph operation"
     );
     assert!(
@@ -1416,12 +1419,10 @@ fn shadow_temporary_surfaces_are_frame_recorder_transients() {
         shape_body.contains(
             "let scratch = frame_encoder.acquire_transient_offscreen(&device, scratch_descriptor);"
         ) && shape_body.contains("let source_is_cacheable = cache_key.is_some();")
-            && shape_body.contains(
-                "frame_encoder.release_transient_offscreen(scratch_descriptor, scratch)"
-            )
-            && shape_body.contains(
-                "frame_encoder.release_transient_offscreen(source_descriptor, source)"
-            ),
+            && shape_body
+                .contains("frame_encoder.release_transient_offscreen(scratch_descriptor, scratch)")
+            && shape_body
+                .contains("frame_encoder.release_transient_offscreen(source_descriptor, source)"),
         "shape-only shadow scratch must be a frame transient, with retained source allocation limited to cache insertion"
     );
 }

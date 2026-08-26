@@ -26,8 +26,8 @@
 use std::{
     ffi::c_void,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
@@ -80,7 +80,9 @@ pub(crate) fn request_wake_at_next_vsync() -> bool {
         if choreographer.is_null() {
             CALLBACK_POSTED.store(false, Ordering::Release);
             UNAVAILABLE.store(true, Ordering::Relaxed);
-            log::warn!("[android-vsync] AChoreographer_getInstance returned null; frame loop will fall back to polling");
+            log::warn!(
+                "[android-vsync] AChoreographer_getInstance returned null; frame loop will fall back to polling"
+            );
             return false;
         }
         ndk_sys::AChoreographer_postFrameCallback64(

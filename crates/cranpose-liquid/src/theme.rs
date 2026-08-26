@@ -6,7 +6,7 @@
 
 use std::cell::RefCell;
 
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
 use cranpose_services::isSystemInDarkTheme;
 use cranpose_ui::text::{FontWeight, SpanStyle, TextStyle, TextUnit};

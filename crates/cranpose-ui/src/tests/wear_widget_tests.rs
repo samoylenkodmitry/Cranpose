@@ -12,25 +12,25 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
-use cranpose_foundation::{lazy::LazyItems, PointerButton, PointerButtons};
+use cranpose_foundation::{PointerButton, PointerButtons, lazy::LazyItems};
 use cranpose_ui_graphics::Size as ViewportSize;
 
 use super::*;
 use crate::{
     modifier::{ModifierNodeSlices, PointerEvent, PointerEventKind},
-    round_scaling_list::{scale_and_alpha, CentreAnchor},
+    round_scaling_list::{CentreAnchor, scale_and_alpha},
     round_scroll_indicator::{
-        decimal_first_item_index, decimal_last_item_index, indicator_geometry, IndicatorGeometry,
-        ThumbLength,
+        IndicatorGeometry, ThumbLength, decimal_first_item_index, decimal_last_item_index,
+        indicator_geometry,
     },
     widgets::{
-        wear::{
-            indicator_for_scaling_list, ListHeader, ListHeaderSpec, ScreenScaffold,
-            ScreenScaffoldSpec, ScrollIndicatorSpec, SwitchButton, SwitchButtonSpec, SwitchColors,
-            WearButton, WearButtonSpec, WearColors, WearScalingLazyColumn,
-            WearScalingLazyColumnSpec, WearScalingListState, WearTextStyle,
-        },
         Spacer,
+        wear::{
+            ListHeader, ListHeaderSpec, ScreenScaffold, ScreenScaffoldSpec, ScrollIndicatorSpec,
+            SwitchButton, SwitchButtonSpec, SwitchColors, WearButton, WearButtonSpec, WearColors,
+            WearScalingLazyColumn, WearScalingLazyColumnSpec, WearScalingListState, WearTextStyle,
+            indicator_for_scaling_list,
+        },
     },
 };
 
@@ -365,7 +365,7 @@ fn the_scale_a_frame_draws_with_is_the_scale_that_frame_measured() {
 /// an anchor. Deliberately written from `round_scaling_list` directly, so the
 /// widget is checked against the geometry rather than against itself.
 fn expected_rows(count: usize, anchor: CentreAnchor) -> Vec<crate::round_scaling_list::PlacedRow> {
-    use crate::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
+    use crate::round_scaling_list::{RowRun, Slot, centre_offset, place_rows, stack_into};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW_HEIGHT, count), 4.0, &mut slots);
     // No content padding term: auto-centring absorbs it. See
@@ -938,7 +938,7 @@ fn the_indicator_sweep_is_the_one_measured_on_a_454_pixel_watch() {
 
 #[test]
 fn a_wear_text_style_asks_for_the_line_box_rule_that_gives_a_38_pixel_header() {
-    use crate::text::line_box::{line_box, FontExtent};
+    use crate::text::line_box::{FontExtent, line_box};
     let style = WearTextStyle::TITLE_MEDIUM.resolve(measured_colors().on_background);
     // Roboto's hhea metrics at 16sp on a density-2 watch: 32px of glyph,
     // ascender 1900/2048 and descender 500/2048.

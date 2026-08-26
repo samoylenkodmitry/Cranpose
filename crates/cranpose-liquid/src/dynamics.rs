@@ -16,7 +16,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{with_current_composer, RuntimeHandle};
+use cranpose_core::{RuntimeHandle, with_current_composer};
 use cranpose_macros::composable;
 
 use crate::material::GlassDeformation;

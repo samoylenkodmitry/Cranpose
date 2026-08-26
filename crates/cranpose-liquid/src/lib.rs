@@ -25,31 +25,31 @@ pub mod motion;
 pub mod theme;
 pub mod widgets;
 
-pub use dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose};
+pub use dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics};
 pub use material::{
-    glass_light_direction, set_glass_light_direction, Glass, GlassDeformation, GlassDynamics,
-    GlassShadow, GlassVariant, LiquidModifierExt, LiquidShape,
+    Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
+    LiquidShape, glass_light_direction, set_glass_light_direction,
 };
-pub use motion::{liquid_press_scale, LiquidMotion};
+pub use motion::{LiquidMotion, liquid_press_scale};
 pub use theme::{
-    liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography,
-    SchemeMode,
+    LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography, SchemeMode, liquid_colors,
+    liquid_typography,
 };
 pub use widgets::*;
 
 /// Everything an app needs to build Liquid UI.
 pub mod prelude {
     pub use crate::{
-        dynamics::{rememberLiquidDynamics, LiquidDynamics, LiquidPose},
+        dynamics::{LiquidDynamics, LiquidPose, rememberLiquidDynamics},
         icons,
         material::{
             Glass, GlassDeformation, GlassDynamics, GlassShadow, GlassVariant, LiquidModifierExt,
             LiquidShape,
         },
-        motion::{liquid_press_scale, LiquidMotion},
+        motion::{LiquidMotion, liquid_press_scale},
         theme::{
-            liquid_colors, liquid_typography, LiquidColors, LiquidTheme, LiquidThemeSpec,
-            LiquidTypography, SchemeMode,
+            LiquidColors, LiquidTheme, LiquidThemeSpec, LiquidTypography, SchemeMode,
+            liquid_colors, liquid_typography,
         },
         widgets::*,
     };

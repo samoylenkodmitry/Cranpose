@@ -2,8 +2,8 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -14,12 +14,12 @@ use smallvec::SmallVec;
 use super::*;
 use crate as cranpose_core;
 #[cfg(test)]
-use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
+use crate::snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests};
 use crate::{
+    SnapshotStateObserver,
     slot::ActiveGroupId,
     snapshot_v2::take_mutable_snapshot,
     state::{MutationPolicy, SnapshotMutableState},
-    SnapshotStateObserver,
 };
 
 /// Reset the snapshot runtime for tests to ensure clean state.

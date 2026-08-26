@@ -45,8 +45,8 @@
 //! `run_entry` confines its `Sync` proof.
 
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
     OnceLock,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use web_time::Instant;
@@ -571,20 +571,22 @@ mod tests {
                 let mut out: Vec<u64> = Vec::new();
                 for round in 0..100u64 {
                     executor.map_fill(Stage::Producer, &input, &mut out, |v| v * 2 + round);
-                    assert!(out
-                        .iter()
-                        .enumerate()
-                        .all(|(i, &v)| v == i as u64 * 2 + round));
+                    assert!(
+                        out.iter()
+                            .enumerate()
+                            .all(|(i, &v)| v == i as u64 * 2 + round)
+                    );
                 }
             });
             let present = scope.spawn(|| {
                 let mut out: Vec<u64> = Vec::new();
                 for round in 0..100u64 {
                     executor.map_fill(Stage::Present, &input, &mut out, |v| v * 5 + round);
-                    assert!(out
-                        .iter()
-                        .enumerate()
-                        .all(|(i, &v)| v == i as u64 * 5 + round));
+                    assert!(
+                        out.iter()
+                            .enumerate()
+                            .all(|(i, &v)| v == i as u64 * 5 + round)
+                    );
                 }
             });
             producer.join().expect("producer thread");

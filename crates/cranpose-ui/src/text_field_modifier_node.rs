@@ -22,13 +22,13 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{mutableStateOf, MutableState};
+use cranpose_core::{MutableState, mutableStateOf};
 use cranpose_foundation::{
-    text::{TextFieldLineLimits, TextFieldState, TextRange},
     Constraints, DelegatableNode, DrawModifierNode, DrawScope, InvalidationKind,
     LayoutModifierNode, Measurable, ModifierNode, ModifierNodeContext, ModifierNodeElement,
     NodeCapabilities, NodeState, PointerEvent, PointerEventKind, PointerInputNode,
     SemanticsConfiguration, SemanticsNode, Size,
+    text::{TextFieldLineLimits, TextFieldState, TextRange},
 };
 use cranpose_ui_graphics::{Brush, Color, Point};
 
@@ -641,9 +641,9 @@ impl TextFieldModifierNode {
         // multi-tap selection granularity gestures.
         use crate::{
             text_selection::{
-                classify_tap_count, find_line_boundaries, find_paragraph_boundaries,
-                resolve_selection_tap_count, tap_selection_granularity, SelectionGranularity,
-                MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS,
+                MULTI_TAP_SLOP_PX, MULTI_TAP_TIMEOUT_MS, SelectionGranularity, classify_tap_count,
+                find_line_boundaries, find_paragraph_boundaries, resolve_selection_tap_count,
+                tap_selection_granularity,
             },
             word_boundaries::find_word_boundaries,
         };
@@ -818,27 +818,27 @@ impl TextFieldModifierNode {
                         return;
                     }
                     // If we have a drag anchor, extend selection during drag
-                    if let Some(anchor) = refs.drag_anchor.get() {
-                        if *refs.is_focused.borrow() {
-                            let text = state.text();
-                            let current_pos = crate::text::offset_for_position_wrapped(
-                                &text,
-                                &style,
-                                refs.node_id.get(),
-                                refs.wrap_width.get(),
-                                refs.line_height.get(),
-                                click_x,
-                                click_y,
-                            );
+                    if let Some(anchor) = refs.drag_anchor.get()
+                        && *refs.is_focused.borrow()
+                    {
+                        let text = state.text();
+                        let current_pos = crate::text::offset_for_position_wrapped(
+                            &text,
+                            &style,
+                            refs.node_id.get(),
+                            refs.wrap_width.get(),
+                            refs.line_height.get(),
+                            click_x,
+                            click_y,
+                        );
 
-                            // Update selection directly (without undo stack push)
-                            state.set_selection(TextRange::new(anchor, current_pos));
+                        // Update selection directly (without undo stack push)
+                        state.set_selection(TextRange::new(anchor, current_pos));
 
-                            // Selection change only needs redraw, not layout
-                            crate::request_render_invalidation();
+                        // Selection change only needs redraw, not layout
+                        crate::request_render_invalidation();
 
-                            event.consume();
-                        }
+                        event.consume();
                     }
                 }
                 PointerEventKind::Up => {

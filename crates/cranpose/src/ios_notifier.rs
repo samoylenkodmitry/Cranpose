@@ -16,13 +16,12 @@ use std::{
 
 use block2::RcBlock;
 use cranpose_services::{
-    push_notification_deeplink, set_platform_notifier, Notifier, NotifyRequest,
+    Notifier, NotifyRequest, push_notification_deeplink, set_platform_notifier,
 };
 use objc2::{
-    define_class, msg_send,
+    MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{Bool, ProtocolObject},
-    MainThreadMarker, MainThreadOnly,
 };
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{

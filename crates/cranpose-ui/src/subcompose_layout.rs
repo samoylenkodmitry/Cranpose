@@ -15,12 +15,12 @@ use web_time::Instant;
 use crate::{
     layout::MeasuredNode,
     modifier::{
-        collect_modifier_slices_into, Modifier, ModifierChainHandle, ModifierNodeSlices, Point,
-        ResolvedModifiers, Size,
+        Modifier, ModifierChainHandle, ModifierNodeSlices, Point, ResolvedModifiers, Size,
+        collect_modifier_slices_into,
     },
     widgets::nodes::{
-        allocate_virtual_node_id, is_virtual_node, register_layout_node, LayoutNode,
-        LayoutNodeCacheHandles, LayoutState,
+        LayoutNode, LayoutNodeCacheHandles, LayoutState, allocate_virtual_node_id, is_virtual_node,
+        register_layout_node,
     },
 };
 

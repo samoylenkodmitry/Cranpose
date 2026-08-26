@@ -6,15 +6,15 @@ use cranpose_core::{MemoryApplier, NodeId};
 #[cfg(test)]
 use cranpose_render_common::primitive_emit::resolve_clip;
 use cranpose_render_common::{
+    Brush, RenderScene,
     geometry::{expand_blurred_rect, union_rect},
-    hit_graph::{collect_hits_from_graph as collect_common_hits, HitGraphSink},
+    hit_graph::{HitGraphSink, collect_hits_from_graph as collect_common_hits},
     layer_shadow::layer_shadow_geometry,
     layer_transform::{apply_layer_to_rect, layer_uniform_scale},
     primitive_emit::{
-        draw_shape_params_for_primitive, emit_draw_primitive, DrawPrimitiveSink, ImageDrawParams,
-        ShapeDrawParams, TextDrawParams,
+        DrawPrimitiveSink, ImageDrawParams, ShapeDrawParams, TextDrawParams,
+        draw_shape_params_for_primitive, emit_draw_primitive,
     },
-    Brush, RenderScene,
 };
 #[cfg(test)]
 use cranpose_ui::layout_text;
@@ -23,14 +23,14 @@ use cranpose_ui::measure_text;
 #[cfg(test)]
 use cranpose_ui::prepare_text_layout;
 #[cfg(test)]
-use cranpose_ui::text::{resolve_text_direction, ResolvedTextDirection, TextAlign};
-use cranpose_ui::{
-    text::{TextDecoration, TextDrawStyle, TextStyle},
-    text_layout_result::TextLayoutResult,
-    LayoutBox, TextLayoutOptions,
-};
+use cranpose_ui::text::{ResolvedTextDirection, TextAlign, resolve_text_direction};
 #[cfg(test)]
 use cranpose_ui::{EdgeInsets, TextOverflow};
+use cranpose_ui::{
+    LayoutBox, TextLayoutOptions,
+    text::{TextDecoration, TextDrawStyle, TextStyle},
+    text_layout_result::TextLayoutResult,
+};
 use cranpose_ui_graphics::{
     BlendMode, Color, DrawPrimitive, GraphicsLayer, LayerShape, Point, Rect, RenderEffect,
     RoundedCornerShape, RuntimeShader, TileMode,
@@ -642,19 +642,19 @@ fn gpu_text_material_batches_for_text(
         range_style.span_style =
             merged_span_style_for_range(text, &text_style.span_style, start, end);
         let material = gpu_text_material_for_style(&range_style, fallback_color, text_scale);
-        if let Some(last_batch) = batches.last_mut() {
-            if last_batch.material == material {
-                if let Some(last_range) = last_batch.visible_ranges.last_mut() {
-                    if last_range.end == start {
-                        last_range.end = end;
-                    } else {
-                        last_batch.visible_ranges.push(start..end);
-                    }
+        if let Some(last_batch) = batches.last_mut()
+            && last_batch.material == material
+        {
+            if let Some(last_range) = last_batch.visible_ranges.last_mut() {
+                if last_range.end == start {
+                    last_range.end = end;
                 } else {
                     last_batch.visible_ranges.push(start..end);
                 }
-                continue;
+            } else {
+                last_batch.visible_ranges.push(start..end);
             }
+            continue;
         }
 
         batches.push(GpuTextMaterialBatch {
@@ -1149,80 +1149,80 @@ fn emit_text_style_draws<S: TextStyleDrawSink>(
         return;
     }
 
-    if !has_span_foreground_overrides {
-        if let Some((effect, effect_rect)) = gpu_text_effect_for_style(
+    if !has_span_foreground_overrides
+        && let Some((effect, effect_rect)) = gpu_text_effect_for_style(
             &transformed_text_style,
             transformed_shifted_text_rect,
             transformed_text_color,
             text_scale,
-        ) {
-            // If any span overrides the foreground color, the single GPU effect
-            // would overwrite that override. Fall back to per-span batching so
-            // each range gets its own material (gradient vs solid).
-            if text_spans_override_foreground_color(text)
-                && push_span_gpu_text_material_draws(
-                    sink,
-                    node_id,
-                    transformed_shifted_text_rect,
-                    content_layer,
-                    text,
-                    &transformed_text_style,
-                    transformed_text_color,
-                    font_size,
-                    text_scale,
-                    options,
-                    text_clip,
-                )
-            {
-                return;
-            }
-
-            let z_start = sink.current_z();
-            let mut mask_text_style = transformed_text_style.clone();
-            mask_text_style.span_style.brush = None;
-            mask_text_style.span_style.alpha = None;
-            mask_text_style.span_style.color = Some(Color::WHITE);
-            mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
-            let mask_text = text_for_gpu_mask(text);
-
-            sink.push_text(
+        )
+    {
+        // If any span overrides the foreground color, the single GPU effect
+        // would overwrite that override. Fall back to per-span batching so
+        // each range gets its own material (gradient vs solid).
+        if text_spans_override_foreground_color(text)
+            && push_span_gpu_text_material_draws(
+                sink,
                 node_id,
                 transformed_shifted_text_rect,
-                Rc::new(mask_text),
-                Color::WHITE,
-                mask_text_style,
+                content_layer,
+                text,
+                &transformed_text_style,
+                transformed_text_color,
                 font_size,
                 text_scale,
                 options,
                 text_clip,
-            );
-
-            sink.push_effect_layer_with_surface(
-                effect_rect,
-                text_clip,
-                Some(effect),
-                BlendMode::SrcOver,
-                1.0,
-                z_start,
-                sink.current_z(),
-                SurfaceRequirementSet::from_iter([
-                    SurfaceRequirement::RenderEffect,
-                    SurfaceRequirement::TextMaterialMask,
-                ]),
-            );
-            push_text_decorations(
-                sink,
-                text_layout,
-                rect,
-                shifted_text_rect,
-                content_layer,
-                text,
-                text_style,
-                &text_brush,
-                text_clip,
-            );
+            )
+        {
             return;
         }
+
+        let z_start = sink.current_z();
+        let mut mask_text_style = transformed_text_style.clone();
+        mask_text_style.span_style.brush = None;
+        mask_text_style.span_style.alpha = None;
+        mask_text_style.span_style.color = Some(Color::WHITE);
+        mask_text_style.span_style.draw_style = Some(TextDrawStyle::Fill);
+        let mask_text = text_for_gpu_mask(text);
+
+        sink.push_text(
+            node_id,
+            transformed_shifted_text_rect,
+            Rc::new(mask_text),
+            Color::WHITE,
+            mask_text_style,
+            font_size,
+            text_scale,
+            options,
+            text_clip,
+        );
+
+        sink.push_effect_layer_with_surface(
+            effect_rect,
+            text_clip,
+            Some(effect),
+            BlendMode::SrcOver,
+            1.0,
+            z_start,
+            sink.current_z(),
+            SurfaceRequirementSet::from_iter([
+                SurfaceRequirement::RenderEffect,
+                SurfaceRequirement::TextMaterialMask,
+            ]),
+        );
+        push_text_decorations(
+            sink,
+            text_layout,
+            rect,
+            shifted_text_rect,
+            content_layer,
+            text,
+            text_style,
+            &text_brush,
+            text_clip,
+        );
+        return;
     }
 
     push_text_draw(
@@ -1344,12 +1344,11 @@ fn shadow_draw_bounds(shadow_draws: &[ShadowDraw]) -> Option<Rect> {
         for text in &shadow.texts {
             shadow_bounds = union_rect(shadow_bounds, text.rect);
         }
-        if let Some(shadow_bounds) = shadow_bounds {
-            if let Some(expanded) =
+        if let Some(shadow_bounds) = shadow_bounds
+            && let Some(expanded) =
                 expand_blurred_rect(shadow_bounds, shadow.blur_radius, shadow.clip)
-            {
-                bounds = union_rect(bounds, expanded);
-            }
+        {
+            bounds = union_rect(bounds, expanded);
         }
     }
     bounds

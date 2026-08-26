@@ -206,22 +206,22 @@ fn interpolate_colors(colors: &[Color], stops: Option<&[f32]>, t: f32) -> Color 
     }
     let clamped = t.clamp(0.0, 1.0);
 
-    if let Some(stops) = stops {
-        if stops.len() == colors.len() {
-            if clamped <= stops[0] {
-                return colors[0];
-            }
-            for index in 0..(stops.len() - 1) {
-                let start = stops[index];
-                let end = stops[index + 1];
-                if clamped <= end {
-                    let span = (end - start).max(f32::EPSILON);
-                    let frac = ((clamped - start) / span).clamp(0.0, 1.0);
-                    return lerp_color(colors[index], colors[index + 1], frac);
-                }
-            }
-            return last_color(colors);
+    if let Some(stops) = stops
+        && stops.len() == colors.len()
+    {
+        if clamped <= stops[0] {
+            return colors[0];
         }
+        for index in 0..(stops.len() - 1) {
+            let start = stops[index];
+            let end = stops[index + 1];
+            if clamped <= end {
+                let span = (end - start).max(f32::EPSILON);
+                let frac = ((clamped - start) / span).clamp(0.0, 1.0);
+                return lerp_color(colors[index], colors[index + 1], frac);
+            }
+        }
+        return last_color(colors);
     }
 
     let segments = (colors.len() - 1) as f32;

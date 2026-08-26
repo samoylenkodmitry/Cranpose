@@ -16,12 +16,12 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
+    Color, Modifier, Text,
     round_scaling_list::CentreAnchor,
     widgets::wear::{
-        rememberWearScalingListState, ListHeader, ListHeaderSpec, WearColors,
-        WearScalingLazyColumn, WearScalingLazyColumnSpec, WearTextStyle,
+        ListHeader, ListHeaderSpec, WearColors, WearScalingLazyColumn, WearScalingLazyColumnSpec,
+        WearTextStyle, rememberWearScalingListState,
     },
-    Color, Modifier, Text,
 };
 
 /// A 454x454 watch, rendered one framebuffer pixel per layout point so the

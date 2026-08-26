@@ -63,15 +63,15 @@ use cranpose_core::location_key;
 use cranpose_foundation::lazy::LazyItems;
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
+    Color, Modifier, Size,
     round_scaling_list::CentreAnchor,
     widgets::{
-        wear::{
-            rememberWearScalingListState, SwitchButton, SwitchButtonSpec, WearColors,
-            WearScalingLazyColumn, WearScalingLazyColumnSpec,
-        },
         Box, BoxSpec, Spacer,
+        wear::{
+            SwitchButton, SwitchButtonSpec, WearColors, WearScalingLazyColumn,
+            WearScalingLazyColumnSpec, rememberWearScalingListState,
+        },
     },
-    Color, Modifier, Size,
 };
 
 /// A 454x454 watch, one framebuffer pixel per layout point.
@@ -209,7 +209,7 @@ fn expected_rows() -> Vec<(f32, f32, f32, f32)> {
 }
 
 fn rows_for(count: usize) -> Vec<(f32, f32, f32, f32)> {
-    use cranpose_ui::round_scaling_list::{centre_offset, place_rows, stack_into, RowRun, Slot};
+    use cranpose_ui::round_scaling_list::{RowRun, Slot, centre_offset, place_rows, stack_into};
     let mut slots: Vec<Slot> = Vec::new();
     stack_into(std::iter::repeat_n(ROW, count), 4.0, &mut slots);
     let viewport = SIZE as f32;

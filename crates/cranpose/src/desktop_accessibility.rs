@@ -134,11 +134,11 @@ impl DesktopAccessibilityBridge {
                 // it is parked by identity and run against the live semantics
                 // tree on the next frame, exactly as the Android bridge does.
                 Action::CustomAction => {
-                    if let Some(ActionData::CustomAction(index)) = request.data {
-                        if index >= 0 {
-                            self.pending_custom_actions
-                                .push((request.target_node, index as usize));
-                        }
+                    if let Some(ActionData::CustomAction(index)) = request.data
+                        && index >= 0
+                    {
+                        self.pending_custom_actions
+                            .push((request.target_node, index as usize));
                     }
                 }
                 _ => {}
@@ -282,10 +282,10 @@ impl PlatformAdapter {
     }
 
     fn process_event(&mut self, _window: &dyn Window, event: &WindowEvent) {
-        if let WindowEvent::Focused(focused) = event {
-            if let Some(events) = self.0.update_view_focus_state(*focused) {
-                events.raise();
-            }
+        if let WindowEvent::Focused(focused) = event
+            && let Some(events) = self.0.update_view_focus_state(*focused)
+        {
+            events.raise();
         }
     }
 

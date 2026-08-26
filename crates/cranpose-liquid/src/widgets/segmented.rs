@@ -10,9 +10,9 @@ use cranpose_animation::{animateFloatAsState, spring};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
 use cranpose_ui::{
+    Modifier, PointerInputScope, SemanticsWidgetRole, Size,
     text::{FontWeight, SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope, Row, RowSpec, Text},
-    Modifier, PointerInputScope, SemanticsWidgetRole, Size,
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii, GraphicsLayer};
 use cranpose_ui_layout::Alignment;

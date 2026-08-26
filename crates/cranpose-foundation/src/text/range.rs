@@ -116,11 +116,7 @@ impl TextRange {
                 .unwrap_or(text.len())
         };
 
-        if start <= end {
-            &text[start..end]
-        } else {
-            ""
-        }
+        if start <= end { &text[start..end] } else { "" }
     }
 }
 

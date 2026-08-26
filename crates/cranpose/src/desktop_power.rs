@@ -21,8 +21,8 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    set_platform_power_monitor, BatteryStatus, PowerCapabilities, PowerMonitor, PowerReading,
-    ThermalState,
+    BatteryStatus, PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
+    set_platform_power_monitor,
 };
 
 /// Installs the desktop power monitor.

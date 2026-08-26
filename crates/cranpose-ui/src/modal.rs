@@ -11,7 +11,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{compositionLocalOf, try_mutableStateOf, CompositionLocal, MutableState};
+use cranpose_core::{CompositionLocal, MutableState, compositionLocalOf, try_mutableStateOf};
 
 struct ModalEntry {
     id: u64,
@@ -42,10 +42,10 @@ fn depth_state() -> Option<MutableState<usize>> {
 fn publish_depth() {
     let depth = MODALS.with(|modals| modals.borrow().len());
     DEPTH_COUNT.with(|count| count.set(depth));
-    if let Some(state) = DEPTH.with(|cell| *cell.borrow()) {
-        if state.get() != depth {
-            state.set(depth);
-        }
+    if let Some(state) = DEPTH.with(|cell| *cell.borrow())
+        && state.get() != depth
+    {
+        state.set(depth);
     }
 }
 

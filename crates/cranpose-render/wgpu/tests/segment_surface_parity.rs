@@ -18,13 +18,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -276,29 +276,27 @@ fn set_common_env() {
     // path the surface cache replaces, so the delta isolates the cache.
     // Arc meshes off for the same reason command_feed_parity keeps them
     // off: their interpolation envelope is measured in arc_mesh_parity.
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     // The synthetic bricks are much sparser than the mega scene's (1.8 px
     // chords in 10 px bands), so the r=150 ring prices at ~3.9x its member
     // pixels and the DEFAULT ratio (3.0) correctly rejects it. These tests
     // pin CORRECTNESS of the composite path, not the default economics —
     // the module unit tests pin the gate — so they widen the ratio to
     // admit all three rings.
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", "6.0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", Some("6.0"));
     // The cache defaults ON since the watch A/B earned the flip, so every
     // baseline arm must hold the kill switch shut EXPLICITLY — an unset
     // variable now measures cache against cache and proves nothing. The
     // active arms open it with "1" right before their cached run.
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
 }
 
 fn clear_env() {
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
-    std::env::remove_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", None);
 }
 
 /// Identity transforms end-to-end: static rings, one twinkle palette flip.
@@ -337,7 +335,7 @@ fn identity_segments_composite_within_one_level_and_recolor_recaptures_same_fram
         "the cache must stay silent while the kill switch is held shut"
     );
 
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("1"));
     let cached = render_sequence(&mut renderer, &graphs);
     let (captures, composites, dirty_recaptures, rejected_churn, _) =
         renderer.segment_surface_stats();
@@ -391,11 +389,11 @@ fn fractional_alpha_retained_surface_matches_float_blending() {
         }
     };
     set_common_env();
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", "6.0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_COST_RATIO", Some("6.0"));
     let graphs = build_sequence(16, false, false, false, None, true);
     let _ = render_sequence(&mut renderer, &graphs);
     let baseline = render_sequence(&mut renderer, &graphs);
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("1"));
     let cached = render_sequence(&mut renderer, &graphs);
     let (captures, composites, _, _, _) = renderer.segment_surface_stats();
     clear_env();
@@ -437,7 +435,7 @@ fn rotating_segments_stay_inside_the_resampling_envelope_and_churn_is_rejected()
     let _warmup = render_sequence(&mut renderer, &graphs);
     let baseline = render_sequence(&mut renderer, &graphs);
 
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("1"));
     let cached = render_sequence(&mut renderer, &graphs);
     let (captures, composites, _, rejected_churn, rejected_economics) =
         renderer.segment_surface_stats();
@@ -509,12 +507,12 @@ fn scale_drift_beyond_the_threshold_recaptures() {
     // A tight drift threshold makes the recapture land well inside the
     // breathing run: the rings shrink 0.1% per frame, so from a capture at
     // scale s0 the drift crosses 0.004 roughly every four frames.
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", "0.004");
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", Some("0.004"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("1"));
     let graphs = build_sequence(FRAMES, false, true, false, None, false);
     let _ = render_sequence(&mut renderer, &graphs);
     let stats = renderer.segment_surface_stats();
-    std::env::remove_var("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE_SCALE_EPS", None);
     clear_env();
     eprintln!("scale drift (captures, composites, dirty, churn, economics): {stats:?}");
     let (captures, composites, _, _, _) = stats;

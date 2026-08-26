@@ -8,11 +8,11 @@
 //! a screen reacts to thermal pressure instead of sampling it.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_core::{rememberEventStream, State};
+use cranpose_core::{State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 

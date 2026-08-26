@@ -9,8 +9,8 @@
 use std::{
     f32::consts::PI,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::Duration,
 };

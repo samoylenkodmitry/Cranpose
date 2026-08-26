@@ -10,7 +10,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
 #[derive(thiserror::Error, Debug)]

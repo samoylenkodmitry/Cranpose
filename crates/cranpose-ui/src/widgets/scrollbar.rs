@@ -22,10 +22,10 @@ use crate::{
     draggable::rememberDraggableState,
     modifier::Modifier,
     scroll::ScrollState,
-    scrollbar::{content_delta_for_thumb_drag, ThumbBounds},
+    scrollbar::{ThumbBounds, content_delta_for_thumb_drag},
     widgets::{
-        scopes::{BoxWithConstraintsScope, BoxWithConstraintsScopeImpl},
         BoxWithConstraints, Canvas,
+        scopes::{BoxWithConstraintsScope, BoxWithConstraintsScopeImpl},
     },
 };
 
@@ -410,20 +410,24 @@ mod tests {
         let _runtime = Runtime::new(Arc::new(DefaultScheduler));
         let _app_context = crate::render_state::app_context_test_scope();
         let state = scrollable_state(200.0, 800.0, 0.0);
-        assert!(scene(
-            Size::new(0.0, 200.0),
-            state,
-            Axis::Vertical,
-            ScrollbarSpec::default()
-        )
-        .is_empty());
-        assert!(scene(
-            Size::new(8.0, 0.0),
-            state,
-            Axis::Vertical,
-            ScrollbarSpec::default()
-        )
-        .is_empty());
+        assert!(
+            scene(
+                Size::new(0.0, 200.0),
+                state,
+                Axis::Vertical,
+                ScrollbarSpec::default()
+            )
+            .is_empty()
+        );
+        assert!(
+            scene(
+                Size::new(8.0, 0.0),
+                state,
+                Axis::Vertical,
+                ScrollbarSpec::default()
+            )
+            .is_empty()
+        );
     }
 
     #[test]

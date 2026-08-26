@@ -801,13 +801,13 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
-                    if key == 0 {
-                        if let Some(rx) = receiver.borrow_mut().take() {
-                            scope.launch_background(
-                                move |_| async move { rx.recv().expect("value available") },
-                                move |value| result_state.set_value(value),
-                            );
-                        }
+                    if key == 0
+                        && let Some(rx) = receiver.borrow_mut().take()
+                    {
+                        scope.launch_background(
+                            move |_| async move { rx.recv().expect("value available") },
+                            move |value| result_state.set_value(value),
+                        );
                     }
                 });
             })
@@ -823,13 +823,13 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
-                    if key == 0 {
-                        if let Some(rx) = receiver.borrow_mut().take() {
-                            scope.launch_background(
-                                move |_| async move { rx.recv().expect("value available") },
-                                move |value| result_state.set_value(value),
-                            );
-                        }
+                    if key == 0
+                        && let Some(rx) = receiver.borrow_mut().take()
+                    {
+                        scope.launch_background(
+                            move |_| async move { rx.recv().expect("value available") },
+                            move |value| result_state.set_value(value),
+                        );
                     }
                 });
             })

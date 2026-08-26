@@ -3,13 +3,13 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{tween, AnimationType, Easing};
+use cranpose_animation::{AnimationType, Easing, tween};
 use cranpose_core::{DisposableEffectResult, MutableState};
 use cranpose_macros::composable;
 
 use crate::{
-    fade_in, fade_out, run_test_composition, slide_in_vertically, slide_out_vertically,
-    AnimatedVisibility, EnterTransition, ExitTransition, TestComposition,
+    AnimatedVisibility, EnterTransition, ExitTransition, TestComposition, fade_in, fade_out,
+    run_test_composition, slide_in_vertically, slide_out_vertically,
 };
 
 const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS

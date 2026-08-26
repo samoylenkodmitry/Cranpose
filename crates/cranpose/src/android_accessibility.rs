@@ -6,10 +6,9 @@ use std::sync::{Mutex, OnceLock};
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, jni_sig, jni_str,
     objects::{JClass, JObject, JValue},
     sys::{jfloat, jint},
-    EnvUnowned,
 };
 
 use crate::{
@@ -100,7 +99,7 @@ pub(crate) fn sync(
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityActivate(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -120,7 +119,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccess
 /// that view published. Resolving that to a handler happens on the frame loop
 /// against the live semantics tree, so nothing here holds app state.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAccessibilityCustomAction(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,

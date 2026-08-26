@@ -3,7 +3,7 @@
 use std::{borrow::Cow, fmt::Debug};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{collections::map::HashMap, NodeId};
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::Renderer;
 use cranpose_ui::{LayoutBox, SemanticsAction, SemanticsNode, SemanticsRole, SemanticsWidgetRole};
 
@@ -282,38 +282,39 @@ fn project_node(
     };
     let rect = bounds.get(&node.node_id).copied().unwrap_or_default();
 
-    if let Some(label) = label.filter(|label| !label.trim().is_empty()) {
-        if rect.is_visible() && (actionable || !suppress_static_text) {
-            let role = if let Some(role) = node.widget_role {
-                AccessibilityRole::from_widget_role(role)
-            } else if node.editable_text {
-                AccessibilityRole::TextField
-            } else if clickable || matches!(node.role, SemanticsRole::Button) {
-                AccessibilityRole::Button
-            } else {
-                AccessibilityRole::StaticText
-            };
-            let label = label.into_owned();
-            elements.push(AccessibilityElement {
-                node_id: node.node_id,
-                canvas_key: None,
-                value: node.editable_text.then(|| label.clone()),
-                label,
-                state_description: node.state_description.clone(),
-                click_label: node.on_click_label.clone(),
-                bounds: rect,
-                role,
-                clickable,
-                selected: node.selected,
-                toggled: node.toggled,
-                enabled: node.enabled,
-                custom_actions: node
-                    .custom_actions
-                    .iter()
-                    .map(|action| action.label.clone())
-                    .collect(),
-            });
-        }
+    if let Some(label) = label.filter(|label| !label.trim().is_empty())
+        && rect.is_visible()
+        && (actionable || !suppress_static_text)
+    {
+        let role = if let Some(role) = node.widget_role {
+            AccessibilityRole::from_widget_role(role)
+        } else if node.editable_text {
+            AccessibilityRole::TextField
+        } else if clickable || matches!(node.role, SemanticsRole::Button) {
+            AccessibilityRole::Button
+        } else {
+            AccessibilityRole::StaticText
+        };
+        let label = label.into_owned();
+        elements.push(AccessibilityElement {
+            node_id: node.node_id,
+            canvas_key: None,
+            value: node.editable_text.then(|| label.clone()),
+            label,
+            state_description: node.state_description.clone(),
+            click_label: node.on_click_label.clone(),
+            bounds: rect,
+            role,
+            clickable,
+            selected: node.selected,
+            toggled: node.toggled,
+            enabled: node.enabled,
+            custom_actions: node
+                .custom_actions
+                .iter()
+                .map(|action| action.label.clone())
+                .collect(),
+        });
     }
 
     // Drawn controls come straight after the node that drew them, so a screen
@@ -784,14 +785,13 @@ mod tests {
             None,
             Vec::new(),
         );
-        child.canvas_children =
-            vec![
-                CanvasSemanticsNode::control(42, rect(0.0, 0.0, 40.0, 40.0), "Haptics")
-                    .with_custom_action(SemanticsCustomAction::new("Toggle", {
-                        let fired = Rc::clone(&fired);
-                        move || fired.borrow_mut().push("toggle")
-                    })),
-            ];
+        child.canvas_children = vec![
+            CanvasSemanticsNode::control(42, rect(0.0, 0.0, 40.0, 40.0), "Haptics")
+                .with_custom_action(SemanticsCustomAction::new("Toggle", {
+                    let fired = Rc::clone(&fired);
+                    move || fired.borrow_mut().push("toggle")
+                })),
+        ];
         root.children = vec![child];
 
         assert!(perform_custom_action(&root, arena_id, None, 0));

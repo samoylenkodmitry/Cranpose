@@ -25,8 +25,8 @@ use std::{
     cell::UnsafeCell,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 

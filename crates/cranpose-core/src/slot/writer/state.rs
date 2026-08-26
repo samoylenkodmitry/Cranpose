@@ -2,7 +2,7 @@ use super::{
     super::{DetachedSubtree, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
-use crate::{collections::map::HashMap, AnchorId};
+use crate::{AnchorId, collections::map::HashMap};
 
 pub(in crate::slot) struct BranchFoldEntry {
     key: crate::Key,

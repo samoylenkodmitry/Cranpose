@@ -32,14 +32,14 @@ use std::{
 };
 
 use cranpose_core::{
-    mutableStateOf, remember, staticCompositionLocalOf, CompositionLocalProvider, MutableState,
-    SideEffect, StaticCompositionLocal,
+    CompositionLocalProvider, MutableState, SideEffect, StaticCompositionLocal, mutableStateOf,
+    remember, staticCompositionLocalOf,
 };
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{Point, Rect};
 
 use super::box_widget::{Box, BoxSpec};
-use crate::{composable, modifier::Modifier, PointerInputScope};
+use crate::{PointerInputScope, composable, modifier::Modifier};
 
 /// One registered popup: a stable id, its absolute top-left position (logical
 /// px, in [`PopupHost`] space, i.e. window coordinates) and its content.

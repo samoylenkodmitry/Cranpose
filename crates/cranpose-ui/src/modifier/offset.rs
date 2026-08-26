@@ -2,7 +2,7 @@
 //!
 //! Reference: /media/huge/composerepo/compose/foundation/foundation-layout/src/commonMain/kotlin/androidx/compose/foundation/layout/Offset.kt
 
-use super::{inspector_metadata, Modifier, Point};
+use super::{Modifier, Point, inspector_metadata};
 use crate::modifier_nodes::{FractionalOffsetElement, OffsetElement};
 
 impl Modifier {

@@ -14,7 +14,7 @@ use cranpose_animation::{Animatable, AnimationSpec, AnimationType};
 use cranpose_core::with_current_composer;
 use cranpose_macros::composable;
 
-use crate::{run_test_composition, TestComposition};
+use crate::{TestComposition, run_test_composition};
 
 fn drain(composition: &mut TestComposition) {
     while composition

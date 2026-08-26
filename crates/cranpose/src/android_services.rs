@@ -14,27 +14,26 @@
 use std::{
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
         Arc, Mutex, OnceLock, PoisonError,
+        atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
     },
 };
 
 use cranpose_services::{
-    publish_incoming_content, push_notification_deeplink, set_platform_app_updater,
-    set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
-    set_platform_launch_args, set_platform_network_monitor, set_platform_notifier,
-    set_platform_power_monitor, set_platform_share_sheet, AppUpdateCapabilities, AppUpdateError,
-    AppUpdateStatus, AppUpdater, BackgroundActivity, BatteryStatus, BundledAssetError,
-    BundledAssetReader, BundledAssets, GitHubReleaseUpdate, HapticEffect, HapticFeedback,
-    HapticPattern, Haptics, IncomingContent, LaunchArgs, NetworkMonitor, NetworkStatus, Notifier,
-    NotifyRequest, PackageDigest, PowerCapabilities, PowerMonitor, PowerReading, ShareContent,
-    ShareError, ShareSheet, StreamingAssetReader, ThermalState, UpdatePackage,
+    AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater, BackgroundActivity,
+    BatteryStatus, BundledAssetError, BundledAssetReader, BundledAssets, GitHubReleaseUpdate,
+    HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent, LaunchArgs,
+    NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, PackageDigest, PowerCapabilities,
+    PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet, StreamingAssetReader,
+    ThermalState, UpdatePackage, publish_incoming_content, push_notification_deeplink,
+    set_platform_app_updater, set_platform_background_activity, set_platform_bundled_assets,
+    set_platform_haptics, set_platform_launch_args, set_platform_network_monitor,
+    set_platform_notifier, set_platform_power_monitor, set_platform_share_sheet,
 };
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JByteArray, JClass, JObject, JString, JValue},
     sys::{jboolean, jint, jlong},
-    EnvUnowned, Outcome,
 };
 
 use crate::{
@@ -1012,7 +1011,7 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for AndroidClipboard {
 // --- Java → Rust callbacks (Android UI thread) ---------------------------------------
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkStatus(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -1024,7 +1023,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetworkRegistration(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -1034,7 +1033,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnNetwor
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsetsChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -1052,7 +1051,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnInsets
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotificationAction<
     'local,
 >(
@@ -1074,7 +1073,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeNotifica
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomingContent<
     'local,
 >(
@@ -1104,7 +1103,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomi
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAppUpdateStatus<
     'local,
 >(
@@ -1170,7 +1169,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnAppUpd
 /// snapshot; the payload replaces the previous one wholesale, matching
 /// `setIntent` replacing what a Compose activity reads from `getIntent`.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnLaunchArguments<
     'local,
 >(

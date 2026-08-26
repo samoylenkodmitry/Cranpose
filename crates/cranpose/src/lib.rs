@@ -108,8 +108,8 @@ mod native_window;
 pub use android_activity::AndroidApp;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android_host_window::{
-    rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
-    AndroidHostWindowSizeStatus, AndroidHostWindowState,
+    AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+    AndroidHostWindowState, rememberAndroidHostWindowState,
 };
 #[cfg(all(
     feature = "renderer-wgpu",
@@ -122,13 +122,13 @@ pub use app_launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
 /// the weight set it registers, and the registry and error
 /// [`AppLauncher::with_fonts_from`] hands out.
 pub use cranpose_render_common::font_source::{
-    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+    ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    current_native_window_surface_origin, rememberWindowState, Window, WindowAttachPolicy,
-    WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
-    WindowResizeDirection, WindowState,
+    Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
+    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
+    current_native_window_surface_origin, rememberWindowState,
 };
 #[cfg(all(
     feature = "renderer-wgpu",
@@ -164,12 +164,12 @@ mod wgpu_surface;
 /// The real-time audio engine that backs `cranpose_services::audio`. Call
 /// [`install_audio`] once at startup; Android installs it automatically.
 #[cfg(feature = "audio")]
-pub use cranpose_audio::{install as install_audio, AudioEngine};
+pub use cranpose_audio::{AudioEngine, install as install_audio};
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
-    delay, interval, launchBlocking, mutableStateOf, produceState, remember,
-    rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
-    rememberUpdatedState, CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
+    CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
+    launchBlocking, mutableStateOf, produceState, remember, rememberCoroutineScope,
+    rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -180,7 +180,7 @@ pub use cranpose_liquid as liquid;
 /// platform backend instead. [`uri_for_path`] builds the `file:` URI a
 /// [`cranpose_services::MediaItem`] takes from a path.
 #[cfg(feature = "media")]
-pub use cranpose_media::{path_from_uri, uri_for_path, SoftwareMediaPlayer};
+pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
 /// Re-export the UI crate so applications can depend on a single crate.
@@ -216,11 +216,8 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
     spec: cranpose_services::BundledAssetInstallSpec,
     on_result: impl FnOnce(
-            Result<
-                cranpose_services::BundledAssetInstallOutcome,
-                cranpose_services::BundledAssetError,
-            >,
-        ) + 'static,
+        Result<cranpose_services::BundledAssetInstallOutcome, cranpose_services::BundledAssetError>,
+    ) + 'static,
 ) {
     cranpose_core::LaunchedEffect!(keys, move |scope| {
         scope.launch_background(
@@ -341,9 +338,9 @@ pub fn FrameEffect<K: PartialEq + 'static>(
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    __branch_group_scope_deferred, branch_location_key, caller_location_key,
-    composable_identity_key, debug_label_current_scope, location_key, with_current_composer,
-    CallbackHolder, Composer, Key, ParamState, ReturnSlot,
+    __branch_group_scope_deferred, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
+    branch_location_key, caller_location_key, composable_definition_key, composable_identity_key,
+    debug_label_current_scope, location_key, with_current_composer,
 };
 
 #[cfg(all(
@@ -362,22 +359,22 @@ pub mod _docs;
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
     pub use cranpose_core::{
-        delay, interval, mutableStateOf, produceState, remember, rememberCoroutineScope,
-        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
+        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
+        mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
-        rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
-        AndroidHostWindowSizeStatus, AndroidHostWindowState,
+        AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+        AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        rememberWindowState, AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window,
-        WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode,
-        WindowNode, WindowResizeDirection, WindowState,
+        AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window, WindowAttachPolicy,
+        WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
+        WindowResizeDirection, WindowState, rememberWindowState,
     };
 }
 

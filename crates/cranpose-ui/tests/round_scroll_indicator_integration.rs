@@ -1,5 +1,5 @@
 use cranpose_ui::round_scroll_indicator::{
-    indicator_arc, indicator_geometry, indicator_segments, IndicatorPart,
+    IndicatorPart, indicator_arc, indicator_geometry, indicator_segments,
 };
 
 #[test]

@@ -1,8 +1,8 @@
 use super::{
-    checked_u32_delta, checked_usize_to_i64, CheckedU32Delta, ChildCursor, DetachedSubtree,
-    GroupKey, GroupRecord, SlotTable, SlotWriteSessionState, SubtreeRange,
+    CheckedU32Delta, ChildCursor, DetachedSubtree, GroupKey, GroupRecord, SlotTable,
+    SlotWriteSessionState, SubtreeRange, checked_u32_delta, checked_usize_to_i64,
 };
-use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
+use crate::{AnchorId, Applier, NodeError, NodeId, remove_child_and_cleanup_now};
 
 impl SlotTable {
     // Keep detach and restore ordering aligned with docs/SLOT_TABLE_LIFECYCLE.md.

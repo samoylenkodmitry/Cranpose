@@ -12,7 +12,7 @@ use cranpose_ui_graphics::Rect;
 use crate::{
     gpu_stats::FrameStats,
     offscreen::OffscreenTarget,
-    surface_executor::{offscreen_byte_size, CachedLayerSurface},
+    surface_executor::{CachedLayerSurface, offscreen_byte_size},
 };
 
 const MAX_LAYER_SURFACE_CACHE_ITEMS: usize = 256;
@@ -270,10 +270,10 @@ impl LayerSurfaceCache {
     }
 
     fn remove_identity_for_key(&mut self, key: &LayerRasterCacheKey) {
-        if let Some(identity) = key.identity() {
-            if self.identity.get(&identity) == Some(key) {
-                self.identity.remove(&identity);
-            }
+        if let Some(identity) = key.identity()
+            && self.identity.get(&identity) == Some(key)
+        {
+            self.identity.remove(&identity);
         }
     }
 
@@ -333,7 +333,7 @@ impl Default for LayerSurfaceCache {
 mod tests {
     use std::rc::Rc;
 
-    use super::{take_unshared, MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES};
+    use super::{MAX_SCENE_RANGE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES, take_unshared};
     use crate::surface_executor::offscreen_byte_size;
 
     /// A layer whose backdrop moves replaces its cache entry every frame. The

@@ -19,12 +19,12 @@
 use crate::{
     modifier::Color,
     text::{
+        FontFamily, FontWeight, TextUnit,
         paragraph::TextAlign,
         style::{
             LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ParagraphStyle,
             PlatformParagraphStyle, SpanStyle, TextStyle,
         },
-        FontFamily, FontWeight, TextUnit,
     },
     widgets::wear::color_appearance::set_luminance,
 };

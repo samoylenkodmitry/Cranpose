@@ -17,13 +17,12 @@ use std::{
 
 use android_activity::AndroidApp;
 use cranpose_services::{
-    set_writable_folder_store_factory, FolderEntry, FolderError, FolderReader, FolderWriter,
-    WritableFolderStore, WritableFolderStoreRef, DEFAULT_CHUNK_LEN,
+    DEFAULT_CHUNK_LEN, FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
+    WritableFolderStoreRef, set_writable_folder_store_factory,
 };
 use jni::{
-    jni_sig, jni_str,
+    Env, jni_sig, jni_str,
     objects::{JByteArray, JObject, JString, JValue},
-    Env,
 };
 
 static APP: OnceLock<AndroidApp> = OnceLock::new();

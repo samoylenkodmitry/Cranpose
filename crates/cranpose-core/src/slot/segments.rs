@@ -1,7 +1,6 @@
 use super::{
-    checked_u32_delta, checked_usize_to_i64, checked_usize_to_u32,
+    CheckedU32Delta, GroupRecord, checked_u32_delta, checked_usize_to_i64, checked_usize_to_u32,
     ranges::{GroupItemRange, ItemRangeKind, NodeRangeKind, PayloadRangeKind, TypedItemRange},
-    CheckedU32Delta, GroupRecord,
 };
 
 pub(in crate::slot) trait GroupSegment {

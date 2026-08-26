@@ -3,18 +3,18 @@
 use std::{cell::Cell, hint::black_box, rc::Rc, sync::Arc, time::Duration};
 
 use cranpose_core::{
-    location_key, Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState,
-    RecomposeOptions, RecomposeScope, SlotId, State, SubcomposeState,
+    Composition, ContentTypeReusePolicy, Key, MemoryApplier, MutableState, RecomposeOptions,
+    RecomposeScope, SlotId, State, SubcomposeState, location_key,
 };
 use cranpose_foundation::lazy::{
-    rememberLazyListStateWithPosition, LazyItems, LazyListScope, LazyListState,
+    LazyItems, LazyListScope, LazyListState, rememberLazyListStateWithPosition,
 };
 use cranpose_macros::composable;
 use cranpose_ui::{
-    measure_layout, AppContext, AppContextScope, Column, ColumnSpec, LazyColumn, LazyColumnSpec,
-    LinearArrangement, Modifier, Size, Text, TextStyle,
+    AppContext, AppContextScope, Column, ColumnSpec, LazyColumn, LazyColumnSpec, LinearArrangement,
+    Modifier, Size, Text, TextStyle, measure_layout,
 };
-use criterion::{criterion_group, criterion_main, Bencher, Criterion};
+use criterion::{Bencher, Criterion, criterion_group, criterion_main};
 
 const KEYED_REVERSE_SIZES: [usize; 5] = [16, 64, 256, 1_024, 4_096];
 const KEYED_ROTATE_ITEMS: usize = 1_024;

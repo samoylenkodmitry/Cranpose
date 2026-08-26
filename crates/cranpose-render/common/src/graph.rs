@@ -3,8 +3,8 @@ use std::{collections::HashSet, mem::size_of, rc::Rc};
 use cranpose_core::NodeId;
 use cranpose_foundation::PointerEvent;
 use cranpose_ui::{
-    text::AnnotatedString, GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape,
-    TextLayoutOptions, TextStyle,
+    GraphicsLayer, Point, Rect, RenderEffect, RoundedCornerShape, TextLayoutOptions, TextStyle,
+    text::AnnotatedString,
 };
 use cranpose_ui_graphics::{BlendMode, ColorFilter, DrawPrimitive, ShadowPrimitive};
 

@@ -4,19 +4,18 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_animation::animateColorAsState;
 use cranpose_macros::composable;
-use cranpose_services::{default_haptics, HapticFeedback};
+use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
-    rememberMutableInteractionSource,
+    Modifier, rememberMutableInteractionSource,
     text::{FontWeight, SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Text},
-    Modifier,
 };
 use cranpose_ui_graphics::{Brush, CornerRadii};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
     material::{Glass, LiquidModifierExt},
-    motion::{liquid_press_scale, LiquidMotion},
+    motion::{LiquidMotion, liquid_press_scale},
     theme::{liquid_colors, liquid_typography},
 };
 

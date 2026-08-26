@@ -10,11 +10,11 @@
 use std::{cell::Cell, rc::Rc};
 
 use cranpose_foundation::{
-    lazy::{rememberLazyListState, LazyListScope},
+    lazy::{LazyListScope, rememberLazyListState},
     text::TextFieldState,
 };
 use cranpose_ui::{
-    measure_layout, run_test_composition,
+    Modifier, TextStyle, measure_layout, run_test_composition,
     text::AnnotatedString,
     widgets::{
         animated_visibility::{EnterTransition, ExitTransition},
@@ -25,7 +25,6 @@ use cranpose_ui::{
         slider::SliderSpec,
         text_selection_menu::TextMenuItem,
     },
-    Modifier, TextStyle,
 };
 
 /// One 24pt square, as a vector path an icon can parse.

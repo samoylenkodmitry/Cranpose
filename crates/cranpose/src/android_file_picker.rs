@@ -27,24 +27,23 @@ use std::{
     pin::Pin,
     rc::Rc,
     sync::{
-        atomic::{AtomicI64, Ordering},
         Mutex, OnceLock,
+        atomic::{AtomicI64, Ordering},
     },
     task::{Context, Poll, Waker},
 };
 
 use cranpose_services::{
-    set_platform_content_resolver, set_platform_file_picker, Content, ContentEntry, ContentError,
-    ContentFolder, ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata, ContentReader,
-    ContentReaderRef, ContentResolver, ContentSink, ContentSinkRef, ContentStream,
-    ContentStreamRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture, RecoveredPick,
-    SaveDocumentRequest, DEFAULT_CHUNK_LEN,
+    Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
+    ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentResolver, ContentSink,
+    ContentSinkRef, ContentStream, ContentStreamRef, DEFAULT_CHUNK_LEN, FilePicker,
+    FilePickerError, FilePickerOptions, PickerFuture, RecoveredPick, SaveDocumentRequest,
+    set_platform_content_resolver, set_platform_file_picker,
 };
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
     sys::{jboolean, jint, jlong},
-    EnvUnowned, Outcome,
 };
 
 /// Mirrors the `FLAG_*` request flags in `CranposeActivity`.
@@ -862,7 +861,7 @@ fn read_optional_jstring(env: &mut EnvUnowned<'_>, value: JString<'_>) -> Option
 
 /// Java callback: records a granted selection in the resume inbox (see above).
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordResumablePick<
     'local,
 >(
@@ -882,7 +881,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeRecordRe
 
 /// Java callback delivering a document chooser result.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePicked<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -905,7 +904,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFilePi
 
 /// Java callback: a folder (or persistent writable folder) was granted.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderPicked<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -923,7 +922,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
 
 /// Java callback: a persistent writable folder was granted.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritableFolderPicked<
     'local,
 >(
@@ -943,7 +942,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnWritab
 
 /// Java callback: a save destination was created.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnDocumentCreated<
     'local,
 >(
@@ -981,7 +980,7 @@ fn tree_result(
 /// Java callback: a batch of newly-discovered files. Returns `false` once the
 /// collector has dropped the stream, so the Java walker can stop.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderEntries<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -1008,7 +1007,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolder
 
 /// Java callback: the walk finished, with an optional error.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnFolderFinished<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,

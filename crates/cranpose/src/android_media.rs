@@ -27,25 +27,24 @@
 
 use std::{
     sync::{
-        atomic::{AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicU32, Ordering},
     },
     time::Duration,
 };
 
 use cranpose_media::SoftwareMediaPlayer;
 use cranpose_services::{
-    playback_progress, publish_audio_focus, publish_media_command, set_platform_media_player,
-    set_platform_media_source_opener, AudioFocus, EqualizerBand, EqualizerSettings,
-    MediaCapabilities, MediaCommand, MediaError, MediaItem, MediaMetadata, MediaPlayer,
-    MediaSourceHandle, MediaSourceOpener,
+    AudioFocus, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError,
+    MediaItem, MediaMetadata, MediaPlayer, MediaSourceHandle, MediaSourceOpener, playback_progress,
+    publish_audio_focus, publish_media_command, set_platform_media_player,
+    set_platform_media_source_opener,
 };
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, jni_sig, jni_str,
     objects::{JClass, JValue},
     signature::MethodSignature,
     sys::{jfloat, jint, jlong},
-    EnvUnowned,
 };
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
@@ -294,7 +293,7 @@ impl MediaPlayer for AndroidMediaPlayer {
 
 /// What the rest of the device is doing with the output.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaAudioFocus(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -311,7 +310,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaA
 
 /// A button pressed on the lock screen, the notification or a headset.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnMediaCommand(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,

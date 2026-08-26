@@ -18,15 +18,15 @@ use std::{
     cell::RefCell,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
-use cranpose_ui::text_input_session::{set_platform_text_input_handler, PlatformTextInputHandler};
+use cranpose_ui::text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler};
 use objc2::{
-    define_class, msg_send, rc::Retained, runtime::ProtocolObject, DefinedClass, MainThreadMarker,
-    MainThreadOnly,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::ProtocolObject,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};

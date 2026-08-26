@@ -264,8 +264,8 @@ fn aosp_line_box(
 mod tests {
     use super::*;
     use crate::text::{
-        style::{ParagraphStyle, PlatformParagraphStyle},
         TextUnit,
+        style::{ParagraphStyle, PlatformParagraphStyle},
     };
 
     /// Roboto at 16sp on a density-2 watch: 32px of glyph, `hhea` ascender

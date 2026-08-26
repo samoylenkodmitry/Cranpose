@@ -20,11 +20,11 @@ use std::{
 };
 
 use cranpose_services::{
-    set_platform_image_picker, ImagePicker, ImagePickerError, ImageSource, PickerFuture,
+    ImagePicker, ImagePickerError, ImageSource, PickerFuture, set_platform_image_picker,
 };
 use objc2::{
-    define_class, msg_send, rc::Retained, runtime::AnyObject, DefinedClass, MainThreadMarker,
-    MainThreadOnly,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::AnyObject,
 };
 use objc2_foundation::{NSDictionary, NSObject, NSObjectProtocol};
 use objc2_ui_kit::{

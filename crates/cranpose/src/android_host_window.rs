@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui::{composable, Point, Size};
+use cranpose_ui::{Point, Size, composable};
 use thiserror::Error;
 
 const SIZE_EPSILON: f32 = 0.5;

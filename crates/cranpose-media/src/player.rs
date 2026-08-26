@@ -9,15 +9,15 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use cranpose_services::{
-    publish_playback_progress, publish_playback_state, EqualizerBand, EqualizerSettings,
-    MediaCapabilities, MediaError, MediaItem, MediaPlayer, PlaybackProgress, PlaybackState,
+    EqualizerBand, EqualizerSettings, MediaCapabilities, MediaError, MediaItem, MediaPlayer,
+    PlaybackProgress, PlaybackState, publish_playback_progress, publish_playback_state,
 };
 use parking_lot::Mutex;
 
@@ -176,12 +176,12 @@ impl Shared {
         self.close();
         if self.looping.load(Ordering::Acquire) {
             let item = self.item.lock().clone();
-            if let Some(item) = item {
-                if self.open(&item).is_ok() {
-                    self.play_active();
-                    publish_playback_state(PlaybackState::Playing);
-                    return;
-                }
+            if let Some(item) = item
+                && self.open(&item).is_ok()
+            {
+                self.play_active();
+                publish_playback_state(PlaybackState::Playing);
+                return;
             }
         }
         if self.generation.load(Ordering::Acquire) != generation + 1 {

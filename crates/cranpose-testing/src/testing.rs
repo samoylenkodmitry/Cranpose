@@ -5,14 +5,14 @@ use std::rc::Rc;
 use std::rc::Rc as StdRc;
 
 use cranpose_core::{
-    location_key, ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, RuntimeHandle,
-    ROOT_RENDER_REPLAY_LIMIT,
+    ApplierGuard, Composition, Key, MemoryApplier, NodeError, NodeId, ROOT_RENDER_REPLAY_LIMIT,
+    RuntimeHandle, location_key,
 };
 #[cfg(test)]
 use cranpose_core::{
-    pop_parent, push_parent, with_current_composer, with_node_mut, MutableState, Node,
+    MutableState, Node, pop_parent, push_parent, with_current_composer, with_node_mut,
 };
-use cranpose_ui::{request_render_invalidation, reset_render_state_for_tests, AppContext};
+use cranpose_ui::{AppContext, request_render_invalidation, reset_render_state_for_tests};
 
 /// Headless harness for exercising compositions in tests.
 ///

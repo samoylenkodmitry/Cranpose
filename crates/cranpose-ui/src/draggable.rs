@@ -27,7 +27,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{remember, MutableState, State};
+use cranpose_core::{MutableState, State, remember};
 
 /// What a [`DraggableState`] hands each drag delta to.
 pub type DragDeltaHandler = Rc<dyn Fn(f32)>;
@@ -158,7 +158,7 @@ mod tests {
     /// a value the first pass captured.
     #[test]
     fn a_remembered_drag_state_survives_recomposition_and_takes_the_new_handler() {
-        use cranpose_core::{location_key, Composition, MemoryApplier};
+        use cranpose_core::{Composition, MemoryApplier, location_key};
 
         let mut composition = Composition::new(MemoryApplier::new());
         let seen = Rc::new(RefCell::new(Vec::new()));

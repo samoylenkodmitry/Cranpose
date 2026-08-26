@@ -1,14 +1,14 @@
 use std::mem;
 
 use super::{
+    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
     checked_usize_to_i64,
     segments::{
-        extract_subtree_segment, group_segment_len, group_segment_range_checked,
+        NodeSegment, extract_subtree_segment, group_segment_len, group_segment_range_checked,
         group_segment_start, group_segment_subrange_at, insert_group_segment_item,
         move_subtree_segment_to_earlier_group, remove_group_segment_range,
-        repair_group_segment_start_and_len_to_storage, restore_subtree_segment, NodeSegment,
+        repair_group_segment_start_and_len_to_storage, restore_subtree_segment,
     },
-    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
 use crate::{AnchorId, NodeId};
 

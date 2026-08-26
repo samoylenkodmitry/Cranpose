@@ -139,7 +139,7 @@ thread_local! {
 /// comparison. Read per frame (not cached) so a comparison can flip it
 /// mid-process; one environment lookup per frame is noise.
 pub(crate) fn command_feed_enabled() -> bool {
-    std::env::var("CRANPOSE_COMMAND_FEED").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_COMMAND_FEED").as_deref() != Some("0")
 }
 
 /// Test/diagnostic view of the identity feed on this thread: live feed

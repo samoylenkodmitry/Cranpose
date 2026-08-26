@@ -37,13 +37,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -225,9 +225,9 @@ fn render_sequence(
     let mut deltas = Vec::with_capacity(graphs.len());
     let mut mesh_stats = Vec::with_capacity(graphs.len());
     for (frame, graph) in graphs.iter().enumerate() {
-        std::env::set_var(
+        cranpose_render_wgpu::set_debug_toggle(
             "CRANPOSE_ARC_MESH",
-            if frame < JOLT_FRAME { "1" } else { "0" },
+            Some(if frame < JOLT_FRAME { "1" } else { "0" }),
         );
         let before = renderer.retained_bundle_stats();
         renderer.scene_mut().graph = Some(graph.clone());
@@ -265,8 +265,7 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     let graphs = build_sequence(9);
 
@@ -274,21 +273,20 @@ fn retained_bundles_replay_byte_exact_and_rebuild_on_churn() {
     // pixels are never compared, but its counters prove churn safety.
     // (`render_sequence` drives CRANPOSE_ARC_MESH per position: meshed
     // captures before the jolt, meshless recaptures from it.)
-    std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("1"));
     let (_warm, warm_deltas, _warm_mesh) = render_sequence(&mut renderer, &graphs);
 
     // Passes 2..4 at stable renderer positions: OFF control, ON, OFF control.
-    std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("0"));
     let (off_frames, off_deltas, _off_mesh) = render_sequence(&mut renderer, &graphs);
-    std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("1"));
     let (on_frames, on_deltas, on_mesh) = render_sequence(&mut renderer, &graphs);
-    std::env::set_var("CRANPOSE_RETAINED_BUNDLES", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", Some("0"));
     let (off2_frames, _off2_deltas, _off2_mesh) = render_sequence(&mut renderer, &graphs);
 
-    std::env::remove_var("CRANPOSE_RETAINED_BUNDLES");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RETAINED_BUNDLES", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
 
     eprintln!("warm deltas (rebuilds, executes): {warm_deltas:?}");
     eprintln!("on   deltas (rebuilds, executes): {on_deltas:?}");

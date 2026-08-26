@@ -134,10 +134,10 @@ impl<S: RegistryState> GenerationalRegistryStorage<S> {
     }
 
     pub(crate) fn set_state(&mut self, id: usize, generation: u32, state: S) -> Option<S> {
-        if let Some(slot) = self.slot(id) {
-            if slot.generation != generation {
-                return None;
-            }
+        if let Some(slot) = self.slot(id)
+            && slot.generation != generation
+        {
+            return None;
         }
         let previous = self.insert_slot(id, generation, state);
         self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));

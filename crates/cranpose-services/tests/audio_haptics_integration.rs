@@ -7,12 +7,12 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_services::{
+    AudioBus, AudioClip, AudioError, HapticEffect, HapticError, HapticFeedback, HapticPattern,
+    PlaybackParams, ProvideAudio, ProvideHaptics, SoundId, SoundSpec, VoiceId,
     clear_platform_audio, clear_platform_haptics, default_audio, default_haptics, local_audio,
-    local_haptics, rememberSoundBank, AudioBus, AudioClip, AudioError, HapticEffect, HapticError,
-    HapticFeedback, HapticPattern, PlaybackParams, ProvideAudio, ProvideHaptics, SoundId,
-    SoundSpec, VoiceId,
+    local_haptics, rememberSoundBank,
 };
 
 fn run_test_composition(build: impl FnMut()) {

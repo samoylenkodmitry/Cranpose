@@ -237,7 +237,7 @@ where
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use super::*;
     use crate::run_test_composition;

@@ -3,12 +3,11 @@ mod support;
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
-use cranpose_core::{location_key, MutableState};
+use cranpose_core::{MutableState, location_key};
 use cranpose_render_wgpu::CapturedFrame;
 use cranpose_ui::{
-    composable,
+    Box, BoxSpec, Color, Modifier, Text, TextStyle, composable,
     text::{SpanStyle, TextUnit},
-    Box, BoxSpec, Color, Modifier, Text, TextStyle,
 };
 
 const FRAME_WIDTH: u32 = 400;
@@ -80,7 +79,9 @@ fn absolute_offset_text_pixels_redraw_after_state_only_change() {
     let (_lock, renderer) = match support::headless_renderer_parts() {
         Ok(parts) => parts,
         Err(err) => {
-            eprintln!("skipping absolute-offset text redraw assertion because headless WGPU init failed: {err}");
+            eprintln!(
+                "skipping absolute-offset text redraw assertion because headless WGPU init failed: {err}"
+            );
             return;
         }
     };

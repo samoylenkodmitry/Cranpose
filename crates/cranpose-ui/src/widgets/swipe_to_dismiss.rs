@@ -27,10 +27,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_animation::{spring, Animatable, AnimationType, Spring};
+use cranpose_animation::{Animatable, AnimationType, Spring, spring};
 use cranpose_core::{
-    internal::FrameCallbackRegistration, with_current_composer, NodeId, Owned, OwnedMutableState,
-    RuntimeHandle, SlotId,
+    NodeId, Owned, OwnedMutableState, RuntimeHandle, SlotId, internal::FrameCallbackRegistration,
+    with_current_composer,
 };
 use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_layout::Placement;

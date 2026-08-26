@@ -22,11 +22,11 @@
 //! already moved.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_core::{rememberEventStream, EventStream, State};
+use cranpose_core::{EventStream, State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 

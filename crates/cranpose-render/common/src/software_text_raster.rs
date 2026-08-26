@@ -5,16 +5,16 @@ use std::{
 };
 
 use ab_glyph::{
-    point, Font, FontArc, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont, VariableFont,
+    Font, FontArc, FontVec, Glyph, GlyphId, OutlinedGlyph, PxScale, ScaleFont, VariableFont, point,
 };
 use cranpose_core::hash::default as default_hash;
 use cranpose_ui::{
+    TextLinePrefixWidths, TextMeasurer, TextMetrics,
     text::{
         AnnotatedString, FontFamily, FontStyle, FontSynthesis, FontWeight, RangeStyle,
         RenderString, Shadow, SpanStyle, TextDrawStyle, TextMotion, TextShaping, TextStyle,
     },
     text_layout_result::{GlyphLayout, LineLayout, TextLayoutData, TextLayoutResult},
-    TextLinePrefixWidths, TextMeasurer, TextMetrics,
 };
 use cranpose_ui_graphics::{Color, ImageBitmap, Rect};
 use tiny_skia::{LineCap, LineJoin, Paint, Path, PathBuilder, Pixmap, Stroke, Transform};
@@ -24,15 +24,15 @@ use crate::font_layout::layout_line_glyphs;
 #[cfg(feature = "text-hyphenation")]
 use crate::text_hyphenation::HyphenationDictionaryError;
 use crate::{
+    Brush,
     bounded_lru_cache::BoundedLruCache,
     brush_sampling::{color_to_rgba, sample_brush_rgba},
     font_layout::{
-        align_glyph_to_pixel_grid, line_advance_width, pixel_bounds_from_outlined,
-        vertical_metrics, GlyphPixelBounds,
+        GlyphPixelBounds, align_glyph_to_pixel_grid, line_advance_width,
+        pixel_bounds_from_outlined, vertical_metrics,
     },
     gpos_kerning::KernedFont,
     text_hyphenation::HyphenationDictionaryStore,
-    Brush,
 };
 
 const COMPOSE_STROKE_MITER_LIMIT: f32 = 4.0;
@@ -242,10 +242,10 @@ impl SoftwareTextFontSet {
                 parsed.push(candidate);
             }
         }
-        if parsed.is_empty() {
-            if let Some(default_font) = default_software_text_font() {
-                parsed.push(default_font);
-            }
+        if parsed.is_empty()
+            && let Some(default_font) = default_software_text_font()
+        {
+            parsed.push(default_font);
         }
 
         Self::from_faces(parsed)
@@ -499,15 +499,12 @@ fn software_text_font_metadata(bytes: &[u8]) -> SoftwareTextFontMetadata {
         if matches!(
             name.name_id,
             ttf_parser::name_id::TYPOGRAPHIC_FAMILY | ttf_parser::name_id::FAMILY
-        ) {
-            if let Some(value) = name.to_string().filter(|value| !value.is_empty()) {
-                if !families
-                    .iter()
-                    .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
-                {
-                    families.push(value);
-                }
-            }
+        ) && let Some(value) = name.to_string().filter(|value| !value.is_empty())
+            && !families
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&value))
+        {
+            families.push(value);
         }
     }
     let weight = FontWeight::try_new(face.weight().to_number()).unwrap_or(FontWeight::NORMAL);
@@ -2357,10 +2354,10 @@ pub fn layout_text_with_font(
                 });
             }
             current_x += glyph_width;
-            if let Some((_, next)) = iter.peek() {
-                if *next != '\n' {
-                    current_x += letter_spacing;
-                }
+            if let Some((_, next)) = iter.peek()
+                && *next != '\n'
+            {
+                current_x += letter_spacing;
             }
         }
     }
@@ -2521,40 +2518,40 @@ fn rasterize_text_to_image_impl(
     let line_height = line_box.height;
     let first_baseline_y = line_box.baseline;
 
-    if let Brush::Solid(color) = brush {
-        if shadow.is_none() {
-            let color = color_to_rgba(*color);
-            let mut rgba = vec![0u8; (width * height * 4) as usize];
-            visit_text_glyph_masks(
-                text,
-                font,
-                font_cache_key,
-                font_px_size,
-                line_height,
-                first_baseline_y,
-                origin_x,
-                origin_y,
-                letter_spacing,
-                align_fraction,
-                static_text_motion,
-                raster_style,
-                weight_synthesis,
-                style_synthesis,
-                glyph_cache.as_deref_mut(),
-                |mask| {
-                    draw_mask_glyph_solid_u8(
-                        &mut rgba,
-                        width,
-                        height,
-                        mask,
-                        color,
-                        brush_alpha_multiplier,
-                    );
-                },
-            );
+    if let Brush::Solid(color) = brush
+        && shadow.is_none()
+    {
+        let color = color_to_rgba(*color);
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        visit_text_glyph_masks(
+            text,
+            font,
+            font_cache_key,
+            font_px_size,
+            line_height,
+            first_baseline_y,
+            origin_x,
+            origin_y,
+            letter_spacing,
+            align_fraction,
+            static_text_motion,
+            raster_style,
+            weight_synthesis,
+            style_synthesis,
+            glyph_cache.as_deref_mut(),
+            |mask| {
+                draw_mask_glyph_solid_u8(
+                    &mut rgba,
+                    width,
+                    height,
+                    mask,
+                    color,
+                    brush_alpha_multiplier,
+                );
+            },
+        );
 
-            return ImageBitmap::from_rgba8(width, height, rgba).ok();
-        }
+        return ImageBitmap::from_rgba8(width, height, rgba).ok();
     }
 
     let mut canvas = vec![[0.0f32; 4]; (width * height) as usize];
@@ -3213,10 +3210,10 @@ fn fallback_layout_text(text: &str, style: &TextStyle) -> TextLayoutResult {
                 height: line_height,
             });
             current_x += char_width;
-            if let Some((_, next)) = iter.peek() {
-                if *next != '\n' {
-                    current_x += letter_spacing;
-                }
+            if let Some((_, next)) = iter.peek()
+                && *next != '\n'
+            {
+                current_x += letter_spacing;
             }
         }
     }
@@ -5076,9 +5073,11 @@ mod tests {
         assert!(!glyphs.is_empty());
         assert!(glyphs.iter().all(|glyph| glyph.mask.width > 0));
         assert!(glyphs.iter().all(|glyph| glyph.mask.height > 0));
-        assert!(glyphs
-            .iter()
-            .any(|glyph| glyph.color == Color(0.4, 0.7, 1.0, 1.0)));
+        assert!(
+            glyphs
+                .iter()
+                .any(|glyph| glyph.color == Color(0.4, 0.7, 1.0, 1.0))
+        );
         assert!(cache.stats().entries > 0);
     }
 
@@ -5152,17 +5151,19 @@ mod tests {
         .expect("cached masks provide placement-only atlas glyphs");
 
         assert_eq!(placements.len(), glyphs.len());
-        assert!(placements
-            .iter()
-            .zip(glyphs.iter())
-            .all(|(placement, glyph)| {
-                placement.key == glyph.key
-                    && placement.x == glyph.x
-                    && placement.y == glyph.y
-                    && placement.width == glyph.mask.width
-                    && placement.height == glyph.mask.height
-                    && placement.color == glyph.color
-            }));
+        assert!(
+            placements
+                .iter()
+                .zip(glyphs.iter())
+                .all(|(placement, glyph)| {
+                    placement.key == glyph.key
+                        && placement.x == glyph.x
+                        && placement.y == glyph.y
+                        && placement.width == glyph.mask.width
+                        && placement.height == glyph.mask.height
+                        && placement.color == glyph.color
+                })
+        );
         let recovered = cache
             .atlas_glyph_for_placement(&placements[0])
             .expect("placement should recover retained mask payload");
@@ -5215,36 +5216,40 @@ mod tests {
             }),
             ..Default::default()
         });
-        assert!(collect_solid_text_atlas_glyphs(
-            &AnnotatedString::new("shadow".to_string()),
-            rect,
-            &shadow_style,
-            Color::WHITE,
-            18.0,
-            1.0,
-            &font_set,
-            &mut cache,
-            &mut glyphs,
-        )
-        .is_none());
+        assert!(
+            collect_solid_text_atlas_glyphs(
+                &AnnotatedString::new("shadow".to_string()),
+                rect,
+                &shadow_style,
+                Color::WHITE,
+                18.0,
+                1.0,
+                &font_set,
+                &mut cache,
+                &mut glyphs,
+            )
+            .is_none()
+        );
         assert_eq!(glyphs.len(), initial_len);
 
         let gradient_style = TextStyle::from_span_style(SpanStyle {
             brush: Some(Brush::linear_gradient(vec![Color::WHITE, Color::BLACK])),
             ..Default::default()
         });
-        assert!(collect_solid_text_atlas_glyphs(
-            &AnnotatedString::new("gradient".to_string()),
-            rect,
-            &gradient_style,
-            Color::WHITE,
-            18.0,
-            1.0,
-            &font_set,
-            &mut cache,
-            &mut glyphs,
-        )
-        .is_none());
+        assert!(
+            collect_solid_text_atlas_glyphs(
+                &AnnotatedString::new("gradient".to_string()),
+                rect,
+                &gradient_style,
+                Color::WHITE,
+                18.0,
+                1.0,
+                &font_set,
+                &mut cache,
+                &mut glyphs,
+            )
+            .is_none()
+        );
         assert_eq!(glyphs.len(), initial_len);
     }
 

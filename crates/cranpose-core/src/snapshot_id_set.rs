@@ -166,22 +166,22 @@ impl SnapshotIdSet {
             }
         } else if id < self.lower_bound {
             // Below lower_bound
-            if let Some(ref arr) = self.below_bound {
-                if let Ok(pos) = arr.binary_search(&id) {
-                    let mut new_arr = Vec::with_capacity(arr.len() - 1);
-                    new_arr.extend_from_slice(&arr[..pos]);
-                    new_arr.extend_from_slice(&arr[pos + 1..]);
-                    return Self {
-                        upper_set: self.upper_set,
-                        lower_set: self.lower_set,
-                        lower_bound: self.lower_bound,
-                        below_bound: if new_arr.is_empty() {
-                            None
-                        } else {
-                            Some(new_arr.into_boxed_slice())
-                        },
-                    };
-                }
+            if let Some(ref arr) = self.below_bound
+                && let Ok(pos) = arr.binary_search(&id)
+            {
+                let mut new_arr = Vec::with_capacity(arr.len() - 1);
+                new_arr.extend_from_slice(&arr[..pos]);
+                new_arr.extend_from_slice(&arr[pos + 1..]);
+                return Self {
+                    upper_set: self.upper_set,
+                    lower_set: self.lower_set,
+                    lower_bound: self.lower_bound,
+                    below_bound: if new_arr.is_empty() {
+                        None
+                    } else {
+                        Some(new_arr.into_boxed_slice())
+                    },
+                };
             }
         }
 
@@ -246,12 +246,11 @@ impl SnapshotIdSet {
     /// Find the lowest snapshot ID in the set that is <= upper.
     pub fn lowest(&self, upper: SnapshotId) -> SnapshotId {
         // Check below_bound array first
-        if let Some(ref arr) = self.below_bound {
-            if let Some(&lowest) = arr.first() {
-                if lowest <= upper {
-                    return lowest;
-                }
-            }
+        if let Some(ref arr) = self.below_bound
+            && let Some(&lowest) = arr.first()
+            && lowest <= upper
+        {
+            return lowest;
         }
 
         // Check lower_set
@@ -416,12 +415,12 @@ impl<'a> Iterator for SnapshotIdSetIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // First, yield from below_bound array
-        if let Some(ref arr) = self.set.below_bound {
-            if self.below_index < arr.len() {
-                let id = arr[self.below_index];
-                self.below_index += 1;
-                return Some(id);
-            }
+        if let Some(ref arr) = self.set.below_bound
+            && self.below_index < arr.len()
+        {
+            let id = arr[self.below_index];
+            self.below_index += 1;
+            return Some(id);
         }
 
         // Then yield from lower_set

@@ -36,13 +36,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -242,19 +242,18 @@ fn instanced_quads_match_the_six_vertex_expansion() {
     // selection latches at GpuRenderer construction. The arc mesh stays out
     // of this suite entirely (its own envelope lives in arc_mesh_parity) so
     // every retained draw rides the quad path under measurement.
-    std::env::set_var("CRANPOSE_INSTANCED_QUADS", "0");
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
-            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
-            std::env::remove_var("CRANPOSE_ARC_MESH");
+            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
+            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
             eprintln!("skipping instanced quad parity: headless WGPU init failed: {err}");
             return;
         }
     };
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     let graphs = build_sequence(12);
 
@@ -267,12 +266,11 @@ fn instanced_quads_match_the_six_vertex_expansion() {
     // Arm B: re-latch ON through the renderer-replacement path (fresh
     // device, retired slots — the same lifecycle a real surface recreation
     // runs), then warm and control exactly like arm A.
-    std::env::set_var("CRANPOSE_INSTANCED_QUADS", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("1"));
     if let Err(err) = support::reinit_gpu(&mut renderer) {
-        std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
-        std::env::remove_var("CRANPOSE_ARC_MESH");
-        std::env::remove_var("CRANPOSE_COMMAND_FEED");
-        std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
         eprintln!("skipping instanced quad parity: reinit failed: {err}");
         return;
     }
@@ -282,10 +280,9 @@ fn instanced_quads_match_the_six_vertex_expansion() {
     );
     let instanced_frames = render_arm("instanced-control", &mut renderer, &graphs);
 
-    std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
 
     for (frame, (six_vertex, instanced)) in
         six_vertex_frames.iter().zip(&instanced_frames).enumerate()

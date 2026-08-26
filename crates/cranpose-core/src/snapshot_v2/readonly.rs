@@ -97,7 +97,7 @@ mod tests {
     use std::rc::Rc;
 
     use super::*;
-    use crate::state::{StateObject, PREEXISTING_SNAPSHOT_ID};
+    use crate::state::{PREEXISTING_SNAPSHOT_ID, StateObject};
 
     fn mock_state_record() -> Rc<crate::state::StateRecord> {
         crate::state::StateRecord::new(PREEXISTING_SNAPSHOT_ID, (), None)

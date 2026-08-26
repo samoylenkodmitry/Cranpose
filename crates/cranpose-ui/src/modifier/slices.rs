@@ -9,8 +9,8 @@ use super::{ModifierChainHandle, Point};
 use crate::{
     draw::DrawCommand,
     modifier::{
-        scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
         Modifier,
+        scroll::{MotionContextAnimatedNode, TranslatedContentContextNode},
     },
     modifier_nodes::{
         BackgroundNode, ClipToBoundsNode, CornerShapeNode, DrawCommandNode, GraphicsLayerNode,
@@ -463,17 +463,18 @@ pub fn collect_modifier_slices_into(chain: &ModifierNodeChain, slices: &mut Modi
             let any = node.as_any();
 
             // POINTER_INPUT collection
-            if has_pointer && node_caps.intersects(NodeCapabilities::POINTER_INPUT) {
-                if let Some(pointer_node) = node.as_pointer_input_node() {
-                    if let Some(handler) = pointer_node.pointer_input_handler() {
-                        slices.pointer_inputs.push(handler);
-                    }
-                    // Collect the node's size sink so the layout pass can
-                    // publish this node's resolved size into the handler's
-                    // scope (`PointerInputScope::size`).
-                    if let Some(sink) = pointer_node.layout_size_sink() {
-                        slices.pointer_input_sizes.push(sink);
-                    }
+            if has_pointer
+                && node_caps.intersects(NodeCapabilities::POINTER_INPUT)
+                && let Some(pointer_node) = node.as_pointer_input_node()
+            {
+                if let Some(handler) = pointer_node.pointer_input_handler() {
+                    slices.pointer_inputs.push(handler);
+                }
+                // Collect the node's size sink so the layout pass can
+                // publish this node's resolved size into the handler's
+                // scope (`PointerInputScope::size`).
+                if let Some(sink) = pointer_node.layout_size_sink() {
+                    slices.pointer_input_sizes.push(sink);
                 }
             }
 

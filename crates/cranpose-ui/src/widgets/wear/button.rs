@@ -26,14 +26,13 @@ use cranpose_ui_layout::{
 };
 
 use crate::{
-    composable,
+    SemanticsWidgetRole, composable,
     density::Density,
     modifier::{Brush, Color, CornerRadii, Modifier, SemanticsConfiguration},
     widgets::{
-        wear::theme::{WearColors, WearTextStyle},
         Layout, Text,
+        wear::theme::{WearColors, WearTextStyle},
     },
-    SemanticsWidgetRole,
 };
 
 /// `ButtonDefaults` plus `FilledButtonTokens`.

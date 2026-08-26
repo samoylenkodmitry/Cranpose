@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 ))]
 use std::process::Command;
 
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 use cranpose_macros::composable;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

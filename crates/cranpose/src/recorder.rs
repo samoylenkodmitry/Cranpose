@@ -170,10 +170,11 @@ impl InputRecorder {
     /// Record a mouse move event
     pub fn record_mouse_move(&mut self, x: f32, y: f32) {
         // Skip if same position (within 0.5px)
-        if let Some((lx, ly)) = self.last_mouse_pos {
-            if (x - lx).abs() < 0.5 && (y - ly).abs() < 0.5 {
-                return;
-            }
+        if let Some((lx, ly)) = self.last_mouse_pos
+            && (x - lx).abs() < 0.5
+            && (y - ly).abs() < 0.5
+        {
+            return;
         }
         self.last_mouse_pos = Some((x, y));
         let time_ms = self.elapsed_ms();

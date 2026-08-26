@@ -9,8 +9,8 @@
 // Root cause: Conditional rendering breaks RecomposeScope connections for sibling components
 
 use cranpose_core::{
-    __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
-    MemoryApplier, MutableState, Node, TaskSite,
+    __launched_effect_async_impl as launched_effect_async_impl, Composition, MemoryApplier,
+    MutableState, Node, TaskSite, location_key,
 };
 use cranpose_macros::composable;
 
@@ -283,7 +283,9 @@ fn drain_all<A: cranpose_core::Applier + 'static>(
         }
         iterations += 1;
         if iterations > 1000 {
-            eprintln!("drain_all: Exceeded 1000 iterations, giving up. This indicates an infinite recomposition loop. {iterations}");
+            eprintln!(
+                "drain_all: Exceeded 1000 iterations, giving up. This indicates an infinite recomposition loop. {iterations}"
+            );
             return Err(cranpose_core::NodeError::MissingContext {
                 id: 0,
                 reason: "drain_all: Exceeded 1000 iterations",

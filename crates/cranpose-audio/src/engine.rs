@@ -6,8 +6,8 @@
 //! search for a free identifier inside its real-time budget.
 
 use std::sync::{
-    atomic::{fence, AtomicBool, AtomicU32, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicU32, Ordering, fence},
 };
 
 use cranpose_services::{
@@ -17,7 +17,7 @@ use parking_lot::Mutex;
 
 use crate::{
     backend::{self, AudioSink},
-    mixer::{ClipData, Command, MixerSeed, BUS_COUNT, MAX_CLIPS},
+    mixer::{BUS_COUNT, ClipData, Command, MAX_CLIPS, MixerSeed},
     ring,
 };
 
@@ -617,14 +617,14 @@ impl AudioPlayer for AudioEngine {
 #[cfg(test)]
 mod tests {
     use std::sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     };
 
     use parking_lot::Mutex;
 
     use super::*;
-    use crate::mixer::{Mixer, RenderStatus, IDLE_GRACE_SECONDS, MAX_VOICES};
+    use crate::mixer::{IDLE_GRACE_SECONDS, MAX_VOICES, Mixer, RenderStatus};
 
     /// The device rate the rig's mixer runs at, and the burst size its
     /// callbacks arrive in. 128 frames at 48 kHz is a realistic AAudio burst.

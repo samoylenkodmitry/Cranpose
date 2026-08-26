@@ -3,10 +3,10 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem};
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
-    generational_registry::{GenerationalRegistryStorage, RegistryState},
     DetachedSubtree, PayloadAnchor, PayloadRecord, SlotTable,
+    generational_registry::{GenerationalRegistryStorage, RegistryState},
 };
-use crate::{collections::map::HashMap, AnchorId};
+use crate::{AnchorId, collections::map::HashMap};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PayloadAnchorState {
@@ -435,11 +435,11 @@ impl PayloadAnchorRegistry {
             if range.is_empty() {
                 continue;
             }
-            if let Some(last) = merged.last_mut() {
-                if range.start <= last.end.saturating_add(1) {
-                    last.end = last.end.max(range.end);
-                    continue;
-                }
+            if let Some(last) = merged.last_mut()
+                && range.start <= last.end.saturating_add(1)
+            {
+                last.end = last.end.max(range.end);
+                continue;
             }
             merged.push(range);
         }
@@ -697,9 +697,11 @@ mod tests {
         let anchor = PayloadAnchor::new(2_500_000, 1);
         registry.next_id = anchor.id() + 1;
 
-        assert!(registry
-            .set_state(anchor, PayloadAnchorState::Detached)
-            .is_none());
+        assert!(
+            registry
+                .set_state(anchor, PayloadAnchorState::Detached)
+                .is_none()
+        );
         registry.set_active(anchor, AnchorId::new(1), 0);
 
         assert_eq!(

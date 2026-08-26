@@ -3,8 +3,8 @@ use std::rc::Rc;
 use cranpose_ui_graphics::{DrawPrimitive, DrawScope as _, DrawScopeDefault, ShadowPrimitive};
 
 use super::{
-    inspector_metadata, Brush, Color, DrawCommand, LayerShape, Modifier, Point, Rect, Shadow,
-    ShadowScope, Size,
+    Brush, Color, DrawCommand, LayerShape, Modifier, Point, Rect, Shadow, ShadowScope, Size,
+    inspector_metadata,
 };
 use crate::modifier_nodes::DrawCommandElement;
 

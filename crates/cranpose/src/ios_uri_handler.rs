@@ -10,8 +10,8 @@
 
 use std::rc::Rc;
 
-use cranpose_services::{set_platform_uri_handler, UriHandler, UriHandlerError};
-use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker};
+use cranpose_services::{UriHandler, UriHandlerError, set_platform_uri_handler};
+use objc2::{MainThreadMarker, rc::Retained, runtime::AnyObject};
 use objc2_foundation::{NSDictionary, NSString, NSURL};
 use objc2_ui_kit::UIApplication;
 

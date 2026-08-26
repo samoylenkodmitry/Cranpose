@@ -12,7 +12,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 use parking_lot::Mutex;
 

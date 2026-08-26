@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    set_application_id, set_host_controller, HostController, PlatformDirectories,
+    HostController, PlatformDirectories, set_application_id, set_host_controller,
 };
-use jni::{jni_sig, jni_str, EnvUnowned};
+use jni::{EnvUnowned, jni_sig, jni_str};
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
 
@@ -98,7 +98,9 @@ fn package_name(app: &android_activity::AndroidApp) -> Option<String> {
 
 pub(crate) fn install(app: android_activity::AndroidApp) {
     if let Some(path) = app.internal_data_path() {
-        std::env::set_var("XDG_DATA_HOME", path);
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", path);
+        }
     }
     if let Some(package) = package_name(&app) {
         if let Err(error) = set_application_id(&package) {

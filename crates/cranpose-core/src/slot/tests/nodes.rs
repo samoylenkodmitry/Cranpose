@@ -57,10 +57,12 @@ fn node_operations_with_stale_owner_anchor_do_not_panic_or_record() {
         }
     );
     assert_eq!(harness.table.node_identity_at_cursor(group_anchor, 0), None);
-    assert!(harness
-        .table
-        .remove_group_node_tail_at_cursor(group_anchor, 0)
-        .is_empty());
+    assert!(
+        harness
+            .table
+            .remove_group_node_tail_at_cursor(group_anchor, 0)
+            .is_empty()
+    );
     assert_eq!(harness.table.total_node_count(), 0);
 }
 
@@ -220,10 +222,12 @@ fn collecting_root_nodes_with_stale_group_anchor_returns_empty() {
 
     harness.table.anchors.mark_detached(group_anchor);
 
-    assert!(harness
-        .table
-        .collect_subtree_root_node_ids(group_anchor)
-        .is_empty());
+    assert!(
+        harness
+            .table
+            .collect_subtree_root_node_ids(group_anchor)
+            .is_empty()
+    );
 }
 
 #[test]

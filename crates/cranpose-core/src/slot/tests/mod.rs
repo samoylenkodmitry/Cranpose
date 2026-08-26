@@ -16,12 +16,12 @@ use super::{
     SlotWriteSessionState, ValueSlotError,
 };
 use crate::{
+    AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
     retention::{RetainKey, RetentionManager},
     slot::{
         ActiveGroupId, GroupKey, GroupKeySeed, GroupStart, GroupStartKind, NodeSlotUpdate,
         PayloadAnchor, ValueSlotId,
     },
-    AnchorId, Applier, Key, MemoryApplier, Node, NodeId, ScopeId,
 };
 
 struct SlotHarness {

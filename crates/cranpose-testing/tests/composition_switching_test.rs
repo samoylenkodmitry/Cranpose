@@ -3,7 +3,7 @@
 //! This test reproduces a bug where switching between different composable views
 //! and clicking buttons causes content to be appended multiple times.
 
-use cranpose_core::{compositionLocalOf, CompositionLocalProvider, MutableState};
+use cranpose_core::{CompositionLocalProvider, MutableState, compositionLocalOf};
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;

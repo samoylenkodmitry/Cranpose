@@ -137,9 +137,6 @@ impl BranchGroupInjector<'_> {
                     self.wrap_place_value_parts(scrutinee);
                 } else {
                     self.visit_expr_mut(scrutinee);
-                    let guard_expr = self.branch_guard_expr(scrutinee.span());
-                    let original = scrutinee.clone();
-                    **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
                 }
             }
             leaf => {
@@ -264,6 +261,9 @@ impl VisitMut for BranchGroupInjector<'_> {
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
             Expr::Closure(closure) => {
+                if closure.asyncness.is_some() {
+                    return;
+                }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
                 self.visit_expr_mut(&mut closure.body);
                 let guard = self.branch_guard_stmt(closure.span());

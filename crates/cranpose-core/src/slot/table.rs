@@ -1,9 +1,8 @@
 use std::rc::Rc;
 
 use super::{
-    debug::SlotTableDiagnostics, AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord,
-    PayloadAnchorRegistry, PayloadRecord, ScopeIndex, SlotLifecycleCoordinator,
-    SlotWriteSessionState,
+    AnchorRegistry, DeferredDrop, GroupRecord, NodeRecord, PayloadAnchorRegistry, PayloadRecord,
+    ScopeIndex, SlotLifecycleCoordinator, SlotWriteSessionState, debug::SlotTableDiagnostics,
 };
 
 mod metadata;

@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{hash_map::Entry, HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     hash::Hash,
     ops::Range,
     rc::Rc,
@@ -1612,23 +1612,23 @@ fn remap_subsequence_range_styles<T: Clone>(
                 continue;
             }
 
-            if let Some(start) = range_start.take() {
-                if start < range_end {
-                    remapped.push(crate::text::RangeStyle {
-                        item: style.item.clone(),
-                        range: start..range_end,
-                    });
-                }
-            }
-        }
-
-        if let Some(start) = range_start.take() {
-            if start < range_end {
+            if let Some(start) = range_start.take()
+                && start < range_end
+            {
                 remapped.push(crate::text::RangeStyle {
                     item: style.item.clone(),
                     range: start..range_end,
                 });
             }
+        }
+
+        if let Some(start) = range_start.take()
+            && start < range_end
+        {
+            remapped.push(crate::text::RangeStyle {
+                item: style.item.clone(),
+                range: start..range_end,
+            });
         }
     }
 
@@ -1697,10 +1697,10 @@ impl<'a, M: TextMeasurer + ?Sized> LineMeasureContext<'a, M> {
     }
 
     fn prefix_width_for_char_range(&self, start_idx: usize, end_idx: usize) -> Option<f32> {
-        if let Some(prefix_widths) = &self.prefix_widths {
-            if let Some(width) = prefix_widths.width_for_char_range(start_idx, end_idx) {
-                return Some(width);
-            }
+        if let Some(prefix_widths) = &self.prefix_widths
+            && let Some(width) = prefix_widths.width_for_char_range(start_idx, end_idx)
+        {
+            return Some(width);
         }
         None
     }
@@ -1734,28 +1734,27 @@ fn wrap_line_to_width<M: TextMeasurer + ?Sized>(
         )];
     }
 
-    if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style) {
-        if measured_width <= max_width + WRAP_EPSILON {
-            return vec![DisplayLine::from_measured_source_range(
-                line_range,
-                measured_width,
-            )];
-        }
+    if let Some(measured_width) = measurer.measure_line_width(text, line_range.clone(), style)
+        && measured_width <= max_width + WRAP_EPSILON
+    {
+        return vec![DisplayLine::from_measured_source_range(
+            line_range,
+            measured_width,
+        )];
     }
 
     if matches!(line_break, LineBreak::Heading | LineBreak::Paragraph)
         && line_text.chars().any(char::is_whitespace)
-    {
-        if let Some(balanced) = wrap_line_with_word_balance(
+        && let Some(balanced) = wrap_line_with_word_balance(
             measurer,
             text,
             line_range.clone(),
             style,
             max_width,
             line_break,
-        ) {
-            return balanced;
-        }
+        )
+    {
+        return balanced;
     }
 
     wrap_line_greedy(
@@ -1778,13 +1777,12 @@ fn wrap_line_greedy<M: TextMeasurer + ?Sized>(
         LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
     if let Some(measured_width) =
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
+        && measured_width <= max_width + WRAP_EPSILON
     {
-        if measured_width <= max_width + WRAP_EPSILON {
-            return vec![DisplayLine::from_measured_source_range(
-                line_range,
-                measured_width,
-            )];
-        }
+        return vec![DisplayLine::from_measured_source_range(
+            line_range,
+            measured_width,
+        )];
     }
     let mut wrapped = Vec::new();
     let mut start_idx = 0usize;
@@ -1875,13 +1873,12 @@ fn wrap_line_with_word_balance<M: TextMeasurer + ?Sized>(
         LineMeasureContext::new(measurer, text, &line_range, style, boundaries.len());
     if let Some(measured_width) =
         measure_context.prefix_width_for_char_range(0, boundaries.len() - 1)
+        && measured_width <= max_width + WRAP_EPSILON
     {
-        if measured_width <= max_width + WRAP_EPSILON {
-            return Some(vec![DisplayLine::from_measured_source_range(
-                line_range,
-                measured_width,
-            )]);
-        }
+        return Some(vec![DisplayLine::from_measured_source_range(
+            line_range,
+            measured_width,
+        )]);
     }
     let breakpoints = collect_word_breakpoints(line_text, &boundaries);
     if breakpoints.len() <= 2 {
@@ -2023,10 +2020,10 @@ fn resolve_auto_hyphen_break<M: TextMeasurer + ?Sized>(
     start_idx: usize,
     break_idx: usize,
 ) -> usize {
-    if let Some(candidate) = measurer.choose_auto_hyphen_break(line, style, start_idx, break_idx) {
-        if is_valid_auto_hyphen_break(line, boundaries, start_idx, break_idx, candidate) {
-            return candidate;
-        }
+    if let Some(candidate) = measurer.choose_auto_hyphen_break(line, style, start_idx, break_idx)
+        && is_valid_auto_hyphen_break(line, boundaries, start_idx, break_idx, candidate)
+    {
+        return candidate;
     }
     choose_auto_hyphen_break_fallback(boundaries, start_idx, break_idx)
 }

@@ -268,7 +268,7 @@ impl Drop for FileSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::{collect_stream, folder_files, write_all, DEFAULT_CHUNK_LEN};
+    use crate::content::{DEFAULT_CHUNK_LEN, collect_stream, folder_files, write_all};
 
     fn temp_dir(name: &str) -> PathBuf {
         crate::test_scratch_dir(&format!("content-{name}"))

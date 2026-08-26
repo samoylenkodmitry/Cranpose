@@ -2,8 +2,8 @@
 
 use cranpose_macros::composable;
 use cranpose_ui::{
-    widgets::{Box, BoxSpec},
     Modifier,
+    widgets::{Box, BoxSpec},
 };
 use cranpose_ui_layout::Alignment;
 

@@ -8,7 +8,7 @@
 
 use std::rc::Rc;
 
-use cranpose_ui::clipboard_session::{set_platform_clipboard, PlatformClipboard};
+use cranpose_ui::clipboard_session::{PlatformClipboard, set_platform_clipboard};
 use objc2_foundation::NSString;
 use objc2_ui_kit::UIPasteboard;
 

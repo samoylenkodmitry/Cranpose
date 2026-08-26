@@ -10,7 +10,7 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use cranpose_core::{mutableStateOf, remember, MutableState, NodeId, SideEffect};
+use cranpose_core::{MutableState, NodeId, SideEffect, mutableStateOf, remember};
 use cranpose_foundation::{
     modifier_element,
     text::{TextFieldLineLimits, TextFieldState, TextRange},
@@ -24,17 +24,17 @@ use crate::{
     layout::policies::EmptyMeasurePolicy,
     modifier::Modifier,
     safe_area::local_ime_insets,
-    text::{measure_text, AnnotatedString, TextStyle},
+    text::{AnnotatedString, TextStyle, measure_text},
     text_field_focus::{dispatch_copy, dispatch_cut, dispatch_select_all},
     text_field_modifier_node::{
         TextFieldElement, TextFieldHandleController, TextFieldHandleMetrics,
     },
     text_selection::{
-        selection_after_handle_drag, HandleGrabOffset, HandleKind, LineAffinity, HANDLE_RADIUS,
+        HANDLE_RADIUS, HandleGrabOffset, HandleKind, LineAffinity, selection_after_handle_drag,
     },
     widgets::{
-        loupe_target_for_drag, CaretActionMenu, Layout, SelectionHandle, SelectionLoupe,
-        TextSelectionMenu,
+        CaretActionMenu, Layout, SelectionHandle, SelectionLoupe, TextSelectionMenu,
+        loupe_target_for_drag,
     },
 };
 
@@ -938,7 +938,7 @@ mod tests {
     }
     use std::sync::Arc;
 
-    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
+    use cranpose_core::{Composition, DefaultScheduler, MemoryApplier, Runtime, location_key};
 
     /// Sets up a test runtime and keeps it alive for the duration of the test.
     fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
@@ -1164,12 +1164,12 @@ mod tests {
     fn render_range_menu_lazy_column(
         direct_manipulation: bool,
     ) -> crate::renderer::RecordedRenderScene {
-        use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
+        use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
         use cranpose_ui_graphics::Size;
 
         use crate::{
-            layout::LayoutEngine, renderer::HeadlessRenderer, widgets::PopupHost, LazyColumn,
-            LazyColumnSpec,
+            LazyColumn, LazyColumnSpec, layout::LayoutEngine, renderer::HeadlessRenderer,
+            widgets::PopupHost,
         };
 
         let mut composition = Composition::new(MemoryApplier::new());
@@ -1258,12 +1258,12 @@ mod tests {
     fn field_window_origin_follows_vertical_scroll() {
         use std::cell::RefCell;
 
-        use cranpose_core::{remember, Key};
+        use cranpose_core::{Key, remember};
         use cranpose_foundation::modifier_element;
         use cranpose_ui_graphics::Size;
 
         use crate::{
-            layout::{policies::EmptyMeasurePolicy, LayoutBox, LayoutEngine},
+            layout::{LayoutBox, LayoutEngine, policies::EmptyMeasurePolicy},
             renderer::HeadlessRenderer,
             scroll::ScrollState,
             widgets::{Column, ColumnSpec, Layout, PopupHost, Spacer},
@@ -1843,15 +1843,15 @@ mod tests {
         use std::cell::RefCell;
 
         use cranpose_core::Key;
-        use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
+        use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
         use cranpose_ui_graphics::Size;
 
         use crate::{
+            LazyColumn, LazyColumnSpec,
             bring_into_view::local_bring_into_view_responder,
             layout::LayoutEngine,
             renderer::HeadlessRenderer,
             widgets::{Box, BoxSpec, PopupHost},
-            LazyColumn, LazyColumnSpec,
         };
 
         let _app_context = crate::render_state::app_context_test_scope();

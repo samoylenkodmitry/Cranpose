@@ -11,19 +11,19 @@ use std::{
     fmt::{Debug, Write},
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use cranpose_core::{
-    enter_event_handler_scope, location_key, run_in_mutable_snapshot, Applier, Composition, Key,
-    MemoryApplier, NodeError, NodeId,
+    Applier, Composition, Key, MemoryApplier, NodeError, NodeId, enter_event_handler_scope,
+    location_key, run_in_mutable_snapshot,
 };
 // Re-export the rotary (Wear OS crown / rotating bezel) event so platform
 // backends can build one and apps can type their window-level handler.
 pub use cranpose_foundation::{
-    rotary_scroll_pixels_from_detents, RotaryScrollEvent, DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, RotaryScrollEvent, rotary_scroll_pixels_from_detents,
 };
 // Re-export the pointer device source and the keyboard-modifiers type so
 // platform backends can stamp them. `Modifiers` lives in cranpose-foundation
@@ -34,14 +34,14 @@ use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEv
 use cranpose_render_common::{HitTestTarget, RenderScene, Renderer};
 use cranpose_runtime_std::StdRuntime;
 use cranpose_ui::{
-    clear_transient_scroll_motion_contexts, format_layout_tree, format_render_scene,
-    format_screen_summary, has_pending_focus_invalidations, has_pending_pointer_repasses,
-    has_pending_semantics_invalidations, peek_focus_invalidation, peek_layout_invalidation,
-    peek_pointer_invalidation, peek_render_invalidation, process_focus_invalidations,
-    process_pointer_repasses, process_semantics_invalidations, request_render_invalidation,
-    take_draw_repass_nodes, take_focus_invalidation, take_layout_invalidation,
-    take_pointer_invalidation, take_render_invalidation, HeadlessRenderer, LayoutBox, LayoutNode,
-    LayoutTree, MeasureLayoutOptions, SemanticsTree, SubcomposeLayoutNode,
+    HeadlessRenderer, LayoutBox, LayoutNode, LayoutTree, MeasureLayoutOptions, SemanticsTree,
+    SubcomposeLayoutNode, clear_transient_scroll_motion_contexts, format_layout_tree,
+    format_render_scene, format_screen_summary, has_pending_focus_invalidations,
+    has_pending_pointer_repasses, has_pending_semantics_invalidations, peek_focus_invalidation,
+    peek_layout_invalidation, peek_pointer_invalidation, peek_render_invalidation,
+    process_focus_invalidations, process_pointer_repasses, process_semantics_invalidations,
+    request_render_invalidation, take_draw_repass_nodes, take_focus_invalidation,
+    take_layout_invalidation, take_pointer_invalidation, take_render_invalidation,
 };
 // Re-export key event types for use by cranpose
 pub use cranpose_ui::{KeyCode, KeyEvent, KeyEventType};
@@ -92,16 +92,16 @@ impl cranpose_ui::clipboard_session::PlatformClipboard for ShellClipboard {
 // Re-export the platform soft-keyboard hook so runtimes only depend on the shell
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
-    debug_recompose_scope_registry_stats, MemoryApplierDebugStats,
-    RecomposeScopeRegistryDebugStats, SlotTableDebugStats,
+    CompositionPassDebugStats, SlotId,
+    runtime::{RuntimeDebugStats, StateArenaDebugStats},
+    snapshot_pinning::{SnapshotPinningDebugStats, debug_snapshot_pinning_stats},
+    snapshot_state_observer::SnapshotStateObserverDebugStats,
+    snapshot_v2::{SnapshotV2DebugStats, debug_snapshot_v2_stats},
 };
 #[cfg(any(test, feature = "test-support"))]
 use cranpose_core::{
-    runtime::{RuntimeDebugStats, StateArenaDebugStats},
-    snapshot_pinning::{debug_snapshot_pinning_stats, SnapshotPinningDebugStats},
-    snapshot_state_observer::SnapshotStateObserverDebugStats,
-    snapshot_v2::{debug_snapshot_v2_stats, SnapshotV2DebugStats},
-    CompositionPassDebugStats, SlotId,
+    MemoryApplierDebugStats, RecomposeScopeRegistryDebugStats, SlotTableDebugStats,
+    debug_recompose_scope_registry_stats,
 };
 // Re-export the IME editable-state snapshot for platform text-input bridges
 pub use cranpose_ui::ImeEditorState;
@@ -326,9 +326,7 @@ fn log_update_stage_telemetry(telemetry: UpdateStageTelemetry) {
         * 1000.0;
     eprintln!(
         "[update-stage-telemetry] total_ms={total_ms:.2} frame_callbacks_ms={frame_callbacks_ms:.2} ui_drain_ms={ui_drain_ms:.2} reconcile_ms={reconcile_ms:.2} process_frame_ms={process_frame_ms:.2} should_render={} reconcile_attempted={} reconcile_changed={}",
-        telemetry.should_render,
-        telemetry.reconcile_attempted,
-        telemetry.reconcile_changed
+        telemetry.should_render, telemetry.reconcile_attempted, telemetry.reconcile_changed
     );
 }
 
@@ -1183,7 +1181,7 @@ pub fn default_root_key() -> Key {
 mod frame_pacing_tests {
     use std::{
         cell::RefCell,
-        panic::{catch_unwind, AssertUnwindSafe},
+        panic::{AssertUnwindSafe, catch_unwind},
         time::Duration,
     };
 

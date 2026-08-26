@@ -1,9 +1,8 @@
 use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
 
 use crate::{
-    composer_context,
+    Composer, LocalKey, RuntimeHandle, composer_context,
     state::{MutationPolicy, OwnedMutableState},
-    Composer, LocalKey, RuntimeHandle,
 };
 
 pub struct ProvidedValue {

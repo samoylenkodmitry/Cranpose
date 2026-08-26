@@ -1,4 +1,4 @@
-use super::{inspector_metadata, EdgeInsets, InspectorMetadata, Modifier};
+use super::{EdgeInsets, InspectorMetadata, Modifier, inspector_metadata};
 use crate::modifier_nodes::PaddingElement;
 
 impl Modifier {

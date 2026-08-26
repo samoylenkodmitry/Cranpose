@@ -14,9 +14,8 @@ use std::{
 };
 
 use cranpose_core::{
-    composer_context::current_composer, derivedStateOf, launchBlocking, location_key,
-    mutableStateOf, remember, rememberCoroutineScope, CollectEvents, Composition, EventChannel,
-    MemoryApplier,
+    CollectEvents, Composition, EventChannel, MemoryApplier, composer_context::current_composer,
+    derivedStateOf, launchBlocking, location_key, mutableStateOf, remember, rememberCoroutineScope,
 };
 
 fn composition() -> Composition<MemoryApplier> {

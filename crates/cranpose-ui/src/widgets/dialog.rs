@@ -20,9 +20,9 @@ use cranpose_ui_layout::Alignment;
 
 use super::{
     box_widget::{Box, BoxSpec},
-    popup::{local_popup_viewport, PopupDismissable},
+    popup::{PopupDismissable, local_popup_viewport},
 };
-use crate::{composable, safe_area::window_insets, Modifier, SemanticsWidgetRole};
+use crate::{Modifier, SemanticsWidgetRole, composable, safe_area::window_insets};
 
 /// Why a dialog is being asked to close.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,10 +282,10 @@ mod tests {
         use std::cell::{Cell, RefCell};
 
         use cranpose_core::{
-            location_key, mutableStateOf, remember, Composition, MemoryApplier, MutableState,
-            NodeId,
+            Composition, MemoryApplier, MutableState, NodeId, location_key, mutableStateOf,
+            remember,
         };
-        use cranpose_foundation::{text::TextFieldState, PointerEvent, PointerEventKind};
+        use cranpose_foundation::{PointerEvent, PointerEventKind, text::TextFieldState};
         use cranpose_ui_graphics::Size;
 
         use crate::{

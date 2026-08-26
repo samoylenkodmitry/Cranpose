@@ -1,7 +1,7 @@
 use std::fmt;
 
 use super::{super::ValueSlotId, SlotTable};
-use crate::{slot::PayloadAnchor, AnchorId};
+use crate::{AnchorId, slot::PayloadAnchor};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ValueSlotError {
@@ -84,10 +84,7 @@ impl fmt::Display for ValueSlotError {
                 anchor,
                 expected,
                 actual,
-            } => write!(
-                f,
-                "value slot {anchor:?} has type {actual}, not {expected}"
-            ),
+            } => write!(f, "value slot {anchor:?} has type {actual}, not {expected}"),
         }
     }
 }

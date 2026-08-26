@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::NodeId;
-use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope, LazyListState};
+use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 use cranpose_ui_graphics::Size as ViewportSize;
 
 use super::*;
@@ -164,8 +164,8 @@ fn BusyRow(index: usize, state: cranpose_core::MutableState<bool>) {
 #[allow(non_snake_case)]
 fn BadgeRow(index: usize, state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     let busy = state.get() && index == 0;
     Column(Modifier::empty(), ColumnSpec::new(), move || {
@@ -331,8 +331,8 @@ fn task_counts_across_captured_swap() -> Vec<usize> {
 #[allow(non_snake_case)]
 fn CapturedBadgeRow(index: usize, busy: bool) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     Column(Modifier::empty(), ColumnSpec::new(), move || {
         Text(
@@ -371,8 +371,8 @@ fn CapturedBadgeRow(index: usize, busy: bool) {
 #[allow(non_snake_case)]
 fn CapturedBadgeItemList(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     let busy_now = state.get();
     let list_state = rememberLazyListState();
@@ -465,8 +465,8 @@ fn a_badge_in_a_lazy_header_item_stops_its_loops_when_it_goes() {
 #[allow(non_snake_case)]
 fn ToastHost(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     let shown = state.get();
     Column(
@@ -571,8 +571,8 @@ fn a_toast_that_fades_out_stops_the_loops_it_showed() {
 #[allow(non_snake_case)]
 fn ShiftingBadgeList(state: cranpose_core::MutableState<bool>) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     let banner = state.get();
     let list_state = rememberLazyListState();
@@ -1059,8 +1059,8 @@ fn a_lazy_list_that_comes_back_keeps_one_pair_of_loops() {
 #[allow(non_snake_case)]
 fn EarlyReturnBanner(count: usize) {
     use cranpose_animation::{
-        infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode,
-        StartOffset,
+        AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable,
+        rememberInfiniteTransition,
     };
     if count == 0 {
         return;

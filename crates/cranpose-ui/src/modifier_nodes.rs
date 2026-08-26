@@ -615,10 +615,8 @@ impl GraphicsLayerNode {
         let changed = self.layer != layer || self.layer_resolver.is_some();
         self.layer = layer;
         self.layer_resolver = None;
-        if changed {
-            if let Some(node_id) = self.node_id.get() {
-                crate::render_state::schedule_draw_repass(node_id);
-            }
+        if changed && let Some(node_id) = self.node_id.get() {
+            crate::render_state::schedule_draw_repass(node_id);
         }
     }
 
@@ -628,10 +626,8 @@ impl GraphicsLayerNode {
             .as_ref()
             .is_none_or(|current| !Rc::ptr_eq(current, &layer_resolver));
         self.layer_resolver = Some(layer_resolver);
-        if changed {
-            if let Some(node_id) = self.node_id.get() {
-                crate::render_state::schedule_draw_repass(node_id);
-            }
+        if changed && let Some(node_id) = self.node_id.get() {
+            crate::render_state::schedule_draw_repass(node_id);
         }
     }
 }

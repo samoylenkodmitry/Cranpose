@@ -9,7 +9,7 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_core::{with_current_composer, Owned, State};
+use cranpose_core::{Owned, State, with_current_composer};
 use cranpose_ui_graphics::Color;
 
 use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};

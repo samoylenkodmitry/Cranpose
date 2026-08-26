@@ -9,8 +9,8 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_services::{set_platform_system_theme, SystemTheme};
-use cranpose_ui::{local_ime_insets, local_safe_area_insets, EdgeInsets};
+use cranpose_services::{SystemTheme, set_platform_system_theme};
+use cranpose_ui::{EdgeInsets, local_ime_insets, local_safe_area_insets};
 
 /// Live environment values a platform driver feeds into composition.
 #[derive(Default)]

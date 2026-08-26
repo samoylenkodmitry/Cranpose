@@ -1,9 +1,9 @@
 use cranpose_ui_graphics::Point;
 
 use crate::{
+    VelocityTracker1D,
     gesture_constants::MAX_FLING_VELOCITY,
     nodes::input::{PointerEvent, PointerEventKind, PointerId},
-    VelocityTracker1D,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]

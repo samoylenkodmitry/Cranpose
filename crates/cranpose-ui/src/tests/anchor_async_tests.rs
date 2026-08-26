@@ -1,6 +1,6 @@
 use cranpose_core::{
-    __launched_effect_async_impl as launched_effect_async_impl, location_key, Composition,
-    MemoryApplier, MutableState, Node, NodeError, TaskSite,
+    __launched_effect_async_impl as launched_effect_async_impl, Composition, MemoryApplier,
+    MutableState, Node, NodeError, TaskSite, location_key,
 };
 use cranpose_macros::composable;
 

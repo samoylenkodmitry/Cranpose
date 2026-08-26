@@ -4,7 +4,7 @@ use super::{
     super::{ActiveSubtreeRoot, ChildCursor, DirectChildRange, GroupKey, SlotTable},
     state::SlotWriteSessionState,
 };
-use crate::{collections::map::HashMap, AnchorId};
+use crate::{AnchorId, collections::map::HashMap};
 
 const DEFAULT_SIBLING_INDEX_THRESHOLD: usize = 16;
 // `option_env!` is evaluated by rustc. Changing this variable requires a
@@ -48,11 +48,7 @@ const fn parse_positive_usize(value: &str) -> Option<usize> {
         index += 1;
     }
 
-    if parsed == 0 {
-        None
-    } else {
-        Some(parsed)
-    }
+    if parsed == 0 { None } else { Some(parsed) }
 }
 
 #[derive(Default)]

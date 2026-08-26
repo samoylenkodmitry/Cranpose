@@ -31,12 +31,12 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
-    Renderer,
 };
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
 
@@ -213,7 +213,7 @@ fn full_flip_graph(frame: u32) -> RenderGraph {
 #[test]
 fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
     // Before the first frame: latched process-wide (see module docs).
-    std::env::set_var("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -223,7 +223,7 @@ fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
     };
 
     // Arm A: cache off, the live baseline.
-    std::env::set_var("CRANPOSE_STATIC_SPAN", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", Some("0"));
     let baseline = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
     assert_eq!(
         renderer.static_span_stats(),
@@ -232,7 +232,7 @@ fn span_cache_is_byte_exact_across_churn_and_a_palette_flip() {
     );
 
     // Arm B: cache on (default state).
-    std::env::remove_var("CRANPOSE_STATIC_SPAN");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", None);
     let cached = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
     let (hits, recaptures) = renderer.static_span_stats();
 
@@ -272,7 +272,7 @@ fn glow_flip_graph(frame: u32) -> RenderGraph {
 #[test]
 fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
     // Before the first frame: latched process-wide (see module docs).
-    std::env::set_var("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -281,11 +281,11 @@ fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
         }
     };
 
-    std::env::set_var("CRANPOSE_STATIC_SPAN", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", Some("0"));
     let baseline = render_sequence(&mut renderer, 0..UPGRADE_FRAMES, glow_flip_graph);
     let idle_stats = renderer.static_span_stats();
 
-    std::env::remove_var("CRANPOSE_STATIC_SPAN");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STATIC_SPAN", None);
     let cached = render_sequence(&mut renderer, 0..UPGRADE_FRAMES, glow_flip_graph);
     let (hits, recaptures) = renderer.static_span_stats();
     let hits = hits - idle_stats.0;
@@ -318,10 +318,10 @@ fn partial_span_invalidation_stays_byte_exact_and_recovers_the_full_span() {
 /// cache-on arm byte-for-byte.
 #[test]
 fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
-    use cranpose_render_wgpu::{display_clip_pixel_is_visible, DisplayVisibleRegion};
+    use cranpose_render_wgpu::{DisplayVisibleRegion, display_clip_pixel_is_visible};
 
     // Before the first frame: latched process-wide (see module docs).
-    std::env::set_var("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE", Some("1"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -339,9 +339,9 @@ fn span_capture_inside_a_culled_pass_neither_panics_nor_diverges() {
     // The mid-sequence palette flip forces a recapture INSIDE this arm, so
     // the capture pass provably encodes while the fused pass is culled.
     renderer.set_display_visible_region(DisplayVisibleRegion::InscribedCircle);
-    std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
     let culled = render_sequence(&mut renderer, 0..FRAMES, full_flip_graph);
-    std::env::remove_var("CRANPOSE_ROUND_CULL");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
     renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
     let (hits, recaptures) = renderer.static_span_stats();

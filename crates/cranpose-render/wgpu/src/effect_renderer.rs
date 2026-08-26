@@ -6,7 +6,7 @@
 use std::cell::Cell;
 
 use cranpose_ui_graphics::{
-    BlendMode, RenderEffect, RuntimeShader, TileMode, ROUNDED_ALPHA_MASK_WGSL,
+    BlendMode, ROUNDED_ALPHA_MASK_WGSL, RenderEffect, RuntimeShader, TileMode,
 };
 
 use crate::{
@@ -2416,7 +2416,7 @@ fn composite_sampling_mode_value(sample_mode: CompositeSampleMode) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{projective_dest_bounds_rect, BlurUniforms};
+    use super::{BlurUniforms, projective_dest_bounds_rect};
 
     #[test]
     fn blur_uniforms_use_vec4_packing_for_gl_backends() {

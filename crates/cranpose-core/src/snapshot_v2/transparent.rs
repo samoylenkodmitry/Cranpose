@@ -96,10 +96,10 @@ impl TransparentObserverMutableSnapshot {
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let prev = current_snapshot();
 
-        if let Some(ref snapshot) = prev {
-            if snapshot.is_same_transparent(self) {
-                return f();
-            }
+        if let Some(ref snapshot) = prev
+            && snapshot.is_same_transparent(self)
+        {
+            return f();
         }
 
         enter_snapshot_scope(AnySnapshot::TransparentMutable(self.clone()), f)
@@ -248,10 +248,10 @@ impl TransparentObserverSnapshot {
     pub fn enter<T>(self: &Arc<Self>, f: impl FnOnce() -> T) -> T {
         let previous = current_snapshot();
 
-        if let Some(ref prev_snapshot) = previous {
-            if prev_snapshot.is_same_transparent_readonly(self) {
-                return f();
-            }
+        if let Some(ref prev_snapshot) = previous
+            && prev_snapshot.is_same_transparent_readonly(self)
+        {
+            return f();
         }
 
         enter_snapshot_scope(AnySnapshot::TransparentReadonly(self.clone()), f)
@@ -303,7 +303,7 @@ mod tests {
     use super::*;
     use crate::{
         snapshot_v2::runtime::TestRuntimeGuard,
-        state::{ObjectId, StateObject, StateRecord, PREEXISTING_SNAPSHOT_ID},
+        state::{ObjectId, PREEXISTING_SNAPSHOT_ID, StateObject, StateRecord},
     };
 
     fn reset_runtime() -> TestRuntimeGuard {

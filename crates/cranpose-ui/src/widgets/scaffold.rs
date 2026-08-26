@@ -10,10 +10,9 @@ use cranpose_ui_layout::{Constraints, Placement};
 
 use super::SubcomposeLayout;
 use crate::{
-    composable,
-    layout_direction::{layout_direction, LayoutDirection},
+    Modifier, composable,
+    layout_direction::{LayoutDirection, layout_direction},
     subcompose_layout::{SubcomposeLayoutScope, SubcomposeMeasureScope},
-    Modifier,
 };
 
 /// Insets supplied to a scaffold's content slot, in reading order.

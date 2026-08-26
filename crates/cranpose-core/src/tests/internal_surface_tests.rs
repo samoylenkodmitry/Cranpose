@@ -9,12 +9,12 @@ use std::{
     cell::Cell,
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
-use crate::{frame_clock::FrameClock, Composition, MemoryApplier};
+use crate::{Composition, MemoryApplier, frame_clock::FrameClock};
 
 #[test]
 fn a_frame_callback_fires_once_for_the_frame_it_registered_for() {
@@ -116,8 +116,8 @@ fn a_callback_holder_forwards_to_whichever_closure_was_last_stored() {
 #[test]
 fn a_ui_task_label_is_taken_by_the_next_task_and_not_the_one_after() {
     use std::sync::{
-        atomic::{AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicU32, Ordering},
     };
 
     use crate::runtime::label_next_ui_task;

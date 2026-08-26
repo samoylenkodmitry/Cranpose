@@ -12,13 +12,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -213,18 +213,16 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
     // no retained arc meshes: this test documents the FEED's divergence
     // envelope, so its captures stay on the plain quad expansion (the mesh
     // adds its own interpolation noise, measured in arc_mesh_parity).
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     // The feed has defaulted ON since its parity was proven, so the
     // baseline must say "0" explicitly: with the variable merely unset the
     // baseline renders through the very retention path under test, and any
     // stale-slot defect cancels out of the comparison — which is exactly
     // how the mod-11 stale-recolor defect stayed invisible here.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let baseline = render_sequence(&mut renderer, &graphs);
 
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let fed = render_sequence(&mut renderer, &graphs);
 
     // The fed pass confirmed captured slots exactly as production does;
@@ -273,9 +271,8 @@ fn command_feed_matches_the_full_pipeline_pixel_for_pixel() {
         eprintln!("fed-again frame {frame}: vs fed differing {differing}");
     }
     let bypassed = render_sequence(&mut renderer, &bypassed_graphs);
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
 
     let (feed_slots, patches, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert_eq!(

@@ -26,12 +26,12 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CornerRadii, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect, Stroke,
@@ -165,7 +165,7 @@ fn render_arm(renderer: &mut support::LockedRenderer, graph: &RenderGraph) -> Ve
 #[test]
 fn rim_band_mesh_matches_the_quad_expansion() {
     // Arm A must run under the DEFAULT switch state.
-    std::env::remove_var("CRANPOSE_RIM_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RIM_MESH", None);
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -193,10 +193,10 @@ fn rim_band_mesh_matches_the_quad_expansion() {
     // The switch is read per fused-chunk prepare, so no renderer relatch is
     // needed; one throwaway frame after flipping keeps the arms' warm
     // discipline identical anyway.
-    std::env::set_var("CRANPOSE_RIM_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RIM_MESH", Some("0"));
     let quad = render_arm(&mut renderer, &graph);
     let emitted_after_off = renderer.rim_meshes_emitted();
-    std::env::remove_var("CRANPOSE_RIM_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_RIM_MESH", None);
     assert_eq!(
         emitted_after_off, emitted_meshed,
         "arm B must draw every rim through the quad expansion"

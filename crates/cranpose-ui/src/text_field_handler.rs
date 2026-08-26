@@ -10,7 +10,7 @@ use cranpose_foundation::text::{TextFieldLineLimits, TextFieldState};
 use cranpose_ui_graphics::Point;
 
 use crate::{
-    text::{measure_text, AnnotatedString, TextStyle},
+    text::{AnnotatedString, TextStyle, measure_text},
     text_field_focus::ImeCaretGeometry,
     text_field_input::handle_key_event_impl,
 };
@@ -507,7 +507,7 @@ mod tests {
     /// mid-scrub.
     #[test]
     fn cursor_move_via_set_selection_resets_blink_to_solid() {
-        use crate::cursor_animation::{is_cursor_visible, start_cursor_blink, BLINK_INTERVAL_MS};
+        use crate::cursor_animation::{BLINK_INTERVAL_MS, is_cursor_visible, start_cursor_blink};
         let _app_context = crate::render_state::app_context_test_scope();
         with_test_runtime(|| {
             let (state, _focus) = focused_state("hello world", TextFieldLineLimits::SingleLine);

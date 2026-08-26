@@ -23,17 +23,17 @@
 use std::{
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
 };
 
 use cranpose_services::{
-    power_state, publish_power_state, set_platform_power_monitor, BatteryStatus, PowerCapabilities,
-    PowerMonitor, PowerReading,
+    BatteryStatus, PowerCapabilities, PowerMonitor, PowerReading, power_state, publish_power_state,
+    set_platform_power_monitor,
 };
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 /// Installs the browser power monitor. Battery readings stay
 /// [`PowerReading::Unsupported`] until [`start_battery_probe`] finds the API,

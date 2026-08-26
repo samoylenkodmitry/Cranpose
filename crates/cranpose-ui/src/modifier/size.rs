@@ -4,7 +4,7 @@
 
 use cranpose_ui_layout::IntrinsicSize;
 
-use super::{inspector_metadata, DimensionConstraint, Modifier, Size};
+use super::{DimensionConstraint, Modifier, Size, inspector_metadata};
 use crate::modifier_nodes::{IntrinsicSizeElement, SizeElement};
 
 impl Modifier {

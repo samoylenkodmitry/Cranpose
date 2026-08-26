@@ -9,17 +9,17 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
+    Applier, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command, CommandQueue,
+    CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot, LocalStateEntry,
+    MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope,
+    RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId,
+    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, empty_local_stack, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, ValueSlotId},
-    Applier, ApplierHost, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key,
-    LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
-    ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
-    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
-    SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
-    StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
@@ -745,10 +745,10 @@ impl Composer {
         slots.begin_pass(mode);
         {
             let mut stack = self.core.slot_hosts.borrow_mut();
-            if let Some(parent) = stack.last() {
-                if !Rc::ptr_eq(parent, &slots) {
-                    parent.note_nested_host(&slots);
-                }
+            if let Some(parent) = stack.last()
+                && !Rc::ptr_eq(parent, &slots)
+            {
+                parent.note_nested_host(&slots);
             }
             stack.push(Rc::clone(&slots));
         }
@@ -910,23 +910,23 @@ impl Composer {
     /// which removes all virtual nodes and their subtrees from the applier.
     pub fn record_subcompose_child(&self, child_id: NodeId) {
         let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut() {
-            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync) {
-                if let Some(membership) = frame.new_children_membership.as_mut() {
-                    if membership.insert(child_id) {
-                        frame.new_children.push(child_id);
-                    }
-                } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
-                    let mut membership = HashSet::default();
-                    membership.reserve(frame.new_children.len() + 1);
-                    membership.extend(frame.new_children.iter().copied());
-                    if membership.insert(child_id) {
-                        frame.new_children.push(child_id);
-                    }
-                    frame.new_children_membership = Some(membership);
-                } else if !frame.new_children.contains(&child_id) {
+        if let Some(frame) = parent_stack.last_mut()
+            && matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
+        {
+            if let Some(membership) = frame.new_children_membership.as_mut() {
+                if membership.insert(child_id) {
                     frame.new_children.push(child_id);
                 }
+            } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
+                let mut membership = HashSet::default();
+                membership.reserve(frame.new_children.len() + 1);
+                membership.extend(frame.new_children.iter().copied());
+                if membership.insert(child_id) {
+                    frame.new_children.push(child_id);
+                }
+                frame.new_children_membership = Some(membership);
+            } else if !frame.new_children.contains(&child_id) {
+                frame.new_children.push(child_id);
             }
         }
     }

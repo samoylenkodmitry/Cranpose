@@ -127,12 +127,11 @@ const CAPTURE_PAD_PX: f32 = 2.0;
 /// opts in. Mirrored from `debug.cranpose.segment_surface` on Android. Read
 /// per frame, not latched, so the parity harness can flip it between arms.
 fn segment_surface_enabled() -> bool {
-    std::env::var("CRANPOSE_SEGMENT_SURFACE").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_SEGMENT_SURFACE").as_deref() != Some("0")
 }
 
-fn env_f32(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
+fn env_f32(name: &'static str, default: f32) -> f32 {
+    crate::debug_toggles::debug_toggle(name)
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value > 0.0)
         .unwrap_or(default)
@@ -140,9 +139,8 @@ fn env_f32(name: &str, default: f32) -> f32 {
 
 /// As [`env_f32`], except zero is a meaningful value (a kill switch), not a
 /// malformed one.
-fn env_f32_zero_ok(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
+fn env_f32_zero_ok(name: &'static str, default: f32) -> f32 {
+    crate::debug_toggles::debug_toggle(name)
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value >= 0.0)
         .unwrap_or(default)
@@ -648,12 +646,10 @@ impl SegmentSurfaceCache {
                 self.stats.rejected_capacity += 1;
                 return SegmentSurfaceDecision::Direct;
             }
-            if drifted {
-                if let Some(entry) = self.entries.get_mut(&key) {
-                    entry.last_seen_frame = frame;
-                    self.stats.composites += 1;
-                    return SegmentSurfaceDecision::Composite { capture: None };
-                }
+            if drifted && let Some(entry) = self.entries.get_mut(&key) {
+                entry.last_seen_frame = frame;
+                self.stats.composites += 1;
+                return SegmentSurfaceDecision::Composite { capture: None };
             }
             self.stats.rejected_capacity += 1;
             return SegmentSurfaceDecision::Direct;
@@ -872,11 +868,13 @@ mod tests {
         assert!(id.compose(&id.invert().unwrap()).is_identity_for_sampling());
         assert!(!similarity(c, 0.01, 1.0).is_identity_for_sampling());
         assert!(!similarity(c, 0.0, 1.001).is_identity_for_sampling());
-        assert!(!Affine2 {
-            l: [[1.0, 0.0], [0.0, 1.0]],
-            t: [1.0 / 128.0, 0.0],
-        }
-        .is_identity_for_sampling());
+        assert!(
+            !Affine2 {
+                l: [[1.0, 0.0], [0.0, 1.0]],
+                t: [1.0 / 128.0, 0.0],
+            }
+            .is_identity_for_sampling()
+        );
     }
 
     #[test]
@@ -886,11 +884,13 @@ mod tests {
             t: [3.0, -2.0],
         };
         assert!(translated.is_integer_translation_for_sampling());
-        assert!(!Affine2 {
-            l: [[1.0, 0.0], [0.0, 1.0]],
-            t: [3.25, -2.0],
-        }
-        .is_integer_translation_for_sampling());
+        assert!(
+            !Affine2 {
+                l: [[1.0, 0.0], [0.0, 1.0]],
+                t: [3.25, -2.0],
+            }
+            .is_integer_translation_for_sampling()
+        );
         assert!(!similarity([204.0, 204.0], 0.01, 1.0).is_integer_translation_for_sampling());
     }
 

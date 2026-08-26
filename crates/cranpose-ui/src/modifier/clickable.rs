@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::{inspector_metadata, Modifier, Point, SemanticsConfiguration};
+use super::{Modifier, Point, SemanticsConfiguration, inspector_metadata};
 use crate::modifier_nodes::ClickableElement;
 
 impl Modifier {

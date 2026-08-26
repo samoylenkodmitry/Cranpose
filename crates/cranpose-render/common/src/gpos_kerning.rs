@@ -30,7 +30,7 @@
 
 use std::sync::Arc;
 
-use ab_glyph::{v2, CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline};
+use ab_glyph::{CodepointIdIter, Font, FontArc, GlyphId, GlyphSvg, Outline, v2};
 use ttf_parser::{Face, NormalizedCoordinate, Tag};
 
 /// `ValueRecord` field flags, in the order the fields appear in the record.

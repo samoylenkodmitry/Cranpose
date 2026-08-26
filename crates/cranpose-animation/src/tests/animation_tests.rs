@@ -1,8 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    location_key, with_current_composer, Composer, Composition, MemoryApplier, MutableState, Node,
-    SnapshotStateObserver, State,
+    Composer, Composition, MemoryApplier, MutableState, Node, SnapshotStateObserver, State,
+    location_key, with_current_composer,
 };
 
 use super::*;
@@ -386,11 +386,13 @@ fn infinite_transition_animates_float_over_time() {
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
-    assert!(state_slot
-        .borrow()
-        .as_ref()
-        .expect("state available")
-        .has_subscribers());
+    assert!(
+        state_slot
+            .borrow()
+            .as_ref()
+            .expect("state available")
+            .has_subscribers()
+    );
     runtime.drain_ui();
     composition
         .render(root_key, &mut render)

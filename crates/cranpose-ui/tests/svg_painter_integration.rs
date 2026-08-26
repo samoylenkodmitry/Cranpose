@@ -1,6 +1,6 @@
 use cranpose_ui::{
-    Alignment, Color, ColorFilter, ContentScale, HeadlessRenderer, Image, LayoutEngine, Modifier,
-    PaintLayer, RenderOp, Size, SvgPainter, DEFAULT_ALPHA,
+    Alignment, Color, ColorFilter, ContentScale, DEFAULT_ALPHA, HeadlessRenderer, Image,
+    LayoutEngine, Modifier, PaintLayer, RenderOp, Size, SvgPainter,
 };
 
 const ICON_SVG: &[u8] = br##"

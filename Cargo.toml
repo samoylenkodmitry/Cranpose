@@ -4,7 +4,6 @@ members = [
     "crates/cranpose",
     "crates/cranpose-assets",
     "crates/cranpose-core",
-    "crates/cranpose-e2024-tests",
     "crates/cranpose-macros",
     "crates/cranpose-runtime-std",
     "crates/cranpose-ui-graphics",
@@ -32,7 +31,7 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.101"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/samoylenkodmitry/cranpose"
 homepage = "https://samoylenkodmitry.github.io/cranpose/"

@@ -15,8 +15,8 @@ use std::{
 };
 
 use cranpose_core::{
-    internal::FrameCallbackRegistration, with_current_composer, DisposableEffectResult, Owned,
-    OwnedMutableState, RuntimeHandle, SideEffect, State,
+    DisposableEffectResult, Owned, OwnedMutableState, RuntimeHandle, SideEffect, State,
+    internal::FrameCallbackRegistration, with_current_composer,
 };
 
 /// Trait for types that can be linearly interpolated.

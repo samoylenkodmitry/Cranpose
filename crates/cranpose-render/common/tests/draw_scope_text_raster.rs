@@ -10,12 +10,12 @@
 #![cfg(feature = "embedded-default-font")]
 
 use cranpose_render_common::software_text_raster::{
-    collect_solid_text_atlas_run, software_text_font_set_from_fonts_or_default,
     SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
-    SoftwareTextMeasurer,
+    SoftwareTextMeasurer, collect_solid_text_atlas_run,
+    software_text_font_set_from_fonts_or_default,
 };
 use cranpose_ui::text::{
-    text_style_for_draw_style, AnnotatedString, TextMeasurer, TextStyle as UiTextStyle,
+    AnnotatedString, TextMeasurer, TextStyle as UiTextStyle, text_style_for_draw_style,
 };
 use cranpose_ui_graphics::{Color, Rect, TextStyle};
 

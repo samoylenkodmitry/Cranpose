@@ -4,14 +4,14 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal};
+use cranpose_core::{CompositionLocal, compositionLocalOfWithPolicy};
 #[cfg(all(target_arch = "wasm32", feature = "web-http"))]
-use futures_util::{stream, StreamExt};
+use futures_util::{StreamExt, stream};
 
 #[derive(thiserror::Error, Debug, Clone)]
 pub enum HttpError {
@@ -1291,11 +1291,13 @@ mod tests {
             .fraction(),
             None
         );
-        assert!(HttpProgress {
-            transferred: 20,
-            total: Some(20)
-        }
-        .is_complete());
+        assert!(
+            HttpProgress {
+                transferred: 20,
+                total: Some(20)
+            }
+            .is_complete()
+        );
     }
 
     #[test]

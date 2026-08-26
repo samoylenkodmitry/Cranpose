@@ -4,13 +4,12 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{rememberMutableStateOf, rememberUpdatedState, NodeId, State};
+use cranpose_core::{NodeId, State, rememberMutableStateOf, rememberUpdatedState};
 use cranpose_foundation::{PointerEventKind, PointerId};
 
 use crate::{
-    composable,
-    widgets::{scopes::BoxWithConstraintsScope, Box, BoxSpec, BoxWithConstraints},
-    Modifier, MutableInteractionSource,
+    Modifier, MutableInteractionSource, composable,
+    widgets::{Box, BoxSpec, BoxWithConstraints, scopes::BoxWithConstraintsScope},
 };
 
 /// Main axis used by a [`Slider`].

@@ -32,14 +32,14 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{current_runtime_handle, RuntimeHandle};
+use cranpose_core::{RuntimeHandle, current_runtime_handle};
 use cranpose_macros::composable;
 
 use crate::{
     content::{ContentFolderRef, ContentHandle, ContentSinkRef},
     file_picker::{
-        local_file_picker, FilePickerError, FilePickerOptions, FilePickerRef, RecoveredPick,
-        SaveDocumentRequest,
+        FilePickerError, FilePickerOptions, FilePickerRef, RecoveredPick, SaveDocumentRequest,
+        local_file_picker,
     },
     preferences::preferences,
 };

@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{default_root_key, AppShell};
+use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
@@ -30,7 +30,7 @@ use winit::{
 
 use crate::{
     app_launcher::{AppSettings, LaunchError},
-    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },

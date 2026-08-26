@@ -6,8 +6,8 @@
 use std::{rc::Rc, sync::Arc};
 
 use cranpose_services::{
-    set_platform_device_info, set_platform_power_monitor, BatteryStatus, DeviceInfo,
-    PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
+    BatteryStatus, DeviceInfo, PowerCapabilities, PowerMonitor, PowerReading, ThermalState,
+    set_platform_device_info, set_platform_power_monitor,
 };
 use objc2_foundation::NSProcessInfo;
 

@@ -2,14 +2,13 @@ use std::{collections::HashSet, rc::Rc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_ui::{
-    prepare_text_layout,
-    text::{resolve_text_direction, AnnotatedString, TextAlign, TextStyle},
     DrawCommand, LayoutBox, LayoutNode, ModifierNodeSlices, Point, Rect, ResolvedModifiers, Size,
-    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver,
+    SubcomposeLayoutNode, TextLayoutOptions, TextOverflow, TextPanResolver, prepare_text_layout,
+    text::{AnnotatedString, TextAlign, TextStyle, resolve_text_direction},
 };
 use cranpose_ui_graphics::{
-    rounded_corner_alpha_mask_effect, CompositingStrategy, GraphicsLayer, LayerShape,
-    RoundedCornerShape,
+    CompositingStrategy, GraphicsLayer, LayerShape, RoundedCornerShape,
+    rounded_corner_alpha_mask_effect,
 };
 
 use crate::{
@@ -20,7 +19,7 @@ use crate::{
     },
     layer_transform::layer_transform_to_parent,
     raster_cache::LayerRasterCacheHashes,
-    style_shared::{primitives_for_placement_verified, DrawPlacement},
+    style_shared::{DrawPlacement, primitives_for_placement_verified},
 };
 
 const TEXT_CLIP_PAD: f32 = 1.0;
@@ -119,24 +118,24 @@ pub fn update_graph_from_applier_report_into(
     }
 
     let mut remaining_dirty_nodes = dirty_nodes.iter().copied().collect::<HashSet<_>>();
-    if let Some(root_id) = graph.root.node_id {
-        if remaining_dirty_nodes.contains(&root_id) {
-            let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
-                return GraphUpdateReport {
-                    applied: false,
-                    hit_graph_dirty: true,
-                };
-            };
-            let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
-            collect_layer_node_ids(&graph.root, changed_nodes);
-            graph.root = root;
-            graph.root.recompute_raster_cache_hashes();
-            collect_layer_node_ids(&graph.root, changed_nodes);
+    if let Some(root_id) = graph.root.node_id
+        && remaining_dirty_nodes.contains(&root_id)
+    {
+        let Some(root) = build_layer_node_from_applier(applier, root_id, scale, false) else {
             return GraphUpdateReport {
-                applied: true,
-                hit_graph_dirty,
+                applied: false,
+                hit_graph_dirty: true,
             };
-        }
+        };
+        let hit_graph_dirty = layer_hit_graph_state_dirty(&graph.root, &root);
+        collect_layer_node_ids(&graph.root, changed_nodes);
+        graph.root = root;
+        graph.root.recompute_raster_cache_hashes();
+        collect_layer_node_ids(&graph.root, changed_nodes);
+        return GraphUpdateReport {
+            applied: true,
+            hit_graph_dirty,
+        };
     }
 
     let inherited_translated_content_context = graph.root.translated_content_context;
@@ -854,8 +853,8 @@ struct SavedReplayEmission {
 /// this exists to remove.
 fn stale_transition_enabled() -> bool {
     matches!(
-        std::env::var("CRANPOSE_STALE_TRANSITION").as_deref(),
-        Ok(value) if !value.is_empty() && value != "0"
+        crate::debug_toggles::debug_toggle("CRANPOSE_STALE_TRANSITION").as_deref(),
+        Some(value) if !value.is_empty() && value != "0"
     )
 }
 
@@ -1666,12 +1665,12 @@ fn resolve_text_horizontal_offset(
 mod tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope, LazyListState};
+    use cranpose_foundation::lazy::{LazyListScope, LazyListState, rememberLazyListState};
     use cranpose_ui::{
-        text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
         Color, Column, ColumnSpec, DrawCommand, LayoutEngine, LazyColumn, LazyColumnSpec,
         LinearArrangement, Modifier, Point, Rect, ResolvedModifiers, RoundedCornerShape,
         ScrollState, Size, Spacer, Text, TextStyle,
+        text::{AnnotatedString, BaselineShift, SpanStyle, TextAlign, TextDirection, TextMotion},
     };
     use cranpose_ui_graphics::{
         Brush, DrawPrimitive, DrawScope as _, DrawScopeDefault, GraphicsLayer, RenderEffect,
@@ -1786,10 +1785,10 @@ mod tests {
             return Some(layer.translated_content_offset);
         }
         for child in &layer.children {
-            if let RenderNode::Layer(child_layer) = child {
-                if let Some(offset) = find_translated_content_offset(child_layer) {
-                    return Some(offset);
-                }
+            if let RenderNode::Layer(child_layer) = child
+                && let Some(offset) = find_translated_content_offset(child_layer)
+            {
+                return Some(offset);
             }
         }
         None
@@ -2518,7 +2517,7 @@ mod tests {
     fn scene_build_publishes_live_window_rect_without_layout_tree() {
         use std::cell::Cell;
 
-        use cranpose_ui::{measure_layout_with_options, Box, BoxSpec, MeasureLayoutOptions};
+        use cranpose_ui::{Box, BoxSpec, MeasureLayoutOptions, measure_layout_with_options};
 
         let spacer_before = 120.0_f32;
         let sink: Rc<Cell<Rect>> = Rc::new(Cell::new(Rect {
@@ -4344,10 +4343,10 @@ mod tests {
                 for child in &layer.children {
                     match child {
                         RenderNode::Primitive(primitive) => {
-                            if let PrimitiveNode::Text(text) = &primitive.node {
-                                if squashed(&text.text.text) == squashed(value) {
-                                    return Some(text);
-                                }
+                            if let PrimitiveNode::Text(text) = &primitive.node
+                                && squashed(&text.text.text) == squashed(value)
+                            {
+                                return Some(text);
                             }
                         }
                         RenderNode::Layer(child_layer) => {

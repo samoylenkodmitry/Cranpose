@@ -27,14 +27,14 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
-    Renderer,
 };
-use cranpose_render_wgpu::{display_clip_pixel_is_visible, DisplayVisibleRegion};
+use cranpose_render_wgpu::{DisplayVisibleRegion, display_clip_pixel_is_visible};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect};
 
 /// Watch-like square surface: the inscribed circle has radius 204
@@ -227,9 +227,9 @@ fn cull_is_bitwise_invisible_on_every_pixel_the_region_shows() {
         // opt-in while the on-device abort is under investigation, so the
         // active arms opt in the way a device build would.
         renderer.set_display_visible_region(region);
-        std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
         let culled = render_arm(&mut renderer, &graph);
-        std::env::remove_var("CRANPOSE_ROUND_CULL");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
         renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
         let (visible_diffs, invisible_diffs, first_visible) =
@@ -277,9 +277,9 @@ fn occluder_never_covers_a_pixel_the_region_shows() {
 
     for region in CULLABLE_REGIONS {
         renderer.set_display_visible_region(region);
-        std::env::set_var("CRANPOSE_ROUND_CULL", "1");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("1"));
         let culled = render_arm(&mut renderer, &graph);
-        std::env::remove_var("CRANPOSE_ROUND_CULL");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
         renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
         let mut covered_visible = 0usize;
@@ -332,9 +332,9 @@ fn kill_switch_disables_the_cull_bitwise() {
 
     for region in CULLABLE_REGIONS {
         renderer.set_display_visible_region(region);
-        std::env::set_var("CRANPOSE_ROUND_CULL", "0");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", Some("0"));
         let disabled = render_arm(&mut renderer, &graph);
-        std::env::remove_var("CRANPOSE_ROUND_CULL");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ROUND_CULL", None);
         renderer.set_display_visible_region(DisplayVisibleRegion::Full);
 
         assert_eq!(

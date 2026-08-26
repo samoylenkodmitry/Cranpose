@@ -193,14 +193,14 @@ where
         let pos = Point { x, y };
         let previously_hovered = self.hovered_nodes.clone();
         for old_id in previously_hovered {
-            if !new_ids.contains(&old_id) {
-                if let Some(target) = self.renderer.scene().find_target(old_id) {
-                    let exit_event = self
-                        .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
-                        .with_buttons(self.buttons_pressed)
-                        .with_source(self.pointer_source);
-                    self.dispatch_targets(std::iter::once(target), exit_event, false);
-                }
+            if !new_ids.contains(&old_id)
+                && let Some(target) = self.renderer.scene().find_target(old_id)
+            {
+                let exit_event = self
+                    .pointer_event(PointerEventKind::Exit, pos, pos, event_time)
+                    .with_buttons(self.buttons_pressed)
+                    .with_source(self.pointer_source);
+                self.dispatch_targets(std::iter::once(target), exit_event, false);
             }
         }
 
@@ -875,12 +875,12 @@ where
     /// the current cursor so rotary remains usable on a build where nothing has
     /// claimed focus (the common case today).
     fn rotary_dispatch_order(&self) -> Vec<NodeId> {
-        if let Some(focused) = cranpose_ui::active_focus_target() {
-            if let Some(target) = self.renderer.scene().find_target(focused) {
-                let path = target.capture_path();
-                if !path.is_empty() {
-                    return crate::hit_path_tracker::dispatch_order_for_paths(&[path]);
-                }
+        if let Some(focused) = cranpose_ui::active_focus_target()
+            && let Some(target) = self.renderer.scene().find_target(focused)
+        {
+            let path = target.capture_path();
+            if !path.is_empty() {
+                return crate::hit_path_tracker::dispatch_order_for_paths(&[path]);
             }
         }
 
@@ -1036,10 +1036,10 @@ where
                     }
                     // Ctrl+V - Paste
                     KeyCode::V => {
-                        if let Some(text) = cranpose_ui::clipboard_session::clipboard_read_text() {
-                            if self.on_paste_inner(&text) {
-                                return true;
-                            }
+                        if let Some(text) = cranpose_ui::clipboard_session::clipboard_read_text()
+                            && self.on_paste_inner(&text)
+                        {
+                            return true;
                         }
                     }
                     _ => {}

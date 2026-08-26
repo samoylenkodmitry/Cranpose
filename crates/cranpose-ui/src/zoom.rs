@@ -49,8 +49,8 @@ use std::{
 
 use cranpose_core::{MutableState, OwnedMutableState};
 use cranpose_foundation::{
-    nodes::input::gestures::{TransformGesture, TransformGestureEvent},
     DRAG_THRESHOLD,
+    nodes::input::gestures::{TransformGesture, TransformGestureEvent},
 };
 use cranpose_ui_graphics::{GraphicsLayer, Point, TransformOrigin};
 use web_time::Instant;

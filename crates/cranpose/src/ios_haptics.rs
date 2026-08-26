@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    set_platform_haptics, HapticEffect, HapticFeedback, HapticPattern, Haptics,
+    HapticEffect, HapticFeedback, HapticPattern, Haptics, set_platform_haptics,
 };
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_ui_kit::{

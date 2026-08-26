@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    set_application_id, set_host_controller, HostController, PlatformDirectories,
+    HostController, PlatformDirectories, set_application_id, set_host_controller,
 };
 use objc2::MainThreadMarker;
 use objc2_foundation::{NSBundle, NSHomeDirectory};

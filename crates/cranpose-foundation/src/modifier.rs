@@ -6,7 +6,7 @@
 //! across updates.
 
 use std::{
-    any::{type_name, Any, TypeId},
+    any::{Any, TypeId, type_name},
     cell::{Cell, RefCell},
     fmt,
     hash::{Hash, Hasher},

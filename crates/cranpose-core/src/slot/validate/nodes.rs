@@ -1,9 +1,9 @@
 use super::{
     super::{GroupRecord, NodeLifecycle, NodeRecord},
-    groups::{SlotTreeChecks, SlotTreeView},
     SlotInvariantError,
+    groups::{SlotTreeChecks, SlotTreeView},
 };
-use crate::{collections::map::HashSet, NodeId};
+use crate::{NodeId, collections::map::HashSet};
 
 pub(super) fn validate_group_nodes(
     view: &SlotTreeView<'_>,

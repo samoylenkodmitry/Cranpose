@@ -547,10 +547,10 @@ pub fn clear_platform_content_resolver() {
 /// Resolves `uri` through the platform resolver, falling back to the local
 /// filesystem for `file://` URIs and plain paths.
 pub fn resolve_content(uri: &str) -> Option<ContentHandle> {
-    if let Some(resolver) = PLATFORM_RESOLVER.with(|cell| cell.borrow().clone()) {
-        if let Some(content) = resolver.resolve(uri) {
-            return Some(content);
-        }
+    if let Some(resolver) = PLATFORM_RESOLVER.with(|cell| cell.borrow().clone())
+        && let Some(content) = resolver.resolve(uri)
+    {
+        return Some(content);
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -564,7 +564,7 @@ pub fn resolve_content(uri: &str) -> Option<ContentHandle> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use file::{file_content, file_folder, FileContent, FileFolder, FileSink};
+pub use file::{FileContent, FileFolder, FileSink, file_content, file_folder};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod file;

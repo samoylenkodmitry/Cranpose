@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use cranpose_foundation::SemanticsWidgetRole;
 
-use super::{inspector_metadata, Modifier, SemanticsConfiguration};
+use super::{Modifier, SemanticsConfiguration, inspector_metadata};
 
 impl Modifier {
     /// Make the component a two-state control.
@@ -69,7 +69,7 @@ mod tests {
     use cranpose_foundation::{PointerButton, PointerButtons, PointerEvent, PointerEventKind};
 
     use super::*;
-    use crate::modifier::{collect_semantics_from_modifier, collect_slices_from_modifier, Point};
+    use crate::modifier::{Point, collect_semantics_from_modifier, collect_slices_from_modifier};
 
     /// A click on a real chain is a pointer down followed by a pointer up: the
     /// click fires on the release, and only then.

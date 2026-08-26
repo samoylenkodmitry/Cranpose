@@ -18,10 +18,10 @@ use std::{io::Seek, path::Path, time::Duration};
 use cranpose_services::MediaError;
 use symphonia::core::{
     codecs::{
-        audio::{AudioDecoder, AudioDecoderOptions},
         CodecParameters,
+        audio::{AudioDecoder, AudioDecoderOptions},
     },
-    formats::{probe::Hint, FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
     io::{MediaSource, MediaSourceStream},
     meta::MetadataOptions,
     units::{Duration as TimeBaseUnits, Time, TimeBase},

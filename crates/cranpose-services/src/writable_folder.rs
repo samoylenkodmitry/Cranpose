@@ -229,9 +229,11 @@ mod tests {
             FolderError::ReadOnly.to_string(),
             "writable folder is read-only"
         );
-        assert!(FolderError::NotFound("a.txt".into())
-            .to_string()
-            .contains("a.txt"));
+        assert!(
+            FolderError::NotFound("a.txt".into())
+                .to_string()
+                .contains("a.txt")
+        );
     }
 
     #[test]

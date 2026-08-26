@@ -7,9 +7,8 @@ use std::{
 
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
-    modifier_element,
+    BasicModifierNodeContext, ModifierNodeChain, modifier_element,
     text::{TextFieldLineLimits, TextFieldState, TextRange},
-    BasicModifierNodeContext, ModifierNodeChain,
 };
 
 use crate::{
@@ -331,8 +330,8 @@ fn focused_single_line_chain(state: TextFieldState, style: TextStyle) -> Modifie
 #[test]
 fn tap_count_selects_cursor_word_and_line() {
     use cranpose_foundation::{
-        nodes::input::{PointerEvent, PointerEventKind},
         PointerInputNode,
+        nodes::input::{PointerEvent, PointerEventKind},
     };
     use cranpose_ui_graphics::Point;
 
@@ -450,7 +449,7 @@ fn horizontal_scroll_offset_math_keeps_cursor_visible() {
 /// the dragged edge stays in view, reusing the same cursor-follow pan resolver.
 #[test]
 fn handle_drag_auto_pans_to_keep_dragged_edge_visible() {
-    use crate::text_selection::{selection_after_handle_drag, HandleKind};
+    use crate::text_selection::{HandleKind, selection_after_handle_drag};
 
     let viewport = 100.0;
     let text_width = 400.0;

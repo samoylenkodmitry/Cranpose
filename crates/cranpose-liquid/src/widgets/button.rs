@@ -9,19 +9,19 @@ use std::{
 use cranpose_animation::{AnimationSpec, AnimationType, Easing};
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
-use cranpose_services::{default_haptics, HapticFeedback};
+use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
+    Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size,
     rememberMutableInteractionSource,
     text::TextStyle,
     widgets::{Box, BoxSpec, Text},
-    Modifier, PointerEventKind, PointerInputScope, SemanticsWidgetRole, Size,
 };
 use cranpose_ui_graphics::{Color, GraphicsLayer};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
     material::{Glass, GlassDynamics, GlassMorph, LiquidModifierExt, LiquidShape},
-    motion::{liquid_press_scale, LiquidMotion},
+    motion::{LiquidMotion, liquid_press_scale},
     theme::{liquid_colors, liquid_typography},
     widgets::content_scope::ScopeContent,
 };

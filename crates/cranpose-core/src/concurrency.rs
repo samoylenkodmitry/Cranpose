@@ -16,8 +16,8 @@ use std::{
     pin::Pin,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll, Waker},
     time::Duration,
@@ -29,7 +29,7 @@ use web_time::Instant;
 
 use crate::{
     hooks::{mutableStateOf, remember},
-    runtime::{current_runtime_handle, RuntimeHandle, TaskHandle},
+    runtime::{RuntimeHandle, TaskHandle, current_runtime_handle},
     state::{MutableState, State},
 };
 
@@ -602,8 +602,7 @@ where
         key,
         move |scope| {
             #[cfg(not(target_arch = "wasm32"))]
-            let Some(dispatcher) = dispatcher
-            else {
+            let Some(dispatcher) = dispatcher else {
                 log::warn!("cranpose: an event stream was remembered without a runtime");
                 return scope.on_dispose(|| {});
             };
@@ -804,17 +803,19 @@ impl BlockingPool {
         let counters = Arc::clone(&self.state);
         let started = std::thread::Builder::new()
             .name("cranpose-blocking".to_string())
-            .spawn(move || loop {
-                let job = {
-                    let queue = receiver.lock().unwrap_or_else(|error| error.into_inner());
-                    queue.recv()
-                };
-                let Ok(job) = job else {
-                    break;
-                };
-                job();
-                let mut counters = counters.lock().unwrap_or_else(|error| error.into_inner());
-                counters.outstanding = counters.outstanding.saturating_sub(1);
+            .spawn(move || {
+                loop {
+                    let job = {
+                        let queue = receiver.lock().unwrap_or_else(|error| error.into_inner());
+                        queue.recv()
+                    };
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    job();
+                    let mut counters = counters.lock().unwrap_or_else(|error| error.into_inner());
+                    counters.outstanding = counters.outstanding.saturating_sub(1);
+                }
             });
         if started.is_err() {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -835,30 +836,28 @@ impl<T> Future for BlockingWork<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<T> {
-        if self.done.load(Ordering::Acquire) {
-            if let Some(value) = self
+        if self.done.load(Ordering::Acquire)
+            && let Some(value) = self
                 .slot
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take()
-            {
-                return Poll::Ready(value);
-            }
+        {
+            return Poll::Ready(value);
         }
         self.wakers
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(context.waker().clone());
         // The worker may have finished between the check and the registration.
-        if self.done.load(Ordering::Acquire) {
-            if let Some(value) = self
+        if self.done.load(Ordering::Acquire)
+            && let Some(value) = self
                 .slot
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take()
-            {
-                return Poll::Ready(value);
-            }
+        {
+            return Poll::Ready(value);
         }
         Poll::Pending
     }
@@ -932,10 +931,12 @@ mod tests {
             fired: Arc::new(AtomicBool::new(false)),
         });
         let waker = Waker::noop().clone();
-        assert!(future
-            .as_mut()
-            .poll(&mut Context::from_waker(&waker))
-            .is_ready());
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
     }
 }
 

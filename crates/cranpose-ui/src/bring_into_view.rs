@@ -17,7 +17,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{compositionLocalOf, CompositionLocal};
+use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui_graphics::Rect;
 
 use crate::modifier::Modifier;

@@ -1,14 +1,14 @@
 /// Integration tests for the modifier system in real-world scenarios.
 /// These tests verify that the entire system works together correctly,
 /// not just individual units.
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_foundation::{
-    modifier_element, BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain,
+    BasicModifierNodeContext, LayoutModifierNode, ModifierNodeChain, modifier_element,
 };
 use cranpose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier,
-    OffsetElement, OffsetNode, PaddingElement, PaddingNode, Row, RowSpec, Size, SizeElement,
-    SizeNode, Text, TextStyle,
+    Box as ComposeBox, BoxSpec, Column, ColumnSpec, EdgeInsets, Modifier, OffsetElement,
+    OffsetNode, PaddingElement, PaddingNode, Row, RowSpec, Size, SizeElement, SizeNode, Text,
+    TextStyle, composable,
 };
 use cranpose_ui_layout::{Constraints, Measurable, Placeable};
 

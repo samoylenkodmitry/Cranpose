@@ -3,7 +3,7 @@
 //! `NativeActivity` loads the application's `cdylib` and calls the exported
 //! `android_main` symbol. Writing that symbol by hand costs every application
 //! the same four lines: an `unsafe_code` allowance for the export attribute, a
-//! `#[no_mangle]` it must not misspell, a dependency on `android_activity` for
+//! `#[unsafe(no_mangle)]` it must not misspell, a dependency on `android_activity` for
 //! nothing but the parameter type, and a `target_os` guard. None of it is about
 //! the application, and every copy is a place the contract can drift from what
 //! the framework and the manifest expect.
@@ -31,7 +31,7 @@ macro_rules! android_main {
     (launcher: $launcher:expr, content: $content:expr $(,)?) => {
         /// The symbol `NativeActivity` resolves after loading this library.
         ///
-        /// `#[no_mangle]` is what makes the name findable from Java, and is the
+        /// `#[unsafe(no_mangle)]` is what makes the name findable from Java, and is the
         /// only reason this item needs an `unsafe_code` allowance; the body is
         /// ordinary safe Rust.
         // SAFETY: exporting an unmangled symbol is sound as long as no other
@@ -42,7 +42,7 @@ macro_rules! android_main {
         #[cfg(target_os = "android")]
         #[doc(hidden)]
         #[allow(unsafe_code)]
-        #[no_mangle]
+        #[unsafe(no_mangle)]
         pub fn android_main(app: $crate::AndroidApp) {
             $crate::AppLauncher::run($launcher, app, $content);
         }

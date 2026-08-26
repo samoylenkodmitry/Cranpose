@@ -52,7 +52,7 @@ fn compose_row(with_background: bool) -> TestComposition {
 /// A `SwipeToDismiss` row (with a red bin background) inside a `LazyColumn`
 /// item — the real app shape where the lingering-strip bug appears.
 fn compose_lazy_row_with_background() -> TestComposition {
-    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
+    use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
     run_test_composition(move || {
         let list_state = rememberLazyListState();
         LazyColumn(

@@ -35,8 +35,8 @@ use crate::{
     modifier::Modifier,
     text::paragraph::TextAlign,
     widgets::{
-        wear::theme::{WearColors, WearTextStyle},
         Layout, Text,
+        wear::theme::{WearColors, WearTextStyle},
     },
 };
 

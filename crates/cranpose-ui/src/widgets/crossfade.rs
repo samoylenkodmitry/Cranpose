@@ -11,7 +11,7 @@ use std::{
 };
 
 use cranpose_animation::AnimationType;
-use cranpose_core::{remember, State};
+use cranpose_core::{State, remember};
 
 use crate::{
     composable,

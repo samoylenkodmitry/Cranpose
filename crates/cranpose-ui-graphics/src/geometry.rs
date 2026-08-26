@@ -3,12 +3,12 @@
 use std::{ops::AddAssign, rc::Rc};
 
 use crate::{
-    stroke::{arc_band, ArcGeometry, Stroke},
-    typography::{
-        estimate_text_measurement, DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle,
-        TextVerticalAlign,
-    },
     Brush, Color, ColorFilter, ImageBitmap, ImageSampling,
+    stroke::{ArcGeometry, Stroke, arc_band},
+    typography::{
+        DrawTextMeasurer, TextAlign, TextMeasurement, TextStyle, TextVerticalAlign,
+        estimate_text_measurement,
+    },
 };
 
 const VECTOR_PATH_MASK_CACHE_ENTRIES: usize = 96;
@@ -612,10 +612,10 @@ fn shared_text_str(text: &str) -> Rc<str> {
 
     POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
-        if let Some(shared) = pool.get(&key) {
-            if &**shared == text {
-                return Rc::clone(shared);
-            }
+        if let Some(shared) = pool.get(&key)
+            && &**shared == text
+        {
+            return Rc::clone(shared);
         }
         let shared: Rc<str> = Rc::from(text);
         if pool.len() >= POOL_CAPACITY {
@@ -1619,21 +1619,21 @@ impl DrawScopeDefault {
         // The common case records raw parameters only; band resolution,
         // tight bounds, and the degeneracy drop run at materialization
         // (see [`materialize_solid_arc`]), producing identical output.
-        if blend_mode == BlendMode::SrcOver {
-            if let Brush::Solid(color) = brush {
-                let idx = self.rec.arcs.len();
-                self.rec.tape.push(TapeRef::new(RecordKind::SolidArc, idx));
-                self.rec.arcs.push(SolidArcRecord {
-                    center,
-                    radius,
-                    start_angle,
-                    sweep_angle,
-                    inner_radius,
-                    color,
-                    stroke,
-                });
-                return;
-            }
+        if blend_mode == BlendMode::SrcOver
+            && let Brush::Solid(color) = brush
+        {
+            let idx = self.rec.arcs.len();
+            self.rec.tape.push(TapeRef::new(RecordKind::SolidArc, idx));
+            self.rec.arcs.push(SolidArcRecord {
+                center,
+                radius,
+                start_angle,
+                sweep_angle,
+                inner_radius,
+                color,
+                stroke,
+            });
+            return;
         }
         let (band_inner, band_outer, cap) = arc_band(radius, inner_radius, stroke);
         let geometry = ArcGeometry::new(

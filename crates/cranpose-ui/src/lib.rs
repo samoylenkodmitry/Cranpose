@@ -5,7 +5,7 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{location_key, ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle};
+use cranpose_core::{ApplierGuard, MemoryApplier, NodeError, NodeId, RuntimeHandle, location_key};
 pub use cranpose_core::{Composition, Key};
 pub use cranpose_macros::composable;
 
@@ -54,7 +54,7 @@ pub mod zoom;
 
 // Export for cursor blink animation - AppShell checks this to continuously redraw
 pub use bring_into_view::{
-    local_bring_into_view_responder, scroll_delta_to_reveal, BringIntoViewResponder,
+    BringIntoViewResponder, local_bring_into_view_responder, scroll_delta_to_reveal,
 };
 // Lazy list exports - single source from cranpose-foundation
 // `rememberLazyListState` belongs here with the state it builds: an app that
@@ -62,8 +62,8 @@ pub use bring_into_view::{
 // cranpose-foundation for the one hook that makes its state, which is the
 // reaching-past this facade exists to prevent.
 pub use cranpose_foundation::lazy::{
-    rememberLazyListState, rememberLazyListStateWithPosition, LazyItems, LazyListItemInfo,
-    LazyListLayoutInfo, LazyListScope, LazyListState,
+    LazyItems, LazyListItemInfo, LazyListLayoutInfo, LazyListScope, LazyListState,
+    rememberLazyListState, rememberLazyListStateWithPosition,
 };
 // The accessibility vocabulary an app writes against. It is declared in
 // cranpose-foundation, next to `SemanticsConfiguration`, but an app composes
@@ -84,15 +84,15 @@ pub use cursor_animation::{
 };
 // Debug utilities
 pub use debug::{
-    format_layout_tree, format_modifier_chain, format_render_scene, format_screen_summary,
-    install_modifier_chain_trace, log_layout_tree, log_modifier_chain, log_render_scene,
-    log_screen_summary, ModifierChainTraceGuard,
+    ModifierChainTraceGuard, format_layout_tree, format_modifier_chain, format_render_scene,
+    format_screen_summary, install_modifier_chain_trace, log_layout_tree, log_modifier_chain,
+    log_render_scene, log_screen_summary,
 };
-pub use density::{density, local_density, Density, DensityMeasureScope};
-pub use draggable::{rememberDraggableState, DragDeltaHandler, DraggableState};
+pub use density::{Density, DensityMeasureScope, density, local_density};
+pub use draggable::{DragDeltaHandler, DraggableState, rememberDraggableState};
 pub use draw::{
-    command_draw_scope, command_draw_scope_retained, command_draw_scope_reusing,
-    execute_draw_commands, DrawCacheBuilder, DrawCommand, DrawCommandFn,
+    DrawCacheBuilder, DrawCommand, DrawCommandFn, command_draw_scope, command_draw_scope_retained,
+    command_draw_scope_reusing, execute_draw_commands,
 };
 // Focus invalidation scheduler plumbing (mirrors Compose's internal
 // FocusInvalidationManager). Hosts like cranpose-app-shell service these
@@ -105,38 +105,37 @@ pub use focus_dispatch::{
 };
 pub use font_scale::{FontScaleCurve, MAX_FONT_SCALE_KNOTS};
 pub use interaction::{
-    collect_is_pressed_as_state, rememberMutableInteractionSource, Interaction,
-    MutableInteractionSource, PressInteraction, PressInteractionCancel, PressInteractionPress,
-    PressInteractionRelease,
+    Interaction, MutableInteractionSource, PressInteraction, PressInteractionCancel,
+    PressInteractionPress, PressInteractionRelease, collect_is_pressed_as_state,
+    rememberMutableInteractionSource,
 };
 pub use key_event::{KeyCode, KeyEvent, KeyEventType, Modifiers};
 pub use layout::{
-    build_layout_tree_from_applier, build_semantics_tree_from_applier,
-    build_semantics_tree_from_layout_tree,
+    LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
+    LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
+    SemanticsNode, SemanticsRole, SemanticsTree, build_layout_tree_from_applier,
+    build_semantics_tree_from_applier, build_semantics_tree_from_layout_tree,
     core::{
         Alignment, Arrangement, HorizontalAlignment, LinearArrangement, Measurable, Placeable,
         VerticalAlignment,
     },
     measure_layout, measure_layout_with_options, tree_needs_layout, tree_needs_semantics,
-    LayoutAllocationDebugStats, LayoutBox, LayoutEngine, LayoutMeasurements, LayoutNodeData,
-    LayoutNodeKind, LayoutTree, MeasureLayoutOptions, SemanticsAction, SemanticsCallback,
-    SemanticsNode, SemanticsRole, SemanticsTree,
 };
 pub use layout_direction::{
-    layout_direction, local_layout_direction, LayoutDirection, ProvideLayoutDirection,
+    LayoutDirection, ProvideLayoutDirection, layout_direction, local_layout_direction,
 };
-pub use lazy_item::{lazy_item_key, local_lazy_item_key, ProvideLazyItemKey};
+pub use lazy_item::{ProvideLazyItemKey, lazy_item_key, local_lazy_item_key};
 pub use modal::{
-    clear_modals, dispatch_modal_back, local_modal_depth, modal_depth, ModalRegistration,
+    ModalRegistration, clear_modals, dispatch_modal_back, local_modal_depth, modal_depth,
 };
 pub use modifier::{
-    collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
     BlendMode, Brush, Color, CompositingStrategy, CornerRadii, DpOffset, EdgeInsets,
     FocusDirection, GlassMaterial, GraphicsLayer, LayerShape, Modifier, ModifierLocalKey,
     ModifierLocalReadScope, ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, PointerEvent,
     PointerEventKind, PointerInputScope, PointerSource, Rect, RenderEffect, ResolvedBackground,
     ResolvedModifiers, RotaryInputModifierNode, RotaryScrollEvent, RoundedCornerShape,
     RuntimeShader, SemanticsRequester, Shadow, ShadowScope, Size, TransformOrigin,
+    collect_modifier_slices, collect_semantics_from_modifier, collect_slices_from_modifier,
 };
 // Test utilities for fling velocity verification (only with test-helpers feature)
 #[cfg(feature = "test-helpers")]
@@ -148,7 +147,7 @@ pub use modifier_nodes::{
     PaddingNode, SizeElement, SizeNode,
 };
 pub use nine_patch::{
-    nine_patch_quads, tile_count, tile_quads, NinePatchInsets, PatchFill, PatchQuad,
+    NinePatchInsets, PatchFill, PatchQuad, nine_patch_quads, tile_count, tile_quads,
 };
 // Pointer repass scheduler plumbing serviced by the host shell each frame.
 #[doc(hidden)]
@@ -157,14 +156,14 @@ pub use pointer_dispatch::{
     schedule_pointer_repass,
 };
 pub use primitives::{
-    fade_in, fade_out, rememberSvg, slide_in_vertically, slide_out_vertically, AnimatedVisibility,
-    BasicText, BasicTextField, BasicTextFieldDecorated, BasicTextFieldDecorationScope,
-    BasicTextFieldOptions, BasicTextFieldWithOptions, BasicTextWithOptions, BitmapPainter,
-    BitmapRegionPainter, Box, BoxScope, BoxSpec, BoxWithConstraints, BoxWithConstraintsScope,
-    BoxWithConstraintsScopeImpl, Button, ButtonSpec, Canvas, Column, ColumnSpec, ContentScale,
-    Crossfade, EnterTransition, ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row,
-    RowSpec, Spacer, SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions,
-    DEFAULT_ALPHA,
+    AnimatedVisibility, BasicText, BasicTextField, BasicTextFieldDecorated,
+    BasicTextFieldDecorationScope, BasicTextFieldOptions, BasicTextFieldWithOptions,
+    BasicTextWithOptions, BitmapPainter, BitmapRegionPainter, Box, BoxScope, BoxSpec,
+    BoxWithConstraints, BoxWithConstraintsScope, BoxWithConstraintsScopeImpl, Button, ButtonSpec,
+    Canvas, Column, ColumnSpec, ContentScale, Crossfade, DEFAULT_ALPHA, EnterTransition,
+    ExitTransition, ForEach, Image, Layout, LayoutNode, Painter, Row, RowSpec, Spacer,
+    SubcomposeLayout, SvgPainter, SvgPainterError, Text, TextWithOptions, fade_in, fade_out,
+    rememberSvg, slide_in_vertically, slide_out_vertically,
 };
 #[cfg(any(test, feature = "test-helpers"))]
 #[doc(hidden)]
@@ -173,6 +172,11 @@ pub use render_state::reset_render_state_for_tests;
 // the host shell and renderer each frame. Custom modifier authors should
 // invalidate through `ModifierNode::invalidate` instead of reaching for
 // these directly.
+pub use render_state::{
+    AppContext, AppContextScope, MAX_FONT_SCALE, MIN_FONT_SCALE, current_density,
+    current_font_scale, current_font_scale_curve, scale_sp, set_density, set_font_scale,
+    set_font_scale_curve,
+};
 #[doc(hidden)]
 pub use render_state::{
     clear_transient_scroll_motion_contexts, debug_last_fling_velocity,
@@ -186,15 +190,10 @@ pub use render_state::{
     take_layout_invalidation, take_layout_repass_nodes, take_measure_repass_nodes,
     take_pointer_invalidation, take_render_invalidation,
 };
-pub use render_state::{
-    current_density, current_font_scale, current_font_scale_curve, scale_sp, set_density,
-    set_font_scale, set_font_scale_curve, AppContext, AppContextScope, MAX_FONT_SCALE,
-    MIN_FONT_SCALE,
-};
 pub use renderer::{HeadlessRenderer, PaintLayer, RecordedRenderScene, RenderOp};
-pub use safe_area::{local_ime_insets, local_safe_area_insets, window_insets, WindowInsets};
+pub use safe_area::{WindowInsets, local_ime_insets, local_safe_area_insets, window_insets};
 pub use scroll::{ScrollElement, ScrollMetrics, ScrollNode, ScrollSettlePolicy, ScrollState};
-pub use scrollbar::{content_delta_for_thumb_drag, thumb_geometry, ThumbBounds, ThumbGeometry};
+pub use scrollbar::{ThumbBounds, ThumbGeometry, content_delta_for_thumb_drag, thumb_geometry};
 // Semantics invalidation scheduler plumbing serviced by the host shell each frame.
 #[doc(hidden)]
 pub use semantics_dispatch::{
@@ -206,13 +205,13 @@ pub use subcompose_layout::{
     SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
 };
 pub use text::{
-    get_cursor_x_for_offset, get_offset_for_position, layout_text, measure_text,
-    measure_text_for_node, measure_text_with_options, measure_text_with_options_for_node,
-    prepare_text_layout, prepare_text_layout_for_node, set_text_measurer, LinkAnnotation,
-    ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
+    LinkAnnotation, ParagraphStyle, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
     PreparedTextLayout, SpanStyle, StringAnnotation, TextDrawStyle, TextLayoutOptions,
     TextLayoutResult, TextLinePrefixWidths, TextMeasurer, TextMetrics, TextOptions, TextOverflow,
-    TextShaping, TextStyle,
+    TextShaping, TextStyle, get_cursor_x_for_offset, get_offset_for_position, layout_text,
+    measure_text, measure_text_for_node, measure_text_with_options,
+    measure_text_with_options_for_node, prepare_text_layout, prepare_text_layout_for_node,
+    set_text_measurer,
 };
 pub use text_field_focus::has_focused_field;
 // Editable-state snapshot for platform IMEs (Android InputConnection, web
@@ -229,8 +228,8 @@ pub use widgets::{
     linked_text::LinkedText,
     slider::{Slider, SliderOrientation, SliderScope, SliderSpec},
     swipe_to_dismiss::{
-        rememberSwipeDismissState, SwipeDismissDirection, SwipeDismissSide, SwipeDismissState,
-        SwipeToDismiss, SwipeToDismissBox, SwipeToDismissSpec,
+        SwipeDismissDirection, SwipeDismissSide, SwipeDismissState, SwipeToDismiss,
+        SwipeToDismissBox, SwipeToDismissSpec, rememberSwipeDismissState,
     },
     text_selection_menu::local_on_light_surface,
 };

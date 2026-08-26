@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use block2::RcBlock;
-use cranpose_services::{set_platform_background_activity, BackgroundActivity};
+use cranpose_services::{BackgroundActivity, set_platform_background_activity};
 use dispatch2::DispatchQueue;
 use objc2::MainThreadMarker;
 use objc2_foundation::NSString;

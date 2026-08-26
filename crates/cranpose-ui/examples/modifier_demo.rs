@@ -1,8 +1,8 @@
 /// Practical demonstration of the modifier system showcasing real-world patterns
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
-    TextStyle,
+    Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text, TextStyle,
+    composable,
 };
 
 #[composable]

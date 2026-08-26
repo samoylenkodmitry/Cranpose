@@ -7,10 +7,9 @@ use std::{
 
 use cranpose_ui::{Point, Size};
 use jni::{
-    jni_sig, jni_str,
+    Env, jni_sig, jni_str,
     objects::{JClass, JObject, JValue},
     sys::jlong,
-    Env,
 };
 use ndk::native_window::NativeWindow;
 

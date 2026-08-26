@@ -8,13 +8,13 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_ui::{
+    AppContext, DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
     collect_slices_from_modifier, execute_draw_commands, set_font_scale, set_text_measurer,
     text::{AnnotatedString, TextLayoutResult},
-    AppContext, DrawCommand, Modifier, TextMeasurer, TextMetrics, TextStyle,
 };
 use cranpose_ui_graphics::{
-    estimate_text_measurement, Brush, Color, DrawPrimitive, DrawScope, Point, Rect, Size,
-    TextAlign, TextStyle as DrawTextStyle, TextVerticalAlign,
+    Brush, Color, DrawPrimitive, DrawScope, Point, Rect, Size, TextAlign,
+    TextStyle as DrawTextStyle, TextVerticalAlign, estimate_text_measurement,
 };
 
 const CHAR_WIDTH: f32 = 6.0;

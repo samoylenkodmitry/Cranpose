@@ -2953,3 +2953,153 @@ fn two_composables_selected_through_one_macro_call_site_stay_distinct() {
     );
     assert_composition_valid(&composition);
 }
+
+struct ChainHolder {
+    value: Option<i32>,
+    marker: i32,
+}
+
+impl std::ops::Deref for ChainHolder {
+    type Target = Option<i32>;
+
+    fn deref(&self) -> &Option<i32> {
+        let value = remember_branch_marker(self.marker);
+        if self.marker == 72 {
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+        &self.value
+    }
+}
+
+#[composable]
+fn short_circuited_place_deref_probe(enabled: bool) {
+    let first = ChainHolder {
+        value: Some(1),
+        marker: 71,
+    };
+    let second = ChainHolder {
+        value: Some(2),
+        marker: 72,
+    };
+    if enabled && let Some(_) = *first {}
+    let _got = *second;
+}
+
+#[test]
+fn a_short_circuited_place_deref_does_not_leak_into_a_later_deref() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(92, || short_circuited_place_deref_probe(enabled))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, false).expect("short-circuit the chained deref");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 72),
+        "the unconditional deref must keep its own slot, not adopt the short-circuited \
+         deref's slot and not reinitialize"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn chain_binding_probe(enabled: bool) {
+    let first = ChainHolder {
+        value: Some(5),
+        marker: 71,
+    };
+    if enabled
+        && let Some(ref x) = *first
+        && *x > 0
+    {
+        BRANCH_SEEN.with(|seen| seen.set(*x));
+    }
+}
+
+#[test]
+fn chain_let_bindings_still_reach_the_arm() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(93, || chain_binding_probe(enabled))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!(branch_seen(), 5);
+
+    pass(&mut composition, false).expect("drop the arm");
+    pass(&mut composition, true).expect("re-enter the arm");
+    assert_eq!(branch_seen(), 5);
+    assert_composition_valid(&composition);
+}
+
+fn require_send<T: Send>(value: T) -> T {
+    value
+}
+
+#[composable]
+fn async_closure_probe() {
+    let make = async || std::future::ready(7).await;
+    let future = require_send(make());
+    drop(future);
+}
+
+#[test]
+fn an_async_closure_future_stays_send() {
+    let mut composition = test_composition();
+    composition
+        .render(91, || async_closure_probe())
+        .expect("compose the async closure");
+    assert_composition_valid(&composition);
+}
+
+macro_rules! make_template_pages {
+    ($a:ident: $ma:expr, $b:ident: $mb:expr) => {
+        #[composable]
+        #[allow(non_snake_case)]
+        fn $a() {
+            let value = remember_branch_marker($ma);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+
+        #[composable]
+        #[allow(non_snake_case)]
+        fn $b() {
+            let value = remember_branch_marker($mb);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    };
+}
+
+make_template_pages!(TemplatePageA: 63, TemplatePageB: 64);
+
+#[composable]
+fn template_page_probe(first: bool) {
+    let page: fn() = if first { TemplatePageA } else { TemplatePageB };
+    page();
+}
+
+#[test]
+fn two_composables_from_one_template_invocation_stay_distinct() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, first: bool| {
+        composition.render(90, || template_page_probe(first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 63));
+
+    pass(&mut composition, false).expect("switch template pages");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 64),
+        "one template invocation collapses both definition locations; the local \
+         marker type must still separate the two functions"
+    );
+    assert_composition_valid(&composition);
+}

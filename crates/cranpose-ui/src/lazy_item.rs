@@ -17,7 +17,7 @@
 //! — exactly the identity that causes the leak — so an unkeyed list reports
 //! `None` and per-slot behaviour is unchanged.
 
-use cranpose_core::{compositionLocalOf, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOf};
 
 /// The [`CompositionLocal`] carrying the current lazy item's key.
 pub fn local_lazy_item_key() -> CompositionLocal<Option<u64>> {
@@ -50,7 +50,7 @@ pub fn ProvideLazyItemKey(key: Option<u64>, content: impl FnOnce()) {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use super::*;
 
