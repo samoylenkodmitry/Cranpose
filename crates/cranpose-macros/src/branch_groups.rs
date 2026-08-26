@@ -42,8 +42,32 @@ impl BranchGroupInjector<'_> {
             self.visit_stmt_mut(stmt);
         }
         self.branch_depth -= 1;
+        self.fold_local_statements(block);
         let guard = self.branch_guard_stmt(block.brace_token.span.join());
         block.stmts.insert(0, guard);
+    }
+
+    fn fold_local_statements(&mut self, block: &mut Block) {
+        let has_bound_local = block
+            .stmts
+            .iter()
+            .any(|stmt| matches!(stmt, Stmt::Local(local) if local.init.is_some()));
+        if !has_bound_local {
+            return;
+        }
+        let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        let mut rebuilt = Vec::with_capacity(block.stmts.len());
+        for stmt in block.stmts.drain(..) {
+            let folds = matches!(&stmt, Stmt::Local(local) if local.init.is_some());
+            if folds {
+                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(stmt);
+                rebuilt.push(syn::parse_quote! { drop(#guard); });
+            } else {
+                rebuilt.push(stmt);
+            }
+        }
+        block.stmts = rebuilt;
     }
 
     fn wrap_arm_body(&mut self, body: &mut Expr) {
@@ -257,6 +281,13 @@ impl VisitMut for BranchGroupInjector<'_> {
         }
     }
 
+    fn visit_block_mut(&mut self, block: &mut Block) {
+        for stmt in &mut block.stmts {
+            self.visit_stmt_mut(stmt);
+        }
+        self.fold_local_statements(block);
+    }
+
     fn visit_stmt_mut(&mut self, stmt: &mut Stmt) {
         visit_mut::visit_stmt_mut(self, stmt);
         if let Stmt::Expr(expr, Some(semi)) = stmt {
@@ -338,45 +369,33 @@ fn expr_is_place(expr: &Expr) -> bool {
     }
 }
 
-fn block_contains_await(block: &Block) -> bool {
-    struct AwaitScan {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for AwaitScan {
-        fn visit_expr(&mut self, expr: &'ast Expr) {
-            if self.found {
-                return;
-            }
-            match expr {
-                Expr::Await(_) => self.found = true,
-                Expr::Async(_) => {}
-                Expr::Closure(closure) if closure.asyncness.is_some() => {}
-                _ => syn::visit::visit_expr(self, expr),
-            }
+struct AwaitScan {
+    found: bool,
+}
+
+impl<'ast> Visit<'ast> for AwaitScan {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        if self.found {
+            return;
+        }
+        match expr {
+            Expr::Await(_) => self.found = true,
+            Expr::Async(_) => {}
+            Expr::Closure(closure) if closure.asyncness.is_some() => {}
+            _ => syn::visit::visit_expr(self, expr),
         }
     }
+
+    fn visit_item(&mut self, _item: &'ast syn::Item) {}
+}
+
+fn block_contains_await(block: &Block) -> bool {
     let mut scan = AwaitScan { found: false };
     scan.visit_block(block);
     scan.found
 }
 
 fn expr_contains_await(expr: &Expr) -> bool {
-    struct AwaitScan {
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for AwaitScan {
-        fn visit_expr(&mut self, expr: &'ast Expr) {
-            if self.found {
-                return;
-            }
-            match expr {
-                Expr::Await(_) => self.found = true,
-                Expr::Async(_) => {}
-                Expr::Closure(closure) if closure.asyncness.is_some() => {}
-                _ => syn::visit::visit_expr(self, expr),
-            }
-        }
-    }
     let mut scan = AwaitScan { found: false };
     scan.visit_expr(expr);
     scan.found
@@ -397,6 +416,8 @@ fn expr_contains_let(expr: &Expr) -> bool {
                 _ => syn::visit::visit_expr(self, expr),
             }
         }
+
+        fn visit_item(&mut self, _item: &'ast syn::Item) {}
     }
     let mut scan = LetScan { found: false };
     scan.visit_expr(expr);

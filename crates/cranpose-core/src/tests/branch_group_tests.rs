@@ -3207,6 +3207,44 @@ fn await_free_async_block_probe(flag: bool) {
     });
 }
 
+#[composable]
+fn dormant_item_async_probe(flag: bool) {
+    poll_ready(async {
+        async fn dormant() {
+            std::future::ready(()).await;
+        }
+        let _keep = dormant;
+        if flag {
+            let value = remember_branch_marker(83);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(84);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    });
+}
+
+#[test]
+fn a_dormant_async_item_does_not_mark_the_block_suspending() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(99, || dormant_item_async_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 83));
+
+    pass(&mut composition, false).expect("switch arms past the dormant item");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 84),
+        "an async fn defined inside the block cannot suspend the block; its \
+         await must not disable the fold instrumentation"
+    );
+    assert_composition_valid(&composition);
+}
+
 #[test]
 fn an_await_free_async_block_keeps_branch_identity() {
     reset_branch_probes();
@@ -3264,7 +3302,7 @@ fn two_let_bound_erased_calls_probe(first: Option<i32>, second: Option<i32>) {
 }
 
 #[test]
-fn a_let_bound_erased_call_is_positional_by_construction() {
+fn a_let_bound_erased_call_keeps_its_own_identity() {
     reset_branch_probes();
     let mut composition = test_composition();
     let pass = |composition: &mut Composition<MemoryApplier>, first: Option<i32>| {
@@ -3277,11 +3315,9 @@ fn a_let_bound_erased_call_is_positional_by_construction() {
     pass(&mut composition, None).expect("drop the first binding's call");
     assert_eq!(
         (branch_inits(), branch_seen()),
-        (2, 71),
-        "two erased calls inside binding initializers share the collapsed shim \
-         caller and no statement fold separates them: the survivor adopts the \
-         vanished instance, the documented residual of caller erasure; the \
-         escape is with_key around either initializer"
+        (2, 72),
+        "each binding statement carries its own fold, so the surviving erased \
+         call keeps its own instance instead of adopting the vanished one"
     );
     assert_composition_valid(&composition);
 }
