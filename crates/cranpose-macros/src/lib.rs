@@ -260,6 +260,21 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for (index, arg) in func.sig.inputs.iter_mut().enumerate() {
         if let FnArg::Typed(PatType { pat, ty, .. }) = arg {
+            // The expansion threads its own `__composer` binding through the
+            // body; a user parameter of that name would shadow it into
+            // whatever type the user chose and every injected reference
+            // would break. Refuse loudly instead of failing strangely.
+            if let Pat::Ident(pat_ident) = &**pat {
+                let name = pat_ident.ident.to_string();
+                if name == "__composer" || name.starts_with("__cranpose") {
+                    return syn::Error::new(
+                        pat_ident.ident.span(),
+                        format!("`{name}` is reserved by #[composable]"),
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            }
             let pat_is_mut = matches!(
                 pat.as_ref(),
                 Pat::Ident(pat_ident) if pat_ident.mutability.is_some()

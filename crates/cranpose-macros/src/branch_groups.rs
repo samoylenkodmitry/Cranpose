@@ -82,14 +82,13 @@ struct BranchGroupInjector<'a> {
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
         let reaches = block_can_reach_composer(block);
-        let deferred = reaches && block_is_fully_keyed(block);
         self.branch_depth += 1;
         self.visit_block_mut(block);
         self.branch_depth -= 1;
         if !reaches {
             return;
         }
-        let guard = self.branch_guard_stmt(block.brace_token.span.join(), deferred);
+        let guard = self.branch_guard_stmt(block.brace_token.span.join());
         block.stmts.insert(0, guard);
     }
 
@@ -99,14 +98,13 @@ impl BranchGroupInjector<'_> {
             return;
         }
         let reaches = expr_can_reach_composer(body);
-        let deferred = reaches && expr_is_keyed_call(body);
         self.branch_depth += 1;
         self.visit_expr_mut(body);
         self.branch_depth -= 1;
         if !reaches {
             return;
         }
-        let guard = self.branch_guard_stmt(body.span(), deferred);
+        let guard = self.branch_guard_stmt(body.span());
         let original = body.clone();
         *body = syn::parse_quote! {{
             #guard
@@ -139,12 +137,20 @@ impl BranchGroupInjector<'_> {
             // branch body.
             Expr::Let(let_expr) => {
                 let scrutinee = &mut let_expr.expr;
-                let needs_group = expr_can_reach_composer(scrutinee) && !expr_is_place(scrutinee);
-                self.visit_expr_mut(scrutinee);
-                if needs_group {
-                    let guard_expr = self.branch_guard_expr(scrutinee.span());
-                    let original = scrutinee.clone();
-                    **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
+                if expr_is_place(scrutinee) {
+                    // A place must stay a place — a `ref` pattern binds into
+                    // it — but its value sub-expressions (an index, a deref
+                    // operand) are wrappable, so a composing
+                    // `values[stateful_index()]` still gets its group.
+                    self.wrap_place_value_parts(scrutinee);
+                } else {
+                    let needs_group = expr_can_reach_composer(scrutinee);
+                    self.visit_expr_mut(scrutinee);
+                    if needs_group {
+                        let guard_expr = self.branch_guard_expr(scrutinee.span());
+                        let original = scrutinee.clone();
+                        **scrutinee = syn::parse_quote! { (#guard_expr, #original).1 };
+                    }
                 }
             }
             leaf => {
@@ -153,7 +159,7 @@ impl BranchGroupInjector<'_> {
                 if !needs_group {
                     return;
                 }
-                let guard_stmt = self.branch_guard_stmt(leaf.span(), false);
+                let guard_stmt = self.branch_guard_stmt(leaf.span());
                 let original = leaf.clone();
                 *leaf = syn::parse_quote! {{
                     #guard_stmt
@@ -167,40 +173,66 @@ impl BranchGroupInjector<'_> {
     /// branch does not warn, while still living to the end of the branch —
     /// `let _ = …` would drop the group immediately. The identifier uses
     /// `mixed_site` hygiene, so user code can never see it and a user binding
-    /// of the same name is never shadowed.
-    /// `deferred` is the fully-keyed case: the bracket is reserved, not
-    /// opened, so the real `with_key` keeps its unbracketed sibling structure
-    /// while a lookalike still materializes an isolating bracket at runtime.
-    fn branch_guard_stmt(&mut self, span: Span, deferred: bool) -> Stmt {
+    /// of the same name is never shadowed. Every guard is a deferred shell:
+    /// a reservation that materializes into a real bracket on the branch's
+    /// first composing operation and costs a push and a pop otherwise, so
+    /// over-matching a branch that never composes is free, and the real
+    /// `with_key` keeps its unbracketed keyed sibling structure by passing
+    /// through.
+    fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         if self.in_content_closure {
-            let entry = if deferred {
-                quote::quote! { __branch_group_scope_deferred }
-            } else {
-                quote::quote! { __branch_group_scope }
-            };
             syn::parse_quote_spanned! {span=>
-                let #guard = #core_path::#entry(
+                let #guard = #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
             }
         } else {
             self.uses_composer_alias = true;
             let composer = composer_alias_ident();
-            let entry = if deferred {
-                quote::quote! { __branch_group_deferred }
-            } else {
-                quote::quote! { __branch_group }
-            };
             syn::parse_quote_spanned! {span=>
-                let #guard = #composer.#entry(
+                let #guard = #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 );
             }
         }
+    }
+
+    /// Walk a place expression and wrap its composing value sub-expressions:
+    /// the index of an indexing, the operand of a deref, the base chain of a
+    /// field access. The place structure itself is untouched.
+    fn wrap_place_value_parts(&mut self, place: &mut Expr) {
+        match place {
+            Expr::Index(index) => {
+                self.wrap_place_value_parts(&mut index.expr);
+                self.wrap_value_part(&mut index.index);
+            }
+            Expr::Field(field) => self.wrap_place_value_parts(&mut field.base),
+            Expr::Paren(paren) => self.wrap_place_value_parts(&mut paren.expr),
+            Expr::Group(group) => self.wrap_place_value_parts(&mut group.expr),
+            Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+                self.wrap_value_part(&mut unary.expr);
+            }
+            _ => {}
+        }
+    }
+
+    /// Block-wrap one value-position sub-expression when it composes.
+    fn wrap_value_part(&mut self, expr: &mut Expr) {
+        let needs_group = expr_can_reach_composer(expr);
+        self.visit_expr_mut(expr);
+        if !needs_group {
+            return;
+        }
+        let guard_stmt = self.branch_guard_stmt(expr.span());
+        let original = expr.clone();
+        *expr = syn::parse_quote! {{
+            #guard_stmt
+            #original
+        }};
     }
 
     /// The guard as a bare expression, for positions where a `let` statement
@@ -211,7 +243,7 @@ impl BranchGroupInjector<'_> {
         let core_path = self.core_path;
         if self.in_content_closure {
             syn::parse_quote_spanned! {span=>
-                #core_path::__branch_group_scope(
+                #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 )
             }
@@ -219,7 +251,7 @@ impl BranchGroupInjector<'_> {
             self.uses_composer_alias = true;
             let composer = composer_alias_ident();
             syn::parse_quote_spanned! {span=>
-                #composer.__branch_group(
+                #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
                 )
             }
@@ -276,7 +308,7 @@ impl VisitMut for BranchGroupInjector<'_> {
                 // consumed by that call and needs none; outside branches
                 // there is no sibling to collide with.
                 if self.branch_depth > 0 && !was_arg {
-                    let guard = self.branch_guard_stmt(closure.span(), false);
+                    let guard = self.branch_guard_stmt(closure.span());
                     let original = closure.body.clone();
                     closure.body = syn::parse_quote! {{
                         #guard
@@ -425,80 +457,17 @@ fn expr_can_reach_composer(expr: &Expr) -> bool {
     scan.found
 }
 
-/// A branch bracket exists to supply the identity a branch's content lacks.
-/// A branch whose every statement is an explicit `with_key` call has already
-/// stated its identity, and the bracket would only stand between those keys
-/// and the sibling-move machinery — `for row { if visible { with_key(id, …) } }`
-/// must keep the keyed move semantics it always had. Such branches get no
-/// bracket.
-fn block_is_fully_keyed(block: &Block) -> bool {
-    if block.stmts.is_empty() {
-        return false;
-    }
-    block.stmts.iter().all(|stmt| match stmt {
-        Stmt::Expr(expr, _) => expr_is_keyed_call(expr),
-        _ => false,
-    })
-}
-
-/// `with_key` is a reserved composition name inside `#[composable]` code, the
-/// way CamelCase is: a proc macro resolves names, not types, so a user
-/// function of the same name and shape is indistinguishable from the real
-/// one. Getting it wrong here degrades to the pre-transform shared-slot
-/// behavior, never to slot corruption, and the shape is pinned to the real
-/// API — exactly two arguments, the second a closure literal — so lookalikes
-/// of any other arity keep their bracket.
-fn expr_is_keyed_call(expr: &Expr) -> bool {
-    let callee_is_with_key = |name: &syn::Ident| name == "with_key";
-    let (receiver_composes, args) = match expr {
-        Expr::Call(call) => match call.func.as_ref() {
-            Expr::Path(path)
-                if path
-                    .path
-                    .segments
-                    .last()
-                    .is_some_and(|segment| callee_is_with_key(&segment.ident)) =>
-            {
-                (false, &call.args)
-            }
-            _ => return false,
-        },
-        Expr::MethodCall(method) if callee_is_with_key(&method.method) => {
-            (expr_can_reach_composer(&method.receiver), &method.args)
-        }
-        _ => return false,
-    };
-    if receiver_composes || args.len() != 2 {
-        return false;
-    }
-    // Only the content closure runs inside the keyed group. The key — and a
-    // method receiver — evaluate in the surrounding group first, so an
-    // argument that could compose (`with_key(&remembered_key(1), …)`) still
-    // needs the branch bracket for its identity: no elision then.
-    if !matches!(args.last(), Some(Expr::Closure(_))) {
-        return false;
-    }
-    !expr_can_reach_composer(&args[0])
-}
-
-/// Whether raw macro tokens contain what looks like a composing call: an
-/// identifier immediately followed by a parenthesized group — any identifier
-/// when reached as a free call, a composing-named one (`.remember(…)`,
-/// `.use_state(…)`) when reached through `.`. Macro arguments are token soup
-/// to a proc macro — a snake_case composable in
-/// `format!("{}", stateful_label(1))` is indistinguishable from any helper
-/// by name — so every free-call shape counts. Over-matching costs a branch
-/// at most an empty bracket; missing a composable would silently share its
-/// slots across branches.
+/// Whether raw macro tokens contain what looks like a call: an identifier or
+/// parenthesized callee immediately followed by a parenthesized group. Macro
+/// arguments are token soup to a proc macro and any call can transitively
+/// compose, so every call shape counts. Over-matching costs a branch a shell
+/// reservation that never materializes; missing a composable would silently
+/// share its slots across branches.
 fn tokens_contain_free_call(tokens: &TokenStream2) -> bool {
-    let mut previous_was_dot = false;
     let mut call_candidate = false;
     for tree in tokens.clone() {
         match &tree {
-            proc_macro2::TokenTree::Ident(ident) => {
-                call_candidate = !previous_was_dot || method_name_composes_str(&ident.to_string());
-                previous_was_dot = false;
-            }
+            proc_macro2::TokenTree::Ident(_) => call_candidate = true,
             proc_macro2::TokenTree::Group(group) => {
                 if call_candidate && group.delimiter() == proc_macro2::Delimiter::Parenthesis {
                     return true;
@@ -512,14 +481,8 @@ fn tokens_contain_free_call(tokens: &TokenStream2) -> bool {
                     group.delimiter(),
                     proc_macro2::Delimiter::Parenthesis | proc_macro2::Delimiter::None
                 );
-                previous_was_dot = false;
             }
-            proc_macro2::TokenTree::Punct(punct) => {
-                previous_was_dot = punct.as_char() == '.';
-                call_candidate = false;
-            }
-            proc_macro2::TokenTree::Literal(_) => {
-                previous_was_dot = false;
+            proc_macro2::TokenTree::Punct(_) | proc_macro2::TokenTree::Literal(_) => {
                 call_candidate = false;
             }
         }
@@ -571,38 +534,6 @@ fn macro_is_value_shaped(path: &syn::Path) -> bool {
             | "warn"
             | "error"
     )
-}
-
-/// The composing surface of `Composer`, recognized by method-name prefix:
-/// the `remember*`, `with_group*`, `with_key`, `with_slot_value*`, `use_*`
-/// (`use_state`, `use_value_slot`), `emit_*` (`emit_node`,
-/// `emit_recyclable_node`), `mutable_state*` and `subcompose*` families plus
-/// `install` and `cranpose_with_reuse`. Ordinary methods — `.to_string()`,
-/// `.with(…)`, `.get()` — stay inert.
-const COMPOSING_METHOD_PREFIXES: &[&str] = &[
-    "remember",
-    "with_group",
-    "with_key",
-    "with_slot_value",
-    "use_",
-    "emit_",
-    "mutable_state",
-    "subcompose",
-    "cranpose_with_reuse",
-    "install",
-];
-
-/// Whether a method of this name can compose. A CamelCase method is treated
-/// as composing for the same reason a CamelCase free call is.
-fn method_name_composes_str(name: &str) -> bool {
-    COMPOSING_METHOD_PREFIXES
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
-        || name.chars().next().is_some_and(char::is_uppercase)
-}
-
-fn method_name_composes(name: &syn::Ident) -> bool {
-    method_name_composes_str(&name.to_string())
 }
 
 /// Whether the expression is a place expression — a path, field access,
@@ -661,9 +592,11 @@ impl<'ast> Visit<'ast> for ComposerReachScan {
             Expr::Closure(closure) => self.visit_expr(&closure.body),
             Expr::Async(_) | Expr::Const(_) => {}
             Expr::Call(_) => self.found = true,
-            Expr::MethodCall(method) if method_name_composes(&method.method) => {
-                self.found = true;
-            }
+            // Any method can transitively reach the composer through the
+            // thread-local context — `Helper.render()` calling a composable
+            // inside — so every call shape counts. The shell this earns is a
+            // reservation that costs nothing unless something composes.
+            Expr::MethodCall(_) => self.found = true,
             Expr::Macro(expr_macro) => {
                 if !macro_is_value_shaped(&expr_macro.mac.path)
                     || tokens_contain_free_call(&expr_macro.mac.tokens)

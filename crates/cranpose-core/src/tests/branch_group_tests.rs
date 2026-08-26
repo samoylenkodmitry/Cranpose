@@ -2001,3 +2001,77 @@ fn a_branch_selected_closure_carries_its_branch_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+struct MethodHelper;
+
+impl MethodHelper {
+    fn render(&self, marker: i32) {
+        stateful_child(marker);
+    }
+}
+
+#[composable]
+fn transitive_method_probe(cond: bool) {
+    if cond {
+        MethodHelper.render(401);
+    } else {
+        MethodHelper.render(402);
+    }
+}
+
+#[test]
+fn branches_composing_through_arbitrary_methods_own_their_state() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(59, || transitive_method_probe(true))
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 401);
+
+    // `render` matches no composing-name family, yet it composes: any call
+    // can transitively reach the composer, so every branch that calls
+    // anything reserves a shell — free until something composes inside.
+    composition
+        .render(59, || transitive_method_probe(false))
+        .expect("switch to the else branch");
+    assert_eq!(
+        branch_seen(),
+        402,
+        "a branch composing through an arbitrary method must own its state"
+    );
+    assert_composition_valid(&composition);
+}
+
+fn stateful_index() -> usize {
+    let value = remember(|| {
+        BRANCH_INITS.with(|count| count.set(count.get() + 1));
+        0_usize
+    });
+    value.with(|value| *value)
+}
+
+#[composable]
+fn place_index_probe() {
+    let values: Vec<Option<String>> = vec![Some("row".to_string())];
+    if let Some(ref value) = values[stateful_index()] {
+        BRANCH_SEEN.with(|seen| seen.set(value.len() as i32));
+    }
+}
+
+#[test]
+fn a_composing_index_inside_a_place_scrutinee_gets_its_own_group() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(60, place_index_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+
+    composition
+        .render(60, place_index_probe)
+        .expect("recompose");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+    assert_composition_valid(&composition);
+}
