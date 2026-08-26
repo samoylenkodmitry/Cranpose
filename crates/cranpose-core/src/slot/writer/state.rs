@@ -10,6 +10,7 @@ use crate::{
 pub(in crate::slot) struct DeferredBranchShell {
     pub(in crate::slot) parent: AnchorId,
     pub(in crate::slot) seed: GroupKeySeed,
+    pub(in crate::slot) folding: bool,
     pub(in crate::slot) materialized: bool,
 }
 
@@ -215,6 +216,39 @@ impl SlotWriteSessionState {
         self.request_compaction |= payload_pressure || node_pressure || group_pressure;
         self.request_anchor_storage_compaction |= group_pressure;
         self.request_payload_storage_compaction |= payload_pressure;
+    }
+
+    pub(crate) fn push_deferred_branch_shell(
+        &mut self,
+        seed: GroupKeySeed,
+        folding: bool,
+    ) -> usize {
+        let parent = self.current_parent_anchor();
+        self.deferred_branch_shells.push(DeferredBranchShell {
+            parent,
+            seed,
+            folding,
+            materialized: false,
+        });
+        self.deferred_branch_shells.len() - 1
+    }
+
+    pub(crate) fn close_deferred_branch_shell(&mut self, token: usize) -> bool {
+        if self.deferred_branch_shells.len() != token + 1 {
+            log::error!(
+                "deferred branch shell {token} closed out of order at depth {}",
+                self.deferred_branch_shells.len()
+            );
+            return self
+                .deferred_branch_shells
+                .get(token)
+                .is_some_and(|shell| shell.materialized);
+        }
+        let shell = self
+            .deferred_branch_shells
+            .pop()
+            .expect("length checked above");
+        shell.materialized
     }
 
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {

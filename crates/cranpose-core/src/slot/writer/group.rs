@@ -150,7 +150,7 @@ impl SlotWriteSession<'_> {
 
     pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
         let mut seed = seed;
-        if seed.explicit_key.is_none() {
+        if seed.explicit_key.is_none() || !self.pending_shell_run_is_folding() {
             self.materialize_deferred_branch_shells();
         } else {
             seed.static_key = self.fold_pending_shells_into(seed.static_key);
@@ -290,38 +290,6 @@ impl SlotWriteSession<'_> {
         Some(group)
     }
 
-    pub(crate) fn begin_deferred_branch_shell(&mut self, seed: GroupKeySeed) -> usize {
-        let parent = self.state.current_parent_anchor();
-        self.state
-            .deferred_branch_shells
-            .push(super::state::DeferredBranchShell {
-                parent,
-                seed,
-                materialized: false,
-            });
-        self.state.deferred_branch_shells.len() - 1
-    }
-
-    pub(crate) fn close_deferred_branch_shell(&mut self, token: usize) -> bool {
-        if self.state.deferred_branch_shells.len() != token + 1 {
-            log::error!(
-                "deferred branch shell {token} closed out of order at depth {}",
-                self.state.deferred_branch_shells.len()
-            );
-            return self
-                .state
-                .deferred_branch_shells
-                .get(token)
-                .is_some_and(|shell| shell.materialized);
-        }
-        let shell = self
-            .state
-            .deferred_branch_shells
-            .pop()
-            .expect("length checked above");
-        shell.materialized
-    }
-
     fn pending_shell_run_start(&self) -> usize {
         let parent = self.state.current_parent_anchor();
         let shells = &self.state.deferred_branch_shells;
@@ -334,6 +302,13 @@ impl SlotWriteSession<'_> {
             start -= 1;
         }
         start
+    }
+
+    fn pending_shell_run_is_folding(&self) -> bool {
+        let start = self.pending_shell_run_start();
+        self.state.deferred_branch_shells[start..]
+            .iter()
+            .all(|shell| shell.folding)
     }
 
     fn fold_pending_shells_into(&self, static_key: crate::Key) -> crate::Key {
@@ -375,7 +350,7 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        if key.explicit_key.is_none() {
+        if key.explicit_key.is_none() || !self.pending_shell_run_is_folding() {
             self.materialize_deferred_branch_shells();
         }
         self.flush_payload_location_refreshes();

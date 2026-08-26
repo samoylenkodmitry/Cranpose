@@ -11,10 +11,9 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
         core_path,
         next_branch: 0,
         in_content_closure: false,
+        in_with_key_content: false,
         uses_composer_alias: false,
         branch_depth: 0,
-        closure_in_arg_position: false,
-        in_branch_value_position: false,
     };
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
@@ -33,27 +32,20 @@ struct BranchGroupInjector<'a> {
     core_path: &'a TokenStream2,
     next_branch: u32,
     in_content_closure: bool,
+    in_with_key_content: bool,
     uses_composer_alias: bool,
     branch_depth: u32,
-    closure_in_arg_position: bool,
-    in_branch_value_position: bool,
 }
 
 impl BranchGroupInjector<'_> {
     fn wrap_block(&mut self, block: &mut Block) {
+        let folding = block_is_keyed_only(block);
         self.branch_depth += 1;
-        let tail = match block.stmts.last() {
-            Some(Stmt::Expr(_, None)) => block.stmts.len().checked_sub(1),
-            _ => None,
-        };
-        for (index, stmt) in block.stmts.iter_mut().enumerate() {
-            let previous =
-                std::mem::replace(&mut self.in_branch_value_position, Some(index) == tail);
+        for stmt in &mut block.stmts {
             self.visit_stmt_mut(stmt);
-            self.in_branch_value_position = previous;
         }
         self.branch_depth -= 1;
-        let guard = self.branch_guard_stmt(block.brace_token.span.join());
+        let guard = self.branch_guard_stmt(block.brace_token.span.join(), folding);
         block.stmts.insert(0, guard);
     }
 
@@ -62,12 +54,11 @@ impl BranchGroupInjector<'_> {
             self.wrap_block(&mut block_expr.block);
             return;
         }
+        let folding = expr_is_with_key_call(body);
         self.branch_depth += 1;
-        let previous = std::mem::replace(&mut self.in_branch_value_position, true);
         self.visit_expr_mut(body);
-        self.in_branch_value_position = previous;
         self.branch_depth -= 1;
-        let guard = self.branch_guard_stmt(body.span());
+        let guard = self.branch_guard_stmt(body.span(), folding);
         let original = body.clone();
         *body = syn::parse_quote! {{
             #guard
@@ -76,9 +67,7 @@ impl BranchGroupInjector<'_> {
     }
 
     fn wrap_condition(&mut self, condition: &mut Expr) {
-        let previous = std::mem::replace(&mut self.in_branch_value_position, false);
         self.wrap_condition_inner(condition);
-        self.in_branch_value_position = previous;
     }
 
     fn wrap_condition_inner(&mut self, condition: &mut Expr) {
@@ -106,7 +95,7 @@ impl BranchGroupInjector<'_> {
                 if !needs_group {
                     return;
                 }
-                let guard_stmt = self.branch_guard_stmt(leaf.span());
+                let guard_stmt = self.branch_guard_stmt(leaf.span(), false);
                 let original = leaf.clone();
                 *leaf = syn::parse_quote! {{
                     #guard_stmt
@@ -116,7 +105,7 @@ impl BranchGroupInjector<'_> {
         }
     }
 
-    fn branch_guard_stmt(&mut self, span: Span) -> Stmt {
+    fn branch_guard_stmt(&mut self, span: Span, folding: bool) -> Stmt {
         let branch = self.next_branch;
         self.next_branch += 1;
         let core_path = self.core_path;
@@ -125,6 +114,7 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 let #guard = #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                    #folding,
                 );
             }
         } else {
@@ -133,6 +123,7 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 let #guard = #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                    #folding,
                 );
             }
         }
@@ -148,7 +139,7 @@ impl BranchGroupInjector<'_> {
             Expr::Paren(paren) => self.wrap_place_value_parts(&mut paren.expr),
             Expr::Group(group) => self.wrap_place_value_parts(&mut group.expr),
             Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
-                self.wrap_value_part(&mut unary.expr);
+                self.wrap_place_or_value(&mut unary.expr);
             }
             _ => {}
         }
@@ -164,7 +155,7 @@ impl BranchGroupInjector<'_> {
 
     fn wrap_value_part(&mut self, expr: &mut Expr) {
         self.visit_expr_mut(expr);
-        let guard_stmt = self.branch_guard_stmt(expr.span());
+        let guard_stmt = self.branch_guard_stmt(expr.span(), false);
         let original = expr.clone();
         *expr = syn::parse_quote! {{
             #guard_stmt
@@ -180,6 +171,7 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 #core_path::__branch_group_scope_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                    false,
                 )
             }
         } else {
@@ -188,6 +180,7 @@ impl BranchGroupInjector<'_> {
             syn::parse_quote_spanned! {span=>
                 #composer.__branch_group_deferred(
                     #core_path::branch_location_key(file!(), line!(), column!(), #branch),
+                    false,
                 )
             }
         }
@@ -221,18 +214,16 @@ impl VisitMut for BranchGroupInjector<'_> {
         match expr {
             Expr::Closure(closure) => {
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
-                let was_arg = std::mem::replace(&mut self.closure_in_arg_position, false);
-                let in_value = std::mem::replace(&mut self.in_branch_value_position, false);
+                let exempt = std::mem::replace(&mut self.in_with_key_content, false);
                 self.visit_expr_mut(&mut closure.body);
-                if self.branch_depth > 0 && (!was_arg || in_value) {
-                    let guard = self.branch_guard_stmt(closure.span());
+                if self.branch_depth > 0 && !exempt {
+                    let guard = self.branch_guard_stmt(closure.span(), false);
                     let original = closure.body.clone();
                     closure.body = syn::parse_quote! {{
                         #guard
                         #original
                     }};
                 }
-                self.in_branch_value_position = in_value;
                 self.in_content_closure = previous;
             }
             Expr::Async(_) | Expr::Const(_) => {}
@@ -256,22 +247,28 @@ impl VisitMut for BranchGroupInjector<'_> {
                     self.wrap_arm_body(&mut arm.body);
                 }
             }
-            Expr::Call(call) => {
-                self.visit_expr_mut(&mut call.func);
-                for argument in &mut call.args {
-                    let flag = matches!(argument, Expr::Closure(_));
-                    let previous = std::mem::replace(&mut self.closure_in_arg_position, flag);
-                    self.visit_expr_mut(argument);
-                    self.closure_in_arg_position = previous;
-                }
-            }
-            Expr::MethodCall(method) => {
-                self.visit_expr_mut(&mut method.receiver);
-                for argument in &mut method.args {
-                    let flag = matches!(argument, Expr::Closure(_));
-                    let previous = std::mem::replace(&mut self.closure_in_arg_position, flag);
-                    self.visit_expr_mut(argument);
-                    self.closure_in_arg_position = previous;
+            Expr::Call(_) | Expr::MethodCall(_) => {
+                let keyed_call = expr_is_with_key_call(expr);
+                match expr {
+                    Expr::Call(call) => {
+                        self.visit_expr_mut(&mut call.func);
+                        for argument in &mut call.args {
+                            let flag = keyed_call && matches!(argument, Expr::Closure(_));
+                            let previous = std::mem::replace(&mut self.in_with_key_content, flag);
+                            self.visit_expr_mut(argument);
+                            self.in_with_key_content = previous;
+                        }
+                    }
+                    Expr::MethodCall(method) => {
+                        self.visit_expr_mut(&mut method.receiver);
+                        for argument in &mut method.args {
+                            let flag = keyed_call && matches!(argument, Expr::Closure(_));
+                            let previous = std::mem::replace(&mut self.in_with_key_content, flag);
+                            self.visit_expr_mut(argument);
+                            self.in_with_key_content = previous;
+                        }
+                    }
+                    _ => {}
                 }
             }
             Expr::Repeat(repeat) => self.visit_expr_mut(&mut repeat.expr),
@@ -331,6 +328,29 @@ impl VisitMut for BranchGroupInjector<'_> {
         &mut self,
         _args: &mut syn::AngleBracketedGenericArguments,
     ) {
+    }
+}
+
+fn block_is_keyed_only(block: &Block) -> bool {
+    !block.stmts.is_empty()
+        && block.stmts.iter().all(|stmt| match stmt {
+            Stmt::Expr(expr, _) => expr_is_with_key_call(expr),
+            _ => false,
+        })
+}
+
+fn expr_is_with_key_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call(call) => match call.func.as_ref() {
+            Expr::Path(path) => path
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "with_key"),
+            _ => false,
+        },
+        Expr::MethodCall(method) => method.method == "with_key",
+        _ => false,
     }
 }
 

@@ -355,25 +355,8 @@ pub fn location_key(file: &str, line: u32, column: u32) -> Key {
 }
 
 #[doc(hidden)]
-pub fn __branch_group_scope(key: Key) -> Option<BranchGroupGuard> {
-    with_current_composer_opt(|composer| {
-        composer
-            .active_slots_host()
-            .has_active_pass()
-            .then(|| composer.__branch_group(key))
-    })
-    .flatten()
-}
-
-#[doc(hidden)]
-pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
-    with_current_composer_opt(|composer| {
-        composer
-            .active_slots_host()
-            .has_active_pass()
-            .then(|| composer.__branch_group_deferred(key))
-    })
-    .flatten()
+pub fn __branch_group_scope_deferred(key: Key, folding: bool) -> Option<BranchGroupGuard> {
+    with_current_composer_opt(|composer| composer.__branch_group_deferred(key, folding))
 }
 
 #[doc(hidden)]
@@ -4183,6 +4166,22 @@ impl SlotsHost {
 
     pub(crate) fn has_active_pass(&self) -> bool {
         self.inner.borrow().active_pass.is_some()
+    }
+
+    pub(crate) fn try_push_deferred_branch_shell(
+        &self,
+        seed: slot::GroupKeySeed,
+        folding: bool,
+    ) -> Option<usize> {
+        let mut inner = self.inner.try_borrow_mut().ok()?;
+        let pass = inner.active_pass.as_mut()?;
+        Some(pass.state.push_deferred_branch_shell(seed, folding))
+    }
+
+    pub(crate) fn try_close_deferred_branch_shell(&self, token: usize) -> Option<bool> {
+        let mut inner = self.inner.try_borrow_mut().ok()?;
+        let pass = inner.active_pass.as_mut()?;
+        Some(pass.state.close_deferred_branch_shell(token))
     }
 
     pub(crate) fn abandon_active_pass(&self) {

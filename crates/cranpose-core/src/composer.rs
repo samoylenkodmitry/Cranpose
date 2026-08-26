@@ -569,13 +569,19 @@ pub struct BranchGroupGuard {
 
 impl Drop for BranchGroupGuard {
     fn drop(&mut self) {
-        if let Some(token) = self.deferred_shell {
-            let materialized = self
-                .composer
-                .with_slot_session_mut(|slots| slots.close_deferred_branch_shell(token));
-            if !materialized {
-                return;
-            }
+        let Some(token) = self.deferred_shell else {
+            return;
+        };
+        let Some(materialized) = self
+            .composer
+            .active_slots_host()
+            .try_close_deferred_branch_shell(token)
+        else {
+            log::error!("a branch guard closed while its slot host was busy");
+            return;
+        };
+        if !materialized {
+            return;
         }
         let result = self
             .composer
@@ -1154,28 +1160,15 @@ impl Composer {
     }
 
     #[doc(hidden)]
-    pub fn __branch_group(&self, key: Key) -> BranchGroupGuard {
+    pub fn __branch_group_deferred(&self, key: Key, folding: bool) -> BranchGroupGuard {
         let seed = crate::slot::GroupKeySeed::unkeyed(key);
-        self.with_slot_session_mut(|slots| {
-            let reserved = slots.reserve_group_key(seed);
-            let start = slots.begin_group(reserved, None);
-            slots.mark_group_transparent(start.group);
-        });
+        let deferred_shell = self
+            .active_slots_host()
+            .try_push_deferred_branch_shell(seed, folding);
         BranchGroupGuard {
             composer: self.clone(),
             parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
-            deferred_shell: None,
-        }
-    }
-
-    #[doc(hidden)]
-    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
-        let seed = crate::slot::GroupKeySeed::unkeyed(key);
-        let token = self.with_slot_session_mut(|slots| slots.begin_deferred_branch_shell(seed));
-        BranchGroupGuard {
-            composer: self.clone(),
-            parent_scope: self.current_recompose_scope().map(|scope| scope.id()),
-            deferred_shell: Some(token),
+            deferred_shell,
         }
     }
 

@@ -55,9 +55,27 @@ of running on names before expansion rather than on typed IR:
   same class: argument position reads as inline consumption.
 - **A conditional expanded out of a `macro_rules!` body is never bracketed.**
   The attribute macro runs before function-like macros expand, so an `if`
-  whose arms only exist after expansion keeps the old shared-slot behavior.
+  whose arms only exist after expansion keeps the old shared-slot behavior
+  (pinned as `a_macro_rules_conditional_shares_slots_by_construction`).
   Compose's plugin runs on IR after inlining, which is what closing this
   would take.
+- **A closure passed directly to a call named `with_key` carries no
+  definition-site identity of its own.** Every other closure defined in a
+  branch gets a definition-site shell (the `composableLambda` model: an
+  escaped closure composes under its own site wherever it runs), but
+  `with_key` content composes inside a group that already encodes the call
+  site, the explicit key, and the branch fold, so the extra shell is
+  provably redundant there. The exemption is by name, so a lookalike
+  `with_key` that stores its closure and runs it later composes that
+  content positionally; the API contract is that anything named `with_key`
+  taking content runs it synchronously.
+- **A reuse-retained scope inside a keyed wrapper recomposes fresh when the
+  wrapper leaves composition.** Dispose-or-retain engages only when the
+  detached root is itself the reuse scope; a `with_key` wrapper above it
+  hides it. This reproduces on origin/main and is independent of brackets —
+  both shell classes agree with main's behavior (pinned as
+  `keyed_wrapper_retention_behaves_identically_in_both_shell_classes`);
+  making retention descend into detached subtrees is filed as its own task.
 - **Reordering a large bracketed keyed list is quadratic.** The cross-bracket
   steal scans later same-site brackets linearly and the orphan pool is a
   linear scan, so reversing N rows of

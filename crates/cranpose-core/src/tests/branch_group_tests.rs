@@ -2288,3 +2288,314 @@ fn an_operator_that_composes_still_gets_branch_shells() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn unkeyed_neighbor_probe(inner: bool) {
+    if true {
+        if inner {
+            let _ = remember(|| 0_i32);
+        }
+        cranpose_core::with_key(&7, || {
+            let value = remember_branch_marker(70);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        });
+    }
+}
+
+#[test]
+fn a_keyed_identity_survives_an_unkeyed_neighbor_toggling() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(68, || unkeyed_neighbor_probe(false))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 70));
+
+    composition
+        .render(68, || unkeyed_neighbor_probe(true))
+        .expect("the neighbor branch materializes the bracket");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 70),
+        "a neighbor's remember must not move the keyed subtree's identity"
+    );
+
+    composition
+        .render(68, || unkeyed_neighbor_probe(false))
+        .expect("the neighbor branch leaves again");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 70),
+        "the keyed subtree must keep its identity when the bracket empties"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn deref_place_probe() {
+    let current = Box::new(Some(3_i32));
+    if let Some(ref value) = *current {
+        let seen = remember_branch_marker(*value);
+        BRANCH_SEEN.with(|seen_cell| seen_cell.set(seen));
+    }
+    let _again = &current;
+}
+
+#[test]
+fn a_deref_place_scrutinee_keeps_its_binding_usable() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(69, deref_place_probe)
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 3));
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+#[allow(clippy::needless_late_init)]
+fn escaped_closure_probe(cond: bool) {
+    let render: Box<dyn Fn()>;
+    if cond {
+        render = boxed_render(|| {
+            let value = remember_branch_marker(81);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        });
+    } else {
+        render = boxed_render(|| {
+            let value = remember_branch_marker(82);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        });
+    }
+    render();
+}
+
+#[test]
+fn a_branch_selected_boxed_closure_keeps_its_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(70, || escaped_closure_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 81));
+
+    composition
+        .render(70, || escaped_closure_probe(false))
+        .expect("switch to the else arm's closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 82),
+        "an escaped branch closure must not adopt the other arm's remember slot"
+    );
+    assert_composition_valid(&composition);
+}
+
+macro_rules! routed_branch {
+    ($cond:expr) => {
+        if $cond {
+            let value = remember_branch_marker(91);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        } else {
+            let value = remember_branch_marker(92);
+            BRANCH_SEEN.with(|seen| seen.set(value));
+        }
+    };
+}
+
+#[composable]
+fn macro_rules_probe(cond: bool) {
+    routed_branch!(cond);
+}
+
+#[test]
+fn a_macro_rules_conditional_shares_slots_by_construction() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(71, || macro_rules_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 91));
+
+    composition
+        .render(71, || macro_rules_probe(false))
+        .expect("switch arms inside the macro expansion");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 91),
+        "arms born from macro_rules expansion share one slot: the attribute \
+         macro runs before function-like macros expand, so this boundary is \
+         structural; key such content explicitly with with_key"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn cross_branch_invoked_closure_probe(use_first: bool) {
+    let render = boxed_render(|| {
+        let value = remember_branch_marker(101);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    });
+    if use_first {
+        render();
+    } else {
+        render();
+    }
+}
+
+#[test]
+fn a_stored_closure_composes_fresh_per_invoking_branch() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(72, || cross_branch_invoked_closure_probe(true))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 101));
+
+    composition
+        .render(72, || cross_branch_invoked_closure_probe(false))
+        .expect("invoke the same closure from the other branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 101),
+        "one closure invoked from two branches is two composition identities"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn twice_invoked_closure_probe() {
+    let render = boxed_render(|| {
+        let value = remember_branch_marker(111);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    });
+    if true {
+        render();
+        render();
+    }
+}
+
+#[test]
+fn a_stored_closure_invoked_twice_owns_two_slots() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(73, twice_invoked_closure_probe)
+        .expect("initial composition");
+    assert_eq!(branch_inits(), 2);
+
+    composition
+        .render(73, twice_invoked_closure_probe)
+        .expect("recompose");
+    assert_eq!(
+        branch_inits(),
+        2,
+        "each invocation keeps its own slot across passes"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn folded_duplicate_probe() {
+    for _ in 0..2 {
+        if true {
+            cranpose_core::with_key(&5, || {
+                let _ = remember_branch_marker(5);
+            });
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "duplicate sibling group key")]
+fn duplicate_keys_in_folded_brackets_panic_loudly() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let _ = composition.render(74, folded_duplicate_probe);
+}
+
+#[composable]
+fn folded_retention_probe(visible: bool) {
+    if visible {
+        cranpose_core::with_key(&9, || retained_marker(9));
+    }
+}
+
+#[composable]
+fn materialized_retention_probe(visible: bool) {
+    if visible {
+        let _ = remember(|| 0_i32);
+        cranpose_core::with_key(&9, || retained_marker(9));
+    }
+}
+
+#[test]
+fn keyed_wrapper_retention_behaves_identically_in_both_shell_classes() {
+    reset_branch_probes();
+    let mut folded = test_composition();
+    for visible in [true, false, true] {
+        folded
+            .render(75, || folded_retention_probe(visible))
+            .expect("folded pass");
+    }
+    let folded_inits = branch_inits();
+    assert_composition_valid(&folded);
+
+    reset_branch_probes();
+    let mut materialized = test_composition();
+    for visible in [true, false, true] {
+        materialized
+            .render(77, || materialized_retention_probe(visible))
+            .expect("materialized pass");
+    }
+    assert_eq!(
+        (folded_inits, branch_inits()),
+        (2, 2),
+        "a reuse scope inside a keyed wrapper recomposes fresh when the wrapper \
+         leaves - the same pre-existing boundary origin/main has - and the fold \
+         and materialize classes must agree on it"
+    );
+    assert_composition_valid(&materialized);
+}
+
+#[composable]
+fn folded_recompose_probe(bump: i32) {
+    if true {
+        cranpose_core::with_key(&3, || {
+            let state = rememberMutableStateOf(|| 0_i32);
+            if bump > state.value() {
+                state.set_value(bump);
+            }
+            BRANCH_SEEN.with(|seen| seen.set(state.value()));
+            let _ = remember(|| {
+                BRANCH_INITS.with(|count| count.set(count.get() + 1));
+            });
+        });
+    }
+}
+
+#[test]
+fn invalidation_inside_a_folded_keyed_bracket_recomposes_in_place() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+
+    composition
+        .render(76, || folded_recompose_probe(1))
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 1));
+
+    composition
+        .process_invalid_scopes()
+        .expect("state write recomposes the keyed content in place");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 1),
+        "targeted recomposition must reuse the folded keyed group, not remake it"
+    );
+    assert_composition_valid(&composition);
+}
