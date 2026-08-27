@@ -1208,3 +1208,14 @@ against itself and its ±6% noise was mistaken for proof that a +15%
 branch-first reading was order bias. Always `cd` explicitly in *both*
 arms with absolute paths, and treat any suspiciously clean reversal as a
 prompt to check which binary actually ran.
+
+## codex exec blocks on inherited stdin in detached scripts
+
+`codex exec "<prompt>"` with a non-tty stdin reads *additional* input
+from it even when the prompt argv is complete; a background-launched
+script whose stdin is an open pipe that never closes hangs at "Reading
+additional input from stdin..." forever — ten hours, in our case.
+Always `< /dev/null` the codex line in detached launchers. Pair it
+with writing the exit sentinel unconditionally: under `set -e` a
+non-zero codex exit kills the script before the sentinel echo, and
+the until-grep waiter polls an orphan log for the rest of time.
