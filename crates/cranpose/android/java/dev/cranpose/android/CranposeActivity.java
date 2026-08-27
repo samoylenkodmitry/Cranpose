@@ -1869,6 +1869,7 @@ public class CranposeActivity extends NativeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         loadCranposeNativeLibrary();
         super.onCreate(savedInstanceState);
+        installTrimMemoryHook();
         focusNativeContentView();
         installInsetsListener();
         registerNetworkCallback();
@@ -1977,10 +1978,31 @@ public class CranposeActivity extends NativeActivity {
         stopService(new Intent(this, CranposeBackgroundService.class));
     }
 
-    @Override
-    public void onTrimMemory(int level) {
-        super.onTrimMemory(level);
-        nativeOnTrimMemory(level);
+    private static final java.util.concurrent.atomic.AtomicBoolean cranposeTrimHookInstalled =
+            new java.util.concurrent.atomic.AtomicBoolean();
+
+    // Registered on the application context rather than overriding the
+    // activity's onTrimMemory: activity dispatch does not fire on every
+    // OEM build (seen absent on an EMUI Android 10 phone), while registered
+    // callbacks receive every trim on every version.
+    private void installTrimMemoryHook() {
+        if (!cranposeTrimHookInstalled.compareAndSet(false, true)) {
+            return;
+        }
+        getApplicationContext().registerComponentCallbacks(new android.content.ComponentCallbacks2() {
+            @Override
+            public void onTrimMemory(int level) {
+                nativeOnTrimMemory(level);
+            }
+
+            @Override
+            public void onConfigurationChanged(android.content.res.Configuration configuration) {}
+
+            @Override
+            public void onLowMemory() {
+                nativeOnTrimMemory(TRIM_MEMORY_COMPLETE);
+            }
+        });
     }
 
     @Override
