@@ -183,7 +183,7 @@ impl DependencyBudgetScope {
     }
 
     fn cargo_tree_args(self) -> Vec<String> {
-        let mut args: Vec<String> = ["tree", "--duplicates", "--workspace"]
+        let mut args: Vec<String> = ["tree", "--duplicates", "--workspace", "--color", "never"]
             .map(str::to_owned)
             .into();
         if let Self::AllFeatures = self {
@@ -1310,6 +1310,8 @@ fn check_renderer_pixels_feature_boundary(explain: bool) -> Result<(), String> {
             "--no-default-features",
             "--features",
             "renderer-pixels",
+            "--color",
+            "never",
         ])
         .args(shipped_target_args())
         .output()
@@ -1447,11 +1449,42 @@ struct DuplicatePackageRoot {
     direct_dependents: Vec<String>,
 }
 
+/// Removes ANSI escape sequences from one `cargo tree` line.
+///
+/// `cargo tree` colours its output whenever `CARGO_TERM_COLOR=always`, which
+/// the CI workflow sets globally. A nested line then arrives as
+/// `ESC[2m│ESC[0m   ESC[2m└──ESC[0m thiserror v1.0.69`, which does not start
+/// with a box-drawing character, so the root check waves it through and the
+/// package "name" ends up carrying the tree drawing with it. Strip the escapes
+/// before parsing so the budget reads the same graph however the environment
+/// is configured.
+fn strip_ansi_escapes(line: &str) -> String {
+    let mut plain = String::with_capacity(line.len());
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            plain.push(character);
+            continue;
+        }
+        // A control sequence is `ESC [ <parameters> <final>`, where the final
+        // byte is in `@..=~`. Any other escape is two characters long.
+        if let Some('[') = characters.next() {
+            for character in characters.by_ref() {
+                if ('@'..='~').contains(&character) {
+                    break;
+                }
+            }
+        }
+    }
+    plain
+}
+
 fn duplicate_package_details(cargo_tree: &str) -> Vec<DuplicatePackageFamily> {
     let mut roots_by_package = BTreeMap::<String, Vec<DuplicatePackageRoot>>::new();
     let mut current = None::<DuplicatePackageRoot>;
 
-    for line in cargo_tree.lines() {
+    for line in cargo_tree.lines().map(|line| strip_ansi_escapes(line)) {
+        let line = line.as_str();
         if let Some(root) = root_duplicate_package_entry(line) {
             if let Some(root) = current.take() {
                 roots_by_package
@@ -1516,7 +1549,7 @@ fn duplicate_version_package_families(details: &[DuplicatePackageFamily]) -> Vec
 fn package_names_in_cargo_tree(cargo_tree: &str) -> Vec<String> {
     let mut packages = cargo_tree
         .lines()
-        .filter_map(package_name_from_cargo_tree_line)
+        .filter_map(|line| package_name_from_cargo_tree_line(&strip_ansi_escapes(line)))
         .collect::<Vec<_>>();
     packages.sort();
     packages.dedup();
@@ -1875,6 +1908,54 @@ tiny-skia v0.12.0 (*)
                 );
             }
         }
+    }
+
+    /// CI sets `CARGO_TERM_COLOR=always`, so every `cargo tree` line arrives
+    /// wrapped in ANSI escapes. A nested line then starts with `ESC[` rather
+    /// than with a box-drawing character, which is exactly what the root check
+    /// looks for.
+    #[test]
+    fn duplicate_budget_parser_ignores_coloured_nested_lines() {
+        let tree = concat!(
+            "\u{1b}[2m│\u{1b}[0m   \u{1b}[2m└──\u{1b}[0m thiserror v1.0.69\n",
+            "\u{1b}[2m│\u{1b}[0m   \u{1b}[2m└──\u{1b}[0m thiserror v2.0.18\n",
+        );
+
+        let details = duplicate_package_details(tree);
+
+        assert!(
+            duplicate_version_package_families(&details).is_empty(),
+            "nested tree lines are dependents, not roots, coloured or not"
+        );
+    }
+
+    #[test]
+    fn duplicate_budget_parser_reads_coloured_root_lines() {
+        let tree = concat!(
+            "\u{1b}[1mthiserror\u{1b}[0m v1.0.69\n",
+            "\u{1b}[2m└──\u{1b}[0m ndk v0.9.0\n",
+            "\n",
+            "\u{1b}[1mthiserror\u{1b}[0m v2.0.18\n",
+            "\u{1b}[2m└──\u{1b}[0m cranpose v0.1.101\n",
+        );
+
+        let details = duplicate_package_details(tree);
+
+        assert_eq!(
+            duplicate_version_package_families(&details),
+            vec!["thiserror".to_owned()],
+            "a coloured root line names the same family as an uncoloured one"
+        );
+    }
+
+    #[test]
+    fn cargo_tree_package_parser_strips_colour() {
+        let tree = "\u{1b}[1mcranpose-render-pixels\u{1b}[0m v0.1.101\n";
+
+        assert_eq!(
+            package_names_in_cargo_tree(tree),
+            vec!["cranpose-render-pixels".to_owned()]
+        );
     }
 
     #[test]
