@@ -225,6 +225,7 @@ struct LauncherSlot {
 
 /// Remembers a launcher core for `request_key`, draining anything the host
 /// recovered for it and handing it to `deliver`.
+#[track_caller]
 fn remember_core(
     request_key: &'static str,
     deliver: impl FnOnce(RecoveredPick) + 'static,
@@ -289,6 +290,7 @@ impl OpenFileLauncher {
 /// Remembers a single-file launcher under `request_key`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberOpenFileLauncher(
     request_key: &'static str,
     on_result: impl Fn(LauncherResult<Option<ContentHandle>>) + 'static,
@@ -338,6 +340,7 @@ impl OpenFilesLauncher {
 /// Remembers a multi-file launcher under `request_key`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberOpenFilesLauncher(
     request_key: &'static str,
     on_result: impl Fn(LauncherResult<Vec<ContentHandle>>) + 'static,
@@ -387,6 +390,7 @@ impl OpenFolderLauncher {
 /// Remembers a folder launcher under `request_key`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberOpenFolderLauncher(
     request_key: &'static str,
     on_result: impl Fn(LauncherResult<Option<ContentFolderRef>>) + 'static,
@@ -435,6 +439,7 @@ impl SaveDocumentLauncher {
 /// Remembers a save-document launcher under `request_key`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberSaveDocumentLauncher(
     request_key: &'static str,
     on_result: impl Fn(LauncherResult<Option<ContentSinkRef>>) + 'static,
@@ -481,6 +486,7 @@ impl WritableFolderLauncher {
 /// Remembers a writable-folder launcher under `request_key`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberWritableFolderLauncher(
     request_key: &'static str,
     on_result: impl Fn(LauncherResult<Option<String>>) + 'static,

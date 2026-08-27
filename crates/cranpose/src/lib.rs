@@ -296,6 +296,7 @@ impl Drop for BackInterception {
 
 /// Remembers observable application update state for the current composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUpdateStatus> {
     let updates = cranpose_core::rememberEventStream((), |sender| {
         cranpose_services::observe_app_update_status(move |status| sender.send(status))

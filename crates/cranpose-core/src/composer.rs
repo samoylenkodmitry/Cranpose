@@ -1320,7 +1320,12 @@ impl Composer {
         self.remember_at(crate::caller_location_key(), init)
     }
 
-    pub(crate) fn remember_at<T: 'static>(
+    /// [`Composer::remember`] with an explicit source key, for hook wrappers
+    /// whose closures sever the `#[track_caller]` chain: capture
+    /// [`caller_location_key`](crate::caller_location_key) at the wrapper's
+    /// entry and pass it here, so every caller keeps its own slot.
+    #[doc(hidden)]
+    pub fn remember_at<T: 'static>(
         &self,
         source: crate::Key,
         init: impl FnOnce() -> T,

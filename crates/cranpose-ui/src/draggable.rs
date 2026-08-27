@@ -129,6 +129,7 @@ impl DraggableState {
 
 /// Remembers a [`DraggableState`] for this composition, keeping its delta
 /// handler current across recompositions.
+#[track_caller]
 pub fn rememberDraggableState(on_delta: impl Fn(f32) + 'static) -> DraggableState {
     let state = remember(|| DraggableState::new(|_| {})).with(|state| state.clone());
     state.update_handler(on_delta);

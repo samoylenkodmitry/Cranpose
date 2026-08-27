@@ -239,6 +239,7 @@ pub fn clear_incoming_content() {
 /// }
 /// ```
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
     rememberEventStream((), |sender| {
         observe_incoming_content(move |content| sender.send(content))

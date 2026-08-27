@@ -908,6 +908,7 @@ impl Index<usize> for SoundBank {
 /// resource that costs a decode.
 #[allow(non_snake_case)]
 #[composable(no_skip)]
+#[track_caller]
 pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {
     let key = sound_bank_key(specs);
     let player = local_audio().current();

@@ -364,6 +364,7 @@ impl WindowState {
 /// Remembers native-window position and size across recompositions.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
         position: cranpose_core::rememberMutableStateOf(|| None::<Point>),

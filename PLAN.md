@@ -58,14 +58,20 @@ represented structurally:
   — a fn pointer, a macro-expanded router — still key apart because
   their definitions differ. `emit_node` is `#[track_caller]` the same
   way, so a raw node record carries a folded source and an arm can never
-  adopt another arm's node. Every hook that wraps `remember` or keys an
-  effect group propagates the same caller identity — `rememberKeyed`,
-  `rememberCoroutineScope`, `CollectEvents`, `collectAsState`,
-  `produceState`, `rememberEventStream`, and `derivedStateOf`'s group are
-  all `#[track_caller]`-stamped rather than baking their own definition
-  line, so two same-statement calls stay apart when one leaves
+  adopt another arm's node. Every public hook that wraps `remember` or
+  keys an effect group propagates the same caller identity, in every
+  crate: a hook fn is `#[track_caller]` rather than baking its own
+  definition line, a hook whose `remember` sits inside a
+  `with_composer` closure captures `caller_location_key()` at its entry
+  and passes it through `Composer::remember_at` (the closure severs the
+  `#[track_caller]` chain), and a hook that expands an effect macro in
+  its own body calls the effect impl directly with the captured caller
+  key mixed into its site key (the macro's `file!()` is lexical and
+  would stamp the wrapper). So two same-statement calls stay apart when
+  one leaves
   (`a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves`,
-  `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`).
+  `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`,
+  `a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves`).
   A composition-local provider entry is keyed by its `LocalKey` besides
   its position, so two same-typed providers never adopt each other's
   entry and subscriptions when a neighbor leaves
@@ -156,9 +162,11 @@ typed IR:
   await-free conditions and sub-blocks — an arm that composes and then
   awaits closes its guards before the suspension point, so the future
   stays `Send` (`a_composing_arm_before_an_await_keeps_branch_identity`,
-  `a_suspending_arm_future_stays_send`). What stays bare is only the
-  non-control-flow expression carrying the await itself and any opaque
-  macro invocation — its expansion may suspend, and
+  `a_suspending_arm_future_stays_send`). A condition whose spine awaits
+  still folds its await-free `&&`/`||` operands individually
+  (`an_await_free_operand_of_a_suspending_condition_keeps_branch_identity`).
+  What stays bare is only the non-control-flow expression carrying the
+  await itself and any opaque macro invocation — its expansion may suspend, and
   under-instrumentation is the `Send`-safe side. A value-position
   let-scrutinee inside such a statement also carries no fold of its own:
   the sync path covers that spot with a whole-statement fold, and a

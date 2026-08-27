@@ -222,14 +222,25 @@ impl BranchGroupInjector<'_> {
         }
     }
 
+    fn instrument_suspending_condition(&mut self, condition: &mut Expr) {
+        if !expr_contains_await(condition) {
+            self.wrap_condition(condition);
+            return;
+        }
+        match condition {
+            Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
+                self.instrument_suspending_condition(&mut binary.left);
+                self.instrument_suspending_condition(&mut binary.right);
+            }
+            Expr::Paren(paren) => self.instrument_suspending_condition(&mut paren.expr),
+            leaf => self.instrument_suspending_expr(leaf),
+        }
+    }
+
     fn instrument_suspending_expr(&mut self, expr: &mut Expr) {
         match expr {
             Expr::If(expr_if) => {
-                if expr_contains_await(&expr_if.cond) {
-                    self.instrument_sync_interiors(&mut expr_if.cond);
-                } else {
-                    self.wrap_condition(&mut expr_if.cond);
-                }
+                self.instrument_suspending_condition(&mut expr_if.cond);
                 self.instrument_block_by_suspension(&mut expr_if.then_branch);
                 if let Some((_, else_expr)) = &mut expr_if.else_branch {
                     match else_expr.as_mut() {
@@ -242,17 +253,13 @@ impl BranchGroupInjector<'_> {
             }
             Expr::Match(expr_match) => {
                 if expr_contains_await(&expr_match.expr) {
-                    self.instrument_sync_interiors(&mut expr_match.expr);
+                    self.instrument_suspending_expr(&mut expr_match.expr);
                 } else {
                     self.visit_expr_mut(&mut expr_match.expr);
                 }
                 for arm in &mut expr_match.arms {
                     if let Some((_, guard)) = &mut arm.guard {
-                        if expr_contains_await(guard) {
-                            self.instrument_sync_interiors(guard);
-                        } else {
-                            self.wrap_condition(guard);
-                        }
+                        self.instrument_suspending_condition(guard);
                     }
                     if expr_contains_await(&arm.body) {
                         self.instrument_suspending_expr(&mut arm.body);
@@ -262,16 +269,12 @@ impl BranchGroupInjector<'_> {
                 }
             }
             Expr::While(while_loop) => {
-                if expr_contains_await(&while_loop.cond) {
-                    self.instrument_sync_interiors(&mut while_loop.cond);
-                } else {
-                    self.wrap_condition(&mut while_loop.cond);
-                }
+                self.instrument_suspending_condition(&mut while_loop.cond);
                 self.instrument_block_by_suspension(&mut while_loop.body);
             }
             Expr::ForLoop(for_loop) => {
                 if expr_contains_await(&for_loop.expr) {
-                    self.instrument_sync_interiors(&mut for_loop.expr);
+                    self.instrument_suspending_expr(&mut for_loop.expr);
                 } else {
                     self.visit_expr_mut(&mut for_loop.expr);
                 }
@@ -281,12 +284,13 @@ impl BranchGroupInjector<'_> {
             Expr::Block(block_expr) => {
                 self.instrument_block_by_suspension(&mut block_expr.block);
             }
-            Expr::Unsafe(unsafe_block) => {
-                self.instrument_block_by_suspension(&mut unsafe_block.block);
+            Expr::Unsafe(inner) => {
+                self.instrument_block_by_suspension(&mut inner.block);
             }
             Expr::Paren(paren) => self.instrument_suspending_expr(&mut paren.expr),
             Expr::Group(group) => self.instrument_suspending_expr(&mut group.expr),
             Expr::Await(await_expr) => self.instrument_suspending_expr(&mut await_expr.base),
+            Expr::Let(let_expr) => self.instrument_suspending_expr(&mut let_expr.expr),
             Expr::Assign(assign) => self.instrument_suspending_expr(&mut assign.right),
             Expr::Return(expr_return) => {
                 if let Some(value) = &mut expr_return.expr {

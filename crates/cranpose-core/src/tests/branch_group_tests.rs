@@ -3837,3 +3837,40 @@ fn a_suspending_arm_future_stays_send() {
         .expect("initial composition");
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn suspending_condition_probe(flag: bool) {
+    poll_ready(async {
+        if (flag && remember_branch_marker(401) < 0)
+            || (std::future::ready(true).await && {
+                let value = remember_branch_marker(402);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+                false
+            })
+        {
+            unreachable!("both spines are engineered false");
+        }
+    });
+}
+
+#[test]
+fn an_await_free_operand_of_a_suspending_condition_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(104, || suspending_condition_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 402));
+
+    pass(&mut composition, false).expect("short-circuit the first operand away");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 402),
+        "an await-free operand of a suspending condition can carry a fold that \
+         closes inside its own evaluation; the surviving operand must not adopt \
+         the short-circuited one's slot"
+    );
+    assert_composition_valid(&composition);
+}

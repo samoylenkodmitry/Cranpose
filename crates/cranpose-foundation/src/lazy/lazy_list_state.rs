@@ -344,6 +344,7 @@ struct LazyListStateInner {
 /// Button(move || list_state.scroll_to_item(0, 0.0));
 /// ```
 #[composable]
+#[track_caller]
 pub fn rememberLazyListState() -> LazyListState {
     rememberLazyListStateWithPosition(0, 0.0)
 }

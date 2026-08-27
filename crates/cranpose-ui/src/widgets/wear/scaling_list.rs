@@ -761,6 +761,7 @@ fn signed_span(heights: &ItemHeights, from: usize, to: usize) -> f32 {
 
 /// Remembers a scaling list's scroll position.
 #[composable]
+#[track_caller]
 pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListState {
     let anchor = rememberMutableStateOf(move || initial);
     let inner = remember(|| {

@@ -667,6 +667,7 @@ impl InfiniteTransition {
     }
 
     #[allow(non_snake_case)]
+    #[track_caller]
     pub fn animateFloat(
         &self,
         initial_value: f32,
@@ -679,12 +680,14 @@ impl InfiniteTransition {
     }
 
     #[allow(non_snake_case)]
+    #[track_caller]
     pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
         &self,
         initial_value: T,
         target_value: T,
         animation_spec: InfiniteRepeatableSpec<T>,
     ) -> State<T> {
+        let caller = cranpose_core::caller_location_key();
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         let initial_for_remember = initial_value.clone();
         let target_for_remember = target_value.clone();
@@ -718,14 +721,18 @@ impl InfiniteTransition {
             }
         }));
         let animation_id = Rc::as_ptr(&animation_state) as usize;
-        cranpose_core::DisposableEffect!(animation_id, move |_scope| {
-            transition_inner.add_animation(animation_any.clone());
-            let transition_inner = Rc::clone(&transition_inner);
-            let animation_any = animation_any.clone();
-            DisposableEffectResult::new(move || {
-                transition_inner.remove_animation(&animation_any);
-            })
-        });
+        cranpose_core::__disposable_effect_impl(
+            caller ^ cranpose_core::location_key(file!(), line!(), column!()),
+            animation_id,
+            move |_scope| {
+                transition_inner.add_animation(animation_any.clone());
+                let transition_inner = Rc::clone(&transition_inner);
+                let animation_any = animation_any.clone();
+                DisposableEffectResult::new(move || {
+                    transition_inner.remove_animation(&animation_any);
+                })
+            },
+        );
 
         animation_state.state()
     }
@@ -787,6 +794,7 @@ impl InfiniteTransitionInner {
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
     let runtime = with_current_composer(|composer| composer.runtime_handle());
     let transition =
@@ -1090,6 +1098,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
 /// so newly appearing content can enter from 0 instead of snapping. The
 /// building block for enter transitions (`Crossfade`, `AnimatedVisibility`,
 /// morphing popups).
+#[track_caller]
 pub fn animate_float_as_state_with_initial(
     initial: f32,
     target: f32,
@@ -1097,9 +1106,11 @@ pub fn animate_float_as_state_with_initial(
     label: &str,
 ) -> State<f32> {
     let _ = label;
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(initial, runtime));
+        let anim: Owned<Animatable<f32>> =
+            composer.remember_at(caller, || Animatable::new(initial, runtime));
         anim.update(|animatable| {
             let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
             let is_new_animation = animatable.animation_type() != animation;
@@ -1112,11 +1123,14 @@ pub fn animate_float_as_state_with_initial(
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
     let _ = label;
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(target, runtime));
+        let anim: Owned<Animatable<f32>> =
+            composer.remember_at(caller, || Animatable::new(target, runtime));
         anim.update(|animatable| {
             let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
             let is_new_animation = animatable.animation_type() != animation;

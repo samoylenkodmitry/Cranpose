@@ -586,6 +586,7 @@ pub fn observe_camera_stills(
 /// What the camera session is doing, observed for as long as this call stays in
 /// the composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCameraState() -> State<CameraState> {
     let updates = rememberEventStream((), |sender| {
         observe_camera_state(move |state| sender.send(state))
@@ -600,6 +601,7 @@ pub fn rememberCameraState() -> State<CameraState> {
 /// [`dropped_camera_frames`]. A viewfinder draws [`latest_camera_frame`]
 /// instead, which costs no recomposition at all.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCameraFrames() -> EventStream<CameraFrame> {
     rememberEventStream((), |sender| {
         observe_camera_frames(move |frame| sender.send(frame))
@@ -608,6 +610,7 @@ pub fn rememberCameraFrames() -> EventStream<CameraFrame> {
 
 /// The stills the session produces, as a stream this composition collects.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCameraStills() -> EventStream<Result<CameraStill, CameraError>> {
     rememberEventStream((), |sender| {
         observe_camera_stills(move |still| sender.send(still))

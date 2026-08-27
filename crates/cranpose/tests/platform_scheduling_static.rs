@@ -1972,12 +1972,28 @@ fn source_has_unsafe_boundary_escape(source: &str) -> bool {
         if trimmed.starts_with("//") {
             return false;
         }
-        // `apps/isolated-demo` is its own workspace, so it cannot inherit
-        // `[workspace.lints]` and still carries the crate-root attribute. The
-        // attribute names the lint; it is not an FFI boundary.
-        (trimmed.contains("unsafe") || trimmed.contains("#[unsafe(no_mangle)]"))
-            && trimmed != "#![deny(unsafe_code)]"
+        line_has_unsafe_token(trimmed)
     })
+}
+
+/// The `unsafe` keyword always stands alone as a token, so an ordinary
+/// identifier that merely contains the letters — `unsafe_code` in a lint
+/// name, an `unsafe_block` binding — is not a boundary.
+fn line_has_unsafe_token(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut from = 0;
+    while let Some(found) = line[from..].find("unsafe") {
+        let start = from + found;
+        let end = start + "unsafe".len();
+        let word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+        let starts_token = start == 0 || !word(bytes[start - 1]);
+        let ends_token = end >= bytes.len() || !word(bytes[end]);
+        if starts_token && ends_token {
+            return true;
+        }
+        from = end;
+    }
+    false
 }
 
 fn unsafe_lines_without_safety_invariant(source: &str) -> Vec<usize> {

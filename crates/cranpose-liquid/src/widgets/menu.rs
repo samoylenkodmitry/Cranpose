@@ -433,6 +433,7 @@ impl LiquidMenuGesture {
 
 /// Remembers one continuous menu gesture channel.
 #[composable]
+#[track_caller]
 pub fn rememberLiquidMenuGesture() -> LiquidMenuGesture {
     remember(LiquidMenuGesture::new).with(Clone::clone)
 }
