@@ -204,6 +204,10 @@ typed IR:
   the normal visitor whole, its guards closing before the awaiting
   sibling evaluates
   (`an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity`).
+  An await-free tail expression of a suspending block gets a guard
+  opened just before it — nothing follows a tail, so the guard cannot
+  cross an await, and the tail's value and temporaries stay untouched
+  (`an_await_free_tail_of_a_suspending_block_keeps_branch_identity`).
   What stays bare is only the awaiting chain link itself and any opaque
   macro invocation — its expansion may suspend, and
   under-instrumentation is the `Send`-safe side. A value-position

@@ -60,6 +60,7 @@ pub fn layout_direction() -> LayoutDirection {
 
 /// Runs `content` in `direction`.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn ProvideLayoutDirection(direction: LayoutDirection, content: impl FnOnce()) {
     CompositionLocalProvider(vec![local_layout_direction().provides(direction)], content);
 }

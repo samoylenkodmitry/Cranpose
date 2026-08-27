@@ -414,6 +414,9 @@ impl BranchGroupInjector<'_> {
                 rebuilt.push(self.branch_guard_stmt(stmt.span()));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
+            } else if index + 1 == count && matches!(&stmt, Stmt::Expr(_, None)) {
+                rebuilt.push(self.branch_guard_stmt(stmt.span()));
+                rebuilt.push(stmt);
             } else {
                 rebuilt.push(stmt);
             }

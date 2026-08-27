@@ -42,6 +42,7 @@ pub fn lazy_item_key() -> Option<u64> {
 /// Lazy lists call this around each item's content; an application composing
 /// its own reusable slots can call it too.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn ProvideLazyItemKey(key: Option<u64>, content: impl FnOnce()) {
     CompositionLocalProvider(vec![local_lazy_item_key().provides(key)], content);
 }

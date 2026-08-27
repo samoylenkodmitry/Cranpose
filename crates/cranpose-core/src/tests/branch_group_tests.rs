@@ -4106,3 +4106,38 @@ fn an_extern_rust_composable_keeps_caller_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn suspending_tail_probe(flag: bool) {
+    poll_ready(async move {
+        let page: fn(i32) = CountingPage;
+        if flag {
+            std::future::ready(()).await;
+            page(1)
+        } else {
+            std::future::ready(()).await;
+            page(2)
+        }
+    });
+}
+
+#[test]
+fn an_await_free_tail_of_a_suspending_block_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(112, || suspending_tail_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 71));
+
+    pass(&mut composition, false).expect("switch the awaiting arms");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 72),
+        "nothing follows a tail expression, so a guard opened before it never \
+         crosses an await; the arms' tails must not share slots"
+    );
+    assert_composition_valid(&composition);
+}

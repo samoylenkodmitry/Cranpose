@@ -222,6 +222,7 @@ pub fn density() -> Density {
 /// scaled container or a golden that must not depend on the machine it runs on
 /// states its grid here instead of moving the whole shell onto it.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn ProvideDensity(density: Density, content: impl FnOnce()) {
     CompositionLocalProvider(vec![local_density().provides(density)], content);
 }
@@ -229,6 +230,68 @@ pub fn ProvideDensity(density: Density, content: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_surviving_density_scope_keeps_its_entry_when_a_sibling_leaves() {
+        use std::{cell::Cell, rc::Rc};
+
+        use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};
+
+        let mut composition = Composition::new(MemoryApplier::new());
+        let runtime = composition.runtime_handle();
+        let with_leading = MutableState::with_runtime(true, runtime.clone());
+        let survivor = MutableState::with_runtime(3.0_f32, runtime);
+        let seen = Rc::new(Cell::new(0.0_f32));
+
+        #[cranpose_macros::composable]
+        #[allow(non_snake_case)]
+        fn Reader(seen: Rc<Cell<f32>>) {
+            seen.set(density().density());
+        }
+
+        fn tree(with_leading: bool, survivor: f32, seen: Rc<Cell<f32>>) {
+            if with_leading {
+                ProvideDensity(Density::new(2.0, 1.0), || {});
+            }
+            ProvideDensity(Density::new(survivor, 1.0), move || Reader(seen));
+        }
+
+        #[cranpose_macros::composable]
+        #[allow(non_snake_case)]
+        fn Panel(
+            with_leading: MutableState<bool>,
+            survivor: MutableState<f32>,
+            seen: Rc<Cell<f32>>,
+        ) {
+            tree(with_leading.value(), survivor.value(), seen);
+        }
+
+        let key = location_key(file!(), line!(), column!());
+        {
+            let seen = Rc::clone(&seen);
+            composition
+                .render(key, move || Panel(with_leading, survivor, Rc::clone(&seen)))
+                .expect("initial composition");
+        }
+        assert_eq!(seen.get(), 3.0);
+
+        with_leading.set_value(false);
+        while composition
+            .process_invalid_scopes()
+            .expect("drop the leading density scope")
+        {}
+        survivor.set_value(4.0);
+        while composition
+            .process_invalid_scopes()
+            .expect("change the surviving density")
+        {}
+        assert_eq!(
+            seen.get(),
+            4.0,
+            "the surviving density scope must keep its entry and its reader's \
+             subscription when the sibling leaves"
+        );
+    }
 
     /// Density was a value read from the shell, so a subtree could not be
     /// measured on a different grid. Reading it through the local is what lets a
