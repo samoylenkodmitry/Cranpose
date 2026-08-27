@@ -188,11 +188,25 @@ where
         // (re-sizing, e.g. a collapsing swipe-dismissed row) drive a layout pass.
         let has_scoped_repasses = cranpose_ui::has_pending_layout_repasses()
             || cranpose_ui::has_pending_measure_repasses();
-        let scoped_layout_nodes = if cranpose_ui::has_pending_layout_repasses() {
+        // Both kinds carry the node they were scheduled for, and the scene
+        // phase scopes its graph update to exactly those nodes. Collecting only
+        // the layout ids silently dropped the measure ones, which is the path a
+        // scrolling `LazyColumn` takes: the scene phase then saw an empty dirty
+        // set with the scene marked dirty, read that as "everything changed",
+        // and rebuilt the graph from the composition root on every scrolled
+        // frame.
+        let mut scoped_layout_nodes = if cranpose_ui::has_pending_layout_repasses() {
             cranpose_ui::pending_layout_repass_nodes_snapshot()
         } else {
             Vec::new()
         };
+        if cranpose_ui::has_pending_measure_repasses() {
+            for node in cranpose_ui::pending_measure_repass_nodes_snapshot() {
+                if !scoped_layout_nodes.contains(&node) {
+                    scoped_layout_nodes.push(node);
+                }
+            }
+        }
 
         // Global layout invalidation is reserved for app-wide inputs such as
         // viewport, density, font-scale, or debug layout changes. Normal node
@@ -281,14 +295,22 @@ where
                     if self.semantics_enabled {
                         self.semantics_tree = None;
                     }
-                    if has_scoped_repasses
-                        && !global_layout_invalidation
-                        && !force_layout_pass
-                        && !scoped_layout_nodes.is_empty()
-                    {
-                        self.scoped_layout_scene_nodes = scoped_layout_nodes;
-                    } else {
+                    // A frame runs this phase more than once — the initial pass
+                    // and again after post-layout recomposition — and the scene
+                    // phase consumes the ids once, at the end. Assigning here
+                    // let a later pass with nothing pending wipe the ids an
+                    // earlier one recorded, which is how a scrolling
+                    // `LazyColumn` reached the scene phase with an empty dirty
+                    // set and got a full rebuild. Accumulate instead; only an
+                    // app-wide relayout, where scoping means nothing, clears.
+                    if global_layout_invalidation || force_layout_pass {
                         self.scoped_layout_scene_nodes.clear();
+                    } else if has_scoped_repasses {
+                        for node in scoped_layout_nodes {
+                            if !self.scoped_layout_scene_nodes.contains(&node) {
+                                self.scoped_layout_scene_nodes.push(node);
+                            }
+                        }
                     }
                     self.scene_dirty = true;
                 }

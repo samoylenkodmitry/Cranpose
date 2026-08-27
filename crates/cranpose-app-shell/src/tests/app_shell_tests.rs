@@ -4319,6 +4319,75 @@ fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
     );
 }
 
+/// A steady-state lazy-list scroll must reach the renderer as a *scoped*
+/// update, never a full-tree rebuild.
+///
+/// `LazyColumn` invalidates through `schedule_measure_repass`, and the scene
+/// phase only ever learns node ids from *layout* repasses. When the measure
+/// repass ids are dropped the scene phase sees no dirty nodes at all, decides
+/// the whole scene is dirty, and rebuilds the graph from the composition root
+/// on every scrolled frame — O(whole app) where the work is O(visible rows).
+/// The sibling `graphics_layer` repass tests below already assert this bound;
+/// the lazy list is the path that lost it, and it is the path every scrolling
+/// screen in a real app takes.
+#[test]
+fn lazy_column_scroll_never_rebuilds_the_whole_scene() {
+    let _guard = test_guard();
+    APP_SHELL_LAZY_LIST_STATE.with(|slot| slot.borrow_mut().take());
+    let root_key = location_key(file!(), line!(), column!());
+    let rebuilds = Rc::new(Cell::new(0));
+    let updates = Rc::new(Cell::new(0));
+    let visual_updates = Rc::new(Cell::new(0));
+    let last_dirty_nodes = Rc::new(RefCell::new(Vec::new()));
+
+    let mut shell = AppShell::new(
+        ScopedUpdateCountingRenderer::with_visual_updates(
+            Rc::clone(&rebuilds),
+            Rc::clone(&updates),
+            Rc::clone(&visual_updates),
+            Rc::clone(&last_dirty_nodes),
+        ),
+        root_key,
+        AppShellScrollIndicatorLazyList,
+    );
+    shell.set_buffer_size(320, 240);
+    shell.set_viewport(320.0, 240.0);
+    shell.update();
+
+    let list_state = APP_SHELL_LAZY_LIST_STATE
+        .with(|slot| *slot.borrow())
+        .expect("lazy scroll probe should expose its list state");
+
+    // Several steady-state scroll frames, so this cannot pass on a first-frame
+    // special case: every one of them must stay scoped.
+    for step in 0..3 {
+        rebuilds.set(0);
+        updates.set(0);
+        last_dirty_nodes.borrow_mut().clear();
+
+        assert!(
+            list_state.dispatch_scroll_delta(-40.0).abs() > 0.0,
+            "lazy scroll state should consume scroll delta on step {step}"
+        );
+        shell.update();
+
+        assert_eq!(
+            rebuilds.get(),
+            0,
+            "lazy-list scroll step {step} must not rebuild the scene from the root"
+        );
+        assert_eq!(
+            updates.get(),
+            1,
+            "lazy-list scroll step {step} should perform exactly one scoped scene update"
+        );
+        assert!(
+            !last_dirty_nodes.borrow().is_empty(),
+            "scoped lazy-list update on step {step} must carry the dirty node ids"
+        );
+    }
+}
+
 #[test]
 fn graphics_layer_state_repass_does_not_recompose() {
     let _guard = test_guard();
