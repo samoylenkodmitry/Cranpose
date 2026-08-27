@@ -9,13 +9,17 @@
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use cranpose_core::{
     CollectEvents, Composition, EventChannel, MemoryApplier, composer_context::current_composer,
     derivedStateOf, launchBlocking, location_key, mutableStateOf, remember, rememberCoroutineScope,
+    rememberEventStream,
 };
 
 fn composition() -> Composition<MemoryApplier> {
@@ -117,6 +121,265 @@ fn collect_events_delivers_every_event_the_stream_carries() {
         collected.borrow()
     );
     assert_eq!(*collected.borrow(), vec![1, 2, 3]);
+}
+
+/// A platform-service stand-in: observers register from the composition and
+/// unregister when their registration handle drops, exactly like
+/// `observe_memory_pressure` and `observe_incoming_content` in
+/// cranpose-services.
+type PlatformObserver = Arc<dyn Fn(u32) + Send + Sync>;
+
+#[derive(Clone, Default)]
+struct PlatformService {
+    observers: Arc<Mutex<Vec<(u64, PlatformObserver)>>>,
+    next_id: Arc<AtomicU64>,
+}
+
+struct PlatformRegistration {
+    service: PlatformService,
+    id: u64,
+}
+
+impl Drop for PlatformRegistration {
+    fn drop(&mut self) {
+        self.service
+            .observers
+            .lock()
+            .expect("observer registry")
+            .retain(|(id, _)| *id != self.id);
+    }
+}
+
+impl PlatformService {
+    fn observe(&self, observer: impl Fn(u32) + Send + Sync + 'static) -> PlatformRegistration {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.observers
+            .lock()
+            .expect("observer registry")
+            .push((id, Arc::new(observer)));
+        PlatformRegistration {
+            service: self.clone(),
+            id,
+        }
+    }
+
+    fn publish(&self, event: u32) {
+        let observers: Vec<_> = self
+            .observers
+            .lock()
+            .expect("observer registry")
+            .iter()
+            .map(|(_, observer)| Arc::clone(observer))
+            .collect();
+        for observer in observers {
+            observer(event);
+        }
+    }
+
+    fn observer_count(&self) -> usize {
+        self.observers.lock().expect("observer registry").len()
+    }
+}
+
+/// Two `rememberEventStream` calls in one composable are two independent
+/// subscriptions: each service registers exactly one observer, and each publish
+/// reaches its own collector exactly once — before and after the body
+/// recomposes. Identity shared between the two call sites would collapse them
+/// onto one effect and double what a collector sees.
+#[test]
+fn two_event_streams_in_one_composable_each_deliver_exactly_once() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let shares = PlatformService::default();
+    let pressure = PlatformService::default();
+    let tick = mutableStateOf(0u32);
+    let seen_shares = Rc::new(RefCell::new(Vec::new()));
+    let seen_pressure = Rc::new(RefCell::new(Vec::new()));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let shares = shares.clone();
+        let pressure = pressure.clone();
+        let share_sink = Rc::clone(&seen_shares);
+        let pressure_sink = Rc::clone(&seen_pressure);
+        composition
+            .render(key, move || {
+                // The application body reads state, so every set recomposes it
+                // — the shape of cranscan's Root around its two collectors.
+                let _ = tick.get();
+                let shares = shares.clone();
+                let pressure = pressure.clone();
+                let share_sink = Rc::clone(&share_sink);
+                let pressure_sink = Rc::clone(&pressure_sink);
+                let share_stream =
+                    rememberEventStream((), move |sender| shares.observe(move |e| sender.send(e)));
+                CollectEvents(share_stream, (), move |event| {
+                    share_sink.borrow_mut().push(event)
+                });
+                let pressure_stream = rememberEventStream((), move |sender| {
+                    pressure.observe(move |e| sender.send(e))
+                });
+                CollectEvents(pressure_stream, (), move |event| {
+                    pressure_sink.borrow_mut().push(event)
+                });
+            })
+            .expect("render succeeds");
+    };
+
+    render(&mut composition);
+    assert_eq!(shares.observer_count(), 1, "one subscription per stream");
+    assert_eq!(pressure.observer_count(), 1, "one subscription per stream");
+
+    pressure.publish(10);
+    assert!(
+        pump_until(&mut composition, || !seen_pressure.borrow().is_empty()),
+        "the pressure event never arrived"
+    );
+    assert_eq!(
+        *seen_pressure.borrow(),
+        vec![10],
+        "one publish must deliver exactly once"
+    );
+    assert!(
+        seen_shares.borrow().is_empty(),
+        "the share collector saw another service's events: {:?}",
+        seen_shares.borrow()
+    );
+
+    // Recompose the body, then publish again: the subscriptions must neither
+    // duplicate nor swap streams.
+    tick.set(1);
+    render(&mut composition);
+    assert_eq!(
+        shares.observer_count(),
+        1,
+        "recomposition duplicated the share subscription"
+    );
+    assert_eq!(
+        pressure.observer_count(),
+        1,
+        "recomposition duplicated the pressure subscription"
+    );
+
+    pressure.publish(20);
+    shares.publish(7);
+    assert!(
+        pump_until(&mut composition, || seen_pressure.borrow().len() >= 2
+            && !seen_shares.borrow().is_empty()),
+        "events stopped arriving after recomposition: pressure {:?}, shares {:?}",
+        seen_pressure.borrow(),
+        seen_shares.borrow()
+    );
+    assert_eq!(
+        *seen_pressure.borrow(),
+        vec![10, 20],
+        "one publish must deliver exactly once after recomposition"
+    );
+    assert_eq!(
+        *seen_shares.borrow(),
+        vec![7],
+        "one publish must deliver exactly once after recomposition"
+    );
+}
+
+/// A stream that enters the composition later must not disturb the identity of
+/// the streams already mounted after it in the same body.
+///
+/// Each stream owns its subscription by call site, so a conditional stream
+/// appearing above its siblings changes nothing: every service keeps exactly
+/// one observer and every publish is delivered once. Identity that followed
+/// sibling position instead would shift each later stream onto its neighbour's
+/// effect state — the conditional stream inheriting an already-run effect and
+/// never subscribing, the last stream subscribing a second time and doubling
+/// every platform event its collector sees from then on.
+#[test]
+fn a_stream_mounting_later_does_not_steal_an_existing_streams_identity() {
+    let mut composition = composition();
+    let key = location_key(file!(), line!(), column!());
+    let banner = PlatformService::default();
+    let shares = PlatformService::default();
+    let pressure = PlatformService::default();
+    let show_banner = mutableStateOf(false);
+    let seen_banner = Rc::new(RefCell::new(Vec::new()));
+    let seen_shares = Rc::new(RefCell::new(Vec::new()));
+    let seen_pressure = Rc::new(RefCell::new(Vec::new()));
+
+    let render = |composition: &mut Composition<MemoryApplier>| {
+        let banner = banner.clone();
+        let shares = shares.clone();
+        let pressure = pressure.clone();
+        let banner_sink = Rc::clone(&seen_banner);
+        let share_sink = Rc::clone(&seen_shares);
+        let pressure_sink = Rc::clone(&seen_pressure);
+        composition
+            .render(key, move || {
+                if show_banner.get() {
+                    let banner = banner.clone();
+                    let banner_sink = Rc::clone(&banner_sink);
+                    let stream = rememberEventStream((), move |sender| {
+                        banner.observe(move |e| sender.send(e))
+                    });
+                    CollectEvents(stream, (), move |event| {
+                        banner_sink.borrow_mut().push(event)
+                    });
+                }
+                let shares = shares.clone();
+                let share_sink = Rc::clone(&share_sink);
+                let share_stream =
+                    rememberEventStream((), move |sender| shares.observe(move |e| sender.send(e)));
+                CollectEvents(share_stream, (), move |event| {
+                    share_sink.borrow_mut().push(event)
+                });
+                let pressure = pressure.clone();
+                let pressure_sink = Rc::clone(&pressure_sink);
+                let pressure_stream = rememberEventStream((), move |sender| {
+                    pressure.observe(move |e| sender.send(e))
+                });
+                CollectEvents(pressure_stream, (), move |event| {
+                    pressure_sink.borrow_mut().push(event)
+                });
+            })
+            .expect("render succeeds");
+    };
+
+    render(&mut composition);
+    show_banner.set(true);
+    render(&mut composition);
+
+    assert_eq!(
+        banner.observer_count(),
+        1,
+        "the banner stream never subscribed to its service"
+    );
+    assert_eq!(shares.observer_count(), 1, "one subscription per stream");
+    assert_eq!(pressure.observer_count(), 1, "one subscription per stream");
+
+    banner.publish(1);
+    shares.publish(2);
+    pressure.publish(3);
+    assert!(
+        pump_until(&mut composition, || !seen_banner.borrow().is_empty()
+            && !seen_shares.borrow().is_empty()
+            && !seen_pressure.borrow().is_empty()),
+        "an event never arrived: banner {:?}, shares {:?}, pressure {:?}",
+        seen_banner.borrow(),
+        seen_shares.borrow(),
+        seen_pressure.borrow()
+    );
+    assert_eq!(
+        *seen_banner.borrow(),
+        vec![1],
+        "one banner publish must deliver exactly once"
+    );
+    assert_eq!(
+        *seen_shares.borrow(),
+        vec![2],
+        "one share publish must deliver exactly once"
+    );
+    assert_eq!(
+        *seen_pressure.borrow(),
+        vec![3],
+        "one pressure publish must deliver exactly once"
+    );
 }
 
 #[test]
