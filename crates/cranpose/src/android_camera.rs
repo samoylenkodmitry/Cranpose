@@ -14,14 +14,15 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill, FlashMode, FrameFormat,
-    publish_camera_frame, publish_camera_state, publish_camera_still, record_dropped_camera_frame,
-    set_platform_camera,
+    publish_camera_frame, publish_camera_lenses, publish_camera_state, publish_camera_still,
+    record_dropped_camera_frame, set_platform_camera, Camera, CameraError, CameraFrame, CameraLens,
+    CameraLenses, CameraState, CameraStill, FlashMode, FrameFormat, LensFacing,
 };
 use jni::{
-    EnvUnowned, Outcome, jni_sig, jni_str,
+    jni_sig, jni_str,
     objects::{JByteArray, JClass, JObject, JString, JValue},
     sys::{jint, jlong},
+    EnvUnowned, Outcome,
 };
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
@@ -95,15 +96,11 @@ impl Camera for AndroidCamera {
     }
 
     fn lenses(&self) -> Vec<CameraLens> {
-        self.call_string(jni_str!("cranposeCameraLenses"))
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| line.split_once('|'))
-            .map(|(id, name)| CameraLens {
-                id: id.to_string(),
-                name: name.to_string(),
-            })
-            .collect()
+        parse_lenses(
+            &self
+                .call_string(jni_str!("cranposeCameraLenses"))
+                .unwrap_or_default(),
+        )
     }
 
     fn lens(&self) -> Option<String> {
@@ -148,6 +145,27 @@ impl Camera for AndroidCamera {
         })
         .unwrap_or(false)
     }
+}
+
+/// The Java side's lens lines, one `id|facing|name` per line.
+fn parse_lenses(text: &str) -> Vec<CameraLens> {
+    text.lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '|');
+            let id = parts.next()?;
+            let facing = parts.next()?;
+            let name = parts.next()?;
+            Some(CameraLens {
+                id: id.to_string(),
+                name: name.to_string(),
+                facing: match facing {
+                    "front" => LensFacing::Front,
+                    "external" => LensFacing::External,
+                    _ => LensFacing::Back,
+                },
+            })
+        })
+        .collect()
 }
 
 /// One preview frame, in the format the sensor produced.
@@ -252,5 +270,26 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
         } else {
             error
         })),
+    });
+}
+
+/// The devices the application may pick between, and the one in use.
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraLenses<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
+    list: JString<'local>,
+    active: JString<'local>,
+) {
+    let decoded = env.with_env(|env| -> jni::errors::Result<(String, String)> {
+        Ok((list.try_to_string(env)?, active.try_to_string(env)?))
+    });
+    let Outcome::Ok((list, active)) = decoded.into_outcome() else {
+        return;
+    };
+    publish_camera_lenses(CameraLenses {
+        lenses: parse_lenses(&list),
+        active: (!active.is_empty()).then_some(active),
     });
 }

@@ -62,6 +62,7 @@ final class CranposeCamera {
     private volatile String openId = null;
     private volatile int flash = 0;
     private volatile int rotationDegrees = 0;
+    private android.hardware.display.DisplayManager.DisplayListener displayListener;
 
     CranposeCamera(Activity activity) {
         this.activity = activity;
@@ -96,14 +97,13 @@ final class CranposeCamera {
         return false;
     }
 
-    private java.util.List<String> backIds() {
+    private java.util.List<String> facingIds(int wanted) {
         java.util.List<String> ids = new java.util.ArrayList<>();
         try {
             for (String id : manager().getCameraIdList()) {
                 CameraCharacteristics chars = manager().getCameraCharacteristics(id);
                 Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
-                if (facing != null && facing == CameraCharacteristics.LENS_FACING_BACK
-                        && takesPictures(chars)) {
+                if (facing != null && facing == wanted && takesPictures(chars)) {
                     ids.add(id);
                 }
             }
@@ -122,28 +122,64 @@ final class CranposeCamera {
         return ids;
     }
 
+    private java.util.List<String> backIds() {
+        return facingIds(CameraCharacteristics.LENS_FACING_BACK);
+    }
+
+    private java.util.List<String> frontIds() {
+        return facingIds(CameraCharacteristics.LENS_FACING_FRONT);
+    }
+
+    /**
+     * One device per line as {@code id|facing|name}. Back lenses first,
+     * widest first, then the front ones, matching the order the framework
+     * documents for {@code Camera::lenses}.
+     */
     String lensList() {
-        java.util.List<String> ids = backIds();
+        java.util.List<String> backs = backIds();
+        java.util.List<String> fronts = frontIds();
         String[] wideNames = {"Ultra wide", "Wide", "Tele"};
         StringBuilder out = new StringBuilder();
-        for (int i = 0; i < ids.size(); i++) {
+        for (int i = 0; i < backs.size(); i++) {
             String name;
-            if (ids.size() == 1) {
+            if (backs.size() == 1) {
                 name = "Back";
-            } else if (ids.size() <= wideNames.length) {
-                name = wideNames[wideNames.length - ids.size() + i];
             } else if (i < wideNames.length) {
                 name = wideNames[i];
             } else {
                 name = "Lens " + (i + 1);
             }
-            out.append(ids.get(i)).append('|').append(name).append('\n');
+            out.append(backs.get(i)).append("|back|").append(name).append('\n');
+        }
+        for (int i = 0; i < fronts.size(); i++) {
+            String name = fronts.size() == 1 ? "Front" : "Front " + (i + 1);
+            out.append(fronts.get(i)).append("|front|").append(name).append('\n');
         }
         return out.toString();
     }
 
     int rotationDegrees() {
         return rotationDegrees;
+    }
+
+    /**
+     * How far a frame from device {@code id} must be turned clockwise to be
+     * upright: the sensor's mounting against the display's rotation, with the
+     * sign flipped for the mirrored front sensor.
+     */
+    private int rotationFor(String id) {
+        try {
+            CameraCharacteristics chars = manager().getCameraCharacteristics(id);
+            Integer sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION);
+            Integer facing = chars.get(CameraCharacteristics.LENS_FACING);
+            int sensor = sensorOrientation == null ? 0 : sensorOrientation;
+            if (facing != null && facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                return (sensor + displayRotationDegrees()) % 360;
+            }
+            return (sensor - displayRotationDegrees() + 360) % 360;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -183,10 +219,14 @@ final class CranposeCamera {
             return;
         }
         chosenId = id;
-        boolean wasOpen = open;
-        stop();
-        if (wasOpen) {
+        if (open) {
+            // The device changes without a Stopped in between, so the
+            // viewfinder keeps the last frame instead of blanking while the
+            // new device opens.
+            closeSession();
             start();
+        } else {
+            CranposeActivity.onCameraLenses(lensList(), currentLens());
         }
     }
 
@@ -264,7 +304,7 @@ final class CranposeCamera {
             CameraManager manager = manager();
             java.util.List<String> ids = backIds();
             String backId = null;
-            if (chosenId != null && ids.contains(chosenId)) {
+            if (chosenId != null && (ids.contains(chosenId) || frontIds().contains(chosenId))) {
                 backId = chosenId;
             } else if (ids.size() > 1) {
                 backId = ids.get(1);
@@ -288,9 +328,8 @@ final class CranposeCamera {
             }
             openId = backId;
             CameraCharacteristics chars = manager.getCameraCharacteristics(backId);
-            Integer sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION);
-            rotationDegrees = ((sensorOrientation == null ? 0 : sensorOrientation)
-                    - displayRotationDegrees() + 360) % 360;
+            rotationDegrees = rotationFor(backId);
+            watchDisplay();
             StreamConfigurationMap streamMap = chars.get(
                     CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             if (streamMap == null) {
@@ -349,6 +388,8 @@ final class CranposeCamera {
                         applyFlash(request, false);
                         s.setRepeatingRequest(request.build(), null, cameraHandler);
                         CranposeActivity.onCameraRunning(openId == null ? "" : openId);
+                        CranposeActivity.onCameraLenses(
+                                lensList(), openId == null ? "" : openId);
                     } catch (Exception error) {
                         CranposeActivity.onCameraFailed(String.valueOf(error.getMessage()));
                         stop();
@@ -440,8 +481,14 @@ final class CranposeCamera {
     }
 
     synchronized void stop() {
+        closeSession();
+        CranposeActivity.onCameraStopped();
+    }
+
+    private synchronized void closeSession() {
         open = false;
         openId = null;
+        unwatchDisplay();
         try {
             if (session != null) {
                 session.close();
@@ -472,7 +519,49 @@ final class CranposeCamera {
         } catch (Exception ignored) {
         }
         deliveringFrame.set(false);
-        CranposeActivity.onCameraStopped();
+    }
+
+    /**
+     * Keeps {@link #rotationDegrees} matching the display while the session
+     * runs. The activity survives a device turn (its manifest handles
+     * orientation changes), so nothing else recomputes the value.
+     */
+    private void watchDisplay() {
+        android.hardware.display.DisplayManager displays =
+                (android.hardware.display.DisplayManager)
+                        activity.getSystemService(Context.DISPLAY_SERVICE);
+        if (displays == null || displayListener != null) {
+            return;
+        }
+        displayListener = new android.hardware.display.DisplayManager.DisplayListener() {
+            @Override
+            public void onDisplayAdded(int displayId) {}
+
+            @Override
+            public void onDisplayRemoved(int displayId) {}
+
+            @Override
+            public void onDisplayChanged(int displayId) {
+                String id = openId;
+                if (id != null) {
+                    rotationDegrees = rotationFor(id);
+                }
+            }
+        };
+        displays.registerDisplayListener(displayListener, cameraHandler);
+    }
+
+    private void unwatchDisplay() {
+        if (displayListener == null) {
+            return;
+        }
+        android.hardware.display.DisplayManager displays =
+                (android.hardware.display.DisplayManager)
+                        activity.getSystemService(Context.DISPLAY_SERVICE);
+        if (displays != null) {
+            displays.unregisterDisplayListener(displayListener);
+        }
+        displayListener = null;
     }
 
     private static Size choosePreviewSize(Size[] sizes) {

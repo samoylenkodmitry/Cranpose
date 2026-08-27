@@ -124,6 +124,109 @@ impl CameraFrame {
             FrameFormat::Nv12 => nv12_to_rgba8(self.width, self.height, &self.bytes),
         }
     }
+
+    /// The frame as tightly packed RGBA8 with
+    /// [`rotation_degrees`](Self::rotation_degrees) applied, so the pixels are
+    /// the right way up whatever the sensor's mounting was.
+    ///
+    /// The turn happens in the same pass as the format conversion, because this
+    /// runs on every previewed frame: converting and then turning would walk
+    /// the pixels twice. A rotation that is not a quarter turn is left alone —
+    /// no camera produces one.
+    pub fn upright_rgba8(&self) -> UprightRgba {
+        let rotation = self.rotation_degrees;
+        if !matches!(rotation, 90 | 180 | 270) {
+            return UprightRgba {
+                width: self.width,
+                height: self.height,
+                rgba: self.to_rgba8(),
+            };
+        }
+        let (width, height) = (self.width as usize, self.height as usize);
+        let (out_width, out_height) = match rotation {
+            90 | 270 => (self.height, self.width),
+            _ => (self.width, self.height),
+        };
+        let mut rgba = vec![0u8; width * height * 4];
+        match self.format {
+            FrameFormat::Rgba8 => {
+                for y in 0..height {
+                    let row = &self.bytes[y * width * 4..(y + 1) * width * 4];
+                    for x in 0..width {
+                        let src = &row[x * 4..x * 4 + 4];
+                        let dst = turned_index(rotation, width, height, x, y) * 4;
+                        rgba[dst..dst + 4].copy_from_slice(src);
+                    }
+                }
+            }
+            FrameFormat::Rgb8 => {
+                for y in 0..height {
+                    let row = &self.bytes[y * width * 3..(y + 1) * width * 3];
+                    for x in 0..width {
+                        let src = &row[x * 3..x * 3 + 3];
+                        let dst = turned_index(rotation, width, height, x, y) * 4;
+                        rgba[dst..dst + 3].copy_from_slice(src);
+                        rgba[dst + 3] = 255;
+                    }
+                }
+            }
+            FrameFormat::Nv12 => {
+                let pixels = width * height;
+                if self.bytes.len() < pixels + pixels / 2 || width == 0 || height == 0 {
+                    return UprightRgba {
+                        width: out_width,
+                        height: out_height,
+                        rgba,
+                    };
+                }
+                let (luma, chroma) = self.bytes.split_at(pixels);
+                for y in 0..height {
+                    let luma_row = &luma[y * width..(y + 1) * width];
+                    let chroma_row = &chroma[(y / 2) * width..(y / 2 + 1) * width];
+                    for x in 0..width {
+                        let luminance = luma_row[x] as i32;
+                        let blue_difference = chroma_row[x & !1] as i32 - 128;
+                        let red_difference = chroma_row[(x & !1) + 1] as i32 - 128;
+                        let dst = turned_index(rotation, width, height, x, y) * 4;
+                        rgba[dst] = clamp_byte(luminance + ((91881 * red_difference) >> 16));
+                        rgba[dst + 1] = clamp_byte(
+                            luminance - ((22554 * blue_difference + 46802 * red_difference) >> 16),
+                        );
+                        rgba[dst + 2] = clamp_byte(luminance + ((116130 * blue_difference) >> 16));
+                        rgba[dst + 3] = 255;
+                    }
+                }
+            }
+        }
+        UprightRgba {
+            width: out_width,
+            height: out_height,
+            rgba,
+        }
+    }
+}
+
+/// A frame's pixels as tightly packed RGBA8, already the right way up.
+///
+/// `width` and `height` describe the turned image, so a 90° or 270° turn swaps
+/// them relative to the frame that produced this.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UprightRgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Where source pixel `(x, y)` lands in the image turned clockwise by
+/// `rotation`, as a pixel index into the turned image.
+#[inline]
+fn turned_index(rotation: u16, width: usize, height: usize, x: usize, y: usize) -> usize {
+    match rotation {
+        90 => x * height + (height - 1 - y),
+        180 => (height - 1 - y) * width + (width - 1 - x),
+        270 => (width - 1 - x) * height + y,
+        _ => y * width + x,
+    }
 }
 
 /// Widens tightly packed RGB8 to RGBA8, opaque throughout.
@@ -189,13 +292,44 @@ pub struct CameraStill {
 /// One capture device the application may pick.
 ///
 /// `id` is the platform's own handle for the device (an `AVCaptureDevice`
-/// uniqueID on iOS, a camera2 id on Android); pass it back to
-/// [`Camera::use_lens`]. `name` is for a button label: "Ultra wide", "Wide",
-/// "Tele".
+/// uniqueID on iOS, a camera2 id on Android, a device index on desktop); pass
+/// it back to [`Camera::use_lens`]. `name` is for a button label: "Ultra
+/// wide", "Wide", "Tele".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CameraLens {
     pub id: String,
     pub name: String,
+    /// Which way the device points, so an application can offer back lenses
+    /// and the front lens as different controls.
+    pub facing: LensFacing,
+}
+
+/// Which way a capture device points.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LensFacing {
+    /// Away from the screen: the main photography cameras on a phone.
+    #[default]
+    Back,
+    /// At the person holding the device.
+    Front,
+    /// Not fixed to a screen at all: a webcam or another attached device.
+    External,
+}
+
+/// The devices the application may pick between, and the one in use.
+///
+/// Published by the backend when a session opens and when the device changes.
+/// A screen showing a lens control observes this instead of asking the
+/// platform, because both phone lens lists are blocking platform calls — a
+/// JNI round trip on Android, a fresh discovery session on iOS — and a
+/// recomposition must not pay that.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CameraLenses {
+    /// Back lenses first in field-of-view order, widest first, then the rest.
+    pub lenses: Vec<CameraLens>,
+    /// The id of the device the open session uses, or `None` while nothing
+    /// runs.
+    pub active: Option<String>,
 }
 
 /// What the light does when a still is captured.
@@ -303,10 +437,13 @@ pub trait Camera: Send + Sync {
     }
 
     /// The devices the application may pick between, back cameras first and in
-    /// field-of-view order, widest first.
+    /// field-of-view order, widest first, then the rest.
     ///
     /// An empty list means the application shows no lens control: either the
-    /// platform has one camera or the backend does not list them.
+    /// platform has one camera or the backend does not list them. Backends
+    /// also publish this through [`publish_camera_lenses`] when a session
+    /// opens, so a screen observes [`rememberCameraLenses`] rather than paying
+    /// this blocking platform call per recomposition.
     fn lenses(&self) -> Vec<CameraLens> {
         Vec::new()
     }
@@ -358,11 +495,17 @@ pub fn clear_platform_camera() {
     if let Ok(mut observers) = still_observers().lock() {
         observers.clear();
     }
+    if let Ok(mut observers) = lens_observers().lock() {
+        observers.clear();
+    }
     if let Ok(mut latest) = latest_frame_slot().lock() {
         *latest = None;
     }
     if let Ok(mut state) = state_slot().lock() {
         *state = CameraState::Idle;
+    }
+    if let Ok(mut lenses) = lenses_slot().lock() {
+        *lenses = CameraLenses::default();
     }
     DROPPED_FRAMES.store(0, Ordering::Release);
 }
@@ -388,6 +531,11 @@ fn latest_frame_slot() -> &'static Mutex<Option<CameraFrame>> {
     SLOT.get_or_init(|| Mutex::new(None))
 }
 
+fn lenses_slot() -> &'static Mutex<CameraLenses> {
+    static SLOT: OnceLock<Mutex<CameraLenses>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(CameraLenses::default()))
+}
+
 /// Frames produced while every observer was still busy with an earlier one.
 ///
 /// Counted rather than queued: a detector that falls behind should see the
@@ -398,6 +546,7 @@ static DROPPED_FRAMES: AtomicU64 = AtomicU64::new(0);
 type FrameObserver = Arc<dyn Fn(CameraFrame) + Send + Sync>;
 type StateObserver = Arc<dyn Fn(CameraState) + Send + Sync>;
 type StillObserver = Arc<dyn Fn(Result<CameraStill, CameraError>) + Send + Sync>;
+type LensObserver = Arc<dyn Fn(CameraLenses) + Send + Sync>;
 
 fn frame_observers() -> &'static Mutex<Vec<(u64, FrameObserver)>> {
     static SLOT: OnceLock<Mutex<Vec<(u64, FrameObserver)>>> = OnceLock::new();
@@ -414,6 +563,11 @@ fn still_observers() -> &'static Mutex<Vec<(u64, StillObserver)>> {
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn lens_observers() -> &'static Mutex<Vec<(u64, LensObserver)>> {
+    static SLOT: OnceLock<Mutex<Vec<(u64, LensObserver)>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 static NEXT_OBSERVER: AtomicU64 = AtomicU64::new(1);
 
 /// Keeps a camera observer registered until it is dropped.
@@ -427,6 +581,7 @@ enum ObserverKind {
     Frame,
     State,
     Still,
+    Lenses,
 }
 
 impl Drop for CameraObserver {
@@ -435,6 +590,7 @@ impl Drop for CameraObserver {
             ObserverKind::Frame => retain_without(frame_observers(), self.id),
             ObserverKind::State => retain_without(state_observers(), self.id),
             ObserverKind::Still => retain_without(still_observers(), self.id),
+            ObserverKind::Lenses => retain_without(lens_observers(), self.id),
         }
     }
 }
@@ -536,6 +692,32 @@ pub fn publish_camera_still(still: Result<CameraStill, CameraError>) {
     }
 }
 
+/// Publishes the lens list and the device in use. Backends call this when a
+/// session opens and when the device changes.
+pub fn publish_camera_lenses(lenses: CameraLenses) {
+    {
+        let Ok(mut current) = lenses_slot().lock() else {
+            return;
+        };
+        if *current == lenses {
+            return;
+        }
+        *current = lenses.clone();
+    }
+    for observer in snapshot(lens_observers()) {
+        observer(lenses.clone());
+    }
+}
+
+/// The devices the application may pick between, as the backend last published
+/// them.
+pub fn camera_lenses() -> CameraLenses {
+    lenses_slot()
+        .lock()
+        .map(|lenses| lenses.clone())
+        .unwrap_or_default()
+}
+
 /// Registers `observer` for frames. Applications collect
 /// [`rememberCameraFrames`] instead of calling this.
 pub fn observe_camera_frames(
@@ -583,6 +765,24 @@ pub fn observe_camera_stills(
     }
 }
 
+/// Registers `observer` for the lens list. The current list is delivered at
+/// once, so a screen composed mid-session shows the devices rather than
+/// waiting for the next change.
+pub fn observe_camera_lenses(
+    observer: impl Fn(CameraLenses) + Send + Sync + 'static,
+) -> CameraObserver {
+    let id = NEXT_OBSERVER.fetch_add(1, Ordering::Relaxed);
+    let observer: LensObserver = Arc::new(observer);
+    if let Ok(mut observers) = lens_observers().lock() {
+        observers.push((id, Arc::clone(&observer)));
+    }
+    observer(camera_lenses());
+    CameraObserver {
+        id,
+        kind: ObserverKind::Lenses,
+    }
+}
+
 /// What the camera session is doing, observed for as long as this call stays in
 /// the composition.
 #[allow(non_snake_case)]
@@ -615,6 +815,16 @@ pub fn rememberCameraStills() -> EventStream<Result<CameraStill, CameraError>> {
     rememberEventStream((), |sender| {
         observe_camera_stills(move |still| sender.send(still))
     })
+}
+
+/// The lens list and the device in use, observed for as long as this call
+/// stays in the composition.
+#[allow(non_snake_case)]
+pub fn rememberCameraLenses() -> State<CameraLenses> {
+    let updates = rememberEventStream((), |sender| {
+        observe_camera_lenses(move |lenses| sender.send(lenses))
+    });
+    cranpose_core::collectAsState(updates, (), camera_lenses())
 }
 
 /// Starts the camera, publishing [`CameraState::Starting`] before the backend
@@ -670,6 +880,21 @@ pub async fn capture_camera_still() -> Result<CameraStill, CameraError> {
     // is a camera that stopped rather than a still that failed.
     arrived.unwrap_or(Err(CameraError::NotRunning))
 }
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "camera-native"
+))]
+mod native;
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    feature = "camera-native"
+))]
+pub use native::install_native_camera;
 
 #[cfg(test)]
 mod tests {
@@ -1002,10 +1227,12 @@ mod tests {
                     CameraLens {
                         id: "u".into(),
                         name: "Ultra wide".into(),
+                        facing: LensFacing::Back,
                     },
                     CameraLens {
                         id: "w".into(),
                         name: "Wide".into(),
+                        facing: LensFacing::Back,
                     },
                 ]
             }
@@ -1025,5 +1252,123 @@ mod tests {
         assert!(backend.use_lens("u"));
         assert!(!backend.use_lens("tele"));
         clear_platform_camera();
+    }
+
+    fn two_pixel_frame(rotation: u16) -> CameraFrame {
+        let mut bytes = vec![10u8, 10, 10, 255];
+        bytes.extend_from_slice(&[20, 20, 20, 255]);
+        CameraFrame::new(2, 1, FrameFormat::Rgba8, rotation, 0, bytes).expect("a well-formed frame")
+    }
+
+    fn pixel_values(image: &UprightRgba) -> Vec<u8> {
+        image.rgba.iter().step_by(4).copied().collect()
+    }
+
+    /// A quarter turn must land every pixel where a clockwise turn of the
+    /// picture puts it, and swap the sides for the odd quarters.
+    #[test]
+    fn a_frame_turns_upright_by_its_rotation() {
+        let unturned = two_pixel_frame(0).upright_rgba8();
+        assert_eq!((unturned.width, unturned.height), (2, 1));
+        assert_eq!(pixel_values(&unturned), vec![10, 20]);
+
+        let quarter = two_pixel_frame(90).upright_rgba8();
+        assert_eq!((quarter.width, quarter.height), (1, 2));
+        assert_eq!(pixel_values(&quarter), vec![10, 20]);
+
+        let half = two_pixel_frame(180).upright_rgba8();
+        assert_eq!((half.width, half.height), (2, 1));
+        assert_eq!(pixel_values(&half), vec![20, 10]);
+
+        let three_quarters = two_pixel_frame(270).upright_rgba8();
+        assert_eq!((three_quarters.width, three_quarters.height), (1, 2));
+        assert_eq!(pixel_values(&three_quarters), vec![20, 10]);
+    }
+
+    /// The turn happens in the same pass as the NV12 conversion, so the two
+    /// paths must agree pixel for pixel.
+    #[test]
+    fn an_nv12_frame_turns_and_converts_in_one_pass() {
+        let bytes = vec![0, 255, 0, 0, 128, 128];
+        let frame =
+            CameraFrame::new(2, 2, FrameFormat::Nv12, 90, 0, bytes).expect("a well-formed frame");
+        let upright = frame.upright_rgba8();
+        assert_eq!((upright.width, upright.height), (2, 2));
+        let values = pixel_values(&upright);
+        assert_eq!(values[0], 0, "top-left stays dark");
+        assert_eq!(
+            values[3], 255,
+            "the bright top-right pixel lands bottom-right"
+        );
+    }
+
+    #[test]
+    fn an_rgb8_frame_turns_upright_with_a_full_alpha() {
+        let frame = CameraFrame::new(
+            2,
+            1,
+            FrameFormat::Rgb8,
+            180,
+            0,
+            vec![10, 10, 10, 20, 20, 20],
+        )
+        .expect("a well-formed frame");
+        let upright = frame.upright_rgba8();
+        assert_eq!(pixel_values(&upright), vec![20, 10]);
+        assert!(upright.rgba.iter().skip(3).step_by(4).all(|a| *a == 255));
+    }
+
+    /// No camera produces a turn that is not a quarter, so anything else is
+    /// left alone rather than guessed at.
+    #[test]
+    fn a_turn_that_is_not_a_quarter_is_left_alone() {
+        let frame = CameraFrame::new(2, 1, FrameFormat::Rgba8, 45, 0, vec![7; 8])
+            .expect("a well-formed frame");
+        let upright = frame.upright_rgba8();
+        assert_eq!((upright.width, upright.height), (2, 1));
+        assert_eq!(upright.rgba, frame.to_rgba8());
+    }
+
+    #[test]
+    fn the_lens_list_is_published_and_observed() {
+        let _guard = crate::registry::test_service_guard();
+        clear_platform_camera();
+        assert_eq!(camera_lenses(), CameraLenses::default());
+
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let observer = observe_camera_lenses(move |lenses| {
+            recorder
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(lenses)
+        });
+
+        let published = CameraLenses {
+            lenses: vec![CameraLens {
+                id: "0".into(),
+                name: "Back".into(),
+                facing: LensFacing::Back,
+            }],
+            active: Some("0".into()),
+        };
+        publish_camera_lenses(published.clone());
+        publish_camera_lenses(published.clone());
+        assert_eq!(camera_lenses(), published);
+        assert_eq!(
+            *seen.lock().unwrap_or_else(|error| error.into_inner()),
+            vec![CameraLenses::default(), published.clone()],
+            "the current list arrives at once, and a repeat is not re-delivered"
+        );
+
+        drop(observer);
+        publish_camera_lenses(CameraLenses::default());
+        assert_eq!(
+            seen.lock().unwrap_or_else(|error| error.into_inner()).len(),
+            2,
+            "a dropped observer hears nothing more"
+        );
+        clear_platform_camera();
+        assert_eq!(camera_lenses(), CameraLenses::default());
     }
 }

@@ -49,6 +49,8 @@ system-theme = []
 system-theme-web = ["dep:web-sys"]
 # Native desktop file/folder picker (rfd; xdg-portal surfaces GVFS/WebDAV mounts).
 file-picker-native = ["dep:rfd"]
+# Native desktop camera capture (nokhwa: AVFoundation / MSMF / V4L2).
+camera-native = ["dep:nokhwa"]
 # Web file/folder picker (rfd + File System Access).
 file-picker-web = [
     "dep:rfd",
@@ -67,6 +69,7 @@ open = { version = "5.3.5", optional = true }
 # locations (GVFS/WebDAV) on Linux. iOS uses its own backend, so exclude it.
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), not(target_os = "ios")))'.dependencies]
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"], optional = true }
+nokhwa = { version = "0.10", features = ["input-native"], optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-util = { version = "0.3.32", optional = true }
