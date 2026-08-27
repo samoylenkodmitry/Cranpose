@@ -193,6 +193,10 @@ pub fn observe_incoming_content(
         };
         inbox.observe(id, Arc::clone(&observer))
     };
+    log::info!(
+        "incoming share: observer {id} registered, replays {} item(s)",
+        replay.len()
+    );
     for item in replay {
         observer(item);
     }
@@ -208,8 +212,17 @@ pub fn publish_incoming_content(content: IncomingContent) {
         };
         inbox.publish(content.clone())
     }) else {
+        log::info!(
+            "incoming share: no observer yet, item {} waits in the backlog",
+            content.display_name()
+        );
         return;
     };
+    log::info!(
+        "incoming share: item {} goes to {} observer(s)",
+        content.display_name(),
+        observers.len()
+    );
     // Every observer sees every item: two screens can each react to a share.
     for observer in observers {
         observer(content.clone());

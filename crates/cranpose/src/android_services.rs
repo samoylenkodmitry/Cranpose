@@ -1096,9 +1096,14 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomi
         }
         Ok(shared)
     });
-    if let Outcome::Ok(shared) = shared.into_outcome() {
-        publish_incoming_content(shared);
-        wake_native_loop();
+    match shared.into_outcome() {
+        Outcome::Ok(shared) => {
+            publish_incoming_content(shared);
+            wake_native_loop();
+        }
+        Outcome::Err(_) | Outcome::Panic(_) => {
+            log::warn!("incoming share: the strings did not decode");
+        }
     }
 }
 

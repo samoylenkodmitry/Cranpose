@@ -17,6 +17,7 @@
         <activity
             android:name="dev.cranpose.android.CranposeActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:label="${cranposeLabel}"
             android:theme="${cranposeTheme}"
             android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|uiMode|layoutDirection|fontScale|density">
