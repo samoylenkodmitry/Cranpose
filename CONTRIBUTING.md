@@ -85,6 +85,11 @@ Applications live in [`apps/`](apps):
 - `isolated-demo` -- the starter template. It is **its own workspace** and
   depends only on published crates, which is what makes it the canary proving a
   release is actually consumable. Copy this rather than starting from scratch.
+  Its `Cargo.lock` is tracked and has to keep resolving every Cranpose crate
+  from crates.io -- `just versions` fails if one turns into a path dependency.
+  That is why the size budget measures a staged copy of the package under
+  `target/patched-packages/`: it can patch in the local crates there without
+  rewriting the lockfile that proves the release is consumable.
 - `android-demo`, `ios-demo` -- the platform entry points and their build
   scripts.
 
