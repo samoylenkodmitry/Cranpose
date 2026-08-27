@@ -24,6 +24,7 @@ pub mod incoming_share;
 pub mod launch_args;
 pub mod launcher;
 pub mod media;
+pub mod memory_pressure;
 pub mod navigation;
 pub mod network_status;
 pub mod notifier;
@@ -165,6 +166,10 @@ pub use media::{
     set_media_looping, set_media_metadata, set_media_speed, set_media_volume,
     set_platform_media_player, set_platform_media_source_opener, stop_media, toggle_media,
     uri_for_path,
+};
+pub use memory_pressure::{
+    MemoryPressure, MemoryPressureObserver, observe_memory_pressure, publish_memory_pressure,
+    rememberMemoryPressure,
 };
 pub use navigation::{
     BackRequestObserver, back_interception_enabled, exit_requested, observe_back_requests,

@@ -4,6 +4,7 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ServiceInfo;
@@ -14,6 +15,35 @@ import android.os.IBinder;
 public final class CranposeBackgroundService extends Service {
     private static final int NOTIFICATION_ID = 0x4352414e;
     private static final String CHANNEL = "cranpose.background";
+
+    /** Main-thread handshake with {@link CranposeActivity}. Stopping a started
+     * foreground service before its {@code startForeground} has run is a
+     * deliberate framework kill ("Bringing down service while still waiting
+     * for start foreground"), and the caller cannot see from outside whether
+     * that obligation is still open — a background-work lease that closes
+     * moments after it opened lands the stop inside the window. The activity
+     * arms the record before every start, {@link #enterForeground} clears it,
+     * and a stop that arrives while it is armed waits for the service to
+     * honour it itself. */
+    private static boolean obligationArmed;
+    private static boolean stopRequested;
+
+    /** Called by {@link CranposeActivity} immediately before every
+     * {@code startForegroundService}, so a stale stop from the previous cycle
+     * cannot end the service the moment it comes up. */
+    static void noteStartRequested() {
+        obligationArmed = true;
+        stopRequested = false;
+    }
+
+    /** The one way the activity stops this service. */
+    static void stop(Context context) {
+        if (obligationArmed) {
+            stopRequested = true;
+            return;
+        }
+        context.stopService(new Intent(context, CranposeBackgroundService.class));
+    }
 
     @Override
     public void onCreate() {
@@ -53,6 +83,12 @@ public final class CranposeBackgroundService extends Service {
             }
         } catch (RuntimeException error) {
             android.util.Log.w("cranpose", "foreground background-work service failed", error);
+            stopSelf();
+            return;
+        }
+        obligationArmed = false;
+        if (stopRequested) {
+            stopRequested = false;
             stopSelf();
         }
     }
