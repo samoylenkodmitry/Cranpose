@@ -30,6 +30,8 @@ seeked = "seeked"
 mis = "mis"
 # Split out of "PNGs".
 PN = "PN"
+# Split out of "NDKs".
+ND = "ND"
 # Deliberate near-miss fixtures: a short string and bytes that are not "abc".
 Helo = "Helo"
 abd = "abd"
