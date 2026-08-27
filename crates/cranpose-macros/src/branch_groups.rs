@@ -17,9 +17,10 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     injector.visit_block_mut(block);
     if injector.uses_composer_alias {
         let alias = composer_alias_ident();
+        let composer = syn::Ident::new("__composer", Span::mixed_site());
         block
             .stmts
-            .insert(0, syn::parse_quote! { let #alias = __composer; });
+            .insert(0, syn::parse_quote! { let #alias = #composer; });
     }
 }
 

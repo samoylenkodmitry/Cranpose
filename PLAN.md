@@ -227,6 +227,21 @@ CranOrbit's router does.
 
 These are deliberate. They are here so nobody rediscovers them as bugs.
 
+- **A module `const` named exactly like a crate-internal generated binding
+  is not supported.** Every binding `#[composable]` generates uses
+  `Span::mixed_site()`, so it neither captures nor is captured by user
+  *locals* of the same name
+  (`generated_identifiers_survive_local_shadowing`, and a user `let
+  __composer` shadow is separately pinned). Items are different: pattern
+  resolution treats a visible `const` as a const pattern, and mixed-site
+  tokens resolve items at the call site, so `const __cranpose_caller_key:
+  u64` in the composable's module still turns the generated `let` into a
+  refutable pattern. `macro_rules!` has the identical hole — a macro
+  emitting `let value = 1` under a call-site `const value: u8` fails the
+  same way — and only nightly `def_site` hygiene closes it, so on stable
+  Rust the crate-prefixed `__cranpose`/`__composer` names are the
+  boundary, matching what serde-style derives live with.
+
 - **Desktop and iOS can discover an update but not install one.** App Store
   Review Guideline 3.3.2 forbids an iOS application replacing its own binary,
   and the framework owns no desktop installer. `AppUpdateCapabilities` splits

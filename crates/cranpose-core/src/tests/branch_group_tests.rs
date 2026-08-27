@@ -4141,3 +4141,52 @@ fn an_await_free_tail_of_a_suspending_block_keeps_branch_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+#[allow(dead_code, non_snake_case)]
+mod hygiene_shadow_probe {
+    use super::*;
+
+    #[composable]
+    pub(super) fn ShadowedNames(marker: i32) -> i32 {
+        let __cranpose_caller_key = 0_u8;
+        let __outer_composer = 0_u8;
+        let __current_scope = 0_u8;
+        let __result_slot_index = 0_u8;
+        let __has_previous = 0_u8;
+        let __result = 0_u8;
+        let __value = 0_u8;
+        let _ = (
+            __cranpose_caller_key,
+            __outer_composer,
+            __current_scope,
+            __result_slot_index,
+            __has_previous,
+            __result,
+            __value,
+        );
+        let value = remember_branch_marker(marker);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+        value
+    }
+
+    #[composable(no_skip)]
+    pub(super) fn ShadowedNoSkip() {
+        let __outer_composer = 0_u8;
+        let _ = __outer_composer;
+        let value = remember_branch_marker(801);
+        BRANCH_SEEN.with(|seen| seen.set(value));
+    }
+}
+
+#[test]
+fn generated_identifiers_survive_local_shadowing() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    composition
+        .render(113, || {
+            let _ = hygiene_shadow_probe::ShadowedNames(802);
+            hygiene_shadow_probe::ShadowedNoSkip();
+        })
+        .expect("initial composition");
+    assert_eq!(branch_seen(), 801);
+}

@@ -1812,7 +1812,7 @@ impl Composer {
         // whose slots adopt each other when the list shrinks.
         let mut context = LocalContext::default();
         for value in provided.into_iter().rev() {
-            if context.values.contains_key(&value.key()) {
+            if context.values.contains_key(value.key()) {
                 continue;
             }
             let (key, entry) = value.into_entry(self, site);

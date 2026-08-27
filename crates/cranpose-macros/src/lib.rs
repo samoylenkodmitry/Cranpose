@@ -272,7 +272,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 } else {
                     param_info.push(ParamInfo {
-                        ident: Ident::new(&format!("__arg{}", index), Span::call_site()),
+                        ident: Ident::new(&format!("__arg{}", index), Span::mixed_site()),
                         pat: original_pat,
                         ty: ty.as_ref().clone(),
                         pat_is_mut,
@@ -280,7 +280,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 }
             } else {
-                let ident = Ident::new(&format!("__arg{}", index), Span::call_site());
+                let ident = Ident::new(&format!("__arg{}", index), Span::mixed_site());
                 let original_pat: Box<Pat> = pat.clone();
                 **pat = syn::parse_quote! { #ident };
                 param_info.push(ParamInfo {
@@ -307,9 +307,17 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
     let recompose_block = original_block.clone();
-    let key_expr = quote! { __cranpose_caller_key };
+    let composer_ident = Ident::new("__composer", Span::mixed_site());
+    let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
+    let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
+    let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
+    let result_slot_index_ident = Ident::new("__result_slot_index", Span::mixed_site());
+    let has_previous_ident = Ident::new("__has_previous", Span::mixed_site());
+    let result_ident = Ident::new("__result", Span::mixed_site());
+    let value_ident = Ident::new("__value", Span::mixed_site());
+    let key_expr = quote! { #caller_key_ident };
     let caller_key_stmt = quote! {
-        let __cranpose_caller_key = #core_path::composable_identity_key({
+        let #caller_key_ident = #core_path::composable_identity_key({
             struct __CranposeDefinitionMarker;
             static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
                 ::std::sync::OnceLock::new();
@@ -346,11 +354,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let invalidate_return_consumer = if returns_unit || is_node_id_return(&return_ty) {
         quote! {}
     } else {
-        quote! { __composer.__invalidate_return_consumer_scope(); }
+        quote! { #composer_ident.__invalidate_return_consumer_scope(); }
     };
     let _helper_ident = Ident::new(
         &format!("__cranpose_impl_{}", func.sig.ident),
-        Span::call_site(),
+        Span::mixed_site(),
     );
     let generics = func.sig.generics.clone();
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
@@ -371,7 +379,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     if enable_skip && !has_unhandled_impl_trait {
         let helper_ident = Ident::new(
             &format!("__cranpose_impl_{}", func.sig.ident),
-            Span::call_site(),
+            Span::mixed_site(),
         );
         let generics = func.sig.generics.clone();
 
@@ -461,7 +469,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::call_site()))
+            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::mixed_site()))
             .collect();
 
         let param_setup: Vec<TokenStream2> = param_info
@@ -479,9 +487,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! { holder.update(#ident); }
                     };
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
-                        __composer.with_slot_value::<#core_path::CallbackHolder, _>(
+                        #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
                             |holder| {
                                 #update
@@ -495,9 +503,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let ident = &info.ident;
                     let ty = &info.ty;
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
-                        if __composer.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
+                        if #composer_ident.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
                             #slot_ident,
                             |state| state.update(&#ident),
                         )
@@ -517,7 +525,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
                 {
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
                     }
                 } else if info.is_impl_trait {
@@ -525,7 +533,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 } else {
                     let ty = &info.ty;
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
                     }
                 }
@@ -544,7 +552,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     if can_add_mut && !info.pat_is_mut {
                         quote! {
                             #[allow(unused_mut)]
-                            let mut #pat = __composer
+                            let mut #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -553,7 +561,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     } else {
                         quote! {
                             #[allow(unused_mut)]
-                            let #pat = __composer
+                            let #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -584,7 +592,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     if can_add_mut && !info.pat_is_mut {
                         quote! {
                             #[allow(unused_mut)]
-                            let mut #pat = __composer
+                            let mut #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -593,7 +601,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     } else {
                         quote! {
                             #[allow(unused_mut)]
-                            let #pat = __composer
+                            let #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -606,7 +614,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let pat = &info.pat;
                     let ty = &info.ty;
                     quote! {
-                        let #pat = __composer
+                        let #pat = #composer_ident
                             .with_slot_value::<#core_path::ParamState<#ty>, _>(
                                 #slot_ident,
                                 |state| {
@@ -622,16 +630,16 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let recompose_fn_ident = Ident::new(
             &format!("__cranpose_recompose_{}", func.sig.ident),
-            Span::call_site(),
+            Span::mixed_site(),
         );
 
         let recompose_setter = quote! {
             {
-                __composer.set_recompose_callback(move |
-                    __composer: &#core_path::Composer|
+                #composer_ident.set_recompose_callback(move |
+                    #composer_ident: &#core_path::Composer|
                 {
                     let _ = #recompose_fn_ident #ty_generics_turbofish (
-                        __composer
+                        #composer_ident
                     );
                 });
             }
@@ -640,14 +648,14 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_body = if returns_unit {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let __current_scope = __composer
+                let #current_scope_ident = #composer_ident
                     .current_recompose_scope()
                     .expect("missing recompose scope");
-                let mut __changed = __current_scope.should_recompose();
+                let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
-                if !__changed && __current_scope.has_composed_once() {
-                    __composer.skip_current_group();
+                if !__changed && #current_scope_ident.has_composed_once() {
+                    #composer_ident.skip_current_group();
                     return;
                 }
                 #(#rebinds)*
@@ -656,42 +664,42 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let __current_scope = __composer
+                let #current_scope_ident = #composer_ident
                     .current_recompose_scope()
                     .expect("missing recompose scope");
-                let mut __changed = __current_scope.should_recompose();
+                let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
-                let __result_slot_index = __composer
+                let #result_slot_index_ident = #composer_ident
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
-                let __has_previous = __composer
+                let #has_previous_ident = #composer_ident
                     .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                        __result_slot_index,
+                        #result_slot_index_ident,
                         |slot| slot.get().is_some(),
                     );
-                if !__changed && __has_previous {
-                    __composer.skip_current_group();
-                    let __result = __composer
+                if !__changed && #has_previous_ident {
+                    #composer_ident.skip_current_group();
+                    let #result_ident = #composer_ident
                         .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                            __result_slot_index,
+                            #result_slot_index_ident,
                             |slot| {
                                 slot.get()
                                     .expect("composable return value missing during skip")
                             },
                         );
-                    return __result;
+                    return #result_ident;
                 }
-                let __value: #return_ty = {
+                let #value_ident: #return_ty = {
                     #(#rebinds)*
                     #helper_block
                 };
-                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                    __result_slot_index,
+                #composer_ident.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    #result_slot_index_ident,
                     |slot| {
-                        slot.store(__value.clone());
+                        slot.store(#value_ident.clone());
                     },
                 );
-                __value
+                #value_ident
             }
         };
 
@@ -705,28 +713,28 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! {
                 #(#param_setup_recompose)*
-                let __result_slot_index = __composer
+                let #result_slot_index_ident = #composer_ident
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 #(#rebinds_for_recompose)*
-                let __value: #return_ty = {
+                let #value_ident: #return_ty = {
                     #recompose_block
                 };
-                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                    __result_slot_index,
+                #composer_ident.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    #result_slot_index_ident,
                     |slot| {
-                        slot.store(__value.clone());
+                        slot.store(#value_ident.clone());
                     },
                 );
                 #recompose_setter
                 #invalidate_return_consumer
-                __value
+                #value_ident
             }
         };
 
         let recompose_fn = quote! {
             #[allow(non_snake_case)]
             fn #recompose_fn_ident #impl_generics (
-                __composer: &#core_path::Composer
+                #composer_ident: &#core_path::Composer
             ) -> #return_ty #where_clause {
                 #recompose_fn_body
             }
@@ -735,7 +743,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_fn = quote! {
             #[allow(non_snake_case, clippy::too_many_arguments)]
             fn #helper_ident #impl_generics (
-                __composer: &#core_path::Composer
+                #composer_ident: &#core_path::Composer
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
                 #helper_body
@@ -760,9 +768,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let wrapped = quote!({
             #caller_key_stmt
-            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
-                __composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
-                    #helper_ident(__composer #(, #wrapper_args)*)
+            #core_path::with_current_composer(|#composer_ident: &#core_path::Composer| {
+                #composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
+                    #helper_ident(#composer_ident #(, #wrapper_args)*)
                 })
             })
         });
@@ -775,8 +783,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         let wrapped = quote!({
             #caller_key_stmt
-            #core_path::with_current_composer(|__outer_composer: &#core_path::Composer| {
-                __outer_composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
+            #core_path::with_current_composer(|#outer_composer_ident: &#core_path::Composer| {
+                #outer_composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
                     #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                     #(#rebinds_for_no_skip)*
                     #original_block

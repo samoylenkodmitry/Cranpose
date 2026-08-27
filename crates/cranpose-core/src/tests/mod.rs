@@ -79,6 +79,11 @@ fn composition_local_keys_do_not_use_process_global_counter() {
     assert!(!lib_source.contains("NEXT_LOCAL_KEY"));
     assert!(!lib_source.contains("next_local_key"));
     assert!(!local_source.contains("next_local_key"));
+    assert!(
+        lib_source.contains("struct LocalKey(Rc<()>)"),
+        "a local's identity is the allocation its clones share, never a \
+         process-global counter"
+    );
 }
 
 #[test]
