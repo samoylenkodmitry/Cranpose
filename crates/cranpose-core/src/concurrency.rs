@@ -549,6 +549,7 @@ fn deliver_bridged<T: Send + 'static>(bridge: u64, event: T) {
     let Some(channel) = channel else {
         // The composition that asked for these events is gone; dropping the
         // event here is the whole point of scoping the stream to it.
+        log::debug!("event bridge {bridge} is gone, one event dropped");
         return;
     };
     if let Ok(channel) = channel.downcast::<EventChannel<T>>() {

@@ -1969,20 +1969,27 @@ public class CranposeActivity extends NativeActivity {
             }
         }
         String mimeType = intent.getType() == null ? "" : intent.getType();
+        android.util.Log.i("cranpose", "incoming share: " + uris.size()
+                + " uri(s), type " + mimeType);
         // The URI is published, not the bytes: the framework opens it through the
         // content resolver when the application actually reads it, so sharing a
         // multi-gigabyte video costs nothing until it is used.
         new Thread(() -> {
             for (Uri uri : uris) {
                 if (!"content".equalsIgnoreCase(uri.getScheme())) {
+                    android.util.Log.i("cranpose",
+                            "incoming share: skipped, scheme " + uri.getScheme());
                     continue;
                 }
                 try {
                     android.content.pm.ProviderInfo provider =
                             getPackageManager().resolveContentProvider(uri.getAuthority(), 0);
                     if (provider != null && getPackageName().equals(provider.packageName)) {
+                        android.util.Log.i("cranpose",
+                                "incoming share: skipped, own provider " + uri.getAuthority());
                         continue;
                     }
+                    android.util.Log.i("cranpose", "incoming share: to native, " + uri);
                     nativeOnIncomingContent(
                             sanitize(displayName(uri, "shared")), mimeType, uri.toString());
                 } catch (Exception error) {
