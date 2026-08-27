@@ -124,6 +124,11 @@ typed IR:
   arms end scrutinee temporary extension — so the statement is the
   finest sound granularity for a syntactic transform.
 
+- **Const evaluation and suspension are not composition territory, but
+  what they define is.** A `const fn` body, like every const context,
+  stays untouched for const-eval legality while the callables it defines
+  or returns are instrumented through the interior visitor
+  (`a_const_fn_returned_callable_keeps_branch_identity`).
 - **An async body that awaits is not composition territory, but what it
   defines is.** An await-free async block or closure runs synchronously
   when polled, so its conditionals carry folds like any other code and

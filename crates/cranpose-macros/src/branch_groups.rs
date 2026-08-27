@@ -262,12 +262,17 @@ impl BranchGroupInjector<'_> {
                 .is_some_and(|segment| segment.ident == "composable")
         });
         if !runs_during_composition || expands_itself {
-            if signature.asyncness.is_some() && !expands_itself {
+            if expands_itself {
+                return;
+            }
+            if signature.asyncness.is_some() {
                 if block_contains_await(block) {
                     self.instrument_nonsuspending_statements(block);
                 } else {
                     self.instrument_sync_interiors_block(block);
                 }
+            } else {
+                self.instrument_sync_interiors_block(block);
             }
             return;
         }

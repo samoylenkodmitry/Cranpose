@@ -3401,6 +3401,44 @@ fn a_static_item_closure_keeps_branch_identity() {
 }
 
 #[composable]
+fn const_fn_factory_probe(flag: bool) {
+    const fn factory() -> fn(bool) {
+        |flag| {
+            if flag {
+                let value = remember_branch_marker(111);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            } else {
+                let value = remember_branch_marker(112);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+            }
+        }
+    }
+    let render = factory();
+    render(flag);
+}
+
+#[test]
+fn a_const_fn_returned_callable_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(109, || const_fn_factory_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 111));
+
+    pass(&mut composition, false).expect("switch arms in the const-made closure");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 112),
+        "a const fn evaluates at compile time, but the callable it returns \
+         composes at runtime and needs its folds"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
 fn inline_const_closure_probe(flag: bool) {
     let render: fn(bool) = const {
         fn render(flag: bool) {
