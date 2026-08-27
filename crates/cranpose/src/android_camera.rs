@@ -14,15 +14,14 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    publish_camera_frame, publish_camera_lenses, publish_camera_state, publish_camera_still,
-    record_dropped_camera_frame, set_platform_camera, Camera, CameraError, CameraFrame, CameraLens,
-    CameraLenses, CameraState, CameraStill, FlashMode, FrameFormat, LensFacing,
+    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraState, CameraStill,
+    FlashMode, FrameFormat, LensFacing, publish_camera_frame, publish_camera_lenses,
+    publish_camera_state, publish_camera_still, record_dropped_camera_frame, set_platform_camera,
 };
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JByteArray, JClass, JObject, JString, JValue},
     sys::{jint, jlong},
-    EnvUnowned, Outcome,
 };
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};

@@ -10,22 +10,22 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
 };
 
 use nokhwa::{
+    Camera as CaptureDevice,
     pixel_format::RgbFormat,
     utils::{ApiBackend, CameraIndex, RequestedFormat, RequestedFormatType},
-    Camera as CaptureDevice,
 };
 
 use super::{
-    publish_camera_frame, publish_camera_lenses, publish_camera_state, record_dropped_camera_frame,
-    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraState,
-    FrameFormat, LensFacing,
+    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraState, FrameFormat,
+    LensFacing, publish_camera_frame, publish_camera_lenses, publish_camera_state,
+    record_dropped_camera_frame, set_platform_camera,
 };
 
 /// Installs the built-in desktop camera as the platform camera.
@@ -59,12 +59,15 @@ fn list_lenses() -> Vec<CameraLens> {
 
 struct Session {
     running: Arc<AtomicBool>,
-    thread: Option<JoinHandle<()>>,
+    thread: JoinHandle<()>,
 }
 
 #[derive(Default)]
 struct NativeCamera {
     session: Mutex<Option<Session>>,
+    /// Capture threads told to end, waited for by the next [`NativeCamera::open`]
+    /// rather than by whoever stopped the session.
+    retiring: Mutex<Vec<JoinHandle<()>>>,
     /// The device the application picked, kept across stop and start.
     chosen: Mutex<Option<u32>>,
     /// The device the open session uses, written by the capture thread.
@@ -80,6 +83,13 @@ impl NativeCamera {
         if session.is_some() {
             return Ok(());
         }
+        // The previous thread holds the device until it returns, so a new one
+        // waits for it here rather than racing the platform for the camera.
+        if let Ok(mut retiring) = self.retiring.lock() {
+            for thread in retiring.drain(..) {
+                let _ = thread.join();
+            }
+        }
         let chosen = self.chosen.lock().ok().and_then(|chosen| *chosen);
         let running = Arc::new(AtomicBool::new(true));
         let thread_running = Arc::clone(&running);
@@ -88,25 +98,26 @@ impl NativeCamera {
             .name("cranpose-camera".into())
             .spawn(move || capture_loop(chosen, thread_running, active))
             .map_err(|error| CameraError::Failed(error.to_string()))?;
-        *session = Some(Session {
-            running,
-            thread: Some(thread),
-        });
+        *session = Some(Session { running, thread });
         Ok(())
     }
 
-    /// Ends the capture thread and waits for it to release the device, so a
-    /// restart does not race the platform over who holds the camera.
+    /// Tells the capture thread to end and returns.
+    ///
+    /// The thread is left to finish its frame and release the device on its
+    /// own: it is blocked inside a platform read for as long as that read
+    /// takes, and a stop that waited for it would hold up whoever asked —
+    /// which is the screen being left.
     fn close(&self) {
         let taken = self
             .session
             .lock()
             .ok()
             .and_then(|mut session| session.take());
-        if let Some(mut session) = taken {
+        if let Some(session) = taken {
             session.running.store(false, Ordering::Relaxed);
-            if let Some(thread) = session.thread.take() {
-                let _ = thread.join();
+            if let Ok(mut retiring) = self.retiring.lock() {
+                retiring.push(session.thread);
             }
         }
         if let Ok(mut active) = self.active.lock() {
@@ -152,12 +163,24 @@ impl Camera for NativeCamera {
             .map(|session| session.is_some())
             .unwrap_or(false);
         if !running {
+            publish_camera_lenses(CameraLenses {
+                lenses: list_lenses(),
+                active: Some(id.to_string()),
+            });
             return true;
         }
         // The device changes without a Stopped in between, so the viewfinder
         // keeps the last frame instead of blanking while the new one opens.
         self.close();
-        self.open().is_ok()
+        match self.open() {
+            Ok(()) => true,
+            Err(error) => {
+                // The old device is already released, so a screen that heard
+                // Running must hear that there is nothing running now.
+                publish_camera_state(CameraState::Failed(error));
+                false
+            }
+        }
     }
 }
 

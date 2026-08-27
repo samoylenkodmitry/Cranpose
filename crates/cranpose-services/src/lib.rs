@@ -1,7 +1,7 @@
 //! Multiplatform service abstractions used by Cranpose applications.
 
 #[cfg(test)]
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 
 pub mod app_info;
 pub mod app_update;
@@ -39,46 +39,36 @@ pub mod uri_handler;
 pub mod writable_folder;
 
 pub use app_info::{
-    app_info, build_version, clear_platform_app_info, set_platform_app_info, version_name, AppInfo,
-    AppInfoRef,
+    AppInfo, AppInfoRef, app_info, build_version, clear_platform_app_info, set_platform_app_info,
+    version_name,
 };
 pub use app_update::{
-    app_update_capabilities, app_update_checks_supported, app_update_status, app_updates_supported,
-    check_for_app_update, clear_platform_app_updater, install_app_update,
+    AppUpdateCapabilities, AppUpdateError, AppUpdateObserver, AppUpdateStatus, AppUpdater,
+    AppUpdaterRef, DigestAlgorithm, DigestVerifier, GitHubReleaseUpdate, PackageDigest,
+    UpdatePackage, app_update_capabilities, app_update_checks_supported, app_update_status,
+    app_updates_supported, check_for_app_update, clear_platform_app_updater, install_app_update,
     observe_app_update_status, set_app_update_status, set_platform_app_updater, sha256_hex,
-    verify_package, AppUpdateCapabilities, AppUpdateError, AppUpdateObserver, AppUpdateStatus,
-    AppUpdater, AppUpdaterRef, DigestAlgorithm, DigestVerifier, GitHubReleaseUpdate, PackageDigest,
-    UpdatePackage,
+    verify_package,
 };
-pub use async_io::{ChunkChannel, ChunkNext, ChunkStream, Signal, SignalWait, MAX_PENDING_CHUNKS};
+pub use async_io::{ChunkChannel, ChunkNext, ChunkStream, MAX_PENDING_CHUNKS, Signal, SignalWait};
 pub use audio::{
-    clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
     AudioBus, AudioClip, AudioError, AudioPlayer, AudioPlayerRef, NoopAudioPlayer, PlaybackParams,
     ProvideAudio, SoundBank, SoundBankEntry, SoundBankFailure, SoundId, SoundSpec, VoiceId,
+    clear_platform_audio, default_audio, local_audio, rememberSoundBank, set_platform_audio,
 };
 pub use background::{
-    acquire_background_work, background_active, background_activity,
-    clear_platform_background_activity, set_platform_background_activity, BackgroundActivity,
-    BackgroundActivityRef, BackgroundWorkLease,
-};
-pub use bundled_assets::{
-    bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets, BundledAssetError,
-    BundledAssetReader, BundledAssets, BundledAssetsRef, StreamingAssetReader,
+    BackgroundActivity, BackgroundActivityRef, BackgroundWorkLease, acquire_background_work,
+    background_active, background_activity, clear_platform_background_activity,
+    set_platform_background_activity,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use bundled_assets::{
-    install_bundled_asset_set, BundledAssetEntry, BundledAssetInstallOutcome,
-    BundledAssetInstallSpec,
+    BundledAssetEntry, BundledAssetInstallOutcome, BundledAssetInstallSpec,
+    install_bundled_asset_set,
 };
-pub use camera::{
-    camera, camera_lenses, camera_state, camera_supported, capture_camera_still,
-    clear_platform_camera, dropped_camera_frames, latest_camera_frame, observe_camera_frames,
-    observe_camera_lenses, observe_camera_state, observe_camera_stills, publish_camera_frame,
-    publish_camera_lenses, publish_camera_state, publish_camera_still,
-    record_dropped_camera_frame, rememberCameraFrames, rememberCameraLenses, rememberCameraState,
-    rememberCameraStills, request_camera_still, set_platform_camera, start_camera, stop_camera,
-    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraObserver, CameraRef,
-    CameraState, CameraStill, FlashMode, FrameFormat, LensFacing, UprightRgba,
+pub use bundled_assets::{
+    BundledAssetError, BundledAssetReader, BundledAssets, BundledAssetsRef, StreamingAssetReader,
+    bundled_assets, clear_platform_bundled_assets, set_platform_bundled_assets,
 };
 #[cfg(all(
     not(target_arch = "wasm32"),
@@ -87,77 +77,92 @@ pub use camera::{
     feature = "camera-native"
 ))]
 pub use camera::install_native_camera;
+pub use camera::{
+    Camera, CameraError, CameraFrame, CameraLens, CameraLenses, CameraObserver, CameraRef,
+    CameraState, CameraStill, FlashMode, FrameFormat, LensFacing, UprightRgba, camera,
+    camera_lenses, camera_state, camera_supported, capture_camera_still, clear_platform_camera,
+    dropped_camera_frames, latest_camera_frame, observe_camera_frames, observe_camera_lenses,
+    observe_camera_state, observe_camera_stills, publish_camera_frame, publish_camera_lenses,
+    publish_camera_state, publish_camera_still, record_dropped_camera_frame, rememberCameraFrames,
+    rememberCameraLenses, rememberCameraState, rememberCameraStills, request_camera_still,
+    set_platform_camera, start_camera, stop_camera,
+};
 pub use content::{
+    BytesContent, Content, ContentChannel, ContentEntry, ContentError, ContentFolder,
+    ContentFolderRef, ContentFuture, ContentHandle, ContentMetadata, ContentReader,
+    ContentReaderRef, ContentResolver, ContentResolverRef, ContentSink, ContentSinkRef,
+    ContentStream, ContentStreamRef, DEFAULT_CHUNK_LEN, ReadyFolder,
     clear_platform_content_resolver, collect_stream, drain_reader, folder_files, percent_decode,
-    percent_decode_lossy, resolve_content, set_platform_content_resolver, write_all, BytesContent,
-    Content, ContentChannel, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
-    ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef,
-    ContentResolver, ContentResolverRef, ContentSink, ContentSinkRef, ContentStream,
-    ContentStreamRef, ReadyFolder, DEFAULT_CHUNK_LEN,
+    percent_decode_lossy, resolve_content, set_platform_content_resolver, write_all,
 };
 #[cfg(not(target_arch = "wasm32"))]
-pub use content::{file_content, file_folder, FileContent, FileFolder, FileSink};
+pub use content::{FileContent, FileFolder, FileSink, file_content, file_folder};
 pub use device_info::{
-    clear_platform_device_info, device_info, release_free_memory, set_platform_device_info,
-    DeviceInfo, DeviceInfoRef,
+    DeviceInfo, DeviceInfoRef, clear_platform_device_info, device_info, release_free_memory,
+    set_platform_device_info,
 };
 pub use file_picker::{
-    clear_platform_file_picker, default_file_picker, local_file_picker, set_platform_file_picker,
     FileFilter, FilePicker, FilePickerError, FilePickerOptions, FilePickerRef, PickerFuture,
-    ProvideFilePicker, RecoveredPick, SaveDocumentRequest,
+    ProvideFilePicker, RecoveredPick, SaveDocumentRequest, clear_platform_file_picker,
+    default_file_picker, local_file_picker, set_platform_file_picker,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use github_release_updater::GitHubAppUpdater;
 pub use haptics::{
-    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics, HapticEffect,
-    HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
+    HapticEffect, HapticError, HapticFeedback, HapticPattern, Haptics, HapticsRef, ProvideHaptics,
+    clear_platform_haptics, default_haptics, local_haptics, set_platform_haptics,
 };
 pub use host::{
-    application_directories, application_id, background_app, clear_application_id,
-    clear_host_controller, current_lifecycle_state, dispatch_lifecycle, dispatch_lifecycle_state,
-    exit_app, host_controller, local_lifecycle_state, observe_lifecycle, register_durable_save,
-    rememberLifecycleEvents, rememberLifecycleState, set_application_id, set_host_controller,
-    set_keep_screen_on, DurableSaveEffect, DurableSaveOutcome, DurableSaveRegistration,
+    DEFAULT_DURABLE_SAVE_DEADLINE, DurableSaveEffect, DurableSaveOutcome, DurableSaveRegistration,
     HostController, HostControllerRef, LifecycleEvent, LifecycleObserver, LifecycleState,
-    PlatformDirectories, PlatformDirectoryError, ProvideLifecycle, DEFAULT_DURABLE_SAVE_DEADLINE,
+    PlatformDirectories, PlatformDirectoryError, ProvideLifecycle, application_directories,
+    application_id, background_app, clear_application_id, clear_host_controller,
+    current_lifecycle_state, dispatch_lifecycle, dispatch_lifecycle_state, exit_app,
+    host_controller, local_lifecycle_state, observe_lifecycle, register_durable_save,
+    rememberLifecycleEvents, rememberLifecycleState, set_application_id, set_host_controller,
+    set_keep_screen_on,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{durable_save_deadline, run_durable_saves};
 pub use host_surface::{
+    HostSurface, HostSurfaceObserver, HostSurfaceRef, HostSurfaceSize, ResizeRefused,
     clear_platform_host_surface, host_surface, host_surface_size, observe_host_surface_size,
     publish_host_surface_size, rememberHostSurfaceSize, request_host_surface_size,
-    set_platform_host_surface, HostSurface, HostSurfaceObserver, HostSurfaceRef, HostSurfaceSize,
-    ResizeRefused,
+    set_platform_host_surface,
 };
 pub use http::{
-    default_http_client, local_http_client, map_ordered_concurrent, BytesBody, HttpBody,
-    HttpBodyRef, HttpClient, HttpClientRef, HttpControl, HttpError, HttpFuture, HttpMethod,
-    HttpProgress, HttpRequest, HttpResponse, ProgressHandler, StubAnswer, StubHttpClient,
+    BytesBody, HttpBody, HttpBodyRef, HttpClient, HttpClientRef, HttpControl, HttpError,
+    HttpFuture, HttpMethod, HttpProgress, HttpRequest, HttpResponse, ProgressHandler, StubAnswer,
+    StubHttpClient, default_http_client, local_http_client, map_ordered_concurrent,
 };
 pub use image_picker::{
-    clear_platform_image_picker, default_image_picker, local_image_picker,
-    set_platform_image_picker, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
-    ProvideImagePicker, IMAGE_EXTENSIONS,
+    IMAGE_EXTENSIONS, ImagePicker, ImagePickerError, ImagePickerRef, ImageSource,
+    ProvideImagePicker, clear_platform_image_picker, default_image_picker, local_image_picker,
+    set_platform_image_picker,
 };
 pub use incoming_share::{
-    clear_incoming_content, observe_incoming_content, publish_incoming_content,
-    rememberIncomingContent, IncomingContent, IncomingContentObserver, IncomingSource,
+    IncomingContent, IncomingContentObserver, IncomingSource, clear_incoming_content,
+    observe_incoming_content, publish_incoming_content, rememberIncomingContent,
 };
 pub use launch_args::{
-    clear_platform_launch_args, isDebuggable, is_debuggable, launch_args,
-    launch_args_from_command_line, local_launch_args, set_platform_launch_args, LaunchArgValue,
-    LaunchArgs, LaunchArgsRef, ProvideLaunchArgs,
+    LaunchArgValue, LaunchArgs, LaunchArgsRef, ProvideLaunchArgs, clear_platform_launch_args,
+    is_debuggable, isDebuggable, launch_args, launch_args_from_command_line, local_launch_args,
+    set_platform_launch_args,
 };
 pub use launcher::{
-    clear_launcher_state, rememberOpenFileLauncher, rememberOpenFilesLauncher,
-    rememberOpenFolderLauncher, rememberSaveDocumentLauncher, rememberWritableFolderLauncher,
     LauncherResult, OpenFileLauncher, OpenFilesLauncher, OpenFolderLauncher, SaveDocumentLauncher,
-    WritableFolderLauncher,
+    WritableFolderLauncher, clear_launcher_state, rememberOpenFileLauncher,
+    rememberOpenFilesLauncher, rememberOpenFolderLauncher, rememberSaveDocumentLauncher,
+    rememberWritableFolderLauncher,
 };
 pub use media::{
-    audio_focus, clear_platform_media_player, clear_platform_media_source_opener,
-    current_media_item, dropped_media_samples, latest_media_samples, media_capabilities,
-    media_equalizer, media_equalizer_bands, media_playback_supported, media_player, media_volume,
+    AudioFocus, DUCKED_GAIN, EqualizerBand, EqualizerSettings, MediaArtwork, MediaCapabilities,
+    MediaCommand, MediaError, MediaItem, MediaMetadata, MediaObserver, MediaPlayer, MediaPlayerRef,
+    MediaSamples, MediaSourceHandle, MediaSourceOpener, MediaSourceOpenerRef,
+    OCTAVE_BAND_CENTERS_HZ, PlaybackProgress, PlaybackState, audio_focus,
+    clear_platform_media_player, clear_platform_media_source_opener, current_media_item,
+    dropped_media_samples, latest_media_samples, media_capabilities, media_equalizer,
+    media_equalizer_bands, media_playback_supported, media_player, media_volume,
     observe_audio_focus, observe_media_commands, observe_media_samples, observe_playback_progress,
     observe_playback_state, octave_equalizer_bands, open_media, open_media_source, path_from_uri,
     pause_media, play_media, playback_progress, playback_state, probe_media_duration,
@@ -167,65 +172,61 @@ pub use media::{
     seek_media, seek_media_fraction, set_media_analysis_enabled, set_media_equalizer,
     set_media_looping, set_media_metadata, set_media_speed, set_media_volume,
     set_platform_media_player, set_platform_media_source_opener, stop_media, toggle_media,
-    uri_for_path, AudioFocus, EqualizerBand, EqualizerSettings, MediaArtwork, MediaCapabilities,
-    MediaCommand, MediaError, MediaItem, MediaMetadata, MediaObserver, MediaPlayer, MediaPlayerRef,
-    MediaSamples, MediaSourceHandle, MediaSourceOpener, MediaSourceOpenerRef, PlaybackProgress,
-    PlaybackState, DUCKED_GAIN, OCTAVE_BAND_CENTERS_HZ,
+    uri_for_path,
 };
 pub use navigation::{
-    back_interception_enabled, exit_requested, observe_back_requests, push_back_request,
-    request_exit, set_back_interception, take_back_requests, take_exit_request,
-    BackRequestObserver,
+    BackRequestObserver, back_interception_enabled, exit_requested, observe_back_requests,
+    push_back_request, request_exit, set_back_interception, take_back_requests, take_exit_request,
 };
 pub use network_status::{
-    clear_platform_network_monitor, network_monitor, network_status, set_platform_network_monitor,
-    NetworkMonitor, NetworkMonitorRef, NetworkStatus,
+    NetworkMonitor, NetworkMonitorRef, NetworkStatus, clear_platform_network_monitor,
+    network_monitor, network_status, set_platform_network_monitor,
 };
 pub use notifier::{
-    clear_platform_notifier, default_notifier, local_notifier, push_notification_deeplink,
-    set_platform_notifier, take_notification_deeplink, Notifier, NotifierRef, NotifyRequest,
-    ProvideNotifier,
+    Notifier, NotifierRef, NotifyRequest, ProvideNotifier, clear_platform_notifier,
+    default_notifier, local_notifier, push_notification_deeplink, set_platform_notifier,
+    take_notification_deeplink,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use peer::{
-    content_length, fetch_range, fetch_to_writer, ByteSource, BytesSource, FetchResult, PeerError,
-    PeerServer, SourceResolver,
+    ByteSource, BytesSource, FetchResult, PeerError, PeerServer, SourceResolver, content_length,
+    fetch_range, fetch_to_writer,
 };
 pub use power::{
-    clear_platform_power_monitor, observe_power_state, power_capabilities, power_monitor,
-    power_state, publish_power_state, rememberPowerState, set_platform_power_monitor,
     BatteryStatus, PowerCapabilities, PowerMonitor, PowerMonitorRef, PowerObserverRegistration,
-    PowerReading, PowerState, ThermalState,
+    PowerReading, PowerState, ThermalState, clear_platform_power_monitor, observe_power_state,
+    power_capabilities, power_monitor, power_state, publish_power_state, rememberPowerState,
+    set_platform_power_monitor,
 };
 #[cfg(all(target_arch = "wasm32", feature = "preferences-web"))]
 pub use preferences::BrowserPreferences;
 #[cfg(not(target_arch = "wasm32"))]
 pub use preferences::FilePreferences;
 pub use preferences::{
-    clear_platform_preferences, preferences, rememberSaveable, set_platform_preferences,
     MemoryPreferences, PreferencesError, PreferencesRef, PreferencesStore, Saver,
+    clear_platform_preferences, preferences, rememberSaveable, set_platform_preferences,
 };
 pub use purchases::{
+    Product, PurchaseEvent, Purchases, PurchasesRef, StoreObserver, StorePhase, StoreState,
     clear_platform_purchases, note_store_news, observe_store_news, purchases,
     rememberPurchaseEvents, rememberStoreState, set_platform_purchases, store_available,
-    store_state, Product, PurchaseEvent, Purchases, PurchasesRef, StoreObserver, StorePhase,
-    StoreState,
+    store_state,
 };
 pub use share_sheet::{
-    clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
     ProvideShareSheet, ShareContent, ShareError, ShareSheet, ShareSheetRef,
+    clear_platform_share_sheet, default_share_sheet, local_share_sheet, set_platform_share_sheet,
 };
 pub use theme::{
-    clear_platform_system_theme, default_system_theme, isSystemInDarkTheme, local_system_theme,
-    set_platform_system_theme, ProvideSystemTheme, SystemTheme,
+    ProvideSystemTheme, SystemTheme, clear_platform_system_theme, default_system_theme,
+    isSystemInDarkTheme, local_system_theme, set_platform_system_theme,
 };
 pub use uri_handler::{
-    clear_platform_uri_handler, default_uri_handler, local_uri_handler, set_platform_uri_handler,
-    ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef,
+    ProvideUriHandler, UriHandler, UriHandlerError, UriHandlerRef, clear_platform_uri_handler,
+    default_uri_handler, local_uri_handler, set_platform_uri_handler,
 };
 pub use writable_folder::{
-    open_writable_folder, set_writable_folder_store_factory, FolderEntry, FolderError,
-    FolderReader, FolderWriter, WritableFolderStore, WritableFolderStoreRef,
+    FolderEntry, FolderError, FolderReader, FolderWriter, WritableFolderStore,
+    WritableFolderStoreRef, open_writable_folder, set_writable_folder_store_factory,
 };
 
 /// Convenience alias used in unit tests.

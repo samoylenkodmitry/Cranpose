@@ -2736,6 +2736,36 @@ fn the_camera_service_is_published_to_rather_than_polled() {
     );
 }
 
+/// Stopping the desktop camera must return rather than wait.
+///
+/// Its capture thread sits inside a platform read for as long as that read
+/// takes, so joining it where the session is stopped holds up whoever asked —
+/// which is the screen being left, on the thread that draws. The thread is
+/// told to end and the next session opening waits for it instead, which is
+/// also what keeps two sessions from holding one device.
+#[test]
+fn stopping_the_desktop_camera_does_not_wait_for_its_capture_thread() {
+    let backend = workspace_source("crates/cranpose-services/src/camera/native.rs");
+    let close = backend
+        .split_once("fn close(&self)")
+        .map(|(_, tail)| tail.split_once("\n    }").map(|(body, _)| body))
+        .expect("the desktop camera has a close")
+        .expect("close has a body");
+    assert!(
+        !close.contains("join()"),
+        "stopping must not wait for the capture thread: {close}"
+    );
+    let open = backend
+        .split_once("fn open(&self)")
+        .map(|(_, tail)| tail.split_once("\n    }").map(|(body, _)| body))
+        .expect("the desktop camera has an open")
+        .expect("open has a body");
+    assert!(
+        open.contains("join()"),
+        "opening must wait for the previous thread to release the device: {open}"
+    );
+}
+
 /// Every media backend the framework ships, so a contract test covers all of
 /// them rather than whichever one was written last.
 const MEDIA_BACKENDS: [&str; 4] = [
