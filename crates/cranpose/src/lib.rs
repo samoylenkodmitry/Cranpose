@@ -14,6 +14,13 @@ pub use android_file_picker::open_content_uri;
     all(feature = "web", feature = "renderer-wgpu", target_arch = "wasm32")
 ))]
 mod accessibility;
+/// When a platform accessibility bridge may publish a semantics snapshot.
+/// Built on the host as well so its decision tests run everywhere.
+#[cfg(any(
+    test,
+    all(feature = "android", feature = "renderer-wgpu", target_os = "android")
+))]
+mod accessibility_publish_policy;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 mod android_accessibility;
 /// The Android accessibility wire format behind `CranposeActivity`'s
