@@ -1483,7 +1483,7 @@ fn duplicate_package_details(cargo_tree: &str) -> Vec<DuplicatePackageFamily> {
     let mut roots_by_package = BTreeMap::<String, Vec<DuplicatePackageRoot>>::new();
     let mut current = None::<DuplicatePackageRoot>;
 
-    for line in cargo_tree.lines().map(|line| strip_ansi_escapes(line)) {
+    for line in cargo_tree.lines().map(strip_ansi_escapes) {
         let line = line.as_str();
         if let Some(root) = root_duplicate_package_entry(line) {
             if let Some(root) = current.take() {
