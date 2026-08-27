@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn a_non_utf8_path_override_survives_byte_for_byte() {
-        let raw = OsStr::from_bytes(b"/tmp/\xff\xfe/cache.bin");
+        let raw = OsStr::from_bytes(b"cache-\xff\xfe.bin");
         set_debug_toggle_os("CRANPOSE_TOGGLE_OS_TEST", Some(raw));
         assert_eq!(
             debug_toggle_os("CRANPOSE_TOGGLE_OS_TEST").as_deref(),
