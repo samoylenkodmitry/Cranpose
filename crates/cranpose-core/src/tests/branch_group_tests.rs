@@ -3874,3 +3874,35 @@ fn an_await_free_operand_of_a_suspending_condition_keeps_branch_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn expression_bodied_async_closure_probe(flag: bool) {
+    let make = async move || {
+        if flag {
+            std::future::ready(7).await
+        } else {
+            std::future::ready(9).await
+        }
+    };
+    let block_bodied = require_send(make());
+    drop(block_bodied);
+    let make_expression = async move || {
+        if flag {
+            std::future::ready(7).await
+        } else {
+            std::future::ready(9).await
+        }
+    };
+    let expression_bodied = require_send(make_expression());
+    drop(expression_bodied);
+}
+
+#[test]
+fn an_expression_bodied_suspending_async_closure_stays_send() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    composition
+        .render(105, || expression_bodied_async_closure_probe(true))
+        .expect("initial composition");
+    assert_composition_valid(&composition);
+}

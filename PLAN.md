@@ -162,7 +162,11 @@ typed IR:
   await-free conditions and sub-blocks — an arm that composes and then
   awaits closes its guards before the suspension point, so the future
   stays `Send` (`a_composing_arm_before_an_await_keeps_branch_identity`,
-  `a_suspending_arm_future_stays_send`). A condition whose spine awaits
+  `a_suspending_arm_future_stays_send`,
+  `an_expression_bodied_suspending_async_closure_stays_send` — every
+  guard a future's body emits resolves the composer through the deferred
+  thread-local lookup, never through the outer alias, whatever shape the
+  body takes). A condition whose spine awaits
   still folds its await-free `&&`/`||` operands individually
   (`an_await_free_operand_of_a_suspending_condition_keeps_branch_identity`).
   What stays bare is only the non-control-flow expression carrying the

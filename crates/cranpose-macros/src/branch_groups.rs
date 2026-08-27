@@ -392,7 +392,9 @@ impl VisitMut for BranchGroupInjector<'_> {
         match expr {
             Expr::Closure(closure) => {
                 if closure.asyncness.is_some() && expr_contains_await(&closure.body) {
+                    let previous = std::mem::replace(&mut self.in_content_closure, true);
                     self.instrument_suspending_expr(&mut closure.body);
+                    self.in_content_closure = previous;
                     return;
                 }
                 let previous = std::mem::replace(&mut self.in_content_closure, true);
