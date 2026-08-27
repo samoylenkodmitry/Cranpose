@@ -2893,6 +2893,168 @@ fn android_media_declares_the_foreground_service_it_needs() {
     );
 }
 
+/// `startForegroundService` is a promise: something must call `startForeground`
+/// within the framework's window, or the process is ended with
+/// `ForegroundServiceDidNotStartInTimeException`. Two launch shapes break the
+/// promise through no fault of the service, because Android accepts the call
+/// and then never creates the service class: a screen-off launch pauses without
+/// ever resuming (Pixel 9 Pro, Android 16), and an EMUI launch delivers a
+/// pause/resume pair together (EVR-AL00, Android 10). Both were process kills
+/// on real devices, so the ask itself is guarded: only a lifetime that actually
+/// reached the foreground may ask, the ask waits out launch-shaped pauses on a
+/// handler where a resume cancels it, and it re-checks the world when it fires.
+#[test]
+fn the_android_background_service_ask_survives_launch_shaped_pauses() {
+    let java =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+
+    let on_pause = method_body(&java, "protected void onPause()");
+    assert!(
+        !on_pause.contains("startCranposeBackgroundService(")
+            && !on_pause.contains("startForegroundService("),
+        "onPause must not ask for the foreground service synchronously: a launch with the \
+         screen off pauses without ever resuming, the deferred service is never created, \
+         and the framework ends the process for the missing startForeground"
+    );
+    assert!(
+        on_pause.contains("askForCranposeBackgroundService("),
+        "a pause with background work active must still route through the guarded ask, \
+         or backgrounded work loses its foreground service entirely"
+    );
+
+    let ask = method_body(&java, "private void askForCranposeBackgroundService()");
+    assert!(
+        ask.contains("if (!cranposeEverResumed)"),
+        "a lifetime that never reached the foreground must not ask: Android accepts \
+         startForegroundService from it, defers creating the service, and ends the \
+         process when nothing calls startForeground"
+    );
+    assert!(
+        ask.contains("postDelayed("),
+        "the ask must wait on a handler: an EMUI launch delivers pause and resume \
+         together, and a synchronous ask from that pause is the same broken promise"
+    );
+
+    let on_resume = method_body(&java, "protected void onResume()");
+    assert!(
+        on_resume.contains("cranposeEverResumed = true"),
+        "onResume is what turns a lifetime into one that may ask"
+    );
+    assert!(
+        on_resume.contains("removeCallbacks("),
+        "a resume must cancel a pending ask, or a passing pause still promises a \
+         startForeground nothing will deliver"
+    );
+
+    let fire = method_body(&java, "private void startCranposeBackgroundService()");
+    assert!(
+        fire.contains("if (!cranposeBackgroundActive || !cranposePaused)"),
+        "the deferred ask must re-check at fire time: work that finished or an activity \
+         that resumed while the ask waited must not leave an orphan foreground service"
+    );
+    assert!(
+        fire.contains("catch (RuntimeException"),
+        "a start the platform refuses outright (background-start restrictions past the \
+         grace window) is the platform's answer, to be logged rather than to crash"
+    );
+
+    let set_active = method_body(
+        &java,
+        "public void cranposeSetBackgroundActive(boolean active)",
+    );
+    let confined = set_active
+        .find("runOnUiThread(")
+        .zip(set_active.find("cranposeBackgroundActive = active"))
+        .is_some_and(|(post, write)| post < write);
+    assert!(
+        confined,
+        "the JNI thread must not write cranposeBackgroundActive itself: onPause reads it \
+         on the UI thread, and an unsynchronized cross-thread write is a data race"
+    );
+    assert!(
+        set_active.contains("removeCallbacks("),
+        "work that finishes must cancel a pending ask along with stopping the service, \
+         or the ask fires later and starts a foreground service with nothing to protect"
+    );
+}
+
+/// Stopping a started foreground service before it calls `startForeground` is
+/// itself a process kill: `ActiveServices.bringDownServiceLocked` crashes the
+/// app on purpose ("Bringing down service while still waiting for start
+/// foreground"). A background-work lease that closes moments after it opened —
+/// an import spinning up its queue does exactly this — turns start-then-stop
+/// into that kill, reproduced on a Pixel 9 Pro where the stop landed 18 ms
+/// after the accepted start. So the activity never calls `stopService` on the
+/// background service: every stop routes through the service's own handshake,
+/// which waits for `onCreate` to meet the obligation and then stops itself.
+#[test]
+fn the_android_background_service_never_stops_before_start_foreground() {
+    let activity =
+        workspace_source("crates/cranpose/android/java/dev/cranpose/android/CranposeActivity.java");
+    assert!(
+        !activity.contains("stopService("),
+        "the activity must route every stop through CranposeBackgroundService.stop: a \
+         Context.stopService that lands before the service's startForeground is a \
+         deliberate framework kill, and the activity cannot know whether it would"
+    );
+    assert!(
+        activity.contains("CranposeBackgroundService.stop(this)"),
+        "the stop the activity wants still has to happen — through the handshake"
+    );
+
+    assert!(
+        activity.contains("CranposeBackgroundService.noteStartRequested()"),
+        "every start must arm the obligation record first, so a stale stop from the \
+         previous cycle cannot end the service the moment it comes up"
+    );
+
+    let service = workspace_source(
+        "crates/cranpose/android/java/dev/cranpose/android/CranposeBackgroundService.java",
+    );
+    let stop = method_body(&service, "static void stop(Context context)");
+    assert!(
+        stop.contains("if (obligationArmed)") && stop.contains("context.stopService("),
+        "stop() may only forward to Context.stopService once startForeground has met \
+         every armed obligation; before that it records the wish and waits"
+    );
+    let enter = method_body(&service, "private void enterForeground()");
+    let met = enter.find("obligationArmed = false");
+    let honoured = enter.find("if (stopRequested)");
+    assert!(
+        met.zip(honoured)
+            .is_some_and(|(met, honoured)| met < honoured)
+            && enter.contains("startForeground("),
+        "the service itself honours a deferred stop, and only after its startForeground \
+         has run — the order is the whole point"
+    );
+}
+
+/// The body of the first Java method declared with `signature`, up to its
+/// closing brace at the declaration's depth.
+fn method_body<'a>(java: &'a str, signature: &str) -> &'a str {
+    let start = java
+        .find(signature)
+        .unwrap_or_else(|| panic!("CranposeActivity should declare `{signature}`"));
+    let body = &java[start..];
+    let open = body
+        .find('{')
+        .unwrap_or_else(|| panic!("`{signature}` should have a body"));
+    let mut depth = 0usize;
+    for (offset, byte) in body.bytes().enumerate().skip(open) {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &body[..=offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("`{signature}` body should close");
+}
+
 /// A permission an application writes into its own manifest is a permission the
 /// framework's module system cannot leave out of an application that does not
 /// use the service. Applications ask by service name; the module contributes
