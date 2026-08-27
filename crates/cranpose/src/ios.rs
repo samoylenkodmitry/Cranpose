@@ -17,7 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use cranpose_app_shell::{default_root_key, AppShell};
+use cranpose_app_shell::{AppShell, default_root_key};
 use cranpose_platform_desktop_winit::DesktopWinitPlatform;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::EdgeInsets;
@@ -30,7 +30,7 @@ use winit::{
 
 use crate::{
     app_launcher::{AppSettings, LaunchError},
-    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
     winit_pointer::{
         is_primary_pointer_button, pointer_source_from_button, pointer_source_from_winit,
     },
@@ -160,10 +160,8 @@ impl<F: FnMut() + 'static> IosApp<F> {
                 winit::window::Theme::Light => cranpose_services::SystemTheme::Light,
             });
         }
-        if changed {
-            if let Some(shell) = self.shell.as_mut() {
-                shell.request_root_render();
-            }
+        if changed && let Some(shell) = self.shell.as_mut() {
+            shell.request_root_render();
         }
     }
 
@@ -209,15 +207,15 @@ impl<F: FnMut() + 'static> IosApp<F> {
         // the whole rise/fall animation is tracked.
         let mut ime_changed = false;
         if crate::ios_keyboard::keyboard_poll_active() {
-            if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset() {
-                if (self.last_keyboard_bottom - bottom).abs() > 0.5 {
-                    self.last_keyboard_bottom = bottom;
-                    self.platform_env.set_ime_insets(EdgeInsets {
-                        bottom,
-                        ..EdgeInsets::default()
-                    });
-                    ime_changed = true;
-                }
+            if let Some(bottom) = crate::ios_keyboard::poll_keyboard_bottom_inset()
+                && (self.last_keyboard_bottom - bottom).abs() > 0.5
+            {
+                self.last_keyboard_bottom = bottom;
+                self.platform_env.set_ime_insets(EdgeInsets {
+                    bottom,
+                    ..EdgeInsets::default()
+                });
+                ime_changed = true;
             }
             self.event_proxy.wake_up();
         }

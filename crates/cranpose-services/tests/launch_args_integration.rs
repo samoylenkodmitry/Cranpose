@@ -1,9 +1,9 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_services::{
-    clear_platform_launch_args, isDebuggable, launch_args, local_launch_args,
-    set_platform_launch_args, LaunchArgValue, LaunchArgs, ProvideLaunchArgs,
+    LaunchArgValue, LaunchArgs, ProvideLaunchArgs, clear_platform_launch_args, isDebuggable,
+    launch_args, local_launch_args, set_platform_launch_args,
 };
 
 fn run_test_composition(build: impl FnMut()) {

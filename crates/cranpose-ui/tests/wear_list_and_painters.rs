@@ -8,10 +8,10 @@
 //! in the right direction, which is not something a screenshot shows.
 
 use cranpose_ui::{
+    TextOverflow,
     round_scaling_list::CentreAnchor,
     run_test_composition,
     widgets::{image::Painter, wear::scaling_list::rememberWearScalingListState},
-    TextOverflow,
 };
 use cranpose_ui_graphics::ImageBitmap;
 
@@ -153,12 +153,11 @@ fn a_scale_down_floor_that_cannot_be_drawn_at_is_normalised_away() {
 #[test]
 fn the_wear_widgets_compose_against_a_scaling_list_state() {
     use cranpose_ui::{
-        measure_layout,
+        Modifier, measure_layout,
         widgets::wear::{
             scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec},
             switch_button::{SwitchButtonNode, SwitchButtonSpec, SwitchColors, SwitchGraphic},
         },
-        Modifier,
     };
 
     let mut composition = run_test_composition(|| {
@@ -204,8 +203,8 @@ fn the_wear_widgets_compose_against_a_scaling_list_state() {
 #[test]
 fn a_wear_button_composes_its_label() {
     use cranpose_ui::{
-        widgets::wear::button::{WearButton, WearButtonSpec},
         Modifier,
+        widgets::wear::button::{WearButton, WearButtonSpec},
     };
 
     run_test_composition(|| {
@@ -222,8 +221,8 @@ fn a_wear_button_composes_its_label() {
 #[test]
 fn a_list_header_composes_its_label() {
     use cranpose_ui::{
-        widgets::wear::list_header::{ListHeader, ListHeaderSpec},
         Modifier,
+        widgets::wear::list_header::{ListHeader, ListHeaderSpec},
     };
 
     run_test_composition(|| {
@@ -236,8 +235,8 @@ fn a_screen_scaffold_composes_its_content() {
     use std::{cell::Cell, rc::Rc};
 
     use cranpose_ui::{
-        widgets::wear::scaffold::{ScreenScaffold, ScreenScaffoldSpec},
         Modifier,
+        widgets::wear::scaffold::{ScreenScaffold, ScreenScaffoldSpec},
     };
 
     let drawn = Rc::new(Cell::new(0usize));
@@ -262,9 +261,8 @@ fn a_screen_scaffold_composes_its_content() {
 #[test]
 fn a_switch_button_composes_without_a_secondary_label() {
     use cranpose_ui::{
-        measure_layout,
+        Modifier, measure_layout,
         widgets::wear::switch_button::{SwitchButton, SwitchButtonSpec},
-        Modifier,
     };
 
     let mut composition = run_test_composition(|| {
@@ -302,12 +300,11 @@ fn a_wear_scaling_lazy_column_subcomposes_its_rows_during_measurement() {
     use std::{cell::Cell, rc::Rc};
 
     use cranpose_ui::{
-        measure_layout,
+        Modifier, TextStyle, measure_layout,
         widgets::{
             text::Text,
             wear::scaling_list::{WearScalingLazyColumn, WearScalingLazyColumnSpec},
         },
-        Modifier, TextStyle,
     };
 
     let composed_rows = Rc::new(Cell::new(0usize));

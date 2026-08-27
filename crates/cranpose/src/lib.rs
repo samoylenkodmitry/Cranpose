@@ -108,8 +108,8 @@ mod native_window;
 pub use android_activity::AndroidApp;
 #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
 pub use android_host_window::{
-    rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
-    AndroidHostWindowSizeStatus, AndroidHostWindowState,
+    AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+    AndroidHostWindowState, rememberAndroidHostWindowState,
 };
 #[cfg(all(
     feature = "renderer-wgpu",
@@ -122,13 +122,13 @@ pub use app_launcher::{AndroidOverlayWindowOptions, AppLauncher, AppSettings};
 /// the weight set it registers, and the registry and error
 /// [`AppLauncher::with_fonts_from`] hands out.
 pub use cranpose_render_common::font_source::{
-    FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+    ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError, SoftwareTextFontRegistry,
 };
 pub use host_environment::{host_density, system_font_directory};
 pub use native_window::{
-    current_native_window_surface_origin, rememberWindowState, Window, WindowAttachPolicy,
-    WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
-    WindowResizeDirection, WindowState,
+    Window, WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt,
+    WindowMoveMode, WindowNode, WindowResizeDirection, WindowState,
+    current_native_window_surface_origin, rememberWindowState,
 };
 #[cfg(all(
     feature = "renderer-wgpu",
@@ -164,12 +164,12 @@ mod wgpu_surface;
 /// The real-time audio engine that backs `cranpose_services::audio`. Call
 /// [`install_audio`] once at startup; Android installs it automatically.
 #[cfg(feature = "audio")]
-pub use cranpose_audio::{install as install_audio, AudioEngine};
+pub use cranpose_audio::{AudioEngine, install as install_audio};
 /// Core runtime helpers commonly used by applications.
 pub use cranpose_core::{
-    delay, interval, launchBlocking, mutableStateOf, produceState, remember,
-    rememberCoroutineScope, rememberMutableStateOf, rememberMutableStateOfNeverEqual,
-    rememberUpdatedState, CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
+    CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
+    launchBlocking, mutableStateOf, produceState, remember, rememberCoroutineScope,
+    rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
 };
 /// Liquid UI — the first-party glass component library
 /// (`use cranpose::liquid::prelude::*;`).
@@ -180,7 +180,7 @@ pub use cranpose_liquid as liquid;
 /// platform backend instead. [`uri_for_path`] builds the `file:` URI a
 /// [`cranpose_services::MediaItem`] takes from a path.
 #[cfg(feature = "media")]
-pub use cranpose_media::{path_from_uri, uri_for_path, SoftwareMediaPlayer};
+pub use cranpose_media::{SoftwareMediaPlayer, path_from_uri, uri_for_path};
 /// Re-export framework services (HTTP, URI, etc.) from the dedicated services crate.
 pub use cranpose_services::*;
 /// Re-export the UI crate so applications can depend on a single crate.
@@ -192,42 +192,51 @@ static KEEP_SCREEN_ON_EFFECTS: std::sync::atomic::AtomicUsize =
 /// Keeps the platform display awake while this call remains in composition and
 /// `enabled` is true. Multiple active callers are reference-counted.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn KeepScreenOn(enabled: bool) {
-    cranpose_core::DisposableEffect!(enabled, move |scope| {
-        if !enabled {
-            return cranpose_core::DisposableEffectResult::default();
-        }
-        if KEEP_SCREEN_ON_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
-            cranpose_services::set_keep_screen_on(true);
-        }
-        scope.on_dispose(move || {
-            if KEEP_SCREEN_ON_EFFECTS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
-                cranpose_services::set_keep_screen_on(false);
+    cranpose_core::__disposable_effect_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        enabled,
+        move |scope| {
+            if !enabled {
+                return cranpose_core::DisposableEffectResult::default();
             }
-        })
-    });
+            if KEEP_SCREEN_ON_EFFECTS.fetch_add(1, std::sync::atomic::Ordering::AcqRel) == 0 {
+                cranpose_services::set_keep_screen_on(true);
+            }
+            scope.on_dispose(move || {
+                if KEEP_SCREEN_ON_EFFECTS.fetch_sub(1, std::sync::atomic::Ordering::AcqRel) == 1 {
+                    cranpose_services::set_keep_screen_on(false);
+                }
+            })
+        },
+    );
 }
 
 /// Installs a declared bundled-asset set on a worker and returns the outcome
 /// on the UI runtime. Work is cancelled with the owning composition.
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
     keys: K,
     spec: cranpose_services::BundledAssetInstallSpec,
     on_result: impl FnOnce(
-            Result<
-                cranpose_services::BundledAssetInstallOutcome,
-                cranpose_services::BundledAssetError,
-            >,
-        ) + 'static,
+        Result<cranpose_services::BundledAssetInstallOutcome, cranpose_services::BundledAssetError>,
+    ) + 'static,
 ) {
-    cranpose_core::LaunchedEffect!(keys, move |scope| {
-        scope.launch_background(
-            move |_token| async move { cranpose_services::install_bundled_asset_set(&spec) },
-            on_result,
-        );
-    });
+    cranpose_core::__launched_effect_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        keys,
+        move |scope| {
+            scope.launch_background(
+                move |_token| async move { cranpose_services::install_bundled_asset_set(&spec) },
+                on_result,
+            );
+        },
+    );
 }
 
 /// Registers a lifecycle observer for the lifetime of the current composition.
@@ -236,6 +245,7 @@ pub fn BundledAssetInstallEffect<K: PartialEq + 'static>(
 /// [`cranpose_services::local_lifecycle_state`] instead; this is for work that
 /// must react to a *transition*.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn LifecycleEffect<K: PartialEq + 'static>(
     keys: K,
     observer: impl FnMut(cranpose_services::LifecycleEvent) + 'static,
@@ -251,6 +261,7 @@ static ACTIVE_BACK_HANDLERS: std::sync::atomic::AtomicUsize =
 /// Nested handlers follow stack order: the innermost active handler receives
 /// the request and dropping it restores the handler beneath it.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn BackHandler(enabled: bool, mut on_back: impl FnMut() + 'static) {
     let requests = cranpose_core::rememberEventStream(enabled, move |sender| {
         if !enabled {
@@ -299,6 +310,7 @@ impl Drop for BackInterception {
 
 /// Remembers observable application update state for the current composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUpdateStatus> {
     let updates = cranpose_core::rememberEventStream((), |sender| {
         cranpose_services::observe_app_update_status(move |status| sender.send(status))
@@ -314,6 +326,7 @@ pub fn rememberAppUpdateState() -> cranpose_core::State<cranpose_services::AppUp
 /// the loop starts and stops with it. There is no wake handle to hold and no
 /// scheduler to poke: stopping is a state change like any other.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn FrameEffect<K: PartialEq + 'static>(
     keys: K,
     running: bool,
@@ -322,27 +335,34 @@ pub fn FrameEffect<K: PartialEq + 'static>(
     let on_frame: std::rc::Rc<std::cell::RefCell<dyn FnMut(u64)>> =
         std::rc::Rc::new(std::cell::RefCell::new(on_frame));
     let on_frame = cranpose_core::rememberUpdatedState(on_frame);
-    cranpose_core::LaunchedEffectAsync!((keys, running), move |scope| {
-        Box::pin(async move {
-            if !running {
-                return;
-            }
-            let clock = scope.runtime().frame_clock();
-            while scope.is_active() {
-                let now = clock.next_frame().await;
-                if !scope.is_active() {
-                    break;
+    cranpose_core::__launched_effect_async_impl(
+        cranpose_core::caller_location_key()
+            ^ cranpose_core::location_key(file!(), line!(), column!()),
+        std::panic::Location::caller().into(),
+        (keys, running),
+        move |scope| {
+            Box::pin(async move {
+                if !running {
+                    return;
                 }
-                (on_frame.value().borrow_mut())(now);
-            }
-        })
-    });
+                let clock = scope.runtime().frame_clock();
+                while scope.is_active() {
+                    let now = clock.next_frame().await;
+                    if !scope.is_active() {
+                        break;
+                    }
+                    (on_frame.value().borrow_mut())(now);
+                }
+            })
+        },
+    );
 }
 
 #[doc(hidden)]
 pub use cranpose_core::{
-    debug_label_current_scope, location_key, with_current_composer, CallbackHolder, Composer,
-    ParamState, ReturnSlot,
+    __branch_group_scope_deferred, CallbackHolder, Composer, Key, ParamState, ReturnSlot,
+    branch_location_key, caller_location_key, composable_definition_key, composable_identity_key,
+    debug_label_current_scope, location_key, with_current_composer,
 };
 
 #[cfg(all(
@@ -361,22 +381,22 @@ pub mod _docs;
 /// Convenience imports for Cranpose applications.
 pub mod prelude {
     pub use cranpose_core::{
-        delay, interval, mutableStateOf, produceState, remember, rememberCoroutineScope,
-        rememberMutableStateOf, rememberMutableStateOfNeverEqual, rememberUpdatedState,
-        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State,
+        CoroutineScope, MutableState, SnapshotStateList, SnapshotStateMap, State, delay, interval,
+        mutableStateOf, produceState, remember, rememberCoroutineScope, rememberMutableStateOf,
+        rememberMutableStateOfNeverEqual, rememberUpdatedState,
     };
     pub use cranpose_services::*;
     pub use cranpose_ui::*;
 
     #[cfg(all(feature = "android", feature = "renderer-wgpu", target_os = "android"))]
     pub use crate::{
-        rememberAndroidHostWindowState, AndroidHostWindowPositionError, AndroidHostWindowSizeError,
-        AndroidHostWindowSizeStatus, AndroidHostWindowState,
+        AndroidHostWindowPositionError, AndroidHostWindowSizeError, AndroidHostWindowSizeStatus,
+        AndroidHostWindowState, rememberAndroidHostWindowState,
     };
     pub use crate::{
-        rememberWindowState, AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window,
-        WindowAttachPolicy, WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode,
-        WindowNode, WindowResizeDirection, WindowState,
+        AndroidOverlayWindowOptions, AppLauncher, AppSettings, Window, WindowAttachPolicy,
+        WindowConfig, WindowGroup, WindowId, WindowModifierExt, WindowMoveMode, WindowNode,
+        WindowResizeDirection, WindowState, rememberWindowState,
     };
 }
 

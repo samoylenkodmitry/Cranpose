@@ -187,10 +187,11 @@ pub(crate) fn render_string_for(
     RENDER_STRING_MEMO.with(|memo| {
         let mut memo = memo.borrow_mut();
         let key = Rc::as_ptr(text) as usize;
-        if let Some(entry) = memo.get(&key) {
-            if entry.text.strong_count() > 0 && entry.text.as_ptr() == Rc::as_ptr(text) {
-                return std::sync::Arc::clone(&entry.render);
-            }
+        if let Some(entry) = memo.get(&key)
+            && entry.text.strong_count() > 0
+            && entry.text.as_ptr() == Rc::as_ptr(text)
+        {
+            return std::sync::Arc::clone(&entry.render);
         }
 
         let render = std::sync::Arc::new(text.render_string());

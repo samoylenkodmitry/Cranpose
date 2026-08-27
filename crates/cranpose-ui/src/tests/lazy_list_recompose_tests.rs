@@ -4,10 +4,10 @@ use std::{
 };
 
 use cranpose_animation::{
-    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, RepeatMode, StartOffset,
+    AnimationSpec, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, NodeId};
-use cranpose_foundation::lazy::{rememberLazyListState, LazyItems, LazyListScope, LazyListState};
+use cranpose_core::{Composition, MemoryApplier, MutableState, NodeId, location_key};
+use cranpose_foundation::lazy::{LazyItems, LazyListScope, LazyListState, rememberLazyListState};
 
 use super::*;
 use crate::{
@@ -843,7 +843,9 @@ fn gesture_scroll_recomposes_scroll_position_observers() {
         "scroll observer text did not track gesture-updated position; expected {expected}, got {scrolled_texts:?}"
     );
     assert!(
-        scrolled_texts.iter().any(|text| text == "Can scroll back true"),
+        scrolled_texts
+            .iter()
+            .any(|text| text == "Can scroll back true"),
         "scroll observer text did not track gesture-updated backward capability; got {scrolled_texts:?}"
     );
 

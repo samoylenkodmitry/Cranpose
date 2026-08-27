@@ -68,19 +68,19 @@ impl CursorAnimationState {
     /// Advances the blink state if the transition time has passed.
     /// Returns `true` if the state changed (redraw needed).
     pub fn tick(&self, now: Instant) -> bool {
-        if let Some(next) = self.next_blink_time.get() {
-            if now >= next {
-                // Toggle visibility
-                let new_alpha = if self.cursor_alpha.get() > 0.5 {
-                    0.0
-                } else {
-                    1.0
-                };
-                self.cursor_alpha.set(new_alpha);
-                // Schedule next transition
-                self.next_blink_time.set(Some(now + Self::BLINK_INTERVAL));
-                return true;
-            }
+        if let Some(next) = self.next_blink_time.get()
+            && now >= next
+        {
+            // Toggle visibility
+            let new_alpha = if self.cursor_alpha.get() > 0.5 {
+                0.0
+            } else {
+                1.0
+            };
+            self.cursor_alpha.set(new_alpha);
+            // Schedule next transition
+            self.next_blink_time.set(Some(now + Self::BLINK_INTERVAL));
+            return true;
         }
         false
     }

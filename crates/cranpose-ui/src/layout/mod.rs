@@ -14,8 +14,8 @@ use cranpose_core::{
     Phase, RuntimeHandle, SlotTable, SlotsHost, SnapshotStateObserver,
 };
 use cranpose_foundation::{
-    text::TextRange, CanvasSemanticsNode, InvalidationKind, ModifierNodeContext, NodeCapabilities,
-    SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole,
+    CanvasSemanticsNode, InvalidationKind, ModifierNodeContext, NodeCapabilities,
+    SemanticsConfiguration, SemanticsCustomAction, SemanticsWidgetRole, text::TextRange,
 };
 use cranpose_ui_layout::{Constraints, MeasurePolicy, Placement};
 use web_time::Instant;
@@ -25,9 +25,9 @@ use self::core::{HorizontalAlignment, VerticalAlignment};
 use self::core::{Measurable, Placeable};
 use crate::{
     modifier::{
-        collect_semantics_from_modifier, DimensionConstraint, EdgeInsets, Modifier,
-        ModifierNodeSlices, ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect,
-        ResolvedModifiers, Size,
+        DimensionConstraint, EdgeInsets, Modifier, ModifierNodeSlices,
+        ModifierNodeSlicesDebugStats, Point, Rect as GeometryRect, ResolvedModifiers, Size,
+        collect_semantics_from_modifier,
     },
     subcompose_layout::{CachedBatchMeasureInputs, SubcomposeLayoutNode},
     widgets::nodes::{IntrinsicKind, LayoutNode, LayoutNodeCacheHandles, LayoutState},
@@ -1056,17 +1056,16 @@ pub fn measure_layout_with_options(
     // Root node has no parent to place it, so we must explicitly place it at (0,0).
     // This ensures is_placed=true, allowing the renderer to traverse the tree.
     // Handle both LayoutNode and SubcomposeLayoutNode as potential roots.
-    if let Ok(mut applier) = applier_host.try_borrow_typed() {
-        if applier
+    if let Ok(mut applier) = applier_host.try_borrow_typed()
+        && applier
             .with_node::<LayoutNode, _>(root, |node| {
                 node.set_position(Point::default());
             })
             .is_err()
-        {
-            let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
-                node.set_position(Point::default());
-            });
-        }
+    {
+        let _ = applier.with_node::<SubcomposeLayoutNode, _>(root, |node| {
+            node.set_position(Point::default());
+        });
     }
     let after_root_place = Instant::now();
 
@@ -1659,18 +1658,16 @@ impl LayoutBuilderState {
             // inside a `LazyColumn` item), so both node kinds must be positioned
             // and marked placed; otherwise the applier-traversal render, layout,
             // and semantics builds cull the child's whole subtree (issue #305).
-            if let Ok(mut applier) = applier_host.try_borrow_typed() {
-                if applier
+            if let Ok(mut applier) = applier_host.try_borrow_typed()
+                && applier
                     .with_node::<LayoutNode, _>(placement.node_id, |node| {
                         node.set_position(retained_position);
                     })
                     .is_err()
-                {
-                    let _ =
-                        applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
-                            node.set_position(retained_position);
-                        });
-                }
+            {
+                let _ = applier.with_node::<SubcomposeLayoutNode, _>(placement.node_id, |node| {
+                    node.set_position(retained_position);
+                });
             }
 
             children.push(MeasuredChild {
@@ -2867,10 +2864,10 @@ impl LayoutChildMeasureState {
     fn intrinsic_measure(&self, constraints: Constraints) -> Option<Rc<MeasuredNode>> {
         let cache = self.cache();
         cache.activate(self.cache_epoch.get());
-        if !self.force_remeasure.get() {
-            if let Some(cached) = cache.get_measurement(constraints) {
-                return Some(cached);
-            }
+        if !self.force_remeasure.get()
+            && let Some(cached) = cache.get_measurement(constraints)
+        {
+            return Some(cached);
         }
 
         match self.perform_measure(constraints) {
@@ -3008,10 +3005,10 @@ impl Measurable for LayoutChildMeasurable {
         let kind = IntrinsicKind::MinWidth(height);
         let cache = self.state.cache();
         cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get() {
-            if let Some(value) = cache.get_intrinsic(&kind) {
-                return value;
-            }
+        if !self.state.force_remeasure.get()
+            && let Some(value) = cache.get_intrinsic(&kind)
+        {
+            return value;
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -3032,10 +3029,10 @@ impl Measurable for LayoutChildMeasurable {
         let kind = IntrinsicKind::MaxWidth(height);
         let cache = self.state.cache();
         cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get() {
-            if let Some(value) = cache.get_intrinsic(&kind) {
-                return value;
-            }
+        if !self.state.force_remeasure.get()
+            && let Some(value) = cache.get_intrinsic(&kind)
+        {
+            return value;
         }
         let constraints = Constraints {
             min_width: 0.0,
@@ -3056,10 +3053,10 @@ impl Measurable for LayoutChildMeasurable {
         let kind = IntrinsicKind::MinHeight(width);
         let cache = self.state.cache();
         cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get() {
-            if let Some(value) = cache.get_intrinsic(&kind) {
-                return value;
-            }
+        if !self.state.force_remeasure.get()
+            && let Some(value) = cache.get_intrinsic(&kind)
+        {
+            return value;
         }
         let constraints = Constraints {
             min_width: width,
@@ -3080,10 +3077,10 @@ impl Measurable for LayoutChildMeasurable {
         let kind = IntrinsicKind::MaxHeight(width);
         let cache = self.state.cache();
         cache.activate(self.state.cache_epoch.get());
-        if !self.state.force_remeasure.get() {
-            if let Some(value) = cache.get_intrinsic(&kind) {
-                return value;
-            }
+        if !self.state.force_remeasure.get()
+            && let Some(value) = cache.get_intrinsic(&kind)
+        {
+            return value;
         }
         let constraints = Constraints {
             min_width: 0.0,

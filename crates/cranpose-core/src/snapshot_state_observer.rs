@@ -12,11 +12,11 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
+    RecomposeScope, RecomposeScopeInner, ScopeId,
     collections::map::{HashMap, HashSet},
     hash::default as default_hash,
-    snapshot_v2::{register_apply_observer, ReadObserver, StateObjectId},
+    snapshot_v2::{ReadObserver, StateObjectId, register_apply_observer},
     state::StateObject,
-    RecomposeScope, RecomposeScopeInner, ScopeId,
 };
 
 /// Executes a callback once changes are delivered.
@@ -459,14 +459,13 @@ impl SnapshotStateObserverInner {
         let mut owned_scopes = self.owned_scopes.borrow_mut();
         let mut removed = None;
         let mut remove_bucket = false;
-        if let Some(bucket) = owned_scopes.get_mut(&key) {
-            if let Some(index) = bucket
+        if let Some(bucket) = owned_scopes.get_mut(&key)
+            && let Some(index) = bucket
                 .iter()
                 .position(|entry| entry.borrow().matches_scope(scope))
-            {
-                removed = Some(bucket.remove(index));
-                remove_bucket = bucket.is_empty();
-            }
+        {
+            removed = Some(bucket.remove(index));
+            remove_bucket = bucket.is_empty();
         }
         if remove_bucket {
             owned_scopes.remove(&key);
@@ -564,10 +563,10 @@ impl SnapshotStateObserverInner {
                         scope_ids.iter().copied().collect();
                     ordered_scope_ids.sort_unstable();
                     for scope_id in ordered_scope_ids {
-                        if seen_scope_ids.insert(scope_id) {
-                            if let Some(entry) = indexed_scopes.get(&scope_id) {
-                                to_notify.push(entry.clone());
-                            }
+                        if seen_scope_ids.insert(scope_id)
+                            && let Some(entry) = indexed_scopes.get(&scope_id)
+                        {
+                            to_notify.push(entry.clone());
                         }
                     }
                 }
@@ -837,7 +836,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        snapshot_v2::{reset_runtime_for_tests, take_mutable_snapshot, TestRuntimeGuard},
+        snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests, take_mutable_snapshot},
         state::{NeverEqual, SnapshotMutableState},
     };
 

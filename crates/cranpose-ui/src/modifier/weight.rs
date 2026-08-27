@@ -1,4 +1,4 @@
-use super::{inspector_metadata, Modifier};
+use super::{Modifier, inspector_metadata};
 use crate::modifier_nodes::WeightElement;
 
 impl Modifier {

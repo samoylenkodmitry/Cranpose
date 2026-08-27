@@ -822,7 +822,7 @@ impl FrameStats {
 }
 
 pub(crate) fn gpu_stats_enabled() -> bool {
-    std::env::var("CRANPOSE_GPU_STATS")
+    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_STATS")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }
@@ -870,7 +870,7 @@ pub(crate) fn print_gpu_memory_report(device: &wgpu::Device, frame_count: u64) {
 }
 
 fn shadow_cache_diagnostics_enabled() -> bool {
-    std::env::var("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
+    crate::debug_toggles::debug_toggle("CRANPOSE_GPU_SHADOW_CACHE_DIAG")
         .map(|v| matches!(v.as_str(), "1" | "true" | "yes"))
         .unwrap_or(false)
 }

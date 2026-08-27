@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use cranpose_core::{compositionLocalOf, CompositionLocal};
+use cranpose_core::{CompositionLocal, compositionLocalOf};
 use cranpose_ui_graphics::EdgeInsets;
 
 use crate::Modifier;
@@ -94,7 +94,7 @@ impl Modifier {
 mod tests {
     use cranpose_ui_graphics::EdgeInsets;
 
-    use super::{local_ime_insets, local_safe_area_insets, WindowInsets};
+    use super::{WindowInsets, local_ime_insets, local_safe_area_insets};
 
     #[test]
     fn defaults_to_zero_insets() {
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn explicit_window_insets_become_padding() {
-        use crate::{modifier::ModifierChainHandle, Modifier};
+        use crate::{Modifier, modifier::ModifierChainHandle};
 
         let _app_context = crate::render_state::app_context_test_scope();
         let insets = EdgeInsets::from_components(1.0, 2.0, 3.0, 4.0);

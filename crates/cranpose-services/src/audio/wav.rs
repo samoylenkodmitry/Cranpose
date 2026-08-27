@@ -68,11 +68,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<AudioClip, AudioError> {
 
 /// Mono and stereo stay as recorded; three or more channels fold to mono.
 fn output_channels(channels: u16) -> u16 {
-    if channels > 2 {
-        1
-    } else {
-        channels
-    }
+    if channels > 2 { 1 } else { channels }
 }
 
 struct WaveFormat {
@@ -150,7 +146,7 @@ fn decode_samples(format: &WaveFormat, data: &[u8]) -> Result<Vec<f32>, AudioErr
         (tag, bits) => {
             return Err(AudioError::UnsupportedFormat(format!(
                 "WAVE format tag {tag} at {bits} bits per sample"
-            )))
+            )));
         }
     };
 

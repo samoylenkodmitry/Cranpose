@@ -8,13 +8,13 @@
 
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use cranpose_services::{publish_media_samples, record_dropped_media_samples, MediaSamples};
+use cranpose_services::{MediaSamples, publish_media_samples, record_dropped_media_samples};
 use parking_lot::Mutex;
 
 use crate::source::{ChannelCount, Sample, SampleRate, SampleSource, SeekError};

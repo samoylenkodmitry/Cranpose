@@ -3,9 +3,9 @@
 use cranpose_foundation::text::TextFieldState;
 use cranpose_macros::composable;
 use cranpose_ui::{
+    Modifier,
     text::{SpanStyle, TextStyle},
     widgets::{BasicTextFieldDecorated, BasicTextFieldOptions, Box, BoxSpec, Row, RowSpec, Text},
-    Modifier,
 };
 use cranpose_ui_layout::{Alignment, VerticalAlignment};
 

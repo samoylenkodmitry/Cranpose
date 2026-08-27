@@ -14,9 +14,9 @@ use std::{
 
 use cranpose_core::{NodeId, SlotId};
 use cranpose_foundation::lazy::{
-    measure_lazy_list, measure_lazy_list_with_beyond_bounds_policy, LazyListIntervalContent,
-    LazyListMeasureConfig, LazyListMeasureResult, LazyListMeasuredItem, LazyListState,
-    SmallNodeVec, SmallOffsetVec,
+    LazyListIntervalContent, LazyListMeasureConfig, LazyListMeasureResult, LazyListMeasuredItem,
+    LazyListState, SmallNodeVec, SmallOffsetVec, measure_lazy_list,
+    measure_lazy_list_with_beyond_bounds_policy,
 };
 // Re-export from foundation - single source of truth
 pub use cranpose_foundation::lazy::{LazyListItemInfo, LazyListLayoutInfo};
@@ -28,7 +28,7 @@ use crate::{
     composable,
     layout::MeasuredNode,
     modifier::{Modifier, Size},
-    scroll::{scroll_motion_context_for_key, OverscrollEffect, ScrollMotionContextKey},
+    scroll::{OverscrollEffect, ScrollMotionContextKey, scroll_motion_context_for_key},
     subcompose_layout::{
         MeasurePolicy, Placement, SubcomposeChild, SubcomposeLayoutNode, SubcomposeMeasureScope,
         SubcomposeMeasureScopeImpl,
@@ -642,10 +642,10 @@ fn bind_layout_invalidation_callback(
         }),
     );
 
-    if let Some(previous_id) = callback_owner.replace(callback_id) {
-        if Some(previous_id) != callback_id {
-            state.remove_invalidate_callback(previous_id);
-        }
+    if let Some(previous_id) = callback_owner.replace(callback_id)
+        && Some(previous_id) != callback_id
+    {
+        state.remove_invalidate_callback(previous_id);
     }
 
     let overscroll_callback_owner =
@@ -1318,7 +1318,7 @@ fn LazyColumnNode(
         let node_slot = &mut node;
         cranpose_core::CompositionLocalProvider(
             vec![
-                crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder))
+                crate::bring_into_view::local_bring_into_view_responder().provides(Some(responder)),
             ],
             move || {
                 *node_slot = Some(LazyColumnImpl(modifier, state, spec, content));
@@ -1451,7 +1451,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use super::*;
 

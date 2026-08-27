@@ -618,9 +618,11 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::Backdrop));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::Backdrop)
+        );
     }
 
     #[test]
@@ -658,9 +660,11 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
         assert!(!requirements.has_isolating_requirement());
         assert_eq!(
             composite_sample_mode_for_requirements(false, false, requirements),
@@ -718,12 +722,16 @@ mod tests {
         let requirements = layer_surface_requirements(&layer);
 
         assert!(requirements.has_isolating_requirement());
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::ShapeClip));
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::RenderEffect));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::ShapeClip)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::RenderEffect)
+        );
     }
 
     #[test]
@@ -758,15 +766,21 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::RenderEffect));
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::RenderEffect)
+        );
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
         let effective = effective_surface_requirements(true, false, requirements);
         assert!(!effective.contains(SurfaceRequirement::MotionStableCapture));
         assert_eq!(
@@ -828,19 +842,29 @@ mod tests {
         assert!(requirements.contains_translated_content);
         assert!(!requirements.translated_content_axes.x);
         assert!(requirements.translated_content_axes.y);
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::RenderEffect));
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
-        assert!(!effective_surface_requirements(false, false, requirements)
-            .contains(SurfaceRequirement::MotionStableCapture));
-        assert!(!effective_surface_requirements(false, true, requirements)
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::RenderEffect)
+        );
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
+        assert!(
+            !effective_surface_requirements(false, false, requirements)
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
+        assert!(
+            !effective_surface_requirements(false, true, requirements)
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
         assert_eq!(
             layer_surface_target_scale(
                 false,
@@ -921,16 +945,24 @@ mod tests {
 
         assert!(requirements.contains_translated_content);
         assert!(requirements.contains_backdrop_content);
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::RenderEffect));
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
-        assert!(!effective_surface_requirements(false, false, requirements)
-            .contains(SurfaceRequirement::MotionStableCapture));
-        assert!(!effective_surface_requirements(false, true, requirements)
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::RenderEffect)
+        );
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
+        assert!(
+            !effective_surface_requirements(false, false, requirements)
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
+        assert!(
+            !effective_surface_requirements(false, true, requirements)
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
     }
 
     #[test]
@@ -976,9 +1008,11 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
         assert_eq!(
             composite_sample_mode_for_requirements(true, false, requirements),
             CompositeSampleMode::Linear
@@ -1003,9 +1037,11 @@ mod tests {
 
         let requirements = layer_surface_requirements(&layer);
 
-        assert!(!requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            !requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
         assert_eq!(
             composite_sample_mode_for_requirements(true, true, requirements),
             CompositeSampleMode::Linear
@@ -1230,9 +1266,11 @@ mod tests {
     #[test]
     fn scope_text_marks_its_layer_pixel_stable_like_a_text_node_does() {
         let requirements = layer_surface_requirements(&scope_text_layer());
-        assert!(requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::PixelStableComposite));
+        assert!(
+            requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::PixelStableComposite)
+        );
         assert!(!requirements.has_isolating_requirement());
     }
 
@@ -1301,12 +1339,12 @@ mod carried_plan_tests_support {
 mod carried_plan_tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use cranpose_core::{collections::map::HashMap, NodeId};
+    use cranpose_core::{NodeId, collections::map::HashMap};
     use cranpose_render_common::scene_builder::{
         build_graph_from_applier, update_graph_from_applier_report_into,
     };
     use cranpose_ui::{
-        text::TextStyle, Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text,
+        Column, ColumnSpec, LayoutEngine, Modifier, ScrollState, Size, Text, text::TextStyle,
     };
     use cranpose_ui_graphics::GraphicsLayer;
 
@@ -1428,11 +1466,11 @@ mod carried_plan_tests {
 mod carried_plan_structure_tests {
     use std::{cell::RefCell, rc::Rc};
 
-    use cranpose_core::{collections::map::HashMap, NodeId};
+    use cranpose_core::{NodeId, collections::map::HashMap};
     use cranpose_render_common::scene_builder::{
         build_graph_from_applier, update_graph_from_applier_report_into,
     };
-    use cranpose_ui::{text::TextStyle, Column, ColumnSpec, LayoutEngine, Modifier, Size, Text};
+    use cranpose_ui::{Column, ColumnSpec, LayoutEngine, Modifier, Size, Text, text::TextStyle};
     use cranpose_ui_graphics::GraphicsLayer;
 
     use super::carried_plan_tests_support::{

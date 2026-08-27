@@ -9,14 +9,14 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
-use cranpose_core::{rememberEventStream, EventStream};
+use cranpose_core::{EventStream, rememberEventStream};
 
-use crate::content::{resolve_content, BytesContent, ContentHandle, ContentMetadata};
+use crate::content::{BytesContent, ContentHandle, ContentMetadata, resolve_content};
 
 /// Where the bytes of an incoming item live.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -239,6 +239,7 @@ pub fn clear_incoming_content() {
 /// }
 /// ```
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberIncomingContent() -> EventStream<IncomingContent> {
     rememberEventStream((), |sender| {
         observe_incoming_content(move |content| sender.send(content))

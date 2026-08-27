@@ -11,18 +11,18 @@ use std::{
     collections::HashMap,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use cranpose_services::{
+    DeviceInfo, HapticEffect, HapticFeedback, HapticPattern, Haptics, NetworkMonitor,
+    NetworkStatus, Notifier, NotifyRequest, ShareContent, ShareError, ShareSheet,
     set_platform_device_info, set_platform_haptics, set_platform_network_monitor,
-    set_platform_notifier, set_platform_share_sheet, DeviceInfo, HapticEffect, HapticFeedback,
-    HapticPattern, Haptics, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, ShareContent,
-    ShareError, ShareSheet,
+    set_platform_notifier, set_platform_share_sheet,
 };
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 
 pub(crate) fn register() {
     set_platform_share_sheet(Rc::new(WebShareSheet));

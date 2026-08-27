@@ -15,8 +15,8 @@ use std::{
 };
 
 use cranpose_core::{
-    internal::FrameCallbackRegistration, with_current_composer, DisposableEffectResult, Owned,
-    OwnedMutableState, RuntimeHandle, SideEffect, State,
+    DisposableEffectResult, Owned, OwnedMutableState, RuntimeHandle, SideEffect, State,
+    internal::FrameCallbackRegistration, with_current_composer,
 };
 
 /// Trait for types that can be linearly interpolated.
@@ -630,43 +630,51 @@ impl InfiniteTransition {
         &self.inner.label
     }
 
+    #[track_caller]
     fn run(&self) {
         let run_key = self.inner.run_token.get();
         cranpose_core::label_next_ui_task(format!("loop {}", self.inner.label));
         let weak: Weak<InfiniteTransitionInner> = Rc::downgrade(&self.inner);
-        cranpose_core::LaunchedEffectAsync!(run_key, move |scope| {
-            Box::pin(async move {
-                let clock = scope.runtime().frame_clock();
-                let mut start_time: Option<u64> = None;
+        cranpose_core::__launched_effect_async_impl(
+            cranpose_core::caller_location_key()
+                ^ cranpose_core::location_key(file!(), line!(), column!()),
+            std::panic::Location::caller().into(),
+            run_key,
+            move |scope| {
+                Box::pin(async move {
+                    let clock = scope.runtime().frame_clock();
+                    let mut start_time: Option<u64> = None;
 
-                loop {
-                    if !scope.is_active() {
-                        break;
+                    loop {
+                        if !scope.is_active() {
+                            break;
+                        }
+
+                        let Some(inner) = weak.upgrade() else {
+                            break;
+                        };
+                        inner.restart_pending.set(false);
+
+                        if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
+                            break;
+                        }
+
+                        let now = clock.next_perpetual_frame().await;
+                        if !scope.is_active() {
+                            break;
+                        }
+
+                        let start = start_time.get_or_insert(now);
+                        let play_time = now.saturating_sub(*start);
+                        inner.on_frame(play_time);
                     }
-
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    inner.restart_pending.set(false);
-
-                    if inner.animations.borrow().is_empty() || !inner.has_subscribers() {
-                        break;
-                    }
-
-                    let now = clock.next_perpetual_frame().await;
-                    if !scope.is_active() {
-                        break;
-                    }
-
-                    let start = start_time.get_or_insert(now);
-                    let play_time = now.saturating_sub(*start);
-                    inner.on_frame(play_time);
-                }
-            })
-        });
+                })
+            },
+        );
     }
 
     #[allow(non_snake_case)]
+    #[track_caller]
     pub fn animateFloat(
         &self,
         initial_value: f32,
@@ -679,12 +687,14 @@ impl InfiniteTransition {
     }
 
     #[allow(non_snake_case)]
+    #[track_caller]
     pub fn animateValue<T: Lerp + Clone + PartialEq + 'static>(
         &self,
         initial_value: T,
         target_value: T,
         animation_spec: InfiniteRepeatableSpec<T>,
     ) -> State<T> {
+        let caller = cranpose_core::caller_location_key();
         let runtime = with_current_composer(|composer| composer.runtime_handle());
         let initial_for_remember = initial_value.clone();
         let target_for_remember = target_value.clone();
@@ -718,14 +728,18 @@ impl InfiniteTransition {
             }
         }));
         let animation_id = Rc::as_ptr(&animation_state) as usize;
-        cranpose_core::DisposableEffect!(animation_id, move |_scope| {
-            transition_inner.add_animation(animation_any.clone());
-            let transition_inner = Rc::clone(&transition_inner);
-            let animation_any = animation_any.clone();
-            DisposableEffectResult::new(move || {
-                transition_inner.remove_animation(&animation_any);
-            })
-        });
+        cranpose_core::__disposable_effect_impl(
+            caller ^ cranpose_core::location_key(file!(), line!(), column!()),
+            animation_id,
+            move |_scope| {
+                transition_inner.add_animation(animation_any.clone());
+                let transition_inner = Rc::clone(&transition_inner);
+                let animation_any = animation_any.clone();
+                DisposableEffectResult::new(move || {
+                    transition_inner.remove_animation(&animation_any);
+                })
+            },
+        );
 
         animation_state.state()
     }
@@ -787,6 +801,7 @@ impl InfiniteTransitionInner {
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberInfiniteTransition(label: &str) -> InfiniteTransition {
     let runtime = with_current_composer(|composer| composer.runtime_handle());
     let transition =
@@ -1090,6 +1105,7 @@ impl<T: SpringScalar + 'static> Animatable<T> {
 /// so newly appearing content can enter from 0 instead of snapping. The
 /// building block for enter transitions (`Crossfade`, `AnimatedVisibility`,
 /// morphing popups).
+#[track_caller]
 pub fn animate_float_as_state_with_initial(
     initial: f32,
     target: f32,
@@ -1097,9 +1113,11 @@ pub fn animate_float_as_state_with_initial(
     label: &str,
 ) -> State<f32> {
     let _ = label;
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(initial, runtime));
+        let anim: Owned<Animatable<f32>> =
+            composer.remember_at(caller, || Animatable::new(initial, runtime));
         anim.update(|animatable| {
             let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
             let is_new_animation = animatable.animation_type() != animation;
@@ -1112,11 +1130,14 @@ pub fn animate_float_as_state_with_initial(
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn animateFloatAsState(target: f32, animation: AnimationType, label: &str) -> State<f32> {
     let _ = label;
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<f32>> = composer.remember(|| Animatable::new(target, runtime));
+        let anim: Owned<Animatable<f32>> =
+            composer.remember_at(caller, || Animatable::new(target, runtime));
         anim.update(|animatable| {
             let is_new_target = (animatable.target() - target).abs() > f32::EPSILON;
             let is_new_animation = animatable.animation_type() != animation;

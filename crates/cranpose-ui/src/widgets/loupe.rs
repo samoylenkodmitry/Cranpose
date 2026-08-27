@@ -29,11 +29,11 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{spring, Animatable, AnimationSpec, AnimationType, Easing};
+use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing, spring};
 use cranpose_core::{remember, with_current_composer};
 use cranpose_ui_graphics::{
-    liquid_loupe_effect, GraphicsLayer, LayerShape, LiquidLoupeSpec, Point, Rect,
-    RoundedCornerShape, Size,
+    GraphicsLayer, LayerShape, LiquidLoupeSpec, Point, Rect, RoundedCornerShape, Size,
+    liquid_loupe_effect,
 };
 
 use crate::{

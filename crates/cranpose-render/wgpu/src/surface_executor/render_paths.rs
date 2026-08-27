@@ -3,10 +3,10 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use cranpose_core::{collections::map::HashMap, NodeId};
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::union_rect,
-    graph::{quad_bounds, CachePolicy, ProjectiveTransform},
+    graph::{CachePolicy, ProjectiveTransform, quad_bounds},
     raster_cache::{LayerRasterCacheKey, ScaleBucket},
 };
 use cranpose_ui::text::LinkKey;
@@ -30,13 +30,13 @@ use crate::{
         CompositeBatchItem, CompositeSampleMode, ProjectiveSurfaceComposite, RoundedCompositeMask,
         ShaderCompositeBatchItem,
     },
-    layer_events::{collect_effect_ranges, collect_layer_events, LayerEventKind},
+    layer_events::{LayerEventKind, collect_effect_ranges, collect_layer_events},
     layer_surface_cache::{MAX_LAYER_SURFACE_CACHE_BYTES, MAX_SCENE_RANGE_CACHE_ENTRY_BYTES},
     normalized_scene::{
+        ChildLayerComposite, CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
         build_scene_window, collected_layer_bounds, filtered_effect_layer_index,
         motion_stable_capture_bounds_from_parts, resolved_child_surface_composite,
         resolved_layer_surface_rect_from_parts, translate_quad, visible_draw_rect,
-        ChildLayerComposite, CollectedLayer, LoweredChildSource, SceneWindowSource, TranslateBy,
     },
     offscreen::OffscreenTarget,
     render::{has_backdrop_layer_in_range, scissor_rect_for_rect},
@@ -45,10 +45,10 @@ use crate::{
         SceneBrush, ShadowDraw, SnapAnchor, TextDraw,
     },
     surface_plan::{
-        composite_sample_mode_for_effect_layer, composite_sample_mode_for_requirements,
-        effect_layer_minimum_scale, effect_layer_target_scale, effective_surface_requirements,
-        layer_surface_target_scale, LayerSurfaceRenderOptions, LayerSurfaceRequest,
-        TranslatedContentAxes, TranslationRenderContext,
+        LayerSurfaceRenderOptions, LayerSurfaceRequest, TranslatedContentAxes,
+        TranslationRenderContext, composite_sample_mode_for_effect_layer,
+        composite_sample_mode_for_requirements, effect_layer_minimum_scale,
+        effect_layer_target_scale, effective_surface_requirements, layer_surface_target_scale,
     },
     surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
 };
@@ -79,7 +79,9 @@ fn record_layer_cache_miss<B: SurfaceExecutionBackend>(
 
 fn direct_scene_range_cache_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var_os("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE").is_none())
+    *ENABLED.get_or_init(|| {
+        crate::debug_toggles::debug_toggle("CRANPOSE_DISABLE_DIRECT_SCENE_RANGE_CACHE").is_none()
+    })
 }
 
 fn direct_scene_range_cache_enable_all() -> bool {
@@ -89,8 +91,10 @@ fn direct_scene_range_cache_enable_all() -> bool {
 
 fn direct_scene_range_coalesce_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ENABLED
-        .get_or_init(|| std::env::var("CRANPOSE_DIRECT_SCENE_RANGE_COALESCE").as_deref() != Ok("0"))
+    *ENABLED.get_or_init(|| {
+        crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_SCENE_RANGE_COALESCE").as_deref()
+            != Some("0")
+    })
 }
 
 /// Merges consecutive direct-rendered cache chunks into one flush range.
@@ -150,8 +154,7 @@ fn direct_scene_range_hash_diag_enabled() -> bool {
 fn direct_scene_range_hash_detail_z() -> Option<usize> {
     static DETAIL_Z: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
     *DETAIL_Z.get_or_init(|| {
-        std::env::var("CRANPOSE_DIRECT_SCENE_RANGE_HASH_DETAIL_Z")
-            .ok()
+        crate::debug_toggles::debug_toggle("CRANPOSE_DIRECT_SCENE_RANGE_HASH_DETAIL_Z")
             .and_then(|value| value.parse().ok())
     })
 }
@@ -182,11 +185,11 @@ struct RenderStringHashEntry {
 impl RenderStringHashCache {
     fn get_or_insert(&mut self, text: &std::sync::Arc<cranpose_ui::text::RenderString>) -> u64 {
         let key = std::sync::Arc::as_ptr(text) as usize;
-        if let Some(entry) = self.entries.get(&key) {
-            if entry.text.strong_count() > 0 && entry.text.as_ptr() == std::sync::Arc::as_ptr(text)
-            {
-                return entry.hash;
-            }
+        if let Some(entry) = self.entries.get(&key)
+            && entry.text.strong_count() > 0
+            && entry.text.as_ptr() == std::sync::Arc::as_ptr(text)
+        {
+            return entry.hash;
         }
 
         let hash = compute_render_string_hash(text);
@@ -4359,24 +4362,24 @@ fn render_direct_scene_range_with_pending_composites<B: SurfaceExecutionBackend>
         }
         direct_run.absorb(cursor_z);
         cursor_z = chunk_end;
-        if !direct_scene_range_coalesce_enabled() {
-            if let Some((run_start, run_end)) = direct_run.flush_at(cursor_z) {
-                render_non_effect_range_with_pending_composites(
-                    backend,
-                    target_view,
-                    scene,
-                    run_start,
-                    run_end,
-                    width,
-                    height,
-                    root_scale,
-                    pending_composites,
-                    pending_composite_load_op,
-                    pending_shader_composites,
-                    pending_shader_load_op,
-                    next_load_op,
-                )?;
-            }
+        if !direct_scene_range_coalesce_enabled()
+            && let Some((run_start, run_end)) = direct_run.flush_at(cursor_z)
+        {
+            render_non_effect_range_with_pending_composites(
+                backend,
+                target_view,
+                scene,
+                run_start,
+                run_end,
+                width,
+                height,
+                root_scale,
+                pending_composites,
+                pending_composite_load_op,
+                pending_shader_composites,
+                pending_shader_load_op,
+                next_load_op,
+            )?;
         }
     }
     if let Some((run_start, run_end)) = direct_run.flush_at(z_end) {
@@ -4987,26 +4990,25 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
             cache_candidate = None;
         }
         let max_dim = backend.max_texture_dim() as f32;
-        if effective_requirements.contains(SurfaceRequirement::MotionStableCapture) {
-            if let Some(visible_bounds) = collected_layer_bounds(&local_scene, &child_layers, true)
+        if effective_requirements.contains(SurfaceRequirement::MotionStableCapture)
+            && let Some(visible_bounds) = collected_layer_bounds(&local_scene, &child_layers, true)
                 .and_then(|bounds| visible_draw_rect(bounds, capture_clip))
-            {
-                let required_rect = resolved_layer_surface_rect_from_parts(
-                    child.local_bounds,
-                    child.has_effect,
-                    child.backdrop.is_some(),
-                    Some(visible_bounds),
-                );
-                let desired_scale =
-                    quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
-                surface_rect = fit_capture_rect_to_scale_budget_for_axes(
-                    surface_rect,
-                    required_rect,
-                    desired_scale,
-                    backend.max_texture_dim(),
-                    effective_translated_content_axes,
-                );
-            }
+        {
+            let required_rect = resolved_layer_surface_rect_from_parts(
+                child.local_bounds,
+                child.has_effect,
+                child.backdrop.is_some(),
+                Some(visible_bounds),
+            );
+            let desired_scale =
+                quantize_motion_stable_target_scale(target_scale, composite_sample_mode);
+            surface_rect = fit_capture_rect_to_scale_budget_for_axes(
+                surface_rect,
+                required_rect,
+                desired_scale,
+                backend.max_texture_dim(),
+                effective_translated_content_axes,
+            );
         }
         let target_scale = target_scale
             .min(max_dim / surface_rect.width.max(1.0))
@@ -5162,94 +5164,78 @@ fn render_layer_surface_uncached<B: SurfaceExecutionBackend>(
         let backdrop = child.backdrop.clone();
         let rounded_clip = child.rounded_clip;
 
-        if let Some(effect) = deferred_effect.as_ref() {
-            if can_materialize_cached_effect(effect, backdrop.as_ref())
-                && offscreen_byte_size(width, height) <= MAX_LAYER_SURFACE_CACHE_BYTES
+        if let Some(effect) = deferred_effect.as_ref()
+            && can_materialize_cached_effect(effect, backdrop.as_ref())
+            && offscreen_byte_size(width, height) <= MAX_LAYER_SURFACE_CACHE_BYTES
+            && let Some((cache_key, logical_rect)) = cache_candidate.take()
+        {
+            let effect_target = backend.acquire_retained_surface(width, height);
+            materialize_render_effect_to_target(
+                backend,
+                target.target(),
+                effect,
+                &effect_target,
+                content_effect_pixel_rect(Some(child.local_bounds), logical_rect, width, height),
+                composite_sample_mode,
+            )?;
+            backend.release_layer_surface_target(target);
+            let cached_target =
+                backend.insert_cached_layer_surface(cache_key, effect_target, logical_rect);
+            return Ok(LayerSurface {
+                target: LayerSurfaceTexture::Cached(cached_target),
+                logical_rect,
+                composite_alpha,
+                blend_mode,
+                rounded_clip,
+                backdrop,
+                deferred_effect: None,
+                effect_content_rect: None,
+                sample_mode: composite_sample_mode,
+            });
+        }
+
+        if rounded_clip.is_some()
+            && let Some(effect) = deferred_effect.take()
+        {
+            let effect_target = backend.acquire_frame_surface(width, height);
+            let materialized = materialize_render_effect_to_target(
+                backend,
+                target.target(),
+                &effect,
+                &effect_target,
+                content_effect_pixel_rect(Some(child.local_bounds), surface_rect, width, height),
+                composite_sample_mode,
+            );
+            if let Err(error) = materialized {
+                backend.release_frame_surface(effect_target);
+                return Err(error);
+            }
+            backend.release_layer_surface_target(target);
+            target = LayerSurfaceTexture::Owned(effect_target);
+        }
+
+        if deferred_effect.is_none()
+            && let Some((cache_key, logical_rect)) = cache_candidate
+            && let LayerSurfaceTexture::Owned(owned_target) = target
+        {
+            if offscreen_byte_size(owned_target.width, owned_target.height)
+                <= MAX_LAYER_SURFACE_CACHE_BYTES
             {
-                if let Some((cache_key, logical_rect)) = cache_candidate.take() {
-                    let effect_target = backend.acquire_retained_surface(width, height);
-                    materialize_render_effect_to_target(
-                        backend,
-                        target.target(),
-                        effect,
-                        &effect_target,
-                        content_effect_pixel_rect(
-                            Some(child.local_bounds),
-                            logical_rect,
-                            width,
-                            height,
-                        ),
-                        composite_sample_mode,
-                    )?;
-                    backend.release_layer_surface_target(target);
-                    let cached_target =
-                        backend.insert_cached_layer_surface(cache_key, effect_target, logical_rect);
-                    return Ok(LayerSurface {
-                        target: LayerSurfaceTexture::Cached(cached_target),
-                        logical_rect,
-                        composite_alpha,
-                        blend_mode,
-                        rounded_clip,
-                        backdrop,
-                        deferred_effect: None,
-                        effect_content_rect: None,
-                        sample_mode: composite_sample_mode,
-                    });
-                }
+                let cached_target =
+                    backend.insert_cached_layer_surface(cache_key, owned_target, logical_rect);
+                return Ok(LayerSurface {
+                    target: LayerSurfaceTexture::Cached(cached_target),
+                    logical_rect,
+                    composite_alpha,
+                    blend_mode,
+                    rounded_clip,
+                    backdrop,
+                    deferred_effect: None,
+                    effect_content_rect: None,
+                    sample_mode: composite_sample_mode,
+                });
             }
-        }
-
-        if rounded_clip.is_some() {
-            if let Some(effect) = deferred_effect.take() {
-                let effect_target = backend.acquire_frame_surface(width, height);
-                let materialized = materialize_render_effect_to_target(
-                    backend,
-                    target.target(),
-                    &effect,
-                    &effect_target,
-                    content_effect_pixel_rect(
-                        Some(child.local_bounds),
-                        surface_rect,
-                        width,
-                        height,
-                    ),
-                    composite_sample_mode,
-                );
-                if let Err(error) = materialized {
-                    backend.release_frame_surface(effect_target);
-                    return Err(error);
-                }
-                backend.release_layer_surface_target(target);
-                target = LayerSurfaceTexture::Owned(effect_target);
-            }
-        }
-
-        if deferred_effect.is_none() {
-            if let Some((cache_key, logical_rect)) = cache_candidate {
-                if let LayerSurfaceTexture::Owned(owned_target) = target {
-                    if offscreen_byte_size(owned_target.width, owned_target.height)
-                        <= MAX_LAYER_SURFACE_CACHE_BYTES
-                    {
-                        let cached_target = backend.insert_cached_layer_surface(
-                            cache_key,
-                            owned_target,
-                            logical_rect,
-                        );
-                        return Ok(LayerSurface {
-                            target: LayerSurfaceTexture::Cached(cached_target),
-                            logical_rect,
-                            composite_alpha,
-                            blend_mode,
-                            rounded_clip,
-                            backdrop,
-                            deferred_effect: None,
-                            effect_content_rect: None,
-                            sample_mode: composite_sample_mode,
-                        });
-                    }
-                    target = LayerSurfaceTexture::Owned(owned_target);
-                }
-            }
+            target = LayerSurfaceTexture::Owned(owned_target);
         }
 
         Ok(LayerSurface {
@@ -6139,14 +6125,14 @@ fn composite_layer_surface_to_view<B: SurfaceExecutionBackend>(
 mod tests {
     use std::sync::Arc;
 
-    use cranpose_core::{collections::map::HashMap, NodeId};
+    use cranpose_core::{NodeId, collections::map::HashMap};
     use cranpose_render_common::graph::{
         DrawPrimitiveNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
         ProjectiveTransform, RenderNode, TextPrimitiveNode,
     };
     use cranpose_ui::{
-        text::{AnnotatedString, TextStyle},
         TextLayoutOptions,
+        text::{AnnotatedString, TextStyle},
     };
     use cranpose_ui_graphics::{
         BlendMode, Brush, Color, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect,
@@ -6154,7 +6140,10 @@ mod tests {
     };
 
     use super::{
-        anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
+        BackdropPrefixChildContribution, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES,
+        DirectChunkRunCoalescer, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        SceneBrush, anchored_composite_dest_quad, axis_aligned_backdrop_copy_region,
         axis_aligned_backdrop_snapshot_copy_plan, backdrop_effect_cache_key,
         backdrop_scene_prefix_hash, backdrop_underlay_is_covered_by_local_content,
         child_composite_visible, composite_dest_viewport, dest_quad_intersects_rect,
@@ -6166,9 +6155,7 @@ mod tests {
         rects_intersect, render_string_scene_hash, retained_render_effect_hash,
         rounded_fill_covers_rect, scene_backdrop_input_hashes, snapped_backdrop_geometry,
         surface_target_size, underlay_fill_scissor, underlay_sample_rect,
-        visible_backdrop_capture_rect, BackdropPrefixChildContribution, DirectChunkRunCoalescer,
-        SceneBrush, DEFAULT_DIRECT_SCENE_RANGE_CACHE_BYTES, MAX_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
-        MAX_MOTION_SENSITIVE_DIRECT_SCENE_CACHE_DRAW_BYTES, MIN_DIRECT_SCENE_RANGE_CACHE_DRAW_OPS,
+        visible_backdrop_capture_rect,
     };
     use crate::{
         effect_renderer::CompositeSampleMode,
@@ -6176,7 +6163,7 @@ mod tests {
         scene::{
             BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, ImageDraw, SnapAnchor,
         },
-        surface_plan::{layer_surface_requirements_cached, TranslationRenderContext},
+        surface_plan::{TranslationRenderContext, layer_surface_requirements_cached},
         surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
     };
 
@@ -7103,33 +7090,39 @@ mod tests {
             width: large_side,
             height: large_side + 120.0,
         };
-        assert!(direct_scene_range_cache_key(
-            &scene,
-            0,
-            motion_z,
-            viewport,
-            (large_side as u32, large_side as u32),
-            root_scale,
-        )
-        .is_some());
-        assert!(direct_scene_range_cache_key(
-            &scene,
-            motion_z,
-            suffix_start,
-            viewport,
-            (large_side as u32, large_side as u32),
-            root_scale,
-        )
-        .is_some());
-        assert!(direct_scene_range_cache_key(
-            &scene,
-            suffix_start,
-            scene.next_z,
-            viewport,
-            (large_side as u32, large_side as u32),
-            root_scale,
-        )
-        .is_some());
+        assert!(
+            direct_scene_range_cache_key(
+                &scene,
+                0,
+                motion_z,
+                viewport,
+                (large_side as u32, large_side as u32),
+                root_scale,
+            )
+            .is_some()
+        );
+        assert!(
+            direct_scene_range_cache_key(
+                &scene,
+                motion_z,
+                suffix_start,
+                viewport,
+                (large_side as u32, large_side as u32),
+                root_scale,
+            )
+            .is_some()
+        );
+        assert!(
+            direct_scene_range_cache_key(
+                &scene,
+                suffix_start,
+                scene.next_z,
+                viewport,
+                (large_side as u32, large_side as u32),
+                root_scale,
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -7983,10 +7976,12 @@ mod tests {
         );
 
         let base_lowered = lower_test_layer(&base);
-        assert!(base_lowered
-            .surface_requirements
-            .surface_requirements
-            .contains(SurfaceRequirement::MotionStableCapture));
+        assert!(
+            base_lowered
+                .surface_requirements
+                .surface_requirements
+                .contains(SurfaceRequirement::MotionStableCapture)
+        );
 
         let moved_lowered = lower_test_layer(&moved);
         let base_key = layer_source_cache_key(

@@ -2,7 +2,13 @@ use super::{
     super::{DetachedSubtree, SlotPassMode, SlotTable},
     frames::{GroupFrame, RootFrame},
 };
-use crate::{collections::map::HashMap, AnchorId};
+use crate::{AnchorId, collections::map::HashMap};
+
+pub(in crate::slot) struct BranchFoldEntry {
+    key: crate::Key,
+    prev_fold: Option<crate::Key>,
+    live: bool,
+}
 
 #[derive(Default)]
 pub(crate) struct SlotWriteSessionState {
@@ -11,6 +17,9 @@ pub(crate) struct SlotWriteSessionState {
     frame_pool: Vec<GroupFrame>,
     payload_location_refreshes: HashMap<AnchorId, usize>,
     rejected_restore_subtrees: Vec<DetachedSubtree>,
+    branch_fold_entries: Vec<BranchFoldEntry>,
+    branch_fold: Option<crate::Key>,
+    dead_branch_folds: usize,
     pub(in crate::slot) removed_payload_count: usize,
     pub(in crate::slot) removed_node_count: usize,
     pub(in crate::slot) removed_group_count: usize,
@@ -36,6 +45,15 @@ impl SlotWriteSessionState {
                 self.rejected_restore_subtrees.len()
             );
             self.rejected_restore_subtrees.clear();
+        }
+        if !self.branch_fold_entries.is_empty() {
+            log::error!(
+                "slot writer reset discarded {} branch folds whose guards never closed",
+                self.branch_fold_entries.len()
+            );
+            self.branch_fold_entries.clear();
+            self.branch_fold = None;
+            self.dead_branch_folds = 0;
         }
         self.removed_payload_count = 0;
         self.removed_node_count = 0;
@@ -136,6 +154,87 @@ impl SlotWriteSessionState {
         self.request_payload_storage_compaction |= payload_pressure;
     }
 
+    pub(crate) fn push_branch_fold(&mut self, key: crate::Key) -> usize {
+        let prev_fold = self.branch_fold;
+        if let Some(fold) = prev_fold {
+            self.branch_fold = Some((fold ^ key).wrapping_mul(0x0000_0100_0000_01b3));
+        }
+        self.branch_fold_entries.push(BranchFoldEntry {
+            key,
+            prev_fold,
+            live: true,
+        });
+        self.branch_fold_entries.len() - 1
+    }
+
+    fn fold_watermark(&self) -> usize {
+        self.group_stack
+            .last()
+            .map(|frame| frame.fold_watermark)
+            .unwrap_or(0)
+            .min(self.branch_fold_entries.len())
+    }
+
+    pub(crate) fn close_branch_fold(&mut self, token: usize) {
+        if token + 1 == self.branch_fold_entries.len() {
+            let entry = self
+                .branch_fold_entries
+                .pop()
+                .expect("length checked above");
+            self.branch_fold = if self.dead_branch_folds == 0 {
+                entry.prev_fold
+            } else {
+                None
+            };
+            while self
+                .branch_fold_entries
+                .last()
+                .is_some_and(|entry| !entry.live)
+            {
+                self.branch_fold_entries.pop();
+                self.dead_branch_folds -= 1;
+                self.branch_fold = None;
+            }
+            return;
+        }
+        let Some(entry) = self.branch_fold_entries.get_mut(token) else {
+            log::error!(
+                "branch fold {token} closed past depth {}",
+                self.branch_fold_entries.len()
+            );
+            return;
+        };
+        if entry.live {
+            entry.live = false;
+            self.dead_branch_folds += 1;
+        }
+        self.branch_fold = None;
+    }
+
+    pub(in crate::slot) fn branch_fold(&mut self) -> crate::Key {
+        if let Some(fold) = self.branch_fold {
+            return fold;
+        }
+        let watermark = self.fold_watermark();
+        let mut fold = super::super::BRANCH_PATH_ROOT;
+        for entry in &self.branch_fold_entries[watermark..] {
+            if entry.live {
+                fold ^= entry.key;
+                fold = fold.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        self.branch_fold = Some(fold);
+        fold
+    }
+
+    pub(in crate::slot) fn mix_branch_fold(&mut self, key: crate::Key) -> crate::Key {
+        let fold = self.branch_fold();
+        if fold == super::super::BRANCH_PATH_ROOT {
+            return key;
+        }
+        (fold ^ key).wrapping_mul(0x0000_0100_0000_01b3)
+    }
+
     pub(in crate::slot) fn current_parent_anchor(&self) -> AnchorId {
         self.group_stack
             .last()
@@ -168,12 +267,15 @@ impl SlotWriteSessionState {
     ) {
         let mut frame = self.frame_pool.pop().unwrap_or_default();
         frame.reset(anchor, next_child_index, old_payload_len, old_node_len);
+        frame.fold_watermark = self.branch_fold_entries.len();
         self.group_stack.push(frame);
+        self.branch_fold = None;
     }
 
     pub(in crate::slot) fn recycle_group_frame(&mut self, mut frame: GroupFrame) {
         frame.reset_for_pool();
         self.frame_pool.push(frame);
+        self.branch_fold = None;
     }
 }
 
@@ -296,8 +398,12 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(key, None);
-            let _ = session.value_slot_with_kind(crate::slot::PayloadKind::Internal, || 17_i32);
-            session.record_node_with_parent(31, 1, None);
+            let _ = session.value_slot_with_kind(
+                crate::slot::PayloadKind::Internal,
+                crate::slot::BRANCH_PATH_ROOT,
+                || 17_i32,
+            );
+            session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
         }
 
         assert_eq!(state.group_stack[0].old_payload_len, 0);
@@ -355,7 +461,7 @@ mod tests {
             let mut session = table.write_session(&mut lifecycle, &mut state);
             let key = session.preview_group_key(GroupKeySeed::unkeyed(10));
             let _ = session.begin_group(key, None);
-            session.record_node_with_parent(31, 1, None);
+            session.record_node_with_parent(31, 1, None, crate::slot::BRANCH_PATH_ROOT);
             let _ = session.finish_group_body();
             session.end_group();
         }

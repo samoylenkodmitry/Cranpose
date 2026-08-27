@@ -7,7 +7,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui::{composable, Point, Size};
+use cranpose_ui::{Point, Size, composable};
 use thiserror::Error;
 
 const SIZE_EPSILON: f32 = 0.5;
@@ -240,6 +240,7 @@ impl AndroidHostWindowState {
 /// overlay surface and can move it through `WindowManager.updateViewLayout`.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWindowState {
     let requested = Size::new(width, height);
     let (initial_requested, initial_status, initial_revision) =
@@ -256,6 +257,7 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
             ),
         };
 
+    let caller = cranpose_core::caller_location_key();
     let state = AndroidHostWindowState {
         requested_size: cranpose_core::rememberMutableStateOf(move || initial_requested),
         requested_position: cranpose_core::rememberMutableStateOf(|| Point::ZERO),
@@ -274,9 +276,13 @@ pub fn rememberAndroidHostWindowState(width: f32, height: f32) -> AndroidHostWin
     }
     {
         let owner = Rc::clone(&owner);
-        cranpose_core::DisposableEffect!((), move |scope| {
-            scope.on_dispose(move || unregister_android_host_window_state(state, owner))
-        });
+        cranpose_core::__disposable_effect_impl(
+            caller ^ cranpose_core::location_key(file!(), line!(), column!()),
+            (),
+            move |scope| {
+                scope.on_dispose(move || unregister_android_host_window_state(state, owner))
+            },
+        );
     }
 
     state

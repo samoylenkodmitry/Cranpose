@@ -5,8 +5,8 @@
 use cranpose_core::rememberKeyed;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    widgets::{Box, BoxSpec},
     Modifier, Size,
+    widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{Brush, Color, VectorPath};
 

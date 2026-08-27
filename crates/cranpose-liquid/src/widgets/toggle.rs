@@ -7,14 +7,14 @@
 //! end of the settle. The thumb is swipable; a tap flips.
 
 use cranpose_animation::{
-    animateColorAsState, animateFloatAsState, spring, AnimationSpec, AnimationType, Easing,
+    AnimationSpec, AnimationType, Easing, animateColorAsState, animateFloatAsState, spring,
 };
 use cranpose_core::{mutableStateOf, remember};
 use cranpose_macros::composable;
-use cranpose_services::{default_haptics, HapticFeedback};
+use cranpose_services::{HapticFeedback, default_haptics};
 use cranpose_ui::{
-    widgets::{Box, BoxSpec},
     Modifier, PointerEventKind, PointerInputScope, Size,
+    widgets::{Box, BoxSpec},
 };
 use cranpose_ui_graphics::{Brush, CornerRadii, GraphicsLayer};
 
@@ -184,11 +184,7 @@ fn track_well_brush(track: cranpose_ui_graphics::Color) -> Brush {
 /// the fluid motion axis is unusable here because a slow drag stays under
 /// its direction threshold and holds whatever the previous flight left.
 fn lens_press_travel(checked: bool) -> f32 {
-    if checked {
-        -1.0
-    } else {
-        1.0
-    }
+    if checked { -1.0 } else { 1.0 }
 }
 
 fn lens_ride_x(drag_progress: Option<f32>, thumb_x: f32) -> f32 {
@@ -338,10 +334,10 @@ pub fn LiquidToggle(modifier: Modifier, checked: bool, on_change: impl Fn(bool) 
                                             - THUMB_WIDTH * 0.5)
                                             / (TRACK_WIDTH - 2.0 * THUMB_MARGIN - THUMB_WIDTH))
                                             .clamp(0.0, 1.0);
-                                        if let Some(previous) = drag_progress.get() {
-                                            if (progress - previous).abs() > 0.005 {
-                                                travel_dir.set((progress - previous).signum());
-                                            }
+                                        if let Some(previous) = drag_progress.get()
+                                            && (progress - previous).abs() > 0.005
+                                        {
+                                            travel_dir.set((progress - previous).signum());
                                         }
                                         drag_progress.set(Some(progress));
                                         lens_axis.move_to(

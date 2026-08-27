@@ -2,13 +2,13 @@ use std::cmp::Ordering;
 
 #[cfg(any(test, debug_assertions))]
 use crate::slot::{AnchorState, PayloadAnchorLifecycle, SlotInvariantError};
-use crate::{
-    collections::map::HashMap,
-    slot::{DetachedSubtree, GroupKey, NodeLifecycle},
-    ScopeId,
-};
 #[cfg(any(test, debug_assertions))]
 use crate::{AnchorId, SlotTable};
+use crate::{
+    ScopeId,
+    collections::map::HashMap,
+    slot::{DetachedSubtree, GroupKey, NodeLifecycle},
+};
 
 // Retained subtrees follow docs/SLOT_TABLE_LIFECYCLE.md: anchors stay detached,
 // scopes stay out of the active scope index, and nodes use RetainedDetached until
@@ -358,10 +358,10 @@ impl RetentionManager {
 
     #[cfg(any(test, debug_assertions))]
     pub(crate) fn debug_verify(&self, table: &SlotTable) {
-        if crate::slot_validation_diagnostics_enabled() {
-            if let Err(err) = self.validate(table) {
-                panic!("retention invariant violation: {err:?}");
-            }
+        if crate::slot_validation_diagnostics_enabled()
+            && let Err(err) = self.validate(table)
+        {
+            panic!("retention invariant violation: {err:?}");
         }
     }
 
@@ -412,10 +412,10 @@ impl RetentionManager {
             return None;
         }
 
-        if let Some(max_age_passes) = self.policy.budget.max_age_passes {
-            if let Some(key) = self.age_eviction_key(max_age_passes) {
-                return Some(key);
-            }
+        if let Some(max_age_passes) = self.policy.budget.max_age_passes
+            && let Some(key) = self.age_eviction_key(max_age_passes)
+        {
+            return Some(key);
         }
 
         let over_count = self

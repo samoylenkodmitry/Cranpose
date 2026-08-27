@@ -1,14 +1,14 @@
-use cranpose_core::{collections::map::HashMap, NodeId};
+use cranpose_core::{NodeId, collections::map::HashMap};
 use cranpose_render_common::{
     geometry::{expand_blurred_rect, union_rect},
     graph::{
-        quad_bounds, CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode,
-        PrimitivePhase, ProjectiveTransform, RenderNode,
+        CachePolicy, DrawRunNode, LayerNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase,
+        ProjectiveTransform, RenderNode, quad_bounds,
     },
-    layer_composition::{effective_layer_isolation, local_content_layer_for, LayerIsolation},
+    layer_composition::{LayerIsolation, effective_layer_isolation, local_content_layer_for},
     primitive_emit::{
-        arc_shape_params, rect_shape_params, resolve_clip, resolve_primitive_clip,
-        round_rect_shape_params, PrimitiveClipSpace, ShapeDrawParams,
+        PrimitiveClipSpace, ShapeDrawParams, arc_shape_params, rect_shape_params, resolve_clip,
+        resolve_primitive_clip, round_rect_shape_params,
     },
 };
 use cranpose_ui_graphics::{Brush, DrawPrimitive, GraphicsLayer, Point, Rect, RenderEffect};
@@ -18,8 +18,8 @@ use crate::pipeline::UiTextLayoutResolver;
 use crate::{
     effect_renderer::CompositeSampleMode,
     pipeline::{
-        emitted_scene_bounds, push_draw_primitive, push_layer_shadow, push_text_style_draws,
-        scene_emission_counts, SceneEmissionCounts, TextLayoutResolver,
+        SceneEmissionCounts, TextLayoutResolver, emitted_scene_bounds, push_draw_primitive,
+        push_layer_shadow, push_text_style_draws, scene_emission_counts,
     },
     scene::{
         BackdropLayer, CompositorScene, DrawOp, DrawOpKind, DrawShape, EffectLayer, ImageDraw,
@@ -29,10 +29,10 @@ use crate::{
         backend::LayerSurfaceRoundedClip, layer_source_uses_external_backdrop_underlay,
     },
     surface_plan::{
+        LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
         composite_sample_mode_for_requirements, effective_surface_requirements, layer_cache_key,
         layer_contains_descendant_backdrop, layer_needs_rigid_snap,
         layer_surface_requirements_cached, layer_surface_scale, translated_content_axes_for_layer,
-        LayerSurfaceRequirements, TranslatedContentAxes, TranslationRenderContext,
     },
     surface_requirements::{SurfaceRequirement, SurfaceRequirementSet},
 };
@@ -746,31 +746,31 @@ fn flush_translated_local_picture(
         return;
     };
     let z_end = scene.next_z;
-    if z_end > current.z_start {
-        if let Some(surface_rect) = emitted_scene_bounds(scene, current.counts) {
-            let surface_rect = match visible_draw_rect(surface_rect, clip) {
-                Some(visible_rect) => translated_local_capture_bounds(
-                    visible_rect,
-                    surface_rect,
-                    clip,
-                    current.stabilize_x,
-                    current.stabilize_y,
-                ),
-                None => return,
-            };
-            scene.push_effect_layer_with_requirements(
+    if z_end > current.z_start
+        && let Some(surface_rect) = emitted_scene_bounds(scene, current.counts)
+    {
+        let surface_rect = match visible_draw_rect(surface_rect, clip) {
+            Some(visible_rect) => translated_local_capture_bounds(
+                visible_rect,
                 surface_rect,
                 clip,
-                None,
-                cranpose_ui_graphics::BlendMode::SrcOver,
-                1.0,
-                current.z_start,
-                z_end,
-                SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
-            );
-            if let Some(layer) = scene.effect_layers.last_mut() {
-                layer.snap_anchor = snap_anchor;
-            }
+                current.stabilize_x,
+                current.stabilize_y,
+            ),
+            None => return,
+        };
+        scene.push_effect_layer_with_requirements(
+            surface_rect,
+            clip,
+            None,
+            cranpose_ui_graphics::BlendMode::SrcOver,
+            1.0,
+            current.z_start,
+            z_end,
+            SurfaceRequirementSet::default().with(SurfaceRequirement::MotionStableCapture),
+        );
+        if let Some(layer) = scene.effect_layers.last_mut() {
+            layer.snap_anchor = snap_anchor;
         }
     }
     *state = Some(TranslatedLocalPictureState {
@@ -1017,8 +1017,8 @@ fn flush_shape_run_parallel(
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::shape_replay::{
-    context_fingerprint, layer_supports_replay, rect_contains, SegmentTransform, MAX_RETAINED_OPS,
-    SHAPE_REPLAY,
+    MAX_RETAINED_OPS, SHAPE_REPLAY, SegmentTransform, context_fingerprint, layer_supports_replay,
+    rect_contains,
 };
 
 /// Feeds one [`DrawRunNode`]'s primitives through the shape run, spilling any
@@ -1030,10 +1030,10 @@ fn collect_draw_run<'a>(
     context: &LocalPrimitiveContext<'_>,
 ) {
     #[cfg(not(target_arch = "wasm32"))]
-    if let (Some(frame), Some(command)) = (run.replay.as_deref(), run.command) {
-        if try_command_feed(local_scene, run, frame, command, shape_run, context) {
-            return;
-        }
+    if let (Some(frame), Some(command)) = (run.replay.as_deref(), run.command)
+        && try_command_feed(local_scene, run, frame, command, shape_run, context)
+    {
+        return;
     }
     for primitive in run.primitives.iter() {
         if let Some(entry) = ShapeRunEntry::new(primitive, None) {
@@ -1685,11 +1685,11 @@ fn collect_layer_contents_into(
         match child {
             RenderNode::Primitive(primitive) => match primitive.phase {
                 PrimitivePhase::BeforeChildren => {
-                    if let PrimitiveNode::Draw(draw) = &primitive.node {
-                        if let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip) {
-                            shape_run.push(entry);
-                            continue;
-                        }
+                    if let PrimitiveNode::Draw(draw) = &primitive.node
+                        && let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip)
+                    {
+                        shape_run.push(entry);
+                        continue;
                     }
                     flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
                     push_local_primitive(
@@ -1713,55 +1713,55 @@ fn collect_layer_contents_into(
                     child_layer.as_ref(),
                     layer_surface_requirements_cache,
                 );
-                if !child_requirements.has_isolating_requirement() {
-                    if let Some(translation) = child_requirements.direct_translation {
-                        let child_offset = Point::new(
-                            layer_offset.x + translation.x,
-                            layer_offset.y + translation.y,
-                        );
-                        let child_bounds = child_layer
-                            .local_bounds
-                            .translate(child_offset.x, child_offset.y);
-                        let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
-                            if effective_translated_content_context {
-                                let child_local_layer =
-                                    local_content_layer_for(&child_layer.graphics_layer);
-                                rigid_snap_anchor(child_bounds, &child_local_layer)
-                            } else {
-                                None
-                            }
-                        });
-                        let child_shadow_clip = resolve_clip(
-                            visual_clip,
-                            child_layer
-                                .shadow_clip
-                                .map(|clip| clip.translate(child_offset.x, child_offset.y)),
-                        );
-                        push_layer_shadow(
-                            local_scene,
-                            &child_layer.graphics_layer,
-                            child_bounds,
-                            child_bounds,
-                            child_shadow_clip,
-                        );
-                        collect_layer_contents_into(
-                            child_layer.as_ref(),
-                            text_layout,
-                            visual_clip,
-                            child_offset,
-                            child_translated_snap_anchor,
-                            child_translation_context,
-                            // The flat child list still belongs to the same
-                            // surface layer, so its render request context is
-                            // unchanged.
-                            child_surface_ctx,
-                            local_scene,
-                            child_layers,
-                            layer_surface_rect_cache,
-                            layer_surface_requirements_cache,
-                        );
-                        continue;
-                    }
+                if !child_requirements.has_isolating_requirement()
+                    && let Some(translation) = child_requirements.direct_translation
+                {
+                    let child_offset = Point::new(
+                        layer_offset.x + translation.x,
+                        layer_offset.y + translation.y,
+                    );
+                    let child_bounds = child_layer
+                        .local_bounds
+                        .translate(child_offset.x, child_offset.y);
+                    let child_translated_snap_anchor = translated_snap_anchor.or_else(|| {
+                        if effective_translated_content_context {
+                            let child_local_layer =
+                                local_content_layer_for(&child_layer.graphics_layer);
+                            rigid_snap_anchor(child_bounds, &child_local_layer)
+                        } else {
+                            None
+                        }
+                    });
+                    let child_shadow_clip = resolve_clip(
+                        visual_clip,
+                        child_layer
+                            .shadow_clip
+                            .map(|clip| clip.translate(child_offset.x, child_offset.y)),
+                    );
+                    push_layer_shadow(
+                        local_scene,
+                        &child_layer.graphics_layer,
+                        child_bounds,
+                        child_bounds,
+                        child_shadow_clip,
+                    );
+                    collect_layer_contents_into(
+                        child_layer.as_ref(),
+                        text_layout,
+                        visual_clip,
+                        child_offset,
+                        child_translated_snap_anchor,
+                        child_translation_context,
+                        // The flat child list still belongs to the same
+                        // surface layer, so its render request context is
+                        // unchanged.
+                        child_surface_ctx,
+                        local_scene,
+                        child_layers,
+                        layer_surface_rect_cache,
+                        layer_surface_requirements_cache,
+                    );
+                    continue;
                 }
                 flush_translated_local_picture(
                     local_scene,
@@ -2003,11 +2003,11 @@ fn collect_layer_contents_into(
     for child in deferred_draws {
         match child {
             RenderNode::Primitive(primitive) => {
-                if let PrimitiveNode::Draw(draw) = &primitive.node {
-                    if let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip) {
-                        shape_run.push(entry);
-                        continue;
-                    }
+                if let PrimitiveNode::Draw(draw) = &primitive.node
+                    && let Some(entry) = ShapeRunEntry::new(&draw.primitive, draw.clip)
+                {
+                    shape_run.push(entry);
+                    continue;
                 }
                 flush_shape_run(local_scene, &mut shape_run, &local_primitive_context);
                 push_local_primitive(

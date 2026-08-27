@@ -207,10 +207,10 @@ pub trait SemanticElementLike {
 /// * `E`: A type implementing `SemanticElementLike` (e.g. `SemanticElement`)
 pub fn find_text_center<E: SemanticElementLike>(elements: &[E], text: &str) -> Option<(f32, f32)> {
     fn search<E: SemanticElementLike>(elem: &E, text: &str) -> Option<(f32, f32)> {
-        if let Some(t) = elem.text() {
-            if t.contains(text) {
-                return Some(elem.bounds().center());
-            }
+        if let Some(t) = elem.text()
+            && t.contains(text)
+        {
+            return Some(elem.bounds().center());
         }
         for child in elem.children() {
             if let Some(pos) = search(child, text) {
@@ -231,10 +231,10 @@ pub fn find_text_center<E: SemanticElementLike>(elements: &[E], text: &str) -> O
 /// Find an element by text content and return full bounds.
 pub fn find_text_bounds<E: SemanticElementLike>(elements: &[E], text: &str) -> Option<Bounds> {
     fn search<E: SemanticElementLike>(elem: &E, text: &str) -> Option<Bounds> {
-        if let Some(t) = elem.text() {
-            if t.contains(text) {
-                return Some(elem.bounds());
-            }
+        if let Some(t) = elem.text()
+            && t.contains(text)
+        {
+            return Some(elem.bounds());
         }
         for child in elem.children() {
             if let Some(bounds) = search(child, text) {
@@ -256,10 +256,10 @@ pub fn find_text_bounds<E: SemanticElementLike>(elements: &[E], text: &str) -> O
 /// Returns the bounds (x, y, width, height) if found.
 pub fn find_button_bounds<E: SemanticElementLike>(elements: &[E], text: &str) -> Option<Bounds> {
     fn has_text<E: SemanticElementLike>(elem: &E, text: &str) -> bool {
-        if let Some(t) = elem.text() {
-            if t.contains(text) {
-                return true;
-            }
+        if let Some(t) = elem.text()
+            && t.contains(text)
+        {
+            return true;
         }
         elem.children().iter().any(|c| has_text(c, text))
     }

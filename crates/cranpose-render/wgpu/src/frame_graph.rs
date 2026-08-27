@@ -617,8 +617,7 @@ impl WgpuFrameGraphExecutor {
 }
 
 fn frame_graph_pass_telemetry_threshold_ms() -> Option<f64> {
-    std::env::var("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
-        .ok()
+    crate::debug_toggles::debug_toggle("CRANPOSE_WGPU_RENDER_STAGE_TELEMETRY_MS")
         .and_then(|raw| raw.parse::<f64>().ok())
         .filter(|threshold| *threshold >= 0.0)
 }
@@ -1331,7 +1330,7 @@ impl UploadAllocator {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_pass_schedule, FrameTextureDescriptor, UploadAllocator, WgpuFrameGraph};
+    use super::{FrameTextureDescriptor, UploadAllocator, WgpuFrameGraph, build_pass_schedule};
 
     #[test]
     fn upload_allocator_reset_rewinds_cursor() {

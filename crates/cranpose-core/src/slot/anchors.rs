@@ -3,12 +3,12 @@ use std::{cmp::Reverse, collections::BinaryHeap, mem};
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{
-    generational_registry::{GenerationalRegistryStorage, RegistryState},
     DetachedSubtree, GroupRecord, SlotTable,
+    generational_registry::{GenerationalRegistryStorage, RegistryState},
 };
 #[cfg(any(test, debug_assertions))]
 use crate::collections::map::HashSet;
-use crate::{collections::map::HashMap, retention::RetentionManager, AnchorId};
+use crate::{AnchorId, collections::map::HashMap, retention::RetentionManager};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AnchorState {
@@ -483,9 +483,11 @@ mod tests {
         };
         registry.next_anchor = anchor.id as usize + 1;
 
-        assert!(registry
-            .set_state(anchor, AnchorState::Invalidated)
-            .is_none());
+        assert!(
+            registry
+                .set_state(anchor, AnchorState::Invalidated)
+                .is_none()
+        );
         registry.set_active(anchor, 4);
 
         assert_eq!(registry.active_index(anchor), Some(4));

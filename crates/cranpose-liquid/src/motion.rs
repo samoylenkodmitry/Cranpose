@@ -6,8 +6,8 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_animation::{spring, tween, Animatable, AnimationType, Easing};
-use cranpose_core::{with_current_composer, RuntimeHandle, State};
+use cranpose_animation::{Animatable, AnimationType, Easing, spring, tween};
+use cranpose_core::{RuntimeHandle, State, with_current_composer};
 use cranpose_foundation::VelocityTracker1D;
 use cranpose_macros::composable;
 use cranpose_ui::{Modifier, MutableInteractionSource};
@@ -289,7 +289,7 @@ pub(crate) async fn liquid_lens_gesture(
     gesture: LiquidLensGesture,
 ) {
     use cranpose_foundation::{PointerEventKind, PointerId};
-    use cranpose_services::{default_haptics, HapticFeedback};
+    use cranpose_services::{HapticFeedback, default_haptics};
 
     scope
         .await_pointer_event_scope(|await_scope| async move {

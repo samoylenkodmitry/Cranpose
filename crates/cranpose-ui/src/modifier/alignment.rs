@@ -1,4 +1,4 @@
-use super::{inspector_metadata, Alignment, HorizontalAlignment, Modifier, VerticalAlignment};
+use super::{Alignment, HorizontalAlignment, Modifier, VerticalAlignment, inspector_metadata};
 use crate::modifier_nodes::AlignmentElement;
 
 impl Modifier {

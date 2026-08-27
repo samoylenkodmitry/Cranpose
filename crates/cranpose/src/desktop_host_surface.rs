@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cranpose_services::{set_platform_host_surface, HostSurface, ResizeRefused};
+use cranpose_services::{HostSurface, ResizeRefused, set_platform_host_surface};
 
 /// Wakes the event loop so a request made from an idle application is acted on
 /// without waiting for the next frame something else caused.

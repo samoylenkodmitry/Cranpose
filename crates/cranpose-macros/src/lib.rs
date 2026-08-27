@@ -1,14 +1,15 @@
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
-use syn::{parse_macro_input, FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type};
+use syn::{FnArg, Ident, ItemFn, Pat, PatType, ReturnType, Type, parse_macro_input};
+
+mod branch_groups;
 
 /// Check if a type is Fn-like (impl FnMut/Fn/FnOnce, Box<dyn FnMut>, generic with Fn bound, etc.)
 /// For generic type parameters (e.g., `F` where F: FnMut()), we need to check the bounds.
 fn is_fn_like_type(ty: &Type) -> bool {
     match ty {
-        // impl FnMut(...) + 'static, impl Fn(...), etc.
         Type::ImplTrait(impl_trait) => impl_trait.bounds.iter().any(|bound| {
             if let syn::TypeParamBound::Trait(trait_bound) = bound {
                 let path = &trait_bound.path;
@@ -19,33 +20,28 @@ fn is_fn_like_type(ty: &Type) -> bool {
             }
             false
         }),
-        // Box<dyn FnMut(...)>
         Type::Path(type_path) => {
-            if let Some(segment) = type_path.path.segments.last() {
-                if segment.ident == "Box" {
-                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                        if let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) =
-                            args.args.first()
-                        {
-                            return trait_obj.bounds.iter().any(|bound| {
-                                if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                                    let path = &trait_bound.path;
-                                    if let Some(segment) = path.segments.last() {
-                                        let ident_str = segment.ident.to_string();
-                                        return ident_str == "FnMut"
-                                            || ident_str == "Fn"
-                                            || ident_str == "FnOnce";
-                                    }
-                                }
-                                false
-                            });
+            if let Some(segment) = type_path.path.segments.last()
+                && segment.ident == "Box"
+                && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+                && let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) =
+                    args.args.first()
+            {
+                return trait_obj.bounds.iter().any(|bound| {
+                    if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                        let path = &trait_bound.path;
+                        if let Some(segment) = path.segments.last() {
+                            let ident_str = segment.ident.to_string();
+                            return ident_str == "FnMut"
+                                || ident_str == "Fn"
+                                || ident_str == "FnOnce";
                         }
                     }
-                }
+                    false
+                });
             }
             false
         }
-        // bare fn(...) -> ...
         Type::BareFn(_) => true,
         _ => false,
     }
@@ -53,7 +49,6 @@ fn is_fn_like_type(ty: &Type) -> bool {
 
 /// Check if a generic type parameter has Fn-like bounds by looking at the where clause and bounds
 fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
-    // Extract the ident for Type::Path that might be a generic param
     let type_ident = match ty {
         Type::Path(type_path) if type_path.path.segments.len() == 1 => {
             &type_path.path.segments[0].ident
@@ -61,45 +56,37 @@ fn is_generic_fn_like(ty: &Type, generics: &syn::Generics) -> bool {
         _ => return false,
     };
 
-    // Check if it's a type parameter with Fn bounds
     for param in &generics.params {
-        if let syn::GenericParam::Type(type_param) = param {
-            if type_param.ident == *type_ident {
-                // Check the bounds on the type parameter
-                for bound in &type_param.bounds {
-                    if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                        if let Some(segment) = trait_bound.path.segments.last() {
-                            let ident_str = segment.ident.to_string();
-                            if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
-                                return true;
-                            }
-                        }
+        if let syn::GenericParam::Type(type_param) = param
+            && type_param.ident == *type_ident
+        {
+            for bound in &type_param.bounds {
+                if let syn::TypeParamBound::Trait(trait_bound) = bound
+                    && let Some(segment) = trait_bound.path.segments.last()
+                {
+                    let ident_str = segment.ident.to_string();
+                    if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
+                        return true;
                     }
                 }
             }
         }
     }
 
-    // Also check where clause
     if let Some(where_clause) = &generics.where_clause {
         for predicate in &where_clause.predicates {
-            if let syn::WherePredicate::Type(pred) = predicate {
-                if let Type::Path(bounded_type) = &pred.bounded_ty {
-                    if bounded_type.path.segments.len() == 1
-                        && bounded_type.path.segments[0].ident == *type_ident
+            if let syn::WherePredicate::Type(pred) = predicate
+                && let Type::Path(bounded_type) = &pred.bounded_ty
+                && bounded_type.path.segments.len() == 1
+                && bounded_type.path.segments[0].ident == *type_ident
+            {
+                for bound in &pred.bounds {
+                    if let syn::TypeParamBound::Trait(trait_bound) = bound
+                        && let Some(segment) = trait_bound.path.segments.last()
                     {
-                        for bound in &pred.bounds {
-                            if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                                if let Some(segment) = trait_bound.path.segments.last() {
-                                    let ident_str = segment.ident.to_string();
-                                    if ident_str == "FnMut"
-                                        || ident_str == "Fn"
-                                        || ident_str == "FnOnce"
-                                    {
-                                        return true;
-                                    }
-                                }
-                            }
+                        let ident_str = segment.ident.to_string();
+                        if ident_str == "FnMut" || ident_str == "Fn" || ident_str == "FnOnce" {
+                            return true;
                         }
                     }
                 }
@@ -121,14 +108,14 @@ fn is_fn_param(ty: &Type, generics: &syn::Generics) -> bool {
 fn is_zero_arg_fn_impl_trait(ty: &Type) -> bool {
     if let Type::ImplTrait(impl_trait) = ty {
         impl_trait.bounds.iter().any(|bound| {
-            if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                if let Some(segment) = trait_bound.path.segments.last() {
-                    let ident_str = segment.ident.to_string();
-                    if ident_str == "Fn" || ident_str == "FnMut" {
-                        if let syn::PathArguments::Parenthesized(args) = &segment.arguments {
-                            return args.inputs.is_empty();
-                        }
-                    }
+            if let syn::TypeParamBound::Trait(trait_bound) = bound
+                && let Some(segment) = trait_bound.path.segments.last()
+            {
+                let ident_str = segment.ident.to_string();
+                if (ident_str == "Fn" || ident_str == "FnMut")
+                    && let syn::PathArguments::Parenthesized(args) = &segment.arguments
+                {
+                    return args.inputs.is_empty();
                 }
             }
             false
@@ -183,10 +170,10 @@ fn filter_generics(
             .clone()
             .into_iter()
             .filter(|predicate| {
-                if let syn::WherePredicate::Type(pred) = predicate {
-                    if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
-                        return !strip.contains(&ident.to_string());
-                    }
+                if let syn::WherePredicate::Type(pred) = predicate
+                    && let Some(ident) = type_bare_generic_ident(&pred.bounded_ty)
+                {
+                    return !strip.contains(&ident.to_string());
                 }
                 true
             })
@@ -258,6 +245,15 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for (index, arg) in func.sig.inputs.iter_mut().enumerate() {
         if let FnArg::Typed(PatType { pat, ty, .. }) = arg {
+            if let Some(reserved) = find_reserved_pattern_ident(pat) {
+                let name = reserved.to_string();
+                return syn::Error::new(
+                    reserved.span(),
+                    format!("`{name}` is reserved by #[composable]"),
+                )
+                .to_compile_error()
+                .into();
+            }
             let pat_is_mut = matches!(
                 pat.as_ref(),
                 Pat::Ident(pat_ident) if pat_ident.mutability.is_some()
@@ -276,7 +272,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 } else {
                     param_info.push(ParamInfo {
-                        ident: Ident::new(&format!("__arg{}", index), Span::call_site()),
+                        ident: Ident::new(&format!("__arg{}", index), Span::mixed_site()),
                         pat: original_pat,
                         ty: ty.as_ref().clone(),
                         pat_is_mut,
@@ -284,7 +280,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     });
                 }
             } else {
-                let ident = Ident::new(&format!("__arg{}", index), Span::call_site());
+                let ident = Ident::new(&format!("__arg{}", index), Span::mixed_site());
                 let original_pat: Box<Pat> = pat.clone();
                 **pat = syn::parse_quote! { #ident };
                 param_info.push(ParamInfo {
@@ -298,13 +294,44 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    branch_groups::inject_branch_groups(&core_path, &mut func.block);
+    let has_rust_abi = match &func.sig.abi {
+        None => true,
+        Some(abi) => abi.name.as_ref().is_some_and(|name| name.value() == "Rust"),
+    };
+    if has_rust_abi {
+        func.attrs.push(syn::parse_quote!(#[track_caller]));
+    }
+
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();
     let helper_block = original_block.clone();
     let recompose_block = original_block.clone();
-    let key_expr = quote! { #core_path::location_key(file!(), line!(), column!()) };
+    let composer_ident = Ident::new("__composer", Span::mixed_site());
+    let outer_composer_ident = Ident::new("__outer_composer", Span::mixed_site());
+    let caller_key_ident = Ident::new("__cranpose_caller_key", Span::mixed_site());
+    let current_scope_ident = Ident::new("__current_scope", Span::mixed_site());
+    let result_slot_index_ident = Ident::new("__result_slot_index", Span::mixed_site());
+    let has_previous_ident = Ident::new("__has_previous", Span::mixed_site());
+    let result_ident = Ident::new("__result", Span::mixed_site());
+    let value_ident = Ident::new("__value", Span::mixed_site());
+    let key_expr = quote! { #caller_key_ident };
+    let caller_key_stmt = quote! {
+        let #caller_key_ident = #core_path::composable_identity_key({
+            struct __CranposeDefinitionMarker;
+            static __CRANPOSE_DEFINITION_KEY: ::std::sync::OnceLock<#core_path::Key> =
+                ::std::sync::OnceLock::new();
+            *__CRANPOSE_DEFINITION_KEY.get_or_init(|| {
+                #core_path::composable_definition_key(
+                    file!(),
+                    line!(),
+                    column!(),
+                    ::std::any::TypeId::of::<__CranposeDefinitionMarker>(),
+                )
+            })
+        });
+    };
 
-    // Rebinds will be generated later in the helper_body context where we have access to slots
     let rebinds_for_no_skip: Vec<_> = param_info
         .iter()
         .map(|info| {
@@ -327,11 +354,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     let invalidate_return_consumer = if returns_unit || is_node_id_return(&return_ty) {
         quote! {}
     } else {
-        quote! { __composer.__invalidate_return_consumer_scope(); }
+        quote! { #composer_ident.__invalidate_return_consumer_scope(); }
     };
     let _helper_ident = Ident::new(
         &format!("__cranpose_impl_{}", func.sig.ident),
-        Span::call_site(),
+        Span::mixed_site(),
     );
     let generics = func.sig.generics.clone();
     let (_impl_generics, _ty_generics, _where_clause) = generics.split_for_impl();
@@ -345,8 +372,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         })
         .collect();
 
-    // Check if any params are impl Trait that we can't store in a slot.
-    // Zero-arg Fn-like impl traits (impl Fn() + 'static) are handled via CallbackHolder.
     let has_unhandled_impl_trait = param_info
         .iter()
         .any(|info| info.is_impl_trait && !is_zero_arg_fn_impl_trait(&info.ty));
@@ -354,15 +379,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     if enable_skip && !has_unhandled_impl_trait {
         let helper_ident = Ident::new(
             &format!("__cranpose_impl_{}", func.sig.ident),
-            Span::call_site(),
+            Span::mixed_site(),
         );
         let generics = func.sig.generics.clone();
 
-        // Callback params are type-erased to `Box<dyn FnMut()>` at the public
-        // fn boundary so the generated helper/recompose bodies compile once
-        // per composable instead of once per caller closure type. The holder
-        // boxes callbacks anyway, so this moves an existing allocation, it
-        // does not add one.
         let param_erased: Vec<bool> = param_info
             .iter()
             .map(|info| {
@@ -373,8 +393,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        // Generic params that only ever appear as the type of an erased
-        // callback param can be dropped from the helper/recompose fns.
         let mut strippable: std::collections::HashSet<String> = param_info
             .iter()
             .zip(&param_erased)
@@ -382,9 +400,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .filter_map(|(info, _)| type_bare_generic_ident(&info.ty))
             .map(Ident::to_string)
             .collect();
-        // Fixpoint: a candidate kept because it is used elsewhere re-exposes
-        // its own bounds/predicates, which may in turn mention another
-        // candidate.
         loop {
             use quote::ToTokens;
             let mut used_elsewhere: Vec<TokenStream2> = Vec::new();
@@ -412,12 +427,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
             if let Some(where_clause) = &generics.where_clause {
                 for predicate in &where_clause.predicates {
-                    if let syn::WherePredicate::Type(pred) = predicate {
-                        if let Some(ident) = type_bare_generic_ident(&pred.bounded_ty) {
-                            if strippable.contains(&ident.to_string()) {
-                                continue;
-                            }
-                        }
+                    if let syn::WherePredicate::Type(pred) = predicate
+                        && let Some(ident) = type_bare_generic_ident(&pred.bounded_ty)
+                        && strippable.contains(&ident.to_string())
+                    {
+                        continue;
                     }
                     used_elsewhere.push(predicate.to_token_stream());
                 }
@@ -437,9 +451,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let (impl_generics, ty_generics, where_clause) = helper_generics.split_for_impl();
         let ty_generics_turbofish = ty_generics.as_turbofish();
 
-        // Helper function signature: all params except unhandled impl Trait.
-        // Erased callback params arrive pre-boxed; other zero-arg Fn impl
-        // traits are included as anonymous generics.
         let helper_inputs: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
@@ -457,9 +468,8 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             })
             .collect();
 
-        // Separate Fn-like params from regular params
         let param_state_slots: Vec<Ident> = (0..param_info.len())
-            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::call_site()))
+            .map(|index| Ident::new(&format!("__param_state_slot{}", index), Span::mixed_site()))
             .collect();
 
         let param_setup: Vec<TokenStream2> = param_info
@@ -467,7 +477,6 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .zip(param_state_slots.iter())
             .zip(&param_erased)
             .map(|((info, slot_ident), erased)| {
-                // Zero-arg Fn impl traits and generic Fn params → CallbackHolder
                 if (info.is_impl_trait && is_zero_arg_fn_impl_trait(&info.ty))
                     || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
                 {
@@ -478,9 +487,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         quote! { holder.update(#ident); }
                     };
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
-                        __composer.with_slot_value::<#core_path::CallbackHolder, _>(
+                        #composer_ident.with_slot_value::<#core_path::CallbackHolder, _>(
                             #slot_ident,
                             |holder| {
                                 #update
@@ -489,15 +498,14 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                         __changed = true;
                     }
                 } else if info.is_impl_trait {
-                    // Non-Fn impl trait – cannot store, always mark changed
                     quote! { __changed = true; }
                 } else {
                     let ident = &info.ident;
                     let ty = &info.ty;
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
-                        if __composer.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
+                        if #composer_ident.with_slot_value_mut::<#core_path::ParamState<#ty>, _>(
                             #slot_ident,
                             |state| state.update(&#ident),
                         )
@@ -517,7 +525,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     || (!info.is_impl_trait && is_fn_param(&info.ty, &generics))
                 {
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::CallbackHolder::new());
                     }
                 } else if info.is_impl_trait {
@@ -525,7 +533,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                 } else {
                     let ty = &info.ty;
                     quote! {
-                        let #slot_ident = __composer
+                        let #slot_ident = #composer_ident
                             .__use_param_slot(|| #core_path::ParamState::<#ty>::default());
                     }
                 }
@@ -544,7 +552,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     if can_add_mut && !info.pat_is_mut {
                         quote! {
                             #[allow(unused_mut)]
-                            let mut #pat = __composer
+                            let mut #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -553,7 +561,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     } else {
                         quote! {
                             #[allow(unused_mut)]
-                            let #pat = __composer
+                            let #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -584,7 +592,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     if can_add_mut && !info.pat_is_mut {
                         quote! {
                             #[allow(unused_mut)]
-                            let mut #pat = __composer
+                            let mut #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -593,7 +601,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     } else {
                         quote! {
                             #[allow(unused_mut)]
-                            let #pat = __composer
+                            let #pat = #composer_ident
                                 .with_slot_value::<#core_path::CallbackHolder, _>(
                                     #slot_ident,
                                     |holder| holder.clone_rc(),
@@ -606,7 +614,7 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let pat = &info.pat;
                     let ty = &info.ty;
                     quote! {
-                        let #pat = __composer
+                        let #pat = #composer_ident
                             .with_slot_value::<#core_path::ParamState<#ty>, _>(
                                 #slot_ident,
                                 |state| {
@@ -622,16 +630,16 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 
         let recompose_fn_ident = Ident::new(
             &format!("__cranpose_recompose_{}", func.sig.ident),
-            Span::call_site(),
+            Span::mixed_site(),
         );
 
         let recompose_setter = quote! {
             {
-                __composer.set_recompose_callback(move |
-                    __composer: &#core_path::Composer|
+                #composer_ident.set_recompose_callback(move |
+                    #composer_ident: &#core_path::Composer|
                 {
-                    #recompose_fn_ident #ty_generics_turbofish (
-                        __composer
+                    let _ = #recompose_fn_ident #ty_generics_turbofish (
+                        #composer_ident
                     );
                 });
             }
@@ -640,14 +648,14 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_body = if returns_unit {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let __current_scope = __composer
+                let #current_scope_ident = #composer_ident
                     .current_recompose_scope()
                     .expect("missing recompose scope");
-                let mut __changed = __current_scope.should_recompose();
+                let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
-                if !__changed && __current_scope.has_composed_once() {
-                    __composer.skip_current_group();
+                if !__changed && #current_scope_ident.has_composed_once() {
+                    #composer_ident.skip_current_group();
                     return;
                 }
                 #(#rebinds)*
@@ -656,42 +664,42 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! {
                 #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
-                let __current_scope = __composer
+                let #current_scope_ident = #composer_ident
                     .current_recompose_scope()
                     .expect("missing recompose scope");
-                let mut __changed = __current_scope.should_recompose();
+                let mut __changed = #current_scope_ident.should_recompose();
                 #(#param_setup)*
                 #recompose_setter
-                let __result_slot_index = __composer
+                let #result_slot_index_ident = #composer_ident
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
-                let __has_previous = __composer
+                let #has_previous_ident = #composer_ident
                     .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                        __result_slot_index,
+                        #result_slot_index_ident,
                         |slot| slot.get().is_some(),
                     );
-                if !__changed && __has_previous {
-                    __composer.skip_current_group();
-                    let __result = __composer
+                if !__changed && #has_previous_ident {
+                    #composer_ident.skip_current_group();
+                    let #result_ident = #composer_ident
                         .with_slot_value::<#core_path::ReturnSlot<#return_ty>, _>(
-                            __result_slot_index,
+                            #result_slot_index_ident,
                             |slot| {
                                 slot.get()
                                     .expect("composable return value missing during skip")
                             },
                         );
-                    return __result;
+                    return #result_ident;
                 }
-                let __value: #return_ty = {
+                let #value_ident: #return_ty = {
                     #(#rebinds)*
                     #helper_block
                 };
-                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                    __result_slot_index,
+                #composer_ident.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    #result_slot_index_ident,
                     |slot| {
-                        slot.store(__value.clone());
+                        slot.store(#value_ident.clone());
                     },
                 );
-                __value
+                #value_ident
             }
         };
 
@@ -705,28 +713,28 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         } else {
             quote! {
                 #(#param_setup_recompose)*
-                let __result_slot_index = __composer
+                let #result_slot_index_ident = #composer_ident
                     .__use_return_slot(|| #core_path::ReturnSlot::<#return_ty>::default());
                 #(#rebinds_for_recompose)*
-                let __value: #return_ty = {
+                let #value_ident: #return_ty = {
                     #recompose_block
                 };
-                __composer.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
-                    __result_slot_index,
+                #composer_ident.with_slot_value_mut::<#core_path::ReturnSlot<#return_ty>, _>(
+                    #result_slot_index_ident,
                     |slot| {
-                        slot.store(__value.clone());
+                        slot.store(#value_ident.clone());
                     },
                 );
                 #recompose_setter
                 #invalidate_return_consumer
-                __value
+                #value_ident
             }
         };
 
         let recompose_fn = quote! {
             #[allow(non_snake_case)]
             fn #recompose_fn_ident #impl_generics (
-                __composer: &#core_path::Composer
+                #composer_ident: &#core_path::Composer
             ) -> #return_ty #where_clause {
                 #recompose_fn_body
             }
@@ -735,16 +743,13 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         let helper_fn = quote! {
             #[allow(non_snake_case, clippy::too_many_arguments)]
             fn #helper_ident #impl_generics (
-                __composer: &#core_path::Composer
+                #composer_ident: &#core_path::Composer
                 #(, #helper_inputs)*
             ) -> #return_ty #where_clause {
                 #helper_body
             }
         };
 
-        // Wrapper args: pass all params except unhandled impl Trait on initial
-        // call; erased callback params are boxed here, at the only generic
-        // boundary that remains.
         let wrapper_args: Vec<TokenStream2> = param_info
             .iter()
             .zip(&param_erased)
@@ -762,9 +767,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
 
         let wrapped = quote!({
-            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
-                __composer.with_group(#key_expr, |__composer: &#core_path::Composer| {
-                    #helper_ident(__composer #(, #wrapper_args)*)
+            #caller_key_stmt
+            #core_path::with_current_composer(|#composer_ident: &#core_path::Composer| {
+                #composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
+                    #helper_ident(#composer_ident #(, #wrapper_args)*)
                 })
             })
         });
@@ -775,10 +781,10 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
             #func
         })
     } else {
-        // no_skip path: still uses simple rebinds
         let wrapped = quote!({
-            #core_path::with_current_composer(|__composer: &#core_path::Composer| {
-                __composer.with_group(#key_expr, |__scope: &#core_path::Composer| {
+            #caller_key_stmt
+            #core_path::with_current_composer(|#outer_composer_ident: &#core_path::Composer| {
+                #outer_composer_ident.with_group(#key_expr, |#composer_ident: &#core_path::Composer| {
                     #core_path::debug_label_current_scope(stringify!(#scope_label_ident));
                     #(#rebinds_for_no_skip)*
                     #original_block
@@ -788,4 +794,26 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
         *func.block = syn::parse2(wrapped).expect("failed to build block");
         TokenStream::from(quote! { #func })
     }
+}
+
+fn find_reserved_pattern_ident(pat: &Pat) -> Option<&Ident> {
+    use syn::visit::Visit;
+
+    struct Scan<'ast> {
+        found: Option<&'ast Ident>,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Scan<'ast> {
+        fn visit_pat_ident(&mut self, node: &'ast syn::PatIdent) {
+            if self.found.is_none() {
+                let name = node.ident.to_string();
+                if name == "__composer" || name.starts_with("__cranpose") {
+                    self.found = Some(&node.ident);
+                }
+            }
+            syn::visit::visit_pat_ident(self, node);
+        }
+    }
+    let mut scan = Scan { found: None };
+    scan.visit_pat(pat);
+    scan.found
 }

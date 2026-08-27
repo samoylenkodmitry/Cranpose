@@ -1,14 +1,14 @@
 use std::mem;
 
 use super::{
+    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
     checked_usize_to_i64,
     segments::{
-        extract_subtree_segment, group_segment_len, group_segment_range_checked,
+        NodeSegment, extract_subtree_segment, group_segment_len, group_segment_range_checked,
         group_segment_start, group_segment_subrange_at, insert_group_segment_item,
         move_subtree_segment_to_earlier_group, remove_group_segment_range,
-        repair_group_segment_start_and_len_to_storage, restore_subtree_segment, NodeSegment,
+        repair_group_segment_start_and_len_to_storage, restore_subtree_segment,
     },
-    GroupNodeRange, GroupRecord, NodeLifecycle, NodeRange, NodeRecord, NodeSlotUpdate, SlotTable,
 };
 use crate::{AnchorId, NodeId};
 
@@ -163,51 +163,40 @@ impl SlotTable {
         &mut self,
         group_index: usize,
         node_index: usize,
-        owner: AnchorId,
-        id: NodeId,
-        parent_id: Option<NodeId>,
-        generation: u32,
+        record: NodeRecord,
     ) -> NodeSlotUpdate {
         let node_len = self.repair_group_node_len_to_storage(group_index, "node cursor");
         let node_index = if node_index > node_len {
             log::error!(
-                "slot table clamped node cursor {node_index} to repaired node length {node_len} for owner {owner:?}"
+                "slot table clamped node cursor {node_index} to repaired node length {node_len} for owner {:?}",
+                record.owner
             );
             node_len
         } else {
             node_index
         };
+        let id = record.id;
+        let generation = record.generation;
         if node_index < node_len {
             let existing = *self.group_node_record_at(group_index, node_index);
-            *self.group_node_record_at_mut(group_index, node_index) = NodeRecord {
-                owner,
-                id,
-                parent_id,
-                generation,
-                lifecycle: NodeLifecycle::Active,
-            };
-            if existing.id == id && existing.generation == generation {
-                NodeSlotUpdate::Reused { id, generation }
-            } else {
-                NodeSlotUpdate::Replaced {
-                    old_id: existing.id,
-                    old_generation: existing.generation,
-                    new_id: id,
-                    new_generation: generation,
+            if existing.id == id {
+                *self.group_node_record_at_mut(group_index, node_index) = record;
+                if existing.generation == generation {
+                    NodeSlotUpdate::Reused { id, generation }
+                } else {
+                    NodeSlotUpdate::Replaced {
+                        old_id: existing.id,
+                        old_generation: existing.generation,
+                        new_id: id,
+                        new_generation: generation,
+                    }
                 }
+            } else {
+                self.insert_group_node(group_index, node_index, record);
+                NodeSlotUpdate::Inserted { id, generation }
             }
         } else {
-            self.insert_group_node(
-                group_index,
-                node_index,
-                NodeRecord {
-                    owner,
-                    id,
-                    parent_id,
-                    generation,
-                    lifecycle: NodeLifecycle::Active,
-                },
-            );
+            self.insert_group_node(group_index, node_index, record);
             NodeSlotUpdate::Inserted { id, generation }
         }
     }
@@ -219,6 +208,7 @@ impl SlotTable {
         id: NodeId,
         parent_id: Option<NodeId>,
         generation: u32,
+        source: crate::Key,
     ) -> NodeSlotUpdate {
         let Some(group_index) = self.active_group_index(owner) else {
             log::error!(
@@ -226,8 +216,18 @@ impl SlotTable {
             );
             return NodeSlotUpdate::Inserted { id, generation };
         };
-        let update =
-            self.record_group_node(group_index, node_index, owner, id, parent_id, generation);
+        let update = self.record_group_node(
+            group_index,
+            node_index,
+            NodeRecord {
+                owner,
+                id,
+                parent_id,
+                generation,
+                source,
+                lifecycle: NodeLifecycle::Active,
+            },
+        );
         if matches!(update, NodeSlotUpdate::Inserted { .. }) {
             self.adjust_ancestor_node_counts(owner, 1);
         }
@@ -235,17 +235,45 @@ impl SlotTable {
         update
     }
 
+    pub(super) fn find_node_record_by_source(
+        &self,
+        owner: AnchorId,
+        from_index: usize,
+        source: crate::Key,
+    ) -> Option<(usize, NodeId, u32)> {
+        let group_index = self.active_group_index(owner)?;
+        let records = self.group_node_records_at(group_index);
+        (from_index..records.len()).find_map(|index| {
+            let record = &records[index];
+            (record.source == source).then_some((index, record.id, record.generation))
+        })
+    }
+
+    pub(super) fn rotate_node_record_to_cursor(
+        &mut self,
+        owner: AnchorId,
+        found_index: usize,
+        cursor_index: usize,
+    ) {
+        let Some(group_index) = self.active_group_index(owner) else {
+            return;
+        };
+        let start = self.group_node_start_at(group_index);
+        self.nodes[start + cursor_index..=start + found_index].rotate_right(1);
+    }
+
+    #[cfg(test)]
     pub(super) fn node_identity_at_cursor(
         &self,
         owner: AnchorId,
         node_index: usize,
-    ) -> Option<(NodeId, u32)> {
+    ) -> Option<(NodeId, u32, crate::Key)> {
         let group_index = self.active_group_index(owner)?;
         if node_index >= self.group_node_len_at(group_index) {
             return None;
         }
         let node = self.group_node_records_at(group_index).get(node_index)?;
-        Some((node.id, node.generation))
+        Some((node.id, node.generation, node.source))
     }
 
     pub(super) fn remove_group_node_range(

@@ -42,7 +42,7 @@ impl SlotTable {
 }
 
 impl SlotWriteSession<'_> {
-    pub(crate) fn preview_group_key(&self, seed: GroupKeySeed) -> GroupKey {
+    pub(crate) fn preview_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
         self.state.preview_group_key(seed)
     }
 
@@ -94,11 +94,20 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         detached: DetachedSubtree,
     ) -> Option<GroupStart<ActiveGroupId>> {
+        self.reattach_started_group(key, detached, GroupStartKind::Restored)
+    }
+
+    fn reattach_started_group(
+        &mut self,
+        key: GroupKey,
+        detached: DetachedSubtree,
+        kind: GroupStartKind,
+    ) -> Option<GroupStart<ActiveGroupId>> {
         let parent_anchor = self.state.current_parent_anchor();
         let insert_index = self.state.current_child_cursor();
         let cursor = ChildCursor::new(parent_anchor, insert_index);
         match self.table.restore_subtree(cursor, key, detached) {
-            Ok(anchor) => self.open_started_group(anchor, GroupStartKind::Restored),
+            Ok(anchor) => self.open_started_group(anchor, kind),
             Err(detached) => {
                 log::error!(
                     "slot writer rejected detached subtree restore at parent={parent_anchor:?} child_index={insert_index}"
@@ -107,6 +116,10 @@ impl SlotWriteSession<'_> {
                 None
             }
         }
+    }
+
+    pub(crate) fn reserve_group_key(&mut self, seed: GroupKeySeed) -> GroupKey {
+        self.preview_group_key(seed)
     }
 
     fn recover_malformed_group_start(
@@ -241,23 +254,28 @@ impl SlotWriteSession<'_> {
         key: GroupKey,
         restored: Option<DetachedSubtree>,
     ) -> GroupStart<ActiveGroupId> {
-        self.state.consume_group_key(key);
         self.flush_payload_location_refreshes();
         #[cfg(any(test, debug_assertions))]
         self.state
             .debug_assert_no_pending_payload_location_refreshes("begin_group");
         self.discard_stale_group_frames();
-        let parent_anchor = self.state.current_parent_anchor();
-        let insert_index = self.state.current_child_cursor();
+        let cursor = ChildCursor::new(
+            self.state.current_parent_anchor(),
+            self.state.current_child_cursor(),
+        );
+        let resolution = restored
+            .is_none()
+            .then(|| self.resolve_active_child(cursor, key));
 
-        if let Some(restored) = restored {
-            if let Some(started) = self.restore_started_group(key, restored) {
-                return started;
-            }
+        self.state.consume_group_key(key);
+
+        if let Some(restored) = restored
+            && let Some(started) = self.restore_started_group(key, restored)
+        {
+            return started;
         }
 
-        let cursor = ChildCursor::new(parent_anchor, insert_index);
-        let resolution = self.resolve_active_child(cursor, key);
+        let resolution = resolution.unwrap_or_else(|| self.resolve_active_child(cursor, key));
         let started = self.materialize_group_at_cursor(cursor, key, resolution);
         self.open_started_group(started.anchor, started.kind)
             .unwrap_or_else(|| self.recover_malformed_group_start(key, started.anchor))

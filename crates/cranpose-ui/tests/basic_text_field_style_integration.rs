@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use cranpose_foundation::{
-    modifier_element, text::TextFieldState, BasicModifierNodeContext, ModifierNodeChain,
+    BasicModifierNodeContext, ModifierNodeChain, modifier_element, text::TextFieldState,
 };
-use cranpose_ui::{collect_modifier_slices, Color, SpanStyle, TextFieldElement, TextStyle};
+use cranpose_ui::{Color, SpanStyle, TextFieldElement, TextStyle, collect_modifier_slices};
 
 fn colored_style(color: Color) -> TextStyle {
     TextStyle::from_span_style(SpanStyle {

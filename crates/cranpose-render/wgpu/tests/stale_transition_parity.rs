@@ -25,6 +25,7 @@ mod support;
 use std::rc::Rc;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
@@ -32,7 +33,6 @@ use cranpose_render_common::{
     raster_cache::LayerRasterCacheHashes,
     scene_builder::{draw_command_nodes_for_tests, set_retained_feed_epoch},
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui::DrawCommand;
 use cranpose_ui_graphics::{
@@ -221,8 +221,8 @@ fn worst_diff(a: &[u8], b: &[u8]) -> u8 {
 fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     // Plain quad expansion, as in command_feed_parity: this test documents
     // the serve's byte-level contract, not the arc mesh's interpolation.
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::remove_var("CRANPOSE_STALE_TRANSITION");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", None);
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
@@ -234,12 +234,12 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     // Feed-free baseline graphs: no declared epoch means no verification
     // at all; rendered later (warm) with CRANPOSE_COMMAND_FEED=0 so the
     // renderer stays on the full pipeline.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     set_retained_feed_epoch(None);
     let baseline_graphs = build_graphs(11, &[FLIP]);
 
     // Everything below is the fed configuration production ships.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     set_retained_feed_epoch(Some(cranpose_render_wgpu::retained_feed_generation()));
 
     // Flag OFF, twice: pins current behavior and the determinism floor.
@@ -249,10 +249,10 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     let off4_graphs = build_graphs(17, &[FLIP, FLIP + 1]);
 
     // Flag ON: the single-flip sequence and the consecutive-collapse one.
-    std::env::set_var("CRANPOSE_STALE_TRANSITION", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", Some("1"));
     let on_graphs = build_graphs(14, &[FLIP]);
     let on2_graphs = build_graphs(16, &[FLIP, FLIP + 1]);
-    std::env::set_var("CRANPOSE_STALE_TRANSITION", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", Some("0"));
 
     // Scenario validity before believing any pixel number: flag off, the
     // flip frame collapsed to AllDynamic (no replay frame rides the run);
@@ -330,18 +330,18 @@ fn a_collapse_frame_re_serves_the_previous_emission_exactly_once() {
     // settled state.
     let _ = render_sequence(&mut renderer, &off_graphs);
     let _ = render_sequence(&mut renderer, &off_graphs);
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let (baseline, _) = render_sequence(&mut renderer, &baseline_graphs);
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let (off, _) = render_sequence(&mut renderer, &off_graphs);
     let (off2, _) = render_sequence(&mut renderer, &off2_graphs);
     let (on, on_deltas) = render_sequence(&mut renderer, &on_graphs);
     let (off3, _) = render_sequence(&mut renderer, &off3_graphs);
     let (off4, _) = render_sequence(&mut renderer, &off4_graphs);
     let (on2, _) = render_sequence(&mut renderer, &on2_graphs);
-    std::env::remove_var("CRANPOSE_STALE_TRANSITION");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_STALE_TRANSITION", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
     set_retained_feed_epoch(None);
 
     for frame in 0..FRAMES {

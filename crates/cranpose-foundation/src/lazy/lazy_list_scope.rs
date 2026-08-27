@@ -308,10 +308,10 @@ impl LazyListIntervalContent {
     ///
     /// Matches JC's `LazyLayoutIntervalContent.getKey(index)` pattern.
     pub fn get_key(&self, index: usize) -> LazyLayoutKey {
-        if let Some((interval, local_index)) = self.find_interval(index) {
-            if let Some(key_fn) = &interval.key {
-                return LazyLayoutKey::User(key_fn(local_index));
-            }
+        if let Some((interval, local_index)) = self.find_interval(index)
+            && let Some(key_fn) = &interval.key
+        {
+            return LazyLayoutKey::User(key_fn(local_index));
         }
         // Default key wraps the index (matches JC's getDefaultLazyLayoutKey)
         LazyLayoutKey::Index(index)
@@ -320,10 +320,10 @@ impl LazyListIntervalContent {
     /// Gets the content type for an item at the given global index.
     /// Matches JC's `LazyLayoutIntervalContent.getContentType(index)`.
     pub fn get_content_type(&self, index: usize) -> Option<u64> {
-        if let Some((interval, local_index)) = self.find_interval(index) {
-            if let Some(type_fn) = &interval.content_type {
-                return Some(type_fn(local_index));
-            }
+        if let Some((interval, local_index)) = self.find_interval(index)
+            && let Some(type_fn) = &interval.content_type
+        {
+            return Some(type_fn(local_index));
         }
         None
     }

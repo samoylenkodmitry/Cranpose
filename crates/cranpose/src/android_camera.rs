@@ -14,15 +14,14 @@
 use std::sync::Arc;
 
 use cranpose_services::{
+    Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill, FlashMode, FrameFormat,
     publish_camera_frame, publish_camera_state, publish_camera_still, record_dropped_camera_frame,
-    set_platform_camera, Camera, CameraError, CameraFrame, CameraLens, CameraState, CameraStill,
-    FlashMode, FrameFormat,
+    set_platform_camera,
 };
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JByteArray, JClass, JObject, JString, JValue},
     sys::{jint, jlong},
-    EnvUnowned, Outcome,
 };
 
 use crate::android_jni::{clear_pending_android_jni_exception, with_android_activity_env};
@@ -153,7 +152,7 @@ impl Camera for AndroidCamera {
 
 /// One preview frame, in the format the sensor produced.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrame<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -186,7 +185,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 /// A frame the device produced while the previous one was still in flight.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraFrameDropped(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -196,7 +195,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 /// What the session is doing.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraState<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -228,7 +227,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCamera
 
 /// A still, or the reason there is none.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnCameraStill<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,

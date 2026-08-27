@@ -22,12 +22,12 @@
 
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{
-            channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError,
-            TrySendError,
+            Receiver, RecvTimeoutError, Sender, SyncSender, TryRecvError, TrySendError, channel,
+            sync_channel,
         },
-        Arc,
     },
     time::Duration,
 };
@@ -869,10 +869,10 @@ impl PresentHandle {
         let _ = self
             .msg_tx
             .send(PresentMsg::Control(PresentControl::Shutdown));
-        if let Some(thread) = self.thread.take() {
-            if thread.join().is_err() {
-                log::error!("[present-runtime] present thread panicked");
-            }
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            log::error!("[present-runtime] present thread panicked");
         }
     }
 }

@@ -25,22 +25,21 @@ use std::{
 };
 
 use cranpose_animation::{Animatable, AnimationSpec, AnimationType, Easing};
-use cranpose_core::{remember, with_current_composer, SideEffect};
+use cranpose_core::{SideEffect, remember, with_current_composer};
 use cranpose_foundation::PointerEventKind;
 use cranpose_ui_graphics::{
-    liquid_menu_glass_effect, GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size,
+    GraphicsLayer, LayerShape, Point, Rect, RoundedCornerShape, Size, liquid_menu_glass_effect,
 };
 
 use crate::{
-    composable,
+    PointerInputScope, composable,
     modifier::{Color, Modifier},
-    text::{measure_text, AnnotatedString, TextStyle, TextUnit},
+    text::{AnnotatedString, TextStyle, TextUnit, measure_text},
     widgets::{
-        box_widget::{Box, BoxSpec},
-        popup::{local_popup_viewport, Popup},
         Row, RowSpec, Text,
+        box_widget::{Box, BoxSpec},
+        popup::{Popup, local_popup_viewport},
     },
-    PointerInputScope,
 };
 
 /// Capsule height (dp) — the measured 133 px @3x.
@@ -691,7 +690,7 @@ mod tests {
     use cranpose_ui_graphics::Point;
 
     use super::*;
-    use crate::modifier::{collect_slices_from_modifier, ModifierNodeSlices};
+    use crate::modifier::{ModifierNodeSlices, collect_slices_from_modifier};
 
     /// Collects the button's live pointer-input handler. Returns the owning
     /// [`ModifierNodeSlices`] too: it keeps the attached node (and its running

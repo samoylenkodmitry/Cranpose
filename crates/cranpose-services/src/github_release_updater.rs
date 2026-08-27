@@ -10,10 +10,10 @@
 
 use crate::{
     app_update::{
-        set_app_update_status, AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater,
-        GitHubReleaseUpdate, PackageDigest, UpdatePackage,
+        AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater, GitHubReleaseUpdate,
+        PackageDigest, UpdatePackage, set_app_update_status,
     },
-    http::{default_http_client, HttpClient, HttpClientRef, HttpControl, HttpRequest},
+    http::{HttpClient, HttpClientRef, HttpControl, HttpRequest, default_http_client},
 };
 
 /// Root of the GitHub REST API this checker reads.

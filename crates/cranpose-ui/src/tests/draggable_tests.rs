@@ -11,13 +11,13 @@ use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cranpose_core::{DefaultScheduler, Runtime};
 use cranpose_foundation::{
-    BasicModifierNodeContext, ModifierNodeChain, PointerButton, PointerButtons, PointerEvent,
-    PointerEventKind, DRAG_THRESHOLD,
+    BasicModifierNodeContext, DRAG_THRESHOLD, ModifierNodeChain, PointerButton, PointerButtons,
+    PointerEvent, PointerEventKind,
 };
 use cranpose_ui_graphics::Point;
 use cranpose_ui_layout::Axis;
 
-use crate::{collect_modifier_slices, draggable::DraggableState, Modifier};
+use crate::{Modifier, collect_modifier_slices, draggable::DraggableState};
 
 fn with_test_runtime<T>(body: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));

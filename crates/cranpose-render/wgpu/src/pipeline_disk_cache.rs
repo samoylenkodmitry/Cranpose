@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use web_time::Instant;
 
 fn disk_cache_enabled() -> bool {
-    std::env::var("CRANPOSE_PIPELINE_DISK_CACHE").as_deref() != Ok("0")
+    crate::debug_toggles::debug_toggle("CRANPOSE_PIPELINE_DISK_CACHE").as_deref() != Some("0")
 }
 
 /// The blob's path, or `None` when persistence is off — by kill switch or
@@ -31,7 +31,7 @@ pub(crate) fn file_path() -> Option<PathBuf> {
     if !disk_cache_enabled() {
         return None;
     }
-    match std::env::var_os("CRANPOSE_PIPELINE_CACHE_FILE") {
+    match crate::debug_toggles::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE") {
         Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
         _ => None,
     }
@@ -84,16 +84,16 @@ pub(crate) fn persist(cache: &wgpu::PipelineCache, path: &Path) {
     let Some(data) = cache.get_data() else {
         return;
     };
-    if let Ok(existing) = std::fs::read(path) {
-        if existing == data {
-            return;
-        }
+    if let Ok(existing) = std::fs::read(path)
+        && existing == data
+    {
+        return;
     }
-    if let Some(parent) = path.parent() {
-        if let Err(error) = std::fs::create_dir_all(parent) {
-            log::warn!("[pipeline-cache] create_dir_all {parent:?}: {error}");
-            return;
-        }
+    if let Some(parent) = path.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        log::warn!("[pipeline-cache] create_dir_all {parent:?}: {error}");
+        return;
     }
     // Write-then-rename so a launch never reads a half-written blob.
     let tmp = path.with_extension("tmp");

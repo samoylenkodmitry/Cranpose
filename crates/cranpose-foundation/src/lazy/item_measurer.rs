@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use web_time::{Duration, Instant};
 
 use super::{
-    lazy_list_measure::{LazyListMeasureConfig, DEFAULT_ITEM_SIZE_ESTIMATE},
+    lazy_list_measure::{DEFAULT_ITEM_SIZE_ESTIMATE, LazyListMeasureConfig},
     lazy_list_measured_item::LazyListMeasuredItem,
 };
 

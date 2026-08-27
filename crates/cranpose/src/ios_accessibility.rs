@@ -11,10 +11,9 @@ use std::{
 use cranpose_app_shell::{AppShell, PointerSource};
 use cranpose_render_common::Renderer;
 use objc2::{
-    define_class, msg_send,
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send,
     rc::Retained,
     runtime::{AnyObject, Bool},
-    DefinedClass, MainThreadMarker, MainThreadOnly, Message,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSString};

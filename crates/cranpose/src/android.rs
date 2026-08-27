@@ -9,14 +9,14 @@ use std::{
     ptr::NonNull,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use cranpose_app_shell::{
-    default_root_key, AppShell, KeyEvent, PlatformFrameDriver, PointerSource,
+    AppShell, KeyEvent, PlatformFrameDriver, PointerSource, default_root_key,
 };
 use cranpose_platform_android::AndroidPlatform;
 use cranpose_render_wgpu::{PresentOutcome, PublishOutcome, WgpuRenderer};
@@ -26,12 +26,12 @@ use ndk::native_window::NativeWindow;
 use crate::{
     android_host_window,
     android_jni::{clear_pending_android_jni_exception, with_android_activity_env},
-    android_keyboard::{self, is_system_key, AndroidKeyTranslator, AndroidSoftKeyboard},
+    android_keyboard::{self, AndroidKeyTranslator, AndroidSoftKeyboard, is_system_key},
     android_overlay_window,
-    android_surface::{create_android_wgpu_surface, AndroidSurfaceError},
+    android_surface::{AndroidSurfaceError, create_android_wgpu_surface},
     android_text_input::{self, AndroidImeEvent},
     app_launcher::{AndroidOverlayWindowOptions, AppSettings},
-    wgpu_surface::{current_surface_texture, surface_present_required, SurfaceFrame},
+    wgpu_surface::{SurfaceFrame, current_surface_texture, surface_present_required},
 };
 
 /// GPU resources for the current Android surface and its reusable WGPU device.
@@ -120,7 +120,7 @@ fn android_pointer_source(
 ) -> PointerSource {
     use android_activity::input::{Source, ToolType};
 
-    use crate::android_input::{resolve_pointer_source, AndroidSourceKind, AndroidToolKind};
+    use crate::android_input::{AndroidSourceKind, AndroidToolKind, resolve_pointer_source};
 
     let tool = match pointer.tool_type() {
         ToolType::Finger => AndroidToolKind::Finger,
@@ -1394,8 +1394,10 @@ fn create_android_gpu_resources(
     // file is keyed by adapter identity (vendor, device, driver strings), so
     // a driver update or a different GPU starts cold instead of feeding wgpu
     // a stale blob. `run` decided the directory; a pre-set full path wins.
-    if std::env::var_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
-        if let Some(cache_dir) = std::env::var_os("CRANPOSE_PIPELINE_CACHE_DIR") {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_FILE").is_none() {
+        if let Some(cache_dir) =
+            cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR")
+        {
             let mut driver_hash: u64 = 0xcbf2_9ce4_8422_2325;
             for byte in adapter_info
                 .driver
@@ -1409,9 +1411,10 @@ fn create_android_gpu_resources(
                 "pipeline_cache_v1_{:04x}_{:04x}_{driver_hash:016x}.bin",
                 adapter_info.vendor, adapter_info.device,
             );
-            std::env::set_var(
+            let file_path = std::path::Path::new(&cache_dir).join(file_name);
+            cranpose_render_wgpu::set_debug_toggle_os(
                 "CRANPOSE_PIPELINE_CACHE_FILE",
-                std::path::Path::new(&cache_dir).join(file_name),
+                Some(file_path.as_os_str()),
             );
         }
     }
@@ -1778,11 +1781,12 @@ pub fn run(
     // `CRANPOSE_PIPELINE_CACHE_FILE` from this directory. Seeded properties
     // (above) and pre-set environments win, so tests and debugging can
     // redirect or disable it.
-    if std::env::var_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
+    if cranpose_render_wgpu::debug_toggle_os("CRANPOSE_PIPELINE_CACHE_DIR").is_none() {
         if let Some(data_path) = app.internal_data_path() {
-            std::env::set_var(
+            let cache_dir = data_path.join("cranpose_gpu");
+            cranpose_render_wgpu::set_debug_toggle_os(
                 "CRANPOSE_PIPELINE_CACHE_DIR",
-                data_path.join("cranpose_gpu"),
+                Some(cache_dir.as_os_str()),
             );
         }
     }

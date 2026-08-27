@@ -20,16 +20,15 @@ use cranpose_foundation::{PointerEvent, PointerEventKind};
 use cranpose_ui_graphics::{Brush, Color, DrawScope, Point, Rect, Size, VectorPath};
 
 use crate::{
-    composable,
+    PointerInputScope, composable,
     modifier::Modifier,
     text_selection::{
-        handle_path_data, HandleKind, HANDLE_DOT_LINE_OVERLAP, HANDLE_GRAB_SLOP, HANDLE_STEM_WIDTH,
+        HANDLE_DOT_LINE_OVERLAP, HANDLE_GRAB_SLOP, HANDLE_STEM_WIDTH, HandleKind, handle_path_data,
     },
     widgets::{
         box_widget::{Box, BoxSpec},
         popup::Popup,
     },
-    PointerInputScope,
 };
 
 /// How long (ms) the finger must rest on a handle — without moving beyond

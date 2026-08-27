@@ -10,7 +10,7 @@ pub mod robot_helpers;
 pub mod testing;
 
 // Re-export testing utilities
-pub use placed_semantics::{placed_semantics_from_applier, PlacedSemanticsNode};
+pub use placed_semantics::{PlacedSemanticsNode, placed_semantics_from_applier};
 pub use robot::*;
 #[cfg(feature = "desktop-robot")]
 pub use robot_assertions::assert_robot_fps_over;
@@ -25,7 +25,7 @@ pub mod prelude {
     #[cfg(feature = "desktop-robot")]
     pub use crate::robot_helpers::*;
     pub use crate::{
-        placed_semantics::{placed_semantics_from_applier, PlacedSemanticsNode},
+        placed_semantics::{PlacedSemanticsNode, placed_semantics_from_applier},
         robot::*,
         robot_assertions,
         robot_assertions::{Bounds, SemanticElementLike},

@@ -128,10 +128,10 @@ impl TextFieldFocusState {
     ) {
         let mut current = self.focused_field.borrow_mut();
 
-        if let Some(ref weak) = *current {
-            if let Some(old_focused) = weak.upgrade() {
-                *old_focused.borrow_mut() = false;
-            }
+        if let Some(ref weak) = *current
+            && let Some(old_focused) = weak.upgrade()
+        {
+            *old_focused.borrow_mut() = false;
         }
 
         *is_focused.borrow_mut() = true;
@@ -143,10 +143,10 @@ impl TextFieldFocusState {
     fn clear_focus(&self) {
         let mut current = self.focused_field.borrow_mut();
 
-        if let Some(ref weak) = *current {
-            if let Some(focused) = weak.upgrade() {
-                *focused.borrow_mut() = false;
-            }
+        if let Some(ref weak) = *current
+            && let Some(focused) = weak.upgrade()
+        {
+            *focused.borrow_mut() = false;
         }
 
         *current = None;

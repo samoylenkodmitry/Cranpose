@@ -271,10 +271,10 @@ pub fn shared_plain_annotated_string(text: &str) -> Rc<AnnotatedString> {
 
     POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
-        if let Some(shared) = pool.get(&key) {
-            if shared.text == text {
-                return Rc::clone(shared);
-            }
+        if let Some(shared) = pool.get(&key)
+            && shared.text == text
+        {
+            return Rc::clone(shared);
         }
         let shared = Rc::new(AnnotatedString::new(text.to_owned()));
         if pool.len() >= POOL_CAPACITY {

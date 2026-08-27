@@ -1,7 +1,7 @@
 use super::{
     super::{GroupRecord, PayloadRecord, SlotTable},
-    groups::{SlotTreeChecks, SlotTreeView},
     PayloadAnchorRecord, SlotInvariantError,
+    groups::{SlotTreeChecks, SlotTreeView},
 };
 
 pub(super) fn validate_group_payloads(
@@ -126,8 +126,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        slot::{GroupKey, PayloadAnchor, PayloadKind},
         AnchorId,
+        slot::{GroupKey, PayloadAnchor, PayloadKind},
     };
 
     fn one_payload_table() -> (SlotTable, AnchorId, PayloadAnchor) {
@@ -153,6 +153,7 @@ mod tests {
             anchor: payload_anchor,
             type_id: TypeId::of::<i32>(),
             type_name: std::any::type_name::<i32>(),
+            source: crate::slot::BRANCH_PATH_ROOT,
             kind: PayloadKind::Internal,
             value: Box::new(0_i32),
             fresh: None,

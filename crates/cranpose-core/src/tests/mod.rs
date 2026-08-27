@@ -2,8 +2,8 @@ use std::{
     cell::{Cell, RefCell},
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -14,12 +14,12 @@ use smallvec::SmallVec;
 use super::*;
 use crate as cranpose_core;
 #[cfg(test)]
-use crate::snapshot_v2::{reset_runtime_for_tests, TestRuntimeGuard};
+use crate::snapshot_v2::{TestRuntimeGuard, reset_runtime_for_tests};
 use crate::{
+    SnapshotStateObserver,
     slot::ActiveGroupId,
     snapshot_v2::take_mutable_snapshot,
     state::{MutationPolicy, SnapshotMutableState},
-    SnapshotStateObserver,
 };
 
 /// Reset the snapshot runtime for tests to ensure clean state.
@@ -79,6 +79,11 @@ fn composition_local_keys_do_not_use_process_global_counter() {
     assert!(!lib_source.contains("NEXT_LOCAL_KEY"));
     assert!(!lib_source.contains("next_local_key"));
     assert!(!local_source.contains("next_local_key"));
+    assert!(
+        lib_source.contains("struct LocalKey(Rc<()>)"),
+        "a local's identity is the allocation its clones share, never a \
+         process-global counter"
+    );
 }
 
 #[test]
@@ -300,7 +305,11 @@ pub(crate) fn remember_test_value<T: 'static>(
     state: &mut crate::slot::SlotWriteSessionState,
     init: impl FnOnce() -> T,
 ) -> Owned<T> {
-    with_test_slot_lifecycle(|lifecycle| slots.write_session(lifecycle, state).remember(init))
+    with_test_slot_lifecycle(|lifecycle| {
+        slots
+            .write_session(lifecycle, state)
+            .remember(crate::slot::BRANCH_PATH_ROOT, init)
+    })
 }
 
 pub(crate) fn end_test_group(
@@ -659,6 +668,7 @@ fn exact_subcompose_activation_rejects_invalidated_slot_scopes() {
     assert_eq!(state.reusable(), &[10]);
 }
 
+mod branch_group_tests;
 mod composer_applier_tests;
 mod composition_and_recompose_scope_tests;
 mod internal_surface_tests;

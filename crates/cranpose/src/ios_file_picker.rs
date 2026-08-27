@@ -23,14 +23,14 @@ use std::{
 };
 
 use cranpose_services::{
-    set_platform_file_picker, Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef,
-    ContentFuture, ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink,
-    ContentSinkRef, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
-    SaveDocumentRequest, DEFAULT_CHUNK_LEN,
+    Content, ContentEntry, ContentError, ContentFolder, ContentFolderRef, ContentFuture,
+    ContentHandle, ContentMetadata, ContentReader, ContentReaderRef, ContentSink, ContentSinkRef,
+    DEFAULT_CHUNK_LEN, FilePicker, FilePickerError, FilePickerOptions, PickerFuture,
+    SaveDocumentRequest, set_platform_file_picker,
 };
 use objc2::{
-    define_class, msg_send, rc::Retained, runtime::ProtocolObject, DefinedClass, MainThreadMarker,
-    MainThreadOnly, Message,
+    DefinedClass, MainThreadMarker, MainThreadOnly, Message, define_class, msg_send, rc::Retained,
+    runtime::ProtocolObject,
 };
 use objc2_foundation::{NSArray, NSObject, NSObjectProtocol, NSURL};
 use objc2_ui_kit::{

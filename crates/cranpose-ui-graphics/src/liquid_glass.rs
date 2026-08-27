@@ -310,12 +310,12 @@ pub fn liquid_menu_glass_effect(
     shader.set_float(GLASS_EFFECT_DENSITY_UNIFORM, 1.0);
     shader.set_float(GLASS_ACTIVITY_UNIFORM, 1.0);
     shader.set_float(11, 0.19 * p); // rim intensity (the reference settled
-                                    // pill peaks ~x1.9 of its baseline on
-                                    // BOTH long edges)
-                                    // Settled material (measured on the reference still: white text behind
-                                    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
-                                    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
-                                    // dim+lift that flattened ghosts into an opaque-looking fill.
+    // pill peaks ~x1.9 of its baseline on
+    // BOTH long edges)
+    // Settled material (measured on the reference still: white text behind
+    // the pill reads ~242/255 through it, the dark card dims ~x0.78): a
+    // WHISPER of dark tint plus a mild contrast pivot — not the heavy
+    // dim+lift that flattened ghosts into an opaque-looking fill.
     shader.set_float4(14, 0.0, 0.0, 0.0, 0.04 * p);
     shader.set_float(18, 1.0 + 0.10 * p); // mild vibrancy
     shader.set_float(20, -0.06 * p);

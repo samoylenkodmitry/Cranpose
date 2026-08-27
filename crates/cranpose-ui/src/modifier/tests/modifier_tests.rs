@@ -9,12 +9,12 @@ use cranpose_ui_graphics::{
 };
 
 use super::{
-    collect_slices_from_modifier, inspector_metadata, modifier_element, Alignment, BlendMode,
-    Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset, DrawCommand,
-    DynModifierElement, EdgeInsets, GlassMaterial, GradientCutMaskSpec, GradientFadeMaskSpec,
-    GraphicsLayer, HorizontalAlignment, LayerShape, Modifier, ModifierChainHandle, Point,
-    RenderEffect, RoundedCornerShape, RuntimeShader, SemanticsConfiguration, Shadow, Size,
-    TransformOrigin, VerticalAlignment,
+    Alignment, BlendMode, Color, CompositingStrategy, CutDirection, DimensionConstraint, DpOffset,
+    DrawCommand, DynModifierElement, EdgeInsets, GlassMaterial, GradientCutMaskSpec,
+    GradientFadeMaskSpec, GraphicsLayer, HorizontalAlignment, LayerShape, Modifier,
+    ModifierChainHandle, Point, RenderEffect, RoundedCornerShape, RuntimeShader,
+    SemanticsConfiguration, Shadow, Size, TransformOrigin, VerticalAlignment,
+    collect_slices_from_modifier, inspector_metadata, modifier_element,
 };
 
 /// Records a draw command into a fresh consumer-owned scope, the way the
@@ -107,9 +107,11 @@ fn from_element_exposes_custom_modifier_nodes() {
     handle.update(&modifier);
 
     assert!(handle.has_draw_nodes());
-    assert!(handle
-        .chain()
-        .has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw));
+    assert!(
+        handle
+            .chain()
+            .has_nodes_for_invalidation(cranpose_foundation::InvalidationKind::Draw)
+    );
 }
 
 #[test]
@@ -1078,10 +1080,12 @@ fn drop_shadow_cutout_knocks_element_shape_out_of_silhouette() {
             height: 32.0,
         },
     );
-    let [cranpose_ui_graphics::DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
-        cutout,
-        ..
-    })] = primitives.as_slice()
+    let [
+        cranpose_ui_graphics::DrawPrimitive::Shadow(cranpose_ui_graphics::ShadowPrimitive::Drop {
+            cutout,
+            ..
+        }),
+    ] = primitives.as_slice()
     else {
         panic!("expected a single drop-shadow primitive");
     };
@@ -1598,27 +1602,35 @@ fn collect_inspector_records_include_weight_and_pointer_input_metadata() {
         .iter()
         .find(|record| record.name == "weight")
         .expect("missing weight inspector record");
-    assert!(weight
-        .properties
-        .iter()
-        .any(|prop| prop.name == "weight" && prop.value == 3.5f32.to_string()));
-    assert!(weight
-        .properties
-        .iter()
-        .any(|prop| prop.name == "fill" && prop.value == "false"));
+    assert!(
+        weight
+            .properties
+            .iter()
+            .any(|prop| prop.name == "weight" && prop.value == 3.5f32.to_string())
+    );
+    assert!(
+        weight
+            .properties
+            .iter()
+            .any(|prop| prop.name == "fill" && prop.value == "false")
+    );
 
     let pointer = records
         .iter()
         .find(|record| record.name == "pointerInput")
         .expect("missing pointerInput inspector record");
-    assert!(pointer
-        .properties
-        .iter()
-        .any(|prop| prop.name == "keyCount" && prop.value == "1"));
-    assert!(pointer
-        .properties
-        .iter()
-        .any(|prop| prop.name == "handlerId"));
+    assert!(
+        pointer
+            .properties
+            .iter()
+            .any(|prop| prop.name == "keyCount" && prop.value == "1")
+    );
+    assert!(
+        pointer
+            .properties
+            .iter()
+            .any(|prop| prop.name == "handlerId")
+    );
 }
 
 #[test]
@@ -1683,9 +1695,11 @@ fn inspector_snapshot_includes_delegate_depth_and_capabilities() {
                 .unwrap_or(false)
         })
         .expect("expected padding inspector entry");
-    assert!(padding_entry
-        .capabilities
-        .contains(NodeCapabilities::LAYOUT));
+    assert!(
+        padding_entry
+            .capabilities
+            .contains(NodeCapabilities::LAYOUT)
+    );
 }
 
 #[test]
@@ -1927,7 +1941,7 @@ fn reading_order_padding_swaps_its_ends_in_a_right_to_left_layout() {
 
 #[test]
 fn padding_relative_follows_the_direction_its_composition_provides() {
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use crate::layout_direction::{LayoutDirection, ProvideLayoutDirection};
 

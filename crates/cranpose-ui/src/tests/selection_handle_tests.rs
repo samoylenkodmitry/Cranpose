@@ -1,15 +1,15 @@
 //! Tests that a [`SelectionHandle`] renders its teardrop in the top-level
 //! overlay, anchored so its tip lands on the given text endpoint.
 
-use cranpose_core::{location_key, Key, MemoryApplier, NodeId};
+use cranpose_core::{Key, MemoryApplier, NodeId, location_key};
 use cranpose_ui_graphics::{Color, DrawPrimitive, Point, Rect, Size};
 
 use crate::{
+    Composition,
     layout::{LayoutEngine, LayoutTree},
     renderer::{HeadlessRenderer, RenderOp},
     text_selection::HandleKind,
     widgets::{PopupHost, SelectionHandle},
-    Composition,
 };
 
 fn compute_layout(composition: &mut Composition<MemoryApplier>, root: NodeId) -> LayoutTree {
@@ -143,12 +143,11 @@ mod long_press {
     use cranpose_ui_graphics::Point;
 
     use crate::{
-        collect_modifier_slices,
+        Modifier, collect_modifier_slices,
         text_selection::HandleKind,
         widgets::selection_handle::{
-            is_handle_long_press, selection_handle_pointer_input, HANDLE_LONG_PRESS_TIMEOUT_MS,
+            HANDLE_LONG_PRESS_TIMEOUT_MS, is_handle_long_press, selection_handle_pointer_input,
         },
-        Modifier,
     };
 
     fn point(x: f32, y: f32) -> Point {
@@ -420,8 +419,8 @@ mod kind_restart {
     use cranpose_ui_graphics::Point;
 
     use crate::{
-        collect_modifier_slices, text_selection::HandleKind,
-        widgets::selection_handle::selection_handle_pointer_input, Modifier,
+        Modifier, collect_modifier_slices, text_selection::HandleKind,
+        widgets::selection_handle::selection_handle_pointer_input,
     };
 
     fn down() -> PointerEvent {

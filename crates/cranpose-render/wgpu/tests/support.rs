@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use cranpose_render_common::{software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES, Renderer};
+use cranpose_render_common::{Renderer, software_text_raster::DEFAULT_SOFTWARE_TEXT_FONT_BYTES};
 use cranpose_render_wgpu::{CapturedFrame, RenderStatsSnapshot, WgpuRenderer};
 use cranpose_ui::AppContext;
 
@@ -109,7 +109,7 @@ pub fn headless_renderer() -> Result<LockedRenderer, String> {
     // in-footprint tolerance would leak into every byte-exact suite built on
     // this helper. Pin it OFF at construction; suites that test the cache
     // set "1" per arm after obtaining the renderer, which overrides this.
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
     let lock = lock_gpu_test();
     let mut renderer = create_headless_renderer()?;
     let app_context = AppContext::new();
@@ -122,7 +122,7 @@ pub fn headless_renderer() -> Result<LockedRenderer, String> {
 }
 
 pub fn headless_renderer_unencoded() -> Result<LockedRenderer, String> {
-    std::env::set_var("CRANPOSE_SEGMENT_SURFACE", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_SEGMENT_SURFACE", Some("0"));
     let lock = lock_gpu_test();
     let mut renderer = create_headless_renderer_with_format(wgpu::TextureFormat::Bgra8Unorm)?;
     let app_context = AppContext::new();

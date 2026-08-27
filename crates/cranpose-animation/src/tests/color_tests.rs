@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_core::{location_key, with_current_composer, Composition, MemoryApplier, State};
+use cranpose_core::{Composition, MemoryApplier, State, location_key, with_current_composer};
 
 use super::*;
 use crate::animation::{AnimationSpec, AnimationType, Lerp, SpringSpec};

@@ -21,9 +21,9 @@
 
 use std::rc::Rc;
 
-use cranpose_services::{publish_incoming_content, IncomingContent};
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use cranpose_services::{IncomingContent, publish_incoming_content};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{DragEvent, File, HtmlCanvasElement};
 
 /// Wires `dragenter`/`dragover`/`drop` on `canvas` so files dropped onto it

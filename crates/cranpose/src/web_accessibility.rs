@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Document, Element, HtmlCanvasElement, HtmlElement, MouseEvent};
 
 use crate::accessibility::{self, AccessibilityElement, AccessibilityRole};

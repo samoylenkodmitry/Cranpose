@@ -430,10 +430,11 @@ fn test_dynamic_modifiers_layout() {
     let mut composition = Composition::new(MemoryApplier::new());
     let root_key = location_key(file!(), line!(), column!());
 
+    let pass = |composition: &mut Composition<MemoryApplier>, frame: i32| {
+        composition.render(root_key, || dynamic_modifiers_showcase(frame))
+    };
     // Test at frame 0
-    composition
-        .render(root_key, || dynamic_modifiers_showcase(0))
-        .unwrap();
+    pass(&mut composition, 0).unwrap();
 
     let root = composition.root().expect("Should have root");
     let mut applier = composition.applier_mut();
@@ -461,9 +462,7 @@ fn test_dynamic_modifiers_layout() {
     drop(applier);
 
     // Recompose at frame 5 - should maintain same structure
-    composition
-        .render(root_key, || dynamic_modifiers_showcase(5))
-        .unwrap();
+    pass(&mut composition, 5).unwrap();
 
     let mut applier = composition.applier_mut();
     let all_nodes_frame5 = collect_all_nodes(&mut applier, root);

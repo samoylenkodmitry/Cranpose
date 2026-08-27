@@ -12,8 +12,8 @@ use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };

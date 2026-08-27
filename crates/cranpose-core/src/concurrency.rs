@@ -16,8 +16,8 @@ use std::{
     pin::Pin,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
     },
     task::{Context, Poll, Waker},
     time::Duration,
@@ -29,7 +29,7 @@ use web_time::Instant;
 
 use crate::{
     hooks::{mutableStateOf, remember},
-    runtime::{current_runtime_handle, RuntimeHandle, TaskHandle},
+    runtime::{RuntimeHandle, TaskHandle, current_runtime_handle},
     state::{MutableState, State},
 };
 
@@ -90,10 +90,16 @@ impl CoroutineScope {
             task.cancel();
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn probe_identity(&self) -> usize {
+        Rc::as_ptr(&self.inner) as *const () as usize
+    }
 }
 
 /// Remembers a [`CoroutineScope`] bound to this position in the composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberCoroutineScope() -> CoroutineScope {
     remember(|| CoroutineScope {
         inner: Rc::new(ScopeInner {
@@ -457,7 +463,7 @@ where
     K: PartialEq + 'static,
 {
     crate::__launched_effect_async_impl(
-        crate::location_key(file!(), line!(), column!()),
+        crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,
         move |_scope| {
@@ -585,6 +591,7 @@ impl<T: Send + 'static> Drop for Bridge<T> {
 /// place the framework bridges "a service publishes from another thread" to
 /// "a composition collects".
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberEventStream<T, K, R, S>(key: K, subscribe: S) -> EventStream<T>
 where
     T: Send + 'static,
@@ -597,25 +604,20 @@ where
     #[cfg(not(target_arch = "wasm32"))]
     let dispatcher = current_runtime_handle().map(|runtime| runtime.dispatcher());
 
-    crate::__disposable_effect_impl(
-        crate::location_key(file!(), line!(), column!()),
-        key,
-        move |scope| {
+    crate::__disposable_effect_impl(crate::caller_location_key(), key, move |scope| {
+        #[cfg(not(target_arch = "wasm32"))]
+        let Some(dispatcher) = dispatcher else {
+            log::warn!("cranpose: an event stream was remembered without a runtime");
+            return scope.on_dispose(|| {});
+        };
+        let registration = subscribe(EventSender {
             #[cfg(not(target_arch = "wasm32"))]
-            let Some(dispatcher) = dispatcher
-            else {
-                log::warn!("cranpose: an event stream was remembered without a runtime");
-                return scope.on_dispose(|| {});
-            };
-            let registration = subscribe(EventSender {
-                #[cfg(not(target_arch = "wasm32"))]
-                dispatcher,
-                bridge: id,
-                _events: std::marker::PhantomData,
-            });
-            scope.on_dispose(move || drop(registration))
-        },
-    );
+            dispatcher,
+            bridge: id,
+            _events: std::marker::PhantomData,
+        });
+        scope.on_dispose(move || drop(registration))
+    });
 
     stream
 }
@@ -804,17 +806,19 @@ impl BlockingPool {
         let counters = Arc::clone(&self.state);
         let started = std::thread::Builder::new()
             .name("cranpose-blocking".to_string())
-            .spawn(move || loop {
-                let job = {
-                    let queue = receiver.lock().unwrap_or_else(|error| error.into_inner());
-                    queue.recv()
-                };
-                let Ok(job) = job else {
-                    break;
-                };
-                job();
-                let mut counters = counters.lock().unwrap_or_else(|error| error.into_inner());
-                counters.outstanding = counters.outstanding.saturating_sub(1);
+            .spawn(move || {
+                loop {
+                    let job = {
+                        let queue = receiver.lock().unwrap_or_else(|error| error.into_inner());
+                        queue.recv()
+                    };
+                    let Ok(job) = job else {
+                        break;
+                    };
+                    job();
+                    let mut counters = counters.lock().unwrap_or_else(|error| error.into_inner());
+                    counters.outstanding = counters.outstanding.saturating_sub(1);
+                }
             });
         if started.is_err() {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -835,30 +839,28 @@ impl<T> Future for BlockingWork<T> {
     type Output = T;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<T> {
-        if self.done.load(Ordering::Acquire) {
-            if let Some(value) = self
+        if self.done.load(Ordering::Acquire)
+            && let Some(value) = self
                 .slot
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take()
-            {
-                return Poll::Ready(value);
-            }
+        {
+            return Poll::Ready(value);
         }
         self.wakers
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(context.waker().clone());
         // The worker may have finished between the check and the registration.
-        if self.done.load(Ordering::Acquire) {
-            if let Some(value) = self
+        if self.done.load(Ordering::Acquire)
+            && let Some(value) = self
                 .slot
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take()
-            {
-                return Poll::Ready(value);
-            }
+        {
+            return Poll::Ready(value);
         }
         Poll::Pending
     }
@@ -882,7 +884,7 @@ where
     let state = remember(|| mutableStateOf(initial)).with(|state| *state);
     let handle = ProduceScope { state };
     crate::__launched_effect_async_impl(
-        crate::location_key(file!(), line!(), column!()),
+        crate::caller_location_key(),
         std::panic::Location::caller().into(),
         key,
         move |_scope| producer(handle),
@@ -932,10 +934,12 @@ mod tests {
             fired: Arc::new(AtomicBool::new(false)),
         });
         let waker = Waker::noop().clone();
-        assert!(future
-            .as_mut()
-            .poll(&mut Context::from_waker(&waker))
-            .is_ready());
+        assert!(
+            future
+                .as_mut()
+                .poll(&mut Context::from_waker(&waker))
+                .is_ready()
+        );
     }
 }
 

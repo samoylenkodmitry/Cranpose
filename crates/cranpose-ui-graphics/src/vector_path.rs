@@ -835,9 +835,11 @@ mod tests {
         let path = VectorPath::parse("M 0 0 C 0 5 2 5 5 5 S 10 5 10 10").expect("valid path");
         let points = &path.subpaths()[0];
         assert_eq!(*points.last().unwrap(), Point::new(10.0, 10.0));
-        assert!(points
-            .iter()
-            .any(|p| (p.x - 5.0).abs() < 0.1 && (p.y - 5.0).abs() < 0.1));
+        assert!(
+            points
+                .iter()
+                .any(|p| (p.x - 5.0).abs() < 0.1 && (p.y - 5.0).abs() < 0.1)
+        );
     }
 
     #[test]
@@ -846,13 +848,17 @@ mod tests {
         let points = &path.subpaths()[0];
         assert_eq!(*points.last().unwrap(), Point::new(20.0, 0.0));
         // Quadratic apex at t=0.5 is (5, 5).
-        assert!(points
-            .iter()
-            .any(|p| (p.x - 5.0).abs() < 0.3 && (p.y - 5.0).abs() < 0.3));
+        assert!(
+            points
+                .iter()
+                .any(|p| (p.x - 5.0).abs() < 0.3 && (p.y - 5.0).abs() < 0.3)
+        );
         // T mirrors the control: the second hump dips to (15, -5).
-        assert!(points
-            .iter()
-            .any(|p| (p.x - 15.0).abs() < 0.3 && (p.y + 5.0).abs() < 0.3));
+        assert!(
+            points
+                .iter()
+                .any(|p| (p.x - 15.0).abs() < 0.3 && (p.y + 5.0).abs() < 0.3)
+        );
     }
 
     #[test]

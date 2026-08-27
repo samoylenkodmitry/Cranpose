@@ -25,11 +25,11 @@ use std::{
 };
 
 use cranpose_foundation::{
-    impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities,
-    NodeState, PointerEvent, PointerEventKind, PointerInputNode, RotaryScrollEvent,
+    DelegatableNode, ModifierNode, ModifierNodeElement, NodeCapabilities, NodeState, PointerEvent,
+    PointerEventKind, PointerInputNode, RotaryScrollEvent, impl_pointer_input_node,
 };
 
-use super::{inspector_metadata, Modifier};
+use super::{Modifier, inspector_metadata};
 
 /// Which dispatch pass a rotary handler listens on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

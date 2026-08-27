@@ -29,8 +29,8 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -256,11 +256,11 @@ fn serve_source(
     let mut header = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n"
     );
-    if status == 206 {
-        if let Some(total) = total {
-            let end = start + length - 1;
-            header.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
-        }
+    if status == 206
+        && let Some(total) = total
+    {
+        let end = start + length - 1;
+        header.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
     }
     header.push_str("\r\n");
     stream.write_all(header.as_bytes())?;

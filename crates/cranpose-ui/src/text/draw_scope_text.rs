@@ -12,8 +12,8 @@
 use std::rc::Rc;
 
 use cranpose_ui_graphics::{
-    estimate_text_measurement, DrawTextMeasurer, FontStyle as DrawFontStyle, Size, TextMeasurement,
-    TextStyle as DrawTextStyle,
+    DrawTextMeasurer, FontStyle as DrawFontStyle, Size, TextMeasurement,
+    TextStyle as DrawTextStyle, estimate_text_measurement,
 };
 
 use super::{
@@ -55,10 +55,11 @@ pub fn text_style_for_draw_style(style: &DrawTextStyle) -> TextStyle {
     }
 
     let mut text_style = TextStyle::from_span_style(span_style);
-    if let Some(line_height) = style.line_height {
-        if line_height.is_finite() && line_height > 0.0 {
-            text_style.paragraph_style.line_height = TextUnit::Sp(line_height);
-        }
+    if let Some(line_height) = style.line_height
+        && line_height.is_finite()
+        && line_height > 0.0
+    {
+        text_style.paragraph_style.line_height = TextUnit::Sp(line_height);
     }
     text_style.paragraph_style.line_height_style = style.line_height_style;
     text_style
@@ -185,7 +186,7 @@ mod tests {
         // pixel off the composed rows beside it. Roboto at 16sp on a density-2
         // watch, in device pixels.
         use crate::{
-            text::line_box::{line_box, FontExtent},
+            text::line_box::{FontExtent, line_box},
             widgets::wear::wear_line_height_style,
         };
 

@@ -17,13 +17,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -308,9 +308,8 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     // Warm: captures land and slots are confirmed.
     let graphs = build_sequence(31, &mut |_| false);
@@ -321,14 +320,12 @@ fn feed_disabled_after_build_rematerializes_bypassed_spans() {
     // deterministic CPU emission with no retention state at all. One warm
     // pass absorbs the pass-position transition (same-position-control
     // discipline, see `command_feed_parity`) before anything is compared.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let _ = render_sequence(&mut renderer, &graphs);
     let control = render_sequence(&mut renderer, &graphs);
     let rematerialized = render_sequence(&mut renderer, &bypassed_graphs);
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
 
     let (_, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert_eq!(
@@ -352,9 +349,8 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let command = command_for(32);
 
     let graphs = build_sequence(32, &mut |_| false);
@@ -394,16 +390,14 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     // in-flight frame right after the swap), so it is compared under the
     // blending-noise envelope, not byte-exactly; T2 proves byte-exactness
     // of the rematerialization walk from stable positions.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
     assert_noise_only("swap-remat-vs-ordinary", &ordinary_frame, &remat_frame);
 
     // Heal: a full fed pass re-earns slots and confirmations on the new
     // renderer, and one rebuild later bypass output is byte-identical to a
     // same-position fed control.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let _ = render_sequence(&mut renderer, &bypassed_graphs);
     let (feed_slots, _, remat_misses) = cranpose_render_wgpu::command_feed_live_stats();
     assert!(
@@ -417,9 +411,8 @@ fn renderer_swap_revokes_confirmations_and_rematerializes() {
     let _ = render_sequence(&mut renderer, &graphs);
     let control = render_sequence(&mut renderer, &graphs);
     let rebuilt = render_sequence(&mut renderer, &rebuilt_graphs);
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
     assert_byte_exact("post-swap-rebuild-vs-control", &control, &rebuilt);
 }
 
@@ -438,9 +431,8 @@ fn registry_loss_no_longer_reaches_the_miss_terminal() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     let graphs = build_sequence(33, &mut |_| false);
     let _ = render_sequence(&mut renderer, &graphs);
@@ -465,12 +457,10 @@ fn registry_loss_no_longer_reaches_the_miss_terminal() {
     // remat frame is a first-pass-at-position render (right after the
     // swap), so it is compared under the blending-noise envelope; T2 proves
     // byte-exactness of the walk from stable positions.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let ordinary_frame = render_sequence(&mut renderer, &graphs[last..]);
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
     assert_noise_only("registry-loss-vs-ordinary", &ordinary_frame, &remat_frame);
 }
 
@@ -488,9 +478,8 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
     let command = command_for(35);
 
     let graphs = build_sequence(35, &mut |_| false);
@@ -541,8 +530,7 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
     // miss frame is missing its rings; the next build (nothing confirmed,
     // so nothing bypasses) renders byte-identical to control. One warm
     // pass absorbs the pass-position transition before comparing.
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("0"));
     let _ = render_sequence(&mut renderer, &graphs[last..]);
     let control = render_sequence(&mut renderer, &graphs[last..]);
     // Missing rings put many channels far beyond blending noise (≤2/255).
@@ -561,9 +549,8 @@ fn orphaned_frame_terminal_counts_revokes_and_self_heals() {
         "with every confirmation revoked the next build must materialize fully"
     );
     let healed = render_sequence(&mut renderer, &healed_graphs[last..]);
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
     assert_byte_exact("self-heal-vs-control", &control, &healed);
 }
 
@@ -630,9 +617,8 @@ fn higher_generation_replay_ops_adopt_forward() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     // Warm at scale 1.0: captures land, slots confirm.
     let graphs = build_sequence(37, &mut |_| false);
@@ -640,9 +626,8 @@ fn higher_generation_replay_ops_adopt_forward() {
     let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
     if feed_slots == 0 {
         eprintln!("skipping adopt-forward: device has no retained replay support");
-        std::env::remove_var("CRANPOSE_COMMAND_FEED");
-        std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-        std::env::remove_var("CRANPOSE_ARC_MESH");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
         return;
     }
     let drops_before = renderer.replay_generation_drops_for_tests();
@@ -677,9 +662,8 @@ fn higher_generation_replay_ops_adopt_forward() {
             .expect("post-adopt frame failed");
     }
     let (feed_slots_after, _, _) = cranpose_render_wgpu::command_feed_live_stats();
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
     assert!(
         feed_slots_after > 0,
         "the feed must re-earn slots under the adopted generation"
@@ -705,9 +689,8 @@ fn cancelled_packet_requeues_feed_releases() {
             return;
         }
     };
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     // Warm at scale 1.0 so the feed holds live, confirmed slots.
     let graphs = build_sequence(38, &mut |_| false);
@@ -715,9 +698,8 @@ fn cancelled_packet_requeues_feed_releases() {
     let (feed_slots, _, _) = cranpose_render_wgpu::command_feed_live_stats();
     if feed_slots == 0 {
         eprintln!("skipping cancelled-release requeue: device has no retained replay support");
-        std::env::remove_var("CRANPOSE_COMMAND_FEED");
-        std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-        std::env::remove_var("CRANPOSE_ARC_MESH");
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+        cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
         return;
     }
     let (_, live_before) = renderer.replay_slot_mesh_stats();
@@ -795,9 +777,8 @@ fn cancelled_packet_requeues_feed_releases() {
         drops_before,
         "serving the re-queued releases must not count a generation drop"
     );
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_ARC_MESH");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
 }
 
 /// T5: a feed capture that outlives the frame it was queued on (aborted
@@ -815,7 +796,6 @@ fn stale_feed_captures_are_dropped_at_the_drain() {
     };
     // The flat detector stays out so the injected capture is the only
     // replay-adjacent state in play.
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "0");
     let command = command_for(34);
 
     // A plain (non-replayed) scene with far more shapes than the injected
@@ -844,7 +824,6 @@ fn stale_feed_captures_are_dropped_at_the_drain() {
     renderer
         .capture_frame(SIZE, SIZE)
         .expect("drain frame failed");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
 
     assert_eq!(
         cranpose_render_wgpu::pending_feed_capture_count_for_tests(),

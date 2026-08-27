@@ -38,18 +38,18 @@ pub mod internal {
     pub use crate::frame_clock::{FrameCallbackRegistration, FrameClock};
 }
 pub use callbacks::{CallbackHolder, CallbackHolder1, ParamSlot, ParamState, ReturnSlot};
-pub use composer::{CapturedCompositionContext, Composer, ValueSlotHandle};
+pub use composer::{BranchGroupGuard, CapturedCompositionContext, Composer, ValueSlotHandle};
 pub(crate) use composer::{ComposerCore, EmittedNode, ParentAttachMode, ParentFrame};
 pub use composition::{Composition, ROOT_RENDER_REPLAY_LIMIT};
 pub use composition_locals::{
-    compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf, CompositionLocal,
-    CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
+    CompositionLocal, CompositionLocalProvider, ProvidedValue, StaticCompositionLocal,
+    compositionLocalOf, compositionLocalOfWithPolicy, staticCompositionLocalOf,
 };
 pub(crate) use composition_locals::{LocalStateEntry, StaticLocalEntry};
 pub use concurrency::{
-    collectAsState, delay, interval, launchBlocking, produceState, rememberCoroutineScope,
-    rememberEventStream, spawn_ui_task, withBlocking, CollectEvents, CoroutineScope, Delay,
-    EventChannel, EventSender, EventStream, EventStreamNext, ProduceScope,
+    CollectEvents, CoroutineScope, Delay, EventChannel, EventSender, EventStream, EventStreamNext,
+    ProduceScope, collectAsState, delay, interval, launchBlocking, produceState,
+    rememberCoroutineScope, rememberEventStream, spawn_ui_task, withBlocking,
 };
 #[doc(hidden)]
 pub use debug_trace::{
@@ -69,12 +69,12 @@ pub use launched_effect::{
     TaskSite,
 };
 pub use owned::Owned;
-pub use platform::{scheduler_ref, Clock, RuntimeScheduler, SchedulerRef};
+pub use platform::{Clock, RuntimeScheduler, SchedulerRef, scheduler_ref};
 pub use retention::{RetentionBudget, RetentionEvictionPolicy, RetentionMode, RetentionPolicy};
 #[doc(hidden)]
 pub use runtime::{
-    current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
     DefaultScheduler, Runtime, RuntimeHandle, StateId, TaskHandle, UiDispatcher,
+    current_runtime_handle, label_next_ui_task, schedule_frame, schedule_node_update,
 };
 pub use slot::{
     SlotDebugAnchor, SlotDebugEntry, SlotDebugEntryKind, SlotDebugGroup, SlotDebugScope,
@@ -314,13 +314,17 @@ pub(crate) fn slot_validation_diagnostics_enabled() -> bool {
 }
 
 fn source_location_key(file: &str, line: u32, column: u32) -> Key {
+    avalanche_location_key(source_location_hash(file, line, column))
+}
+
+fn source_location_hash(file: &str, line: u32, column: u32) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     hash = fnv1a_location_key_bytes(hash, file.as_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xff]);
     hash = fnv1a_location_key_bytes(hash, &line.to_le_bytes());
     hash = fnv1a_location_key_bytes(hash, &[0xfe]);
     hash = fnv1a_location_key_bytes(hash, &column.to_le_bytes());
-    avalanche_location_key(hash)
+    hash
 }
 
 fn fnv1a_location_key_bytes(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -339,8 +343,54 @@ fn avalanche_location_key(mut value: u64) -> u64 {
     value ^ (value >> 33)
 }
 
+#[doc(hidden)]
+#[track_caller]
+pub fn caller_location_key() -> Key {
+    let caller = std::panic::Location::caller();
+    location_key(caller.file(), caller.line(), caller.column())
+}
+
+#[doc(hidden)]
+#[track_caller]
+pub fn composable_identity_key(definition: Key) -> Key {
+    (definition.wrapping_mul(0x0000_0100_0000_01b3) ^ caller_location_key())
+        .wrapping_mul(0x0000_0100_0000_01b3)
+}
+
+#[doc(hidden)]
+pub fn composable_definition_key(
+    file: &str,
+    line: u32,
+    column: u32,
+    marker: std::any::TypeId,
+) -> Key {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&marker, &mut hasher);
+    location_key(file, line, column) ^ avalanche_location_key(std::hash::Hasher::finish(&hasher))
+}
+
 pub fn location_key(file: &str, line: u32, column: u32) -> Key {
     let key = source_location_key(file, line, column);
+    #[cfg(test)]
+    register_location_key_debug_info(key, file, line, column);
+    #[cfg(all(debug_assertions, not(test)))]
+    if location_key_diagnostics_enabled() {
+        register_location_key_debug_info(key, file, line, column);
+    }
+    key
+}
+
+#[doc(hidden)]
+pub fn __branch_group_scope_deferred(key: Key) -> Option<BranchGroupGuard> {
+    with_current_composer_opt(|composer| composer.__branch_group_deferred(key))
+}
+
+#[doc(hidden)]
+pub fn branch_location_key(file: &str, line: u32, column: u32, branch: u32) -> Key {
+    let mut hash = source_location_hash(file, line, column);
+    hash = fnv1a_location_key_bytes(hash, &[0xfd]);
+    hash = fnv1a_location_key_bytes(hash, &branch.to_le_bytes());
+    let key = avalanche_location_key(hash);
     #[cfg(test)]
     register_location_key_debug_info(key, file, line, column);
     #[cfg(all(debug_assertions, not(test)))]
@@ -392,6 +442,14 @@ impl LocalKey {
     fn new() -> Self {
         Self(Rc::new(()))
     }
+
+    /// A slot source unique among live locals — the identity allocation every
+    /// clone shares — so entries for two same-typed locals never adopt each
+    /// other when a neighboring provider leaves. Allocation-backed rather
+    /// than counted: creating a local depends on nothing global.
+    pub(crate) fn entry_source(&self) -> Key {
+        avalanche_location_key(Rc::as_ptr(&self.0) as usize as u64)
+    }
 }
 
 impl std::fmt::Debug for LocalKey {
@@ -399,12 +457,6 @@ impl std::fmt::Debug for LocalKey {
         f.debug_tuple("LocalKey")
             .field(&(Rc::as_ptr(&self.0) as usize))
             .finish()
-    }
-}
-
-impl std::fmt::Display for LocalKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:p}", Rc::as_ptr(&self.0))
     }
 }
 
@@ -1843,10 +1895,10 @@ impl Command {
             } => {
                 insert_child_with_reparenting(applier, parent_id, child_id);
                 bubble.apply(applier, parent_id);
-                if insert_index != appended_index {
-                    if let Ok(parent_node) = applier.get_mut(parent_id) {
-                        parent_node.move_child(appended_index, insert_index);
-                    }
+                if insert_index != appended_index
+                    && let Ok(parent_node) = applier.get_mut(parent_id)
+                {
+                    parent_node.move_child(appended_index, insert_index);
                 }
                 Ok(())
             }
@@ -2430,18 +2482,18 @@ fn insert_child_with_reparenting(applier: &mut dyn Applier, parent_id: NodeId, c
         .get_mut(child_id)
         .ok()
         .and_then(|node| node.parent());
-    if let Some(old_parent_id) = old_parent {
-        if old_parent_id != parent_id {
-            if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
-                old_parent_node.remove_child(child_id);
-            }
-            if let Ok(child_node) = applier.get_mut(child_id) {
-                child_node.on_removed_from_parent();
-            }
-            bubble_layout_dirty(applier, old_parent_id);
-            bubble_measure_dirty(applier, old_parent_id);
-            applier.record_structural_change(old_parent_id);
+    if let Some(old_parent_id) = old_parent
+        && old_parent_id != parent_id
+    {
+        if let Ok(old_parent_node) = applier.get_mut(old_parent_id) {
+            old_parent_node.remove_child(child_id);
         }
+        if let Ok(child_node) = applier.get_mut(child_id) {
+            child_node.on_removed_from_parent();
+        }
+        bubble_layout_dirty(applier, old_parent_id);
+        bubble_measure_dirty(applier, old_parent_id);
+        applier.record_structural_change(old_parent_id);
     }
 
     if let Ok(parent_node) = applier.get_mut(parent_id) {
@@ -3111,11 +3163,7 @@ impl MemoryApplier {
         let Some(limit) = self.recycle_pool_limit_for(key) else {
             return usize::MAX;
         };
-        if limit <= 8 {
-            limit
-        } else {
-            limit / 4
-        }
+        if limit <= 8 { limit } else { limit / 4 }
     }
 
     fn update_warm_recycled_node_target(&mut self, key: TypeId, observed_demand: usize) -> usize {
@@ -3177,12 +3225,12 @@ impl MemoryApplier {
             self.cold_recycled_nodes.entry(key).or_default()
         };
         pool.push(recycled);
-        if let Some(limit) = recycle_pool_limit {
-            if pool.len() > limit {
-                let excess = pool.len() - limit;
-                let dropped: Vec<_> = pool.drain(0..excess).collect();
-                drop(dropped);
-            }
+        if let Some(limit) = recycle_pool_limit
+            && pool.len() > limit
+        {
+            let excess = pool.len() - limit;
+            let dropped: Vec<_> = pool.drain(0..excess).collect();
+            drop(dropped);
         }
     }
 
@@ -3200,12 +3248,12 @@ impl MemoryApplier {
         {
             let pool = self.recycled_nodes.entry(key).or_default();
             pool.push(recycled);
-            if let Some(limit) = recycle_pool_limit {
-                if pool.len() > limit {
-                    let excess = pool.len() - limit;
-                    dropped = pool.drain(0..excess).collect();
-                    remove_pool_entry = pool.is_empty();
-                }
+            if let Some(limit) = recycle_pool_limit
+                && pool.len() > limit
+            {
+                let excess = pool.len() - limit;
+                dropped = pool.drain(0..excess).collect();
+                remove_pool_entry = pool.is_empty();
             }
         }
         if remove_pool_entry {
@@ -3464,20 +3512,20 @@ impl MemoryApplier {
 
     fn remove_node_storage(&mut self, node_id: NodeId) -> Result<(), NodeError> {
         if self.high_id_nodes.contains_key(&node_id) {
-            if let Some(mut node) = self.high_id_nodes.remove(&node_id) {
-                if let Some(key) = node.recycle_key() {
-                    let recycle_pool_limit = node.recycle_pool_limit();
-                    let warm_origin = self
-                        .high_id_warm_recycled_origins
-                        .remove(&node_id)
-                        .unwrap_or(false);
-                    node.prepare_for_recycle();
-                    self.push_recycled_node(
-                        key,
-                        recycle_pool_limit,
-                        RecycledNode::new(node_id, node, warm_origin),
-                    );
-                }
+            if let Some(mut node) = self.high_id_nodes.remove(&node_id)
+                && let Some(key) = node.recycle_key()
+            {
+                let recycle_pool_limit = node.recycle_pool_limit();
+                let warm_origin = self
+                    .high_id_warm_recycled_origins
+                    .remove(&node_id)
+                    .unwrap_or(false);
+                node.prepare_for_recycle();
+                self.push_recycled_node(
+                    key,
+                    recycle_pool_limit,
+                    RecycledNode::new(node_id, node, warm_origin),
+                );
             }
             let generation = self.high_id_generations.entry(node_id).or_insert(0);
             *generation = generation.wrapping_add(1);
@@ -3487,21 +3535,21 @@ impl MemoryApplier {
         let physical_id = self
             .resolve_node_index(node_id)
             .ok_or(NodeError::Missing { id: node_id })?;
-        if let Some(mut node) = self.nodes[physical_id].take() {
-            if let Some(key) = node.recycle_key() {
-                let recycle_pool_limit = node.recycle_pool_limit();
-                let warm_origin = self
-                    .physical_warm_recycled_origins
-                    .get_mut(physical_id)
-                    .map(std::mem::take)
-                    .unwrap_or(false);
-                node.prepare_for_recycle();
-                self.push_recycled_node(
-                    key,
-                    recycle_pool_limit,
-                    RecycledNode::new(node_id, node, warm_origin),
-                );
-            }
+        if let Some(mut node) = self.nodes[physical_id].take()
+            && let Some(key) = node.recycle_key()
+        {
+            let recycle_pool_limit = node.recycle_pool_limit();
+            let warm_origin = self
+                .physical_warm_recycled_origins
+                .get_mut(physical_id)
+                .map(std::mem::take)
+                .unwrap_or(false);
+            node.prepare_for_recycle();
+            self.push_recycled_node(
+                key,
+                recycle_pool_limit,
+                RecycledNode::new(node_id, node, warm_origin),
+            );
         }
         self.physical_stable_ids[physical_id] = Self::INVALID_STABLE_ID;
         self.stable_to_physical.remove(&node_id);
@@ -3671,10 +3719,8 @@ impl Applier for MemoryApplier {
             let Some(mut node) = self.nodes[physical_id].take() else {
                 continue;
             };
-            if rehouse_live_nodes {
-                if let Some(rehoused) = node.rehouse_for_live_compaction() {
-                    node = rehoused;
-                }
+            if rehouse_live_nodes && let Some(rehoused) = node.rehouse_for_live_compaction() {
+                node = rehoused;
             }
             let stable_id = std::mem::replace(
                 &mut self.physical_stable_ids[physical_id],
@@ -3950,10 +3996,8 @@ impl SlotsHost {
         for host in nested {
             any |= host.forget_effects();
         }
-        if any {
-            if let Some(runtime_state) = runtime_state {
-                runtime_state.force_recompose_host_scopes(self.storage_key());
-            }
+        if any && let Some(runtime_state) = runtime_state {
+            runtime_state.force_recompose_host_scopes(self.storage_key());
         }
         any
     }
@@ -4142,6 +4186,23 @@ impl SlotsHost {
 
     pub(crate) fn has_active_pass(&self) -> bool {
         self.inner.borrow().active_pass.is_some()
+    }
+
+    pub(crate) fn try_push_branch_fold(&self, key: Key) -> Option<usize> {
+        let mut inner = self.inner.try_borrow_mut().ok()?;
+        let pass = inner.active_pass.as_mut()?;
+        Some(pass.state.push_branch_fold(key))
+    }
+
+    pub(crate) fn try_close_branch_fold(&self, token: usize) -> bool {
+        let Ok(mut inner) = self.inner.try_borrow_mut() else {
+            return false;
+        };
+        let Some(pass) = inner.active_pass.as_mut() else {
+            return false;
+        };
+        pass.state.close_branch_fold(token);
+        true
     }
 
     pub(crate) fn abandon_active_pass(&self) {

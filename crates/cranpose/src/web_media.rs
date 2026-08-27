@@ -23,12 +23,12 @@ use std::{
 };
 
 use cranpose_services::{
+    EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand, MediaError, MediaItem,
+    MediaMetadata, MediaPlayer, MediaSamples, PlaybackProgress, PlaybackState,
     publish_media_command, publish_media_samples, publish_playback_progress,
-    publish_playback_state, EqualizerBand, EqualizerSettings, MediaCapabilities, MediaCommand,
-    MediaError, MediaItem, MediaMetadata, MediaPlayer, MediaSamples, PlaybackProgress,
-    PlaybackState,
+    publish_playback_state,
 };
-use wasm_bindgen::{closure::Closure, JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{
     AnalyserNode, AudioContext, BiquadFilterNode, BiquadFilterType, GainNode, HtmlAudioElement,
     MediaElementAudioSourceNode,
@@ -435,10 +435,10 @@ fn set_analysis_running(browser: &mut Browser, enabled: bool) -> bool {
         return false;
     };
     if !enabled {
-        if let Some(graph) = browser.graph.as_mut() {
-            if let Some(timer) = graph.timer.take() {
-                window.clear_interval_with_handle(timer);
-            }
+        if let Some(graph) = browser.graph.as_mut()
+            && let Some(timer) = graph.timer.take()
+        {
+            window.clear_interval_with_handle(timer);
         }
         return true;
     }

@@ -114,12 +114,16 @@ fn composer_new_with_shared_state_quarantines_mismatched_bound_host() {
     );
     let composer = result.unwrap();
     assert!(!Rc::ptr_eq(&composer.core.slots, &slots_host));
-    assert!(owner_state
-        .host_for_storage_key(original_storage_key)
-        .is_some());
-    assert!(other_state
-        .host_for_storage_key(composer.core.slots.storage_key())
-        .is_some());
+    assert!(
+        owner_state
+            .host_for_storage_key(original_storage_key)
+            .is_some()
+    );
+    assert!(
+        other_state
+            .host_for_storage_key(composer.core.slots.storage_key())
+            .is_some()
+    );
 }
 
 struct MismatchedSlotPassFixture {
@@ -199,16 +203,20 @@ fn assert_mismatched_slot_pass_uses_replacement(
     assert!(rebound_to_other_state);
     assert!(registered_during_pass);
     assert_ne!(active_storage_key, fixture.original_storage_key);
-    assert!(fixture
-        .owner_state
-        .host_for_storage_key(fixture.original_storage_key)
-        .is_some());
+    assert!(
+        fixture
+            .owner_state
+            .host_for_storage_key(fixture.original_storage_key)
+            .is_some()
+    );
     assert!(!fixture.mismatched_host.has_active_pass());
-    assert!(fixture
-        .mismatched_host
-        .runtime_state()
-        .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
-        .unwrap_or(false));
+    assert!(
+        fixture
+            .mismatched_host
+            .runtime_state()
+            .map(|state| Rc::ptr_eq(&state, &fixture.owner_state))
+            .unwrap_or(false)
+    );
 }
 
 #[test]

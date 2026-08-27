@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{composer_context, Composer, ComposerCore, RecomposeScope};
+use crate::{Composer, ComposerCore, RecomposeScope, composer_context};
 
 pub struct ParamState<T> {
     pub(crate) value: Option<T>,
@@ -81,11 +81,11 @@ impl Drop for CallbackScopeGuard {
 
 fn with_callback_scope<R>(scope: &CallbackScopeCell, f: impl FnOnce() -> R) -> R {
     let captured_scope = scope.borrow().clone();
-    if let Some(saved_scope) = captured_scope {
-        if let Some(composer) = composer_context::current_composer() {
-            let _scope_guard = CallbackScopeGuard::push(&composer, saved_scope);
-            return f();
-        }
+    if let Some(saved_scope) = captured_scope
+        && let Some(composer) = composer_context::current_composer()
+    {
+        let _scope_guard = CallbackScopeGuard::push(&composer, saved_scope);
+        return f();
     }
 
     f()
@@ -132,7 +132,7 @@ impl CallbackHolder {
     }
 
     /// Produce a forwarder closure that keeps the holder alive and forwards calls to it.
-    pub fn clone_rc(&self) -> impl Fn() + 'static {
+    pub fn clone_rc(&self) -> impl Fn() + 'static + use<> {
         let rc = self.rc.clone();
         let creator_scope = self.creator_scope.clone();
         move || {
@@ -239,7 +239,7 @@ mod callback_holder_tests {
     use std::{cell::Cell, rc::Rc};
 
     use super::{CallbackHolder, CallbackHolder1, ParamSlot};
-    use crate::{runtime::TestRuntime, RecomposeScope};
+    use crate::{RecomposeScope, runtime::TestRuntime};
 
     #[test]
     fn param_slot_take_reports_absence_instead_of_panicking() {

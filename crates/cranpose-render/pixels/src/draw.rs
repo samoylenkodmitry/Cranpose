@@ -263,10 +263,10 @@ fn draw_shape(
                     stroke.join,
                 )
             } else {
-                if let Some(ref radii) = resolved_shape {
-                    if !point_in_resolved_rounded_rect(center_x, center_y, rect, radii) {
-                        continue;
-                    }
+                if let Some(ref radii) = resolved_shape
+                    && !point_in_resolved_rounded_rect(center_x, center_y, rect, radii)
+                {
+                    continue;
                 }
                 1.0
             };

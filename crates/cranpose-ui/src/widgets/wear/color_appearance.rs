@@ -752,27 +752,15 @@ fn nth_vertex(y: f64, n: i32) -> [f64; 3] {
     if n < 4 {
         let (g, b) = (coord_a, coord_b);
         let r = (y - g * k_g - b * k_b) / k_r;
-        if is_bounded(r) {
-            [r, g, b]
-        } else {
-            MISS
-        }
+        if is_bounded(r) { [r, g, b] } else { MISS }
     } else if n < 8 {
         let (b, r) = (coord_a, coord_b);
         let g = (y - r * k_r - b * k_b) / k_g;
-        if is_bounded(g) {
-            [r, g, b]
-        } else {
-            MISS
-        }
+        if is_bounded(g) { [r, g, b] } else { MISS }
     } else {
         let (r, g) = (coord_a, coord_b);
         let b = (y - r * k_r - g * k_g) / k_b;
-        if is_bounded(b) {
-            [r, g, b]
-        } else {
-            MISS
-        }
+        if is_bounded(b) { [r, g, b] } else { MISS }
     }
 }
 

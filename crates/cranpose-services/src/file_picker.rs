@@ -15,7 +15,7 @@
 
 use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
 use crate::content::{ContentError, ContentFolderRef, ContentHandle, ContentSinkRef};

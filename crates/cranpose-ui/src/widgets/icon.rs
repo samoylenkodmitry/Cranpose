@@ -2,15 +2,14 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_core::{rememberKeyed, NodeId};
+use cranpose_core::{NodeId, rememberKeyed};
 use cranpose_ui_graphics::{Brush, Color, VectorPath};
 use cranpose_ui_layout::Alignment;
 
 use crate::{
-    composable,
-    interaction::{rememberMutableInteractionSource, MutableInteractionSource},
+    Modifier, SemanticsWidgetRole, Size, composable,
+    interaction::{MutableInteractionSource, rememberMutableInteractionSource},
     widgets::{Box, BoxSpec},
-    Modifier, SemanticsWidgetRole, Size,
 };
 
 /// The coordinate system every icon path is authored in.

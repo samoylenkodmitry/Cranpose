@@ -445,6 +445,7 @@ where
 /// Reads restore through the saver on first composition; every write is stored
 /// immediately, so nothing is lost to a process the OS kills without warning.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberSaveable<T>(
     key: &'static str,
     saver: Saver<T>,

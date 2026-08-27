@@ -27,10 +27,10 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_animation::{spring, Animatable, AnimationType, Spring};
+use cranpose_animation::{Animatable, AnimationType, Spring, spring};
 use cranpose_core::{
-    internal::FrameCallbackRegistration, with_current_composer, NodeId, Owned, OwnedMutableState,
-    RuntimeHandle, SlotId,
+    NodeId, Owned, OwnedMutableState, RuntimeHandle, SlotId, internal::FrameCallbackRegistration,
+    with_current_composer,
 };
 use cranpose_foundation::DRAG_THRESHOLD;
 use cranpose_ui_layout::Placement;
@@ -506,10 +506,13 @@ impl SwipeDismissState {
 /// from the middle does not leave its displacement on the row that moves up
 /// into its slot.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberSwipeDismissState() -> SwipeDismissState {
+    let caller = cranpose_core::caller_location_key();
     let state = with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let owned: Owned<SwipeDismissState> = composer.remember(|| SwipeDismissState::new(runtime));
+        let owned: Owned<SwipeDismissState> =
+            composer.remember_at(caller, || SwipeDismissState::new(runtime));
         owned.with(SwipeDismissState::clone)
     });
     let identity = crate::lazy_item::lazy_item_key();

@@ -26,8 +26,8 @@ use std::{
 use cranpose_ui::text::{FontFamily, FontFile, FontStyle, FontWeight};
 
 use crate::software_text_raster::{
-    default_software_text_font, FontFamilyKey, SoftwareTextFont, SoftwareTextFontError,
-    SoftwareTextFontSet,
+    FontFamilyKey, SoftwareTextFont, SoftwareTextFontError, SoftwareTextFontSet,
+    default_software_text_font,
 };
 
 /// Directory Android keeps its system font files in.
@@ -325,10 +325,10 @@ impl SoftwareTextFontRegistry {
             // Unparsable app bytes have always been skipped rather than fatal.
             let _ = self.register_fallback_bytes((*bytes).to_vec());
         }
-        if self.faces.is_empty() {
-            if let Some(default_font) = default_software_text_font() {
-                self.faces.push(default_font);
-            }
+        if self.faces.is_empty()
+            && let Some(default_font) = default_software_text_font()
+        {
+            self.faces.push(default_font);
         }
         SoftwareTextFontSet::from_faces(self.faces)
     }
@@ -608,11 +608,10 @@ mod tests {
     fn register_family_honours_a_declared_weight_over_the_face_header() {
         let dir = ScratchDir::new("declared");
         let path = dir.write("Test-Regular.ttf", REGULAR);
-        let family =
-            FontFamily::file_backed(vec![
-                FontFile::new(path.to_string_lossy().into_owned()).with_weight(FontWeight::MEDIUM)
-            ])
-            .expect("file-backed family");
+        let family = FontFamily::file_backed(vec![
+            FontFile::new(path.to_string_lossy().into_owned()).with_weight(FontWeight::MEDIUM),
+        ])
+        .expect("file-backed family");
 
         let mut registry = SoftwareTextFontRegistry::new();
         registry.register_family(&family).expect("family loads");
@@ -735,9 +734,11 @@ mod tests {
             fonts.default_font().is_some(),
             "the embedded default font must still serve apps that supply nothing"
         );
-        assert!(fonts
-            .resolve(&TextStyle::default())
-            .is_some_and(|font| font.registered_family().is_none()));
+        assert!(
+            fonts
+                .resolve(&TextStyle::default())
+                .is_some_and(|font| font.registered_family().is_none())
+        );
     }
 
     #[test]
@@ -798,11 +799,10 @@ mod tests {
             .expect("bold system face");
         assert_eq!(bold.weight(), FontWeight::BOLD);
         assert_eq!(bold.registered_family(), {
-            let key = fonts
+            fonts
                 .resolve(&style_for(&FontFamily::SansSerif, FontWeight::NORMAL))
                 .expect("regular system face")
-                .registered_family();
-            key
+                .registered_family()
         });
     }
 
@@ -965,11 +965,10 @@ mod tests {
         // and must survive registration untouched.
         let dir = ScratchDir::new("app-off-grid");
         let path = dir.write("Test-Regular.ttf", REGULAR);
-        let family =
-            FontFamily::file_backed(vec![
-                FontFile::new(path.to_string_lossy().into_owned()).with_weight(FontWeight(450))
-            ])
-            .expect("file-backed family");
+        let family = FontFamily::file_backed(vec![
+            FontFile::new(path.to_string_lossy().into_owned()).with_weight(FontWeight(450)),
+        ])
+        .expect("file-backed family");
 
         let mut registry = SoftwareTextFontRegistry::new();
         registry.register_family(&family).expect("family loads");
@@ -1004,8 +1003,10 @@ mod tests {
         let fonts = registry.into_font_set_or_default(&[]);
 
         assert!(fonts.has_registered_family(&family));
-        assert!(fonts
-            .resolve(&style_for(&family, FontWeight::NORMAL))
-            .is_some_and(|font| font.registered_family().is_some()));
+        assert!(
+            fonts
+                .resolve(&style_for(&family, FontWeight::NORMAL))
+                .is_some_and(|font| font.registered_family().is_some())
+        );
     }
 }

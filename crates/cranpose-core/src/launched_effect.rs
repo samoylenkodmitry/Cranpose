@@ -6,12 +6,12 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
-use crate::{effect_key::EffectKey, with_current_composer, Key, RuntimeHandle, TaskHandle};
+use crate::{Key, RuntimeHandle, TaskHandle, effect_key::EffectKey, with_current_composer};
 
 #[derive(Default)]
 struct LaunchedEffectState {

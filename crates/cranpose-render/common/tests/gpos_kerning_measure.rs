@@ -10,8 +10,8 @@
 use cranpose_render_common::{
     gpos_kerning::GposKerning,
     software_text_raster::{
-        default_software_text_font, SoftwareTextFontSet, SoftwareTextMeasurer,
-        DEFAULT_SOFTWARE_TEXT_FONT_BYTES,
+        DEFAULT_SOFTWARE_TEXT_FONT_BYTES, SoftwareTextFontSet, SoftwareTextMeasurer,
+        default_software_text_font,
     },
 };
 use cranpose_ui::text::{

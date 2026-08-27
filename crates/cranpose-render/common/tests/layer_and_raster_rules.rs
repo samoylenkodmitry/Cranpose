@@ -11,7 +11,7 @@ use cranpose_render_common::{
     layer_transform::apply_layer_affine_to_point,
     raster_cache::ScaleBucket,
     scene_builder::{set_verify_executor, verify_executor},
-    style_shared::{resolve_layer_brush, ResolvedBrush},
+    style_shared::{ResolvedBrush, resolve_layer_brush},
 };
 use cranpose_ui_graphics::{Brush, Color, GraphicsLayer, Point, Rect};
 

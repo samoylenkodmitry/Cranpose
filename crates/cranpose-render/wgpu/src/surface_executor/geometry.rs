@@ -504,13 +504,13 @@ mod tests {
     use cranpose_ui_graphics::Rect;
 
     use super::{
-        axis_aligned_quad_rect, canonicalize_device_coordinate, canonicalized_scaled_quad,
-        canonicalized_scaled_rect, clamp_effect_surface_scale, composition_bytes_per_pixel,
-        content_effect_pixel_rect, device_pixel_exact_surface_rect,
+        MAX_EFFECT_LAYER_SURFACE_BYTES, axis_aligned_quad_rect, canonicalize_device_coordinate,
+        canonicalized_scaled_quad, canonicalized_scaled_rect, clamp_effect_surface_scale,
+        composition_bytes_per_pixel, content_effect_pixel_rect, device_pixel_exact_surface_rect,
         fit_capture_rect_to_scale_budget_for_axes, offscreen_byte_size,
         quantize_motion_stable_target_scale, snap_dest_quad_to_stable_point,
         snap_motion_stable_dest_quad, surface_target_size,
-        translation_stable_anchored_device_pixel_bounds, MAX_EFFECT_LAYER_SURFACE_BYTES,
+        translation_stable_anchored_device_pixel_bounds,
     };
     use crate::{
         effect_renderer::CompositeSampleMode, rect_to_quad, surface_plan::TranslatedContentAxes,

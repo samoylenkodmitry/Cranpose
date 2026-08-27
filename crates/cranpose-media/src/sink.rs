@@ -19,17 +19,18 @@
 
 use std::{
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         mpsc,
         mpsc::{Receiver, Sender, TryRecvError},
-        Arc,
     },
     time::Duration,
 };
 
 use cranpose_audio::{
+    RenderStatus,
     backend::{self, AudioSink, Renderer},
-    ring, RenderStatus,
+    ring,
 };
 use cranpose_services::MediaError;
 

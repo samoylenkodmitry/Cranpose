@@ -20,10 +20,10 @@
 //! of magnitude larger.
 
 use crate::{
+    Color, CornerRadii,
     geometry::{
         CommandRecording, Point, RecordKind, Rect, SolidArcRecord, SolidRoundRectRecord, TapeRef,
     },
-    Color, CornerRadii,
 };
 
 /// Relative tolerance for similarity verification.
@@ -1165,27 +1165,27 @@ impl CommandReplayState {
         // Leading segments the pooled pass already committed; the serial
         // walk below runs only from this point on.
         let mut committed = 0usize;
-        if let Some(pool) = pool {
-            if self.segments.len() >= 2 {
-                let commit = self.verify_optimistic(current, pool);
-                if commit.committed == self.segments.len() {
-                    self.optimistic_commits += 1;
-                    return self.finish_verify(current, commit.spans, commit.retained_records);
-                }
-                // Prefix-commit: the pooled spans for every segment before
-                // the first failure are equal by construction to what the
-                // serial walk would produce for them (see
-                // [`Self::verify_optimistic`]), so they are kept and the
-                // serial machinery below is seeded from the failure point
-                // instead of redoing the whole tape.
-                if commit.committed > 0 {
-                    self.prefix_commits += 1;
-                }
-                spans = commit.spans;
-                retained_records = commit.retained_records;
-                cursor = commit.cursor;
-                committed = commit.committed;
+        if let Some(pool) = pool
+            && self.segments.len() >= 2
+        {
+            let commit = self.verify_optimistic(current, pool);
+            if commit.committed == self.segments.len() {
+                self.optimistic_commits += 1;
+                return self.finish_verify(current, commit.spans, commit.retained_records);
             }
+            // Prefix-commit: the pooled spans for every segment before
+            // the first failure are equal by construction to what the
+            // serial walk would produce for them (see
+            // [`Self::verify_optimistic`]), so they are kept and the
+            // serial machinery below is seeded from the failure point
+            // instead of redoing the whole tape.
+            if commit.committed > 0 {
+                self.prefix_commits += 1;
+            }
+            spans = commit.spans;
+            retained_records = commit.retained_records;
+            cursor = commit.cursor;
+            committed = commit.committed;
         }
         // Segments awaiting location this frame, tape order. A split pushes
         // the suffix back onto the front so it is located before the next
@@ -2253,8 +2253,8 @@ mod tests {
     }
 
     use crate::{
-        geometry::{DrawScopeDefault, Size},
         Brush, DrawScope as _,
+        geometry::{DrawScopeDefault, Size},
     };
 
     /// Records one MEGA-shaped frame: `rings` rings of `per_ring` arcs, each
@@ -2316,9 +2316,11 @@ mod tests {
             .count();
         assert!(retained >= 3, "each ring retains, got {spans:?}");
         // The tail circles are dynamic.
-        assert!(spans
-            .iter()
-            .any(|span| matches!(span, ReplaySpan::Dynamic { .. })));
+        assert!(
+            spans
+                .iter()
+                .any(|span| matches!(span, ReplaySpan::Dynamic { .. }))
+        );
         // Retained spans carry the per-ring rotations, not a shared one.
         let transforms: Vec<RecordTransform> = spans
             .iter()

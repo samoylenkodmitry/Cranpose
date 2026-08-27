@@ -344,6 +344,7 @@ struct LazyListStateInner {
 /// Button(move || list_state.scroll_to_item(0, 0.0));
 /// ```
 #[composable]
+#[track_caller]
 pub fn rememberLazyListState() -> LazyListState {
     rememberLazyListStateWithPosition(0, 0.0)
 }
@@ -1326,11 +1327,11 @@ pub mod test_helpers {
 mod tests {
     use std::{cell::Cell, rc::Rc};
 
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use super::{
-        test_helpers::{new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime},
         LazyListItemInfo, LazyListLayoutInfo, LazyListState,
+        test_helpers::{new_lazy_list_state, new_lazy_list_state_with_position, with_test_runtime},
     };
 
     fn set_scroll_bounds(state: &LazyListState, can_forward: bool, can_backward: bool) {

@@ -4,7 +4,11 @@ fn compose_single_i32_value_slot(harness: &mut SlotHarness, key: Key, value: i32
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
         begin_unkeyed(session, key, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || value);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || value,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -28,22 +32,37 @@ fn payload_records_store_semantic_payload_kinds() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, 52, None);
-        let _remembered = session.remember(|| 17_i32);
-        let _param_slot = session
-            .value_slot_with_kind(super::PayloadKind::Param, crate::ParamState::<i32>::default);
-        let _callback_slot =
-            session.value_slot_with_kind(super::PayloadKind::Param, crate::CallbackHolder::new);
+        let _remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 17_i32);
+        let _param_slot = session.value_slot_with_kind(
+            super::PayloadKind::Param,
+            crate::slot::BRANCH_PATH_ROOT,
+            crate::ParamState::<i32>::default,
+        );
+        let _callback_slot = session.value_slot_with_kind(
+            super::PayloadKind::Param,
+            crate::slot::BRANCH_PATH_ROOT,
+            crate::CallbackHolder::new,
+        );
         let _return_slot = session.value_slot_with_kind(
             super::PayloadKind::Return,
+            crate::slot::BRANCH_PATH_ROOT,
             crate::ReturnSlot::<i32>::default,
         );
         let _effect_slot = session.remember_with_kind(
             super::PayloadKind::Effect,
+            crate::slot::BRANCH_PATH_ROOT,
             crate::DisposableEffectState::default,
         );
-        let _type_named_internal_slot =
-            session.value_slot_with_kind(PayloadKind::Internal, crate::ReturnSlot::<i32>::default);
-        let _internal_slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
+        let _type_named_internal_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            crate::ReturnSlot::<i32>::default,
+        );
+        let _internal_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 99_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -81,10 +100,12 @@ fn payload_cleanup_with_stale_owner_anchor_does_not_panic() {
 
     harness.table.anchors.mark_detached(owner);
 
-    assert!(harness
-        .table
-        .remove_payload_tail_at_cursor(owner, 0)
-        .is_empty());
+    assert!(
+        harness
+            .table
+            .remove_payload_tail_at_cursor(owner, 0)
+            .is_empty()
+    );
     harness
         .table
         .refresh_group_payload_anchor_locations(owner, 0);
@@ -171,13 +192,21 @@ fn payload_range_with_mismatched_owner_is_ignored() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, FIRST_CHILD_KEY, None);
-        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 17_i32);
+        let first_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 17_i32,
+        );
         let first_result = session.finish_group_body();
         assert!(first_result.detached_children.is_empty());
         session.end_group();
 
         begin_unkeyed(session, SECOND_CHILD_KEY, None);
-        let second_slot = session.value_slot_with_kind(PayloadKind::Internal, || 29_i32);
+        let second_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 29_i32,
+        );
         let second_result = session.finish_group_body();
         assert!(second_result.detached_children.is_empty());
         session.end_group();
@@ -235,7 +264,11 @@ fn payload_tail_cleanup_repairs_corrupt_group_payload_len() {
     harness.begin_pass(SlotPassMode::Compose);
     let reused = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 99_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -294,7 +327,11 @@ fn value_payload_reuses_after_corrupt_group_payload_start_repair() {
     harness.begin_pass(SlotPassMode::Compose);
     let repaired = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 99_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 99_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -319,9 +356,17 @@ fn appended_value_slots_batch_payload_location_refresh() {
     harness.begin_pass(SlotPassMode::Compose);
     let slots = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
-        let remembered = session.remember(|| 20_i32);
-        let third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let first = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
+        let remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 20_i32);
+        let third = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 30_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -354,7 +399,11 @@ fn pending_payload_location_refreshes_coalesce_to_lowest_start() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let _first = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -364,13 +413,21 @@ fn pending_payload_location_refreshes_coalesce_to_lowest_start() {
     harness.begin_pass(SlotPassMode::Compose);
     let (first, second, third) = harness.session(|session| {
         let group = begin_unkeyed(session, GROUP_KEY, None);
-        let first = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let first = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 0_i32,
+        );
         assert!(
             !session.state.has_pending_payload_location_refreshes(),
             "reusing an existing payload must not request a location refresh"
         );
 
-        let second = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
+        let second = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 20_i32,
+        );
         assert_eq!(
             session
                 .state
@@ -378,7 +435,11 @@ fn pending_payload_location_refreshes_coalesce_to_lowest_start() {
             Some(1)
         );
 
-        let third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let third = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 30_i32,
+        );
         assert_eq!(
             session
                 .state
@@ -417,7 +478,11 @@ fn writer_validation_rejects_pending_payload_location_refreshes() {
             .table
             .write_session(&mut harness.lifecycle, &mut harness.state);
         begin_unkeyed(&mut session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 42_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 42_i32,
+        );
         assert!(
             session.state.has_pending_payload_location_refreshes(),
             "appending a payload should defer the range refresh until a writer boundary"
@@ -448,9 +513,21 @@ fn payload_tail_removal_does_not_refresh_empty_suffix() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
-        let _second = session.value_slot_with_kind(PayloadKind::Internal, || 20_i32);
-        let _third = session.value_slot_with_kind(PayloadKind::Internal, || 30_i32);
+        let _first = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
+        let _second = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 20_i32,
+        );
+        let _third = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 30_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -462,7 +539,11 @@ fn payload_tail_removal_does_not_refresh_empty_suffix() {
     harness.begin_pass(SlotPassMode::Compose);
     harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let _first = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let _first = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 0_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -486,7 +567,11 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     harness.begin_pass(SlotPassMode::Compose);
     let first_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(super::PayloadKind::Param, || 7_i32);
+        let slot = session.value_slot_with_kind(
+            super::PayloadKind::Param,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 7_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -501,7 +586,11 @@ fn payload_kind_updates_when_same_type_slot_changes_semantics() {
     harness.begin_pass(SlotPassMode::Compose);
     let second_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(super::PayloadKind::Return, || 9_i32);
+        let slot = session.value_slot_with_kind(
+            super::PayloadKind::Return,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 9_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -524,7 +613,11 @@ fn second_identical_composition_reuses_group_and_value() {
     harness.begin_pass(SlotPassMode::Compose);
     let first_slot = harness.session(|session| {
         begin_unkeyed(session, 11, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 10_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 10_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -536,7 +629,11 @@ fn second_identical_composition_reuses_group_and_value() {
     harness.begin_pass(SlotPassMode::Compose);
     let (kind, second_slot) = harness.session(|session| {
         let started = begin_unkeyed(session, 11, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 0_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -556,7 +653,11 @@ fn read_value_mut_updates_existing_slot_in_place() {
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
         begin_unkeyed(session, 12, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 5_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -630,7 +731,11 @@ fn read_value_type_mismatch_panics_consistently() {
     harness.begin_pass(SlotPassMode::Compose);
     let slot = harness.session(|session| {
         begin_unkeyed(session, 15, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 5_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -648,7 +753,7 @@ fn read_value_type_mismatch_panics_consistently() {
 }
 
 #[test]
-fn value_slot_type_replacement_advances_generation() {
+fn value_slot_type_change_inserts_fresh_and_trims_the_stale_slot() {
     const GROUP_KEY: Key = 16;
 
     let mut harness = SlotHarness::new();
@@ -656,7 +761,11 @@ fn value_slot_type_replacement_advances_generation() {
     harness.begin_pass(SlotPassMode::Compose);
     let old_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 5_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -667,7 +776,11 @@ fn value_slot_type_replacement_advances_generation() {
     harness.begin_pass(SlotPassMode::Compose);
     let replacement_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 7_u32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 7_u32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -675,11 +788,8 @@ fn value_slot_type_replacement_advances_generation() {
     });
     harness.finish_pass();
 
-    assert_eq!(replacement_slot.anchor().id(), old_slot.anchor().id());
-    assert_ne!(
-        replacement_slot.anchor().generation(),
-        old_slot.anchor().generation()
-    );
+    assert_ne!(replacement_slot.anchor(), old_slot.anchor());
+    assert_eq!(harness.table.group_payload_len_at(0), 1);
     assert_eq!(*harness.table.read_value::<u32>(replacement_slot), 7);
 
     let stale_read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -704,7 +814,11 @@ fn value_slot_type_replacement_recovers_stale_payload_anchor_record() {
     harness.begin_pass(SlotPassMode::Compose);
     let second_slot = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 11_u32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 11_u32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -740,7 +854,11 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     let old_slot = harness.session(|session| {
         begin_unkeyed(session, OLD_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 5_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 5_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -756,7 +874,11 @@ fn disposed_value_slot_handle_does_not_alias_new_slot() {
     harness.begin_pass(SlotPassMode::Compose);
     let new_slot = harness.session(|session| {
         begin_unkeyed(session, NEW_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 77_i32);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 77_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -787,8 +909,16 @@ fn removed_payload_tail_invalidates_value_slot_handle() {
     harness.begin_pass(SlotPassMode::Compose);
     let (first_slot, removed_slot) = harness.session(|session| {
         begin_unkeyed(session, 19, None);
-        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
-        let removed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
+        let first_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 1_i32,
+        );
+        let removed_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 2_i32,
+        );
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -823,10 +953,18 @@ fn recomposition_removes_tail_payloads_and_nodes_together() {
     harness.begin_pass(SlotPassMode::Compose);
     let (first_slot, removed_slot) = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let first_slot = session.value_slot_with_kind(PayloadKind::Internal, || 1_i32);
-        let removed_slot = session.value_slot_with_kind(PayloadKind::Internal, || 2_i32);
-        session.record_node_with_parent(FIRST_NODE, 1, None);
-        session.record_node_with_parent(SECOND_NODE, 1, None);
+        let first_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 1_i32,
+        );
+        let removed_slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 2_i32,
+        );
+        session.record_node_with_parent(FIRST_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
+        session.record_node_with_parent(SECOND_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         assert!(result.direct_nodes.is_empty());
@@ -838,9 +976,14 @@ fn recomposition_removes_tail_payloads_and_nodes_together() {
     harness.begin_pass(SlotPassMode::Compose);
     let direct_nodes = harness.session(|session| {
         begin_unkeyed(session, GROUP_KEY, None);
-        let first_slot_after = session.value_slot_with_kind(PayloadKind::Internal, || 0_i32);
+        let first_slot_after = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 0_i32,
+        );
         assert_eq!(first_slot_after, first_slot);
-        let recorded = session.record_node_with_parent(FIRST_NODE, 1, None);
+        let recorded =
+            session.record_node_with_parent(FIRST_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         assert_eq!(
             recorded,
             NodeSlotUpdate::Reused {
@@ -868,4 +1011,39 @@ fn recomposition_removes_tail_payloads_and_nodes_together() {
     );
     assert_eq!(harness.table.group_node_record_at(0, 0).id, FIRST_NODE);
     assert_eq!(harness.table.validate(), Ok(()));
+}
+
+#[test]
+fn a_slot_reused_from_a_different_source_location_reinitializes() {
+    let mut harness = SlotHarness::new();
+    let source_a = 0xA11A_u64;
+    let source_b = 0xB22B_u64;
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let first = harness.session(|session| {
+        begin_unkeyed(session, 91, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, source_a, || 41_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+    assert_eq!(*harness.table.read_value::<i32>(first), 41);
+
+    harness.begin_pass(SlotPassMode::Compose);
+    let second = harness.session(|session| {
+        begin_unkeyed(session, 91, None);
+        let slot = session.value_slot_with_kind(PayloadKind::Internal, source_b, || 43_i32);
+        let result = session.finish_group_body();
+        assert!(result.detached_children.is_empty());
+        session.end_group();
+        slot
+    });
+    harness.finish_pass();
+    assert_eq!(
+        *harness.table.read_value::<i32>(second),
+        43,
+        "a same-typed slot recorded at another source must not be adopted"
+    );
 }

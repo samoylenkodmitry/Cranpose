@@ -6,9 +6,9 @@ use std::{cell::RefCell, rc::Rc};
 
 use cranpose_macros::composable;
 use cranpose_ui::{
+    Modifier, ScrollState,
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Row, RowSpec, Text},
-    Modifier, ScrollState,
 };
 use cranpose_ui_graphics::GraphicsLayer;
 use cranpose_ui_layout::{Alignment, VerticalAlignment};

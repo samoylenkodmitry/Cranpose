@@ -1,8 +1,8 @@
 use std::{cell::Cell, rc::Rc, sync::Arc};
 
 use cranpose_ui::{
-    collect_slices_from_modifier, AppContext, Color, ColorFilter, GraphicsLayer, LayerShape,
-    Modifier, RenderEffect, RoundedCornerShape, TransformOrigin,
+    AppContext, Color, ColorFilter, GraphicsLayer, LayerShape, Modifier, RenderEffect,
+    RoundedCornerShape, TransformOrigin, collect_slices_from_modifier,
 };
 
 #[test]

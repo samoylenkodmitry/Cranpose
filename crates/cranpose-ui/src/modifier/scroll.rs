@@ -28,24 +28,24 @@ use std::{
     rc::Rc,
 };
 
-use cranpose_core::{current_runtime_handle, internal::FrameCallbackRegistration, NodeId};
+use cranpose_core::{NodeId, current_runtime_handle, internal::FrameCallbackRegistration};
 use cranpose_foundation::{
-    velocity_tracker::ASSUME_STOPPED_MS, DelegatableNode, ModifierNode, ModifierNodeElement,
-    NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D, DRAG_THRESHOLD,
-    MAX_FLING_VELOCITY,
+    DRAG_THRESHOLD, DelegatableNode, MAX_FLING_VELOCITY, ModifierNode, ModifierNodeElement,
+    NodeCapabilities, NodeState, PointerButton, PointerButtons, VelocityTracker1D,
+    velocity_tracker::ASSUME_STOPPED_MS,
 };
 use cranpose_ui_layout::Axis;
 use web_time::Instant;
 
-use super::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind};
+use super::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata};
 use crate::{
     current_density,
     draggable::DraggableState,
-    fling_animation::{fling_rest_position, FlingAnimation, SettleAnimation, MIN_FLING_VELOCITY},
+    fling_animation::{FlingAnimation, MIN_FLING_VELOCITY, SettleAnimation, fling_rest_position},
     render_state::schedule_modifier_slices_repass,
     scroll::{
-        scroll_motion_context_for_key, ScrollElement, ScrollMotionContext, ScrollMotionContextKey,
-        ScrollSettlePolicy, ScrollState,
+        ScrollElement, ScrollMotionContext, ScrollMotionContextKey, ScrollSettlePolicy,
+        ScrollState, scroll_motion_context_for_key,
     },
 };
 
@@ -401,16 +401,14 @@ where
                             continue;
                         }
 
-                        if let Some(ref guard) = guard {
-                            if !guard() {
-                                if matches!(
-                                    event.kind,
-                                    PointerEventKind::Up | PointerEventKind::Cancel
-                                ) {
-                                    detector.on_cancel();
-                                }
-                                continue;
+                        if let Some(ref guard) = guard
+                            && !guard()
+                        {
+                            if matches!(event.kind, PointerEventKind::Up | PointerEventKind::Cancel)
+                            {
+                                detector.on_cancel();
                             }
+                            continue;
                         }
 
                         let should_consume = match event.kind {

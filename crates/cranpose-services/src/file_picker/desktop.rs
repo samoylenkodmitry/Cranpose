@@ -6,7 +6,7 @@
 
 use super::{FilePickerError, FilePickerOptions, PickerFuture, SaveDocumentRequest};
 use crate::content::{
-    file_content, file_folder, ContentFolderRef, ContentHandle, ContentSinkRef, FileSink,
+    ContentFolderRef, ContentHandle, ContentSinkRef, FileSink, file_content, file_folder,
 };
 
 fn dialog(options: &FilePickerOptions) -> rfd::AsyncFileDialog {

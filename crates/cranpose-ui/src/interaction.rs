@@ -8,7 +8,7 @@ use std::{
 };
 
 use cranpose_core::{
-    remember, with_current_composer, MutableState, OwnedMutableState, RuntimeHandle, State,
+    MutableState, OwnedMutableState, RuntimeHandle, State, remember, with_current_composer,
 };
 use cranpose_foundation::{
     DelegatableNode, InvalidationKind, ModifierNode, ModifierNodeContext, ModifierNodeElement,
@@ -17,7 +17,7 @@ use cranpose_foundation::{
 
 use crate::{
     composable,
-    modifier::{inspector_metadata, Modifier, Point, PointerEvent, PointerEventKind},
+    modifier::{Modifier, Point, PointerEvent, PointerEventKind, inspector_metadata},
 };
 
 #[derive(Clone, Copy)]

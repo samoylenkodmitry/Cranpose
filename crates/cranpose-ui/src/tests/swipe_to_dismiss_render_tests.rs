@@ -52,7 +52,7 @@ fn compose_row(with_background: bool) -> TestComposition {
 /// A `SwipeToDismiss` row (with a red bin background) inside a `LazyColumn`
 /// item — the real app shape where the lingering-strip bug appears.
 fn compose_lazy_row_with_background() -> TestComposition {
-    use cranpose_foundation::lazy::{rememberLazyListState, LazyListScope};
+    use cranpose_foundation::lazy::{LazyListScope, rememberLazyListState};
     run_test_composition(move || {
         let list_state = rememberLazyListState();
         LazyColumn(
@@ -152,10 +152,10 @@ fn count_bin_primitives(tree: &crate::LayoutTree) -> usize {
         for primitive in
             crate::execute_draw_commands(node.node_data.modifier_slices().draw_commands(), size)
         {
-            if let DrawPrimitive::Rect { brush, .. } = primitive {
-                if format!("{brush:?}").contains("1.0, 0.0, 0.0") {
-                    *count += 1;
-                }
+            if let DrawPrimitive::Rect { brush, .. } = primitive
+                && format!("{brush:?}").contains("1.0, 0.0, 0.0")
+            {
+                *count += 1;
             }
         }
         for child in &node.children {
@@ -387,10 +387,10 @@ type DepthTaggedHandler = (usize, Rc<dyn Fn(PointerEvent)>);
 /// scroll handler.
 fn deepest_pointer_handler(tree: &crate::LayoutTree) -> Rc<dyn Fn(PointerEvent)> {
     fn walk(node: &crate::LayoutBox, best: &mut Option<DepthTaggedHandler>, depth: usize) {
-        if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first() {
-            if best.as_ref().is_none_or(|(d, _)| depth >= *d) {
-                *best = Some((depth, Rc::clone(handler)));
-            }
+        if let Some(handler) = node.node_data.modifier_slices().pointer_inputs().first()
+            && best.as_ref().is_none_or(|(d, _)| depth >= *d)
+        {
+            *best = Some((depth, Rc::clone(handler)));
         }
         for child in &node.children {
             walk(child, best, depth + 1);

@@ -6,12 +6,13 @@ use std::{
 };
 
 use cranpose_core::{
-    __launched_effect_async_impl as launched_effect_async_impl, compositionLocalOf, location_key,
-    rememberMutableStateOf, CompositionLocal, CompositionLocalProvider, MutableState, TaskSite,
+    __launched_effect_async_impl as launched_effect_async_impl, CompositionLocal,
+    CompositionLocalProvider, MutableState, TaskSite, compositionLocalOf, location_key,
+    rememberMutableStateOf,
 };
 use cranpose_foundation::{
-    lazy::{rememberLazyListState, LazyListScope, LazyListState},
     Modifiers, PointerEvent, PointerEventKind, PointerSource,
+    lazy::{LazyListScope, LazyListState, rememberLazyListState},
 };
 use cranpose_macros::composable;
 use cranpose_ui::{
@@ -4103,20 +4104,19 @@ fn graph_layer_contains_rect_color(
     for child in &layer.children {
         match child {
             cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
-                    if let DrawPrimitive::Rect { brush, .. } = &draw.primitive {
-                        if *brush == Brush::solid(color) {
-                            return true;
-                        }
-                    }
+                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
+                    && let DrawPrimitive::Rect { brush, .. } = &draw.primitive
+                    && *brush == Brush::solid(color)
+                {
+                    return true;
                 }
             }
             cranpose_render_common::graph::RenderNode::DrawRun(run) => {
                 for primitive in run.primitives.iter() {
-                    if let DrawPrimitive::Rect { brush, .. } = primitive {
-                        if *brush == Brush::solid(color) {
-                            return true;
-                        }
+                    if let DrawPrimitive::Rect { brush, .. } = primitive
+                        && *brush == Brush::solid(color)
+                    {
+                        return true;
                     }
                 }
             }
@@ -4308,7 +4308,9 @@ fn lazy_column_scroll_repass_uses_scoped_renderer_update_without_stale_rows() {
         "partial lazy-list update must not retain stale row zero after scrolling: labels={updated_labels:?}"
     );
     assert!(
-        updated_rows.windows(2).all(|window| window[1] == window[0] + 1),
+        updated_rows
+            .windows(2)
+            .all(|window| window[1] == window[0] + 1),
         "partial lazy-list update should keep a consecutive visible row window: rows={updated_rows:?}, labels={updated_labels:?}"
     );
     assert!(
@@ -7462,14 +7464,13 @@ fn graph_rect_colors(graph: &cranpose_render_common::graph::RenderGraph) -> Vec<
     fn collect_node(node: &cranpose_render_common::graph::RenderNode, out: &mut Vec<Color>) {
         match node {
             cranpose_render_common::graph::RenderNode::Primitive(entry) => {
-                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node {
-                    if let DrawPrimitive::Rect {
+                if let cranpose_render_common::graph::PrimitiveNode::Draw(draw) = &entry.node
+                    && let DrawPrimitive::Rect {
                         brush: cranpose_ui_graphics::Brush::Solid(color),
                         ..
                     } = &draw.primitive
-                    {
-                        out.push(*color);
-                    }
+                {
+                    out.push(*color);
                 }
             }
             cranpose_render_common::graph::RenderNode::DrawRun(run) => {
@@ -8264,10 +8265,9 @@ fn find_rect_width(scene: &cranpose_ui::RecordedRenderScene, color: Color) -> Op
             primitive: DrawPrimitive::Rect { rect, brush, .. },
             ..
         } = op
+            && *brush == Brush::solid(color)
         {
-            if *brush == Brush::solid(color) {
-                return Some(rect.width);
-            }
+            return Some(rect.width);
         }
     }
     None
@@ -8634,14 +8634,18 @@ fn rotary_capture_pass_runs_root_to_leaf() {
     shell.rotary_scrolled(RotaryScrollEvent::new(-8.0, 0.0, 1));
 
     // Capture reached the ancestor; bubble reached the child.
-    assert!(child_events
-        .borrow()
-        .iter()
-        .any(|e| e.kind == PointerEventKind::RotaryScrollPre));
-    assert!(ancestor_events
-        .borrow()
-        .iter()
-        .any(|e| e.kind == PointerEventKind::RotaryScroll));
+    assert!(
+        child_events
+            .borrow()
+            .iter()
+            .any(|e| e.kind == PointerEventKind::RotaryScrollPre)
+    );
+    assert!(
+        ancestor_events
+            .borrow()
+            .iter()
+            .any(|e| e.kind == PointerEventKind::RotaryScroll)
+    );
 }
 
 #[test]

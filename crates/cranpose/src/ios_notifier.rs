@@ -16,13 +16,12 @@ use std::{
 
 use block2::RcBlock;
 use cranpose_services::{
-    push_notification_deeplink, set_platform_notifier, Notifier, NotifyRequest,
+    Notifier, NotifyRequest, push_notification_deeplink, set_platform_notifier,
 };
 use objc2::{
-    define_class, msg_send,
+    MainThreadMarker, MainThreadOnly, define_class, msg_send,
     rc::Retained,
     runtime::{Bool, ProtocolObject},
-    MainThreadMarker, MainThreadOnly,
 };
 use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol, NSString};
 use objc2_user_notifications::{
@@ -68,10 +67,10 @@ impl Notifier for IosNotifier {
         content.setTitle(&NSString::from_str(&request.title));
         content.setBody(&NSString::from_str(&request.body));
         content.setSound(Some(&UNNotificationSound::defaultSound()));
-        if let Some(link) = request.deeplink.as_deref() {
-            if let Ok(mut map) = deeplink_map().lock() {
-                map.insert(request.id.clone(), link.to_owned());
-            }
+        if let Some(link) = request.deeplink.as_deref()
+            && let Ok(mut map) = deeplink_map().lock()
+        {
+            map.insert(request.id.clone(), link.to_owned());
         }
 
         let id = NSString::from_str(&request.id);

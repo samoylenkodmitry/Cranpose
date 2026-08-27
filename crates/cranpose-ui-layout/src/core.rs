@@ -5,7 +5,7 @@ use std::rc::Rc;
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::Size;
 
-use crate::{constraints::Constraints, Alignment, HorizontalAlignment, VerticalAlignment};
+use crate::{Alignment, HorizontalAlignment, VerticalAlignment, constraints::Constraints};
 
 /// Parent data for flex layouts (Row/Column weights and alignment).
 #[derive(Clone, Copy, Debug, Default)]

@@ -337,11 +337,7 @@ pub fn collect_semantics_from_chain(chain: &ModifierNodeChain) -> Option<Semanti
         }
     });
 
-    if merged {
-        Some(config)
-    } else {
-        None
-    }
+    if merged { Some(config) } else { None }
 }
 
 /// Collects semantics by instantiating a temporary modifier chain from a [`Modifier`].

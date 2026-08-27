@@ -3,8 +3,8 @@ use std::{
     mem,
 };
 
-use super::{checked_usize_to_u32, DeferredDrop, GroupRecord};
-use crate::{collections::map::HashSet, AnchorId, Key, NodeId, ScopeId};
+use super::{DeferredDrop, GroupRecord, checked_usize_to_u32};
+use crate::{AnchorId, Key, NodeId, ScopeId, collections::map::HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum SlotPassMode {
@@ -91,6 +91,14 @@ pub(crate) struct PayloadAnchor {
 }
 
 impl PayloadAnchor {
+    #[cfg(test)]
+    pub(crate) fn with_generation(self, generation: u32) -> Self {
+        Self {
+            id: self.id,
+            generation,
+        }
+    }
+
     pub(crate) const INVALID: Self = Self {
         id: 0,
         generation: 0,
@@ -109,13 +117,6 @@ impl PayloadAnchor {
 
     pub(crate) fn generation(self) -> u32 {
         self.generation
-    }
-
-    pub(crate) fn with_generation(self, generation: u32) -> Self {
-        Self {
-            id: self.id,
-            generation,
-        }
     }
 }
 
@@ -180,6 +181,7 @@ pub(super) struct PayloadRecord {
     pub(super) anchor: PayloadAnchor,
     pub(super) type_id: TypeId,
     pub(super) type_name: &'static str,
+    pub(super) source: crate::Key,
     pub(super) kind: PayloadKind,
     pub(super) value: Box<dyn Any>,
     pub(super) fresh: Option<fn() -> Box<dyn Any>>,
@@ -212,6 +214,7 @@ pub(super) struct NodeRecord {
     pub(super) id: NodeId,
     pub(super) parent_id: Option<NodeId>,
     pub(super) generation: u32,
+    pub(super) source: crate::Key,
     pub(super) lifecycle: NodeLifecycle,
 }
 
@@ -249,6 +252,8 @@ impl ActiveSubtreeRoot {
         self.anchor
     }
 }
+
+pub(crate) const BRANCH_PATH_ROOT: crate::Key = 0xcbf2_9ce4_8422_2325;
 
 pub(crate) struct DetachedSubtree {
     pub(super) groups: Vec<GroupRecord>,

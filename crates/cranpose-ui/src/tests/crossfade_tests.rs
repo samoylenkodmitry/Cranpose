@@ -1,10 +1,10 @@
 use std::{cell::RefCell, rc::Rc};
 
-use cranpose_animation::{tween, Easing};
+use cranpose_animation::{Easing, tween};
 use cranpose_core::{DisposableEffectResult, MutableState};
 use cranpose_macros::composable;
 
-use crate::{run_test_composition, Crossfade, TestComposition};
+use crate::{Crossfade, TestComposition, run_test_composition};
 
 const FRAME_NANOS: u64 = 16_666_667; // ~60 FPS
 const CROSSFADE_MILLIS: u64 = 160;

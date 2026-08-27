@@ -1,13 +1,13 @@
 use super::{
-    super::{checked_usize_to_u32, GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable},
-    anchors,
+    super::{GroupKey, GroupRecord, NodeRecord, PayloadRecord, SlotTable, checked_usize_to_u32},
+    SlotInvariantError, SlotTreeContext, anchors,
     nodes::{self, validate_group_nodes},
     payloads::{self, validate_group_payloads},
-    scopes, SlotInvariantError, SlotTreeContext,
+    scopes,
 };
 use crate::{
-    collections::map::{HashMap, HashSet},
     AnchorId,
+    collections::map::{HashMap, HashSet},
 };
 
 pub(super) struct SlotTreeView<'a> {

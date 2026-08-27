@@ -622,10 +622,10 @@ impl LayoutNode {
 
     /// Set this node's ID (called by applier after creation).
     pub fn set_node_id(&mut self, id: NodeId) {
-        if let Some(existing) = self.id.replace(Some(id)) {
-            if let Some(owner_context_id) = self.owner_context_id.take() {
-                unregister_layout_node(owner_context_id, existing);
-            }
+        if let Some(existing) = self.id.replace(Some(id))
+            && let Some(owner_context_id) = self.owner_context_id.take()
+        {
+            unregister_layout_node(owner_context_id, existing);
         }
         let owner_context_id = register_layout_node(id, self);
         self.owner_context_id.set(Some(owner_context_id));

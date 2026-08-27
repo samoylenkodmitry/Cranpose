@@ -16,7 +16,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{with_current_composer, RuntimeHandle};
+use cranpose_core::{RuntimeHandle, with_current_composer};
 use cranpose_macros::composable;
 
 use crate::material::GlassDeformation;
@@ -360,11 +360,13 @@ impl LiquidDynamics {
 
 /// Remember one [`LiquidDynamics`] for the calling composition site.
 #[composable]
+#[track_caller]
 pub fn rememberLiquidDynamics() -> Rc<LiquidDynamics> {
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
         composer
-            .remember(move || Rc::new(LiquidDynamics::new(runtime)))
+            .remember_at(caller, move || Rc::new(LiquidDynamics::new(runtime)))
             .with(Rc::clone)
     })
 }

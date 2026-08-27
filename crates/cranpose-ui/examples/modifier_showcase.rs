@@ -4,10 +4,10 @@
 /// - Dynamic modifier updates during recomposition
 /// - Performance with large modifier chains
 /// - Real-world UI patterns (cards, lists, buttons)
-use cranpose_core::{location_key, Composition, MemoryApplier};
+use cranpose_core::{Composition, MemoryApplier, location_key};
 use cranpose_ui::{
-    composable, Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text,
-    TextStyle,
+    Box as ComposeBox, BoxSpec, Column, ColumnSpec, Modifier, Row, RowSpec, Size, Text, TextStyle,
+    composable,
 };
 
 /// Demonstrates a typical card UI pattern with complex modifier stacking

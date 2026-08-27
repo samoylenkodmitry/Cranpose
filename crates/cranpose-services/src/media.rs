@@ -34,17 +34,17 @@ use std::{
     fs::File,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
-use cranpose_core::{rememberEventStream, EventStream, State};
+use cranpose_core::{EventStream, State, rememberEventStream};
 use parking_lot::Mutex;
 
 use crate::{
-    background::{acquire_background_work, BackgroundWorkLease},
+    background::{BackgroundWorkLease, acquire_background_work},
     host::{LifecycleEvent, LifecycleState},
     registry::ServiceRegistry,
 };
@@ -1221,10 +1221,10 @@ pub fn set_media_metadata(metadata: MediaMetadata) {
         };
         item.metadata = metadata.clone();
     }
-    if let Some(player) = media_player() {
-        if player.capabilities().session {
-            player.set_session_metadata(&metadata);
-        }
+    if let Some(player) = media_player()
+        && player.capabilities().session
+    {
+        player.set_session_metadata(&metadata);
     }
 }
 
@@ -1402,6 +1402,7 @@ pub fn open_media_source(uri: &str) -> std::io::Result<MediaSourceHandle> {
 /// What the player is doing, observed for as long as this call stays in the
 /// composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberPlaybackState() -> State<PlaybackState> {
     let updates = rememberEventStream((), |sender| {
         observe_playback_state(move |state| sender.send(state))
@@ -1416,6 +1417,7 @@ pub fn rememberPlaybackState() -> State<PlaybackState> {
 /// label want. A visualiser or a waveform that redraws every frame anyway reads
 /// [`playback_progress`] during draw instead.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberPlaybackProgress() -> State<PlaybackProgress> {
     let updates = rememberEventStream((), |sender| {
         observe_playback_progress(move |progress| sender.send(progress))
@@ -1426,6 +1428,7 @@ pub fn rememberPlaybackProgress() -> State<PlaybackProgress> {
 /// What the rest of the device is doing with the output, observed for as long
 /// as this call stays in the composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberAudioFocus() -> State<AudioFocus> {
     let updates = rememberEventStream((), |sender| {
         observe_audio_focus(move |focus| sender.send(focus))
@@ -1440,6 +1443,7 @@ pub fn rememberAudioFocus() -> State<AudioFocus> {
 /// here; what an application acts on is [`MediaCommand::Next`] and
 /// [`MediaCommand::Previous`], which need the playlist it owns.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberMediaCommands() -> EventStream<MediaCommand> {
     rememberEventStream((), |sender| {
         observe_media_commands(move |command| sender.send(command))
@@ -1451,6 +1455,7 @@ pub fn rememberMediaCommands() -> EventStream<MediaCommand> {
 /// Enable them with [`set_media_analysis_enabled`] first; a backend that cannot
 /// produce them says so through [`MediaCapabilities::analysis`].
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberMediaSamples() -> EventStream<MediaSamples> {
     rememberEventStream((), |sender| {
         observe_media_samples(move |samples| sender.send(samples))

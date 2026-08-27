@@ -7,7 +7,7 @@ use cranpose_foundation::{
 };
 use cranpose_ui_graphics::Point;
 
-use crate::{collect_modifier_slices, zoom::ZoomState, Modifier};
+use crate::{Modifier, collect_modifier_slices, zoom::ZoomState};
 
 fn with_test_runtime<T>(f: impl FnOnce() -> T) -> T {
     let _runtime = Runtime::new(Arc::new(DefaultScheduler));

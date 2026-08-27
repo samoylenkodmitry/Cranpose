@@ -13,13 +13,13 @@ use std::{
 
 use cranpose_core::hash::default;
 use cranpose_foundation::{
-    impl_pointer_input_node, DelegatableNode, ModifierNode, ModifierNodeContext,
-    ModifierNodeElement, NodeCapabilities, NodeState, PointerInputNode,
+    DelegatableNode, ModifierNode, ModifierNodeContext, ModifierNodeElement, NodeCapabilities,
+    NodeState, PointerInputNode, impl_pointer_input_node,
 };
 use cranpose_ui_graphics::Size;
-use futures_task::{waker, ArcWake};
+use futures_task::{ArcWake, waker};
 
-use super::{inspector_metadata, Modifier, PointerEvent};
+use super::{Modifier, PointerEvent, inspector_metadata};
 
 impl Modifier {
     /// A suspending gesture handler. It restarts when `key` changes and

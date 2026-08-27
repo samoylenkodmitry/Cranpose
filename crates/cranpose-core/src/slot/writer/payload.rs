@@ -19,13 +19,14 @@ impl SlotWriteSession<'_> {
     pub(crate) fn value_slot_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
+        source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> ValueSlotId {
         let mut init = Some(init);
         let mut make = move || -> Box<dyn std::any::Any> {
             Box::new(init.take().expect("payload init must run at most once")())
         };
-        let mut init = PayloadInit::new::<T>(&mut make);
+        let mut init = PayloadInit::new::<T>(source, &mut make);
         self.value_slot_with_kind_dyn(kind, &mut init)
     }
 
@@ -37,6 +38,7 @@ impl SlotWriteSession<'_> {
         kind: PayloadKind,
         init: &mut PayloadInit<'_>,
     ) -> ValueSlotId {
+        init.mix_source(self.state.branch_fold());
         self.discard_stale_value_slot_frames();
         let Some(frame) = self.state.group_stack.last() else {
             return self.recover_value_slot_with_kind(kind, init);
@@ -129,18 +131,22 @@ impl SlotWriteSession<'_> {
         slot
     }
 
-    pub(crate) fn remember<T: 'static>(&mut self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Remember, init)
+    pub(crate) fn remember<T: 'static>(
+        &mut self,
+        source: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        self.remember_with_kind(PayloadKind::Remember, source, init)
     }
 
-    pub(crate) fn remember_effect<T: Default + 'static>(&mut self) -> Owned<T> {
+    pub(crate) fn remember_effect<T: Default + 'static>(&mut self, source: crate::Key) -> Owned<T> {
         let mut made = false;
         let mut make = move || -> Box<dyn std::any::Any> {
             assert!(!made, "payload init must run at most once");
             made = true;
             Box::new(Owned::new(T::default()))
         };
-        let mut init = PayloadInit::new_startable::<Owned<T>>(&mut make, || {
+        let mut init = PayloadInit::new_startable::<Owned<T>>(source, &mut make, || {
             Box::new(Owned::new(T::default())) as Box<dyn std::any::Any>
         });
         let slot = self.value_slot_with_kind_dyn(PayloadKind::Effect, &mut init);
@@ -150,9 +156,10 @@ impl SlotWriteSession<'_> {
     pub(crate) fn remember_with_kind<T: 'static>(
         &mut self,
         kind: PayloadKind,
+        source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        let slot = self.value_slot_with_kind(kind, || Owned::new(init()));
+        let slot = self.value_slot_with_kind(kind, source, || Owned::new(init()));
         // The current payload anchor is activated before the coalesced range
         // refresh is flushed, so remember can read the value it just requested.
         #[cfg(any(test, debug_assertions))]

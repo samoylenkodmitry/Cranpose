@@ -77,8 +77,11 @@ where
 #[composable]
 pub fn SubcomposeLayout(
     modifier: Modifier,
-    measure_policy: impl for<'scope> Fn(&mut SubcomposeMeasureScopeImpl<'scope>, Constraints) -> MeasureResult
-        + 'static,
+    measure_policy: impl for<'scope> Fn(
+        &mut SubcomposeMeasureScopeImpl<'scope>,
+        Constraints,
+    ) -> MeasureResult
+    + 'static,
 ) -> NodeId {
     cranpose_core::debug_label_current_scope("SubcomposeLayout");
     let policy_cell =
@@ -182,7 +185,7 @@ where
 mod tests {
     use std::cell::Cell;
 
-    use cranpose_core::{location_key, Composition, MemoryApplier, MutableState};
+    use cranpose_core::{Composition, MemoryApplier, MutableState, location_key};
 
     use super::*;
 

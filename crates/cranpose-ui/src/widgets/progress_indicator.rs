@@ -11,7 +11,7 @@
 #![allow(non_snake_case)]
 
 use cranpose_animation::{
-    infiniteRepeatable, rememberInfiniteTransition, AnimationSpec, Easing, RepeatMode, StartOffset,
+    AnimationSpec, Easing, RepeatMode, StartOffset, infiniteRepeatable, rememberInfiniteTransition,
 };
 use cranpose_core::NodeId;
 use cranpose_ui_graphics::{Brush, Color, Rect, VectorPath};
@@ -224,7 +224,7 @@ pub(crate) fn linear_indicator_band(width: f32, phase: f32) -> Option<(f32, f32)
 mod tests {
     use std::sync::Arc;
 
-    use cranpose_core::{location_key, Composition, DefaultScheduler, MemoryApplier, Runtime};
+    use cranpose_core::{Composition, DefaultScheduler, MemoryApplier, Runtime, location_key};
 
     use super::*;
 

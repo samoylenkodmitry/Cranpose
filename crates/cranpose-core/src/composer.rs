@@ -9,17 +9,17 @@ use std::{
 use smallvec::SmallVec;
 
 use crate::{
+    Applier, ApplierHost, COMMAND_FLUSH_THRESHOLD, ChildList, Command, CommandQueue,
+    CompositionLocal, DirtyBubble, Key, LocalKey, LocalStackSnapshot, LocalStateEntry,
+    MutableState, Node, NodeError, NodeId, Owned, ProvidedValue, RecomposeOptions, RecomposeScope,
+    RecomposeScopeInner, RecycledNode, RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId,
+    SlotId, SlotPassOutcome, SlotTable, SlotsHost, SnapshotStateList, SnapshotStateMap,
+    SnapshotStateObserver, StaticCompositionLocal, StaticLocalEntry, SubcomposeState,
     collections::map::{HashMap, HashSet},
     composer_context, empty_local_stack, explicit_group_key_seed,
     retention::{RetainKey, RetentionManager},
     runtime,
     slot::{FinishGroupResult, GroupStart, GroupStartKind, PayloadKind, ValueSlotId},
-    Applier, ApplierHost, ChildList, Command, CommandQueue, CompositionLocal, DirtyBubble, Key,
-    LocalKey, LocalStackSnapshot, LocalStateEntry, MutableState, Node, NodeError, NodeId, Owned,
-    ProvidedValue, RecomposeOptions, RecomposeScope, RecomposeScopeInner, RecycledNode,
-    RetentionMode, RetentionPolicy, RuntimeHandle, ScopeId, SlotId, SlotPassOutcome, SlotTable,
-    SlotsHost, SnapshotStateList, SnapshotStateMap, SnapshotStateObserver, StaticCompositionLocal,
-    StaticLocalEntry, SubcomposeState, COMMAND_FLUSH_THRESHOLD,
 };
 
 pub struct ValueSlotHandle<'pass, T: 'static> {
@@ -554,6 +554,26 @@ pub struct Composer {
     pub(crate) core: Rc<ComposerCore>,
 }
 
+pub struct BranchGroupGuard {
+    composer: Composer,
+    fold_token: Option<usize>,
+}
+
+impl Drop for BranchGroupGuard {
+    fn drop(&mut self) {
+        let Some(token) = self.fold_token else {
+            return;
+        };
+        if !self
+            .composer
+            .active_slots_host()
+            .try_close_branch_fold(token)
+        {
+            log::error!("a branch fold guard closed while its slot host was busy");
+        }
+    }
+}
+
 pub(crate) enum EmittedNode {
     Fresh(Box<dyn Node>),
     Recycled(RecycledNode),
@@ -725,10 +745,10 @@ impl Composer {
         slots.begin_pass(mode);
         {
             let mut stack = self.core.slot_hosts.borrow_mut();
-            if let Some(parent) = stack.last() {
-                if !Rc::ptr_eq(parent, &slots) {
-                    parent.note_nested_host(&slots);
-                }
+            if let Some(parent) = stack.last()
+                && !Rc::ptr_eq(parent, &slots)
+            {
+                parent.note_nested_host(&slots);
             }
             stack.push(Rc::clone(&slots));
         }
@@ -890,23 +910,23 @@ impl Composer {
     /// which removes all virtual nodes and their subtrees from the applier.
     pub fn record_subcompose_child(&self, child_id: NodeId) {
         let mut parent_stack = self.parent_stack();
-        if let Some(frame) = parent_stack.last_mut() {
-            if matches!(frame.attach_mode, ParentAttachMode::DeferredSync) {
-                if let Some(membership) = frame.new_children_membership.as_mut() {
-                    if membership.insert(child_id) {
-                        frame.new_children.push(child_id);
-                    }
-                } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
-                    let mut membership = HashSet::default();
-                    membership.reserve(frame.new_children.len() + 1);
-                    membership.extend(frame.new_children.iter().copied());
-                    if membership.insert(child_id) {
-                        frame.new_children.push(child_id);
-                    }
-                    frame.new_children_membership = Some(membership);
-                } else if !frame.new_children.contains(&child_id) {
+        if let Some(frame) = parent_stack.last_mut()
+            && matches!(frame.attach_mode, ParentAttachMode::DeferredSync)
+        {
+            if let Some(membership) = frame.new_children_membership.as_mut() {
+                if membership.insert(child_id) {
                     frame.new_children.push(child_id);
                 }
+            } else if frame.new_children.len() >= LARGE_DEFERRED_CHILD_TRACKING_THRESHOLD {
+                let mut membership = HashSet::default();
+                membership.reserve(frame.new_children.len() + 1);
+                membership.extend(frame.new_children.iter().copied());
+                if membership.insert(child_id) {
+                    frame.new_children.push(child_id);
+                }
+                frame.new_children_membership = Some(membership);
+            } else if !frame.new_children.contains(&child_id) {
+                frame.new_children.push(child_id);
             }
         }
     }
@@ -993,7 +1013,7 @@ impl Composer {
         let parent_scope = self.current_recompose_scope();
         let options = self.pending_scope_options().take().unwrap_or_default();
         let parent_scope_id = parent_scope.as_ref().map(RecomposeScope::id);
-        let reserved_key = self.with_slot_session_mut(|slots| slots.preview_group_key(key));
+        let reserved_key = self.with_slot_session_mut(|slots| slots.reserve_group_key(key));
         let host = self.active_slots_host();
         let restored = self.core.shared_state.take_retained(
             &host,
@@ -1109,6 +1129,14 @@ impl Composer {
     pub fn with_key<K: Hash, R>(&self, key: &K, f: impl FnOnce(&Composer) -> R) -> R {
         let seed = explicit_group_key_seed(key, std::panic::Location::caller());
         self.with_group_seed(seed, f)
+    }
+
+    #[doc(hidden)]
+    pub fn __branch_group_deferred(&self, key: Key) -> BranchGroupGuard {
+        BranchGroupGuard {
+            composer: self.clone(),
+            fold_token: self.active_slots_host().try_push_branch_fold(key),
+        }
     }
 
     fn dispose_detached_nodes(&self, nodes: impl IntoIterator<Item = NodeId>) {
@@ -1287,52 +1315,79 @@ impl Composer {
         }
     }
 
+    #[track_caller]
     pub fn remember<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Remember, init)
+        self.remember_at(crate::caller_location_key(), init)
     }
 
-    pub(crate) fn remember_internal<T: 'static>(&self, init: impl FnOnce() -> T) -> Owned<T> {
-        self.remember_with_kind(PayloadKind::Internal, init)
-    }
-
-    pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
-        self.with_slot_session_mut(|slots| slots.remember_effect::<T>())
-    }
-
-    fn remember_with_kind<T: 'static>(
+    /// [`Composer::remember`] with an explicit source key, for hook wrappers
+    /// whose closures sever the `#[track_caller]` chain: capture
+    /// [`caller_location_key`](crate::caller_location_key) at the wrapper's
+    /// entry and pass it here, so every caller keeps its own slot.
+    #[doc(hidden)]
+    pub fn remember_at<T: 'static>(
         &self,
-        kind: PayloadKind,
+        source: crate::Key,
         init: impl FnOnce() -> T,
     ) -> Owned<T> {
-        self.with_slot_session_mut(|slots| slots.remember_with_kind(kind, init))
+        self.with_slot_session_mut(|slots| {
+            slots.remember_with_kind(PayloadKind::Remember, source, init)
+        })
     }
 
+    #[track_caller]
+    pub(crate) fn remember_internal<T: 'static>(
+        &self,
+        source_salt: crate::Key,
+        init: impl FnOnce() -> T,
+    ) -> Owned<T> {
+        let source = crate::caller_location_key() ^ source_salt;
+        self.with_slot_session_mut(|slots| {
+            slots.remember_with_kind(PayloadKind::Internal, source, init)
+        })
+    }
+
+    #[track_caller]
+    pub(crate) fn remember_effect<T: Default + 'static>(&self) -> Owned<T> {
+        let source = crate::caller_location_key();
+        self.with_slot_session_mut(|slots| slots.remember_effect::<T>(source))
+    }
+
+    #[track_caller]
     pub fn use_value_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Internal, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Internal, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 
     #[doc(hidden)]
+    #[track_caller]
     pub fn __use_param_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Param, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Param, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 
     #[doc(hidden)]
+    #[track_caller]
     pub fn __use_return_slot<'pass, T: 'static>(
         &'pass self,
         init: impl FnOnce() -> T,
     ) -> ValueSlotHandle<'pass, T> {
-        let slot = self
-            .with_slot_session_mut(|slots| slots.value_slot_with_kind(PayloadKind::Return, init));
+        let source = crate::caller_location_key();
+        let slot = self.with_slot_session_mut(|slots| {
+            slots.value_slot_with_kind(PayloadKind::Return, source, init)
+        });
         ValueSlotHandle::new(slot)
     }
 
@@ -1395,7 +1450,7 @@ impl Composer {
                     Ok(typed) => return typed.value(),
                     Err(_) => {
                         log::error!(
-                            "composition local entry type mismatch for key {}",
+                            "composition local entry type mismatch for key {:?}",
                             local.key
                         );
                         return local.default_value();
@@ -1417,7 +1472,7 @@ impl Composer {
                     Ok(typed) => return typed.value(),
                     Err(_) => {
                         log::error!(
-                            "static composition local entry type mismatch for key {}",
+                            "static composition local entry type mismatch for key {:?}",
                             local.key
                         );
                         return local.default_value();
@@ -1746,14 +1801,21 @@ impl Composer {
     pub fn with_composition_locals<R>(
         &self,
         provided: Vec<ProvidedValue>,
+        site: crate::Key,
         f: impl FnOnce(&Composer) -> R,
     ) -> R {
         if provided.is_empty() {
             return f(self);
         }
+        // Only the last provider for a local is readable, so only it gets an
+        // entry: applying shadowed ones would leave same-identity siblings
+        // whose slots adopt each other when the list shrinks.
         let mut context = LocalContext::default();
-        for value in provided {
-            let (key, entry) = value.into_entry(self);
+        for value in provided.into_iter().rev() {
+            if context.values.contains_key(value.key()) {
+                continue;
+            }
+            let (key, entry) = value.into_entry(self, site);
             context.values.insert(key, entry);
         }
         {

@@ -1,6 +1,6 @@
 use cranpose_ui_graphics::{GraphicsLayer, Point, Rect};
 
-use crate::graph::{quad_bounds, ProjectiveTransform};
+use crate::graph::{ProjectiveTransform, quad_bounds};
 
 pub(crate) fn layer_scale_x(layer: &GraphicsLayer) -> f32 {
     layer.scale * layer.scale_x

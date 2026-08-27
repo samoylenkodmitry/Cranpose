@@ -1,8 +1,8 @@
 use super::{
-    checked_u32_delta, checked_usize_to_i64, CheckedU32Delta, ChildCursor, DetachedSubtree,
-    GroupKey, GroupRecord, SlotTable, SlotWriteSessionState, SubtreeRange,
+    CheckedU32Delta, ChildCursor, DetachedSubtree, GroupKey, GroupRecord, SlotTable,
+    SlotWriteSessionState, SubtreeRange, checked_u32_delta, checked_usize_to_i64,
 };
-use crate::{remove_child_and_cleanup_now, AnchorId, Applier, NodeError, NodeId};
+use crate::{AnchorId, Applier, NodeError, NodeId, remove_child_and_cleanup_now};
 
 impl SlotTable {
     // Keep detach and restore ordering aligned with docs/SLOT_TABLE_LIFECYCLE.md.
@@ -225,9 +225,25 @@ impl SlotTable {
             return Vec::new();
         }
         let mut detached = Vec::new();
-        let mut dirty_start = None;
+        let dirty_start = self
+            .direct_child_anchor_at_cursor(cursor)
+            .is_some()
+            .then(|| cursor.index());
+        self.detach_children_at_cursor_into(cursor, &mut detached);
+        self.flush_group_index_refresh_from(dirty_start);
+        #[cfg(any(test, debug_assertions))]
+        if !detached.is_empty() {
+            self.debug_assert_valid_after("detach_subtrees_at_cursor");
+        }
+        detached
+    }
+
+    fn detach_children_at_cursor_into(
+        &mut self,
+        cursor: ChildCursor,
+        detached: &mut Vec<DetachedSubtree>,
+    ) {
         while self.direct_child_anchor_at_cursor(cursor).is_some() {
-            dirty_start.get_or_insert(cursor.index());
             let subtree = self.detach_subtree_at_index_internal(cursor.index(), false);
             if subtree.group_count() == 0 {
                 log::error!(
@@ -239,12 +255,6 @@ impl SlotTable {
             }
             detached.push(subtree);
         }
-        self.flush_group_index_refresh_from(dirty_start);
-        #[cfg(any(test, debug_assertions))]
-        if !detached.is_empty() {
-            self.debug_assert_valid_after("detach_subtrees_at_cursor");
-        }
-        detached
     }
 
     pub(in crate::slot) fn restore_subtree(
@@ -334,13 +344,15 @@ impl SlotTable {
         &mut self,
         state: &mut SlotWriteSessionState,
     ) -> Vec<DetachedSubtree> {
+        let mut detached = Vec::new();
         if !state.root.detach_remaining_children {
-            return Vec::new();
+            return detached;
         }
 
         let next_child_index = state.root.next_child_index;
         let cursor = ChildCursor::new(AnchorId::INVALID, next_child_index);
-        self.detach_subtrees_at_cursor(cursor)
+        detached.extend(self.detach_subtrees_at_cursor(cursor));
+        detached
     }
 }
 

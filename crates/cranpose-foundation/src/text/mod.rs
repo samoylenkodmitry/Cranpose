@@ -27,6 +27,6 @@ mod range;
 mod state;
 
 pub use buffer::TextFieldBuffer;
-pub use line_limits::{filter_for_single_line, TextFieldLineLimits};
+pub use line_limits::{TextFieldLineLimits, filter_for_single_line};
 pub use range::TextRange;
 pub use state::{TextFieldState, TextFieldValue};

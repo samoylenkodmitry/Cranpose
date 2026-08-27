@@ -34,10 +34,9 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use android_activity::AndroidAppWaker;
 use cranpose_app_shell::ImeEditorState;
 use jni::{
-    jni_sig, jni_str,
+    EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
     sys::{jint, jlong},
-    EnvUnowned, Outcome,
 };
 
 use crate::android_jni::{
@@ -331,7 +330,7 @@ fn non_negative(value: jint) -> usize {
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeCommitText<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -352,7 +351,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeComm
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingText<
     'local,
 >(
@@ -375,7 +374,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetC
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetComposingRegion(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -393,7 +392,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetC
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetSelection(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -411,7 +410,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSetS
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeFinishComposing(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -421,7 +420,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeFini
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeDeleteSurrounding(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -439,7 +438,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeDele
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSendKeyEvent(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -461,7 +460,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeSend
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerformEditorAction(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -472,7 +471,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImePerf
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInsetsChanged(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,
@@ -486,7 +485,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeInse
 }
 
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeTextInput_nativeImeReleaseQueue(
     _env: EnvUnowned<'_>,
     _class: JClass<'_>,

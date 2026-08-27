@@ -18,7 +18,7 @@ mod writer;
 #[cfg(any(test, debug_assertions))]
 pub(crate) use errors::{PayloadAnchorRecord, SlotInvariantError, SlotTreeContext};
 #[cfg(any(test, debug_assertions))]
-use groups::{validate_slot_tree, ActiveSlotTreeChecks, SlotTreeView};
+use groups::{ActiveSlotTreeChecks, SlotTreeView, validate_slot_tree};
 
 use super::SlotTable;
 
@@ -45,10 +45,10 @@ impl SlotTable {
 #[cfg(any(test, debug_assertions))]
 impl SlotTable {
     pub(crate) fn debug_verify(&self) {
-        if crate::slot_validation_diagnostics_enabled() {
-            if let Err(err) = self.validate() {
-                panic!("slot table invariant violation: {err:?}");
-            }
+        if crate::slot_validation_diagnostics_enabled()
+            && let Err(err) = self.validate()
+        {
+            panic!("slot table invariant violation: {err:?}");
         }
     }
 

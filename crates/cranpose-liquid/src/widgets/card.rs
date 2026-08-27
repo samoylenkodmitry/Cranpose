@@ -5,10 +5,9 @@ use std::{cell::RefCell, rc::Rc};
 use cranpose_animation::animateColorAsState;
 use cranpose_macros::composable;
 use cranpose_ui::{
-    rememberMutableInteractionSource,
+    Modifier, rememberMutableInteractionSource,
     text::{SpanStyle, TextStyle},
     widgets::{Box, BoxSpec, Column, ColumnSpec, Text},
-    Modifier,
 };
 use cranpose_ui_graphics::{Brush, Color, CornerRadii};
 

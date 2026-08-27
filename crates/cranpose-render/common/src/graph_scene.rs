@@ -11,8 +11,8 @@ use cranpose_ui::{LayoutNode, ModifierNodeSlices, SubcomposeLayoutNode};
 use cranpose_ui_graphics::{Point, Rect, RoundedCornerShape};
 
 use crate::{
-    graph::{ProjectiveTransform, RenderGraph},
     HitTestTarget, RenderScene,
+    graph::{ProjectiveTransform, RenderGraph},
 };
 
 pub struct RenderDiagnostics {
@@ -152,10 +152,10 @@ impl HitRegion {
             return false;
         }
 
-        if let Some(clip_bounds) = self.hit_clip_bounds {
-            if !clip_bounds.contains(x, y) {
-                return false;
-            }
+        if let Some(clip_bounds) = self.hit_clip_bounds
+            && !clip_bounds.contains(x, y)
+        {
+            return false;
         }
 
         let point = Point { x, y };

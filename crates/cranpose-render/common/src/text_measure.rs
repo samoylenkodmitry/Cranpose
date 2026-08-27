@@ -11,13 +11,13 @@ use std::{
     sync::{Mutex, MutexGuard},
 };
 
-use cranpose_ui::{text_layout_result::TextLayoutResult, TextMeasurer, TextMetrics};
+use cranpose_ui::{TextMeasurer, TextMetrics, text_layout_result::TextLayoutResult};
 
 use crate::{
     bounded_lru_cache::BoundedLruCache,
     software_text_raster::{
-        cursor_x_for_offset_with_font, layout_text_with_font, measure_text_with_font,
-        text_offset_for_position_with_font, SoftwareTextFont, SoftwareTextFontSet,
+        SoftwareTextFont, SoftwareTextFontSet, cursor_x_for_offset_with_font,
+        layout_text_with_font, measure_text_with_font, text_offset_for_position_with_font,
     },
     text_hyphenation::HyphenationDictionaryStore,
 };

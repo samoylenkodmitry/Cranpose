@@ -7,18 +7,13 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{CStr, CString, c_char, c_void},
     sync::{Arc, Mutex},
 };
 
 use cranpose_services::purchases::{
-    set_platform_purchases, Product, PurchaseEvent, Purchases, StorePhase, StoreState,
+    Product, PurchaseEvent, Purchases, StorePhase, StoreState, set_platform_purchases,
 };
-
-// ---------------------------------------------------------------- ABI codes
-//
-// These mirror the `Kind`, `PhaseCode` and `EventCode` enums in
-// `swift/storekit.swift`. Both sides are in this crate and change together.
 
 const KIND_BEGIN: i32 = 0;
 const KIND_PRODUCT: i32 = 1;
@@ -50,14 +45,12 @@ type StoreCallback = unsafe extern "C" fn(
     *const c_char,
 );
 
-extern "C" {
+unsafe extern "C" {
     fn cranpose_storekit_start(product_ids: *const c_char, ctx: *mut c_void, cb: StoreCallback);
     fn cranpose_storekit_is_connected() -> bool;
     fn cranpose_storekit_purchase(product_id: *const c_char);
     fn cranpose_storekit_restore();
 }
-
-// -------------------------------------------------------------------- state
 
 /// Everything the Swift side has told us.
 ///
@@ -109,10 +102,12 @@ fn shared() -> std::sync::MutexGuard<'static, Shared> {
 /// is what the Swift side guarantees (its buffers live for the callback's
 /// duration only, so the copy here is required, not an optimization).
 unsafe fn take(ptr: *const c_char) -> Option<String> {
-    if ptr.is_null() {
-        return None;
+    unsafe {
+        if ptr.is_null() {
+            return None;
+        }
+        Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
     }
-    Some(CStr::from_ptr(ptr).to_string_lossy().into_owned())
 }
 
 /// The one callback the Swift side pushes everything through.
@@ -126,89 +121,79 @@ unsafe extern "C" fn on_message(
     c: *const c_char,
     d: *const c_char,
 ) {
-    let mut state = shared();
-    match kind {
-        KIND_BEGIN => {
-            state.staging = true;
-            state.staged_products.clear();
-            state.staged_owned.clear();
-            state.staged_orders.clear();
-        }
-        KIND_PRODUCT => {
-            let (Some(id), Some(display_price)) = (take(a), take(b)) else {
-                return;
-            };
-            state.staged_products.push(Product {
-                id,
-                display_price,
-                title: take(c).unwrap_or_default(),
-                description: take(d).unwrap_or_default(),
-            });
-        }
-        KIND_OWNED => {
-            if let Some(id) = take(a) {
-                // The order id is optional on this row and must stay that way:
-                // Android cannot always supply one, so an app reading it has to
-                // handle absence anyway, and a row without it is a normal owned
-                // product rather than a malformed one.
-                if let Some(order) = take(b) {
-                    state.staged_orders.insert(id.clone(), order);
+    unsafe {
+        let mut state = shared();
+        match kind {
+            KIND_BEGIN => {
+                state.staging = true;
+                state.staged_products.clear();
+                state.staged_owned.clear();
+                state.staged_orders.clear();
+            }
+            KIND_PRODUCT => {
+                let (Some(id), Some(display_price)) = (take(a), take(b)) else {
+                    return;
+                };
+                state.staged_products.push(Product {
+                    id,
+                    display_price,
+                    title: take(c).unwrap_or_default(),
+                    description: take(d).unwrap_or_default(),
+                });
+            }
+            KIND_OWNED => {
+                if let Some(id) = take(a) {
+                    if let Some(order) = take(b) {
+                        state.staged_orders.insert(id.clone(), order);
+                    }
+                    state.staged_owned.insert(id);
                 }
-                state.staged_owned.insert(id);
             }
-        }
-        KIND_PHASE => {
-            // Commit, but only if rows were staged: a bare phase update (the
-            // "connecting" ping at start-up) must not blank a price list the
-            // user is already looking at.
-            if state.staging {
-                state.live.products = std::mem::take(&mut state.staged_products);
-                state.live.owned = std::mem::take(&mut state.staged_owned);
-                state.live.orders = std::mem::take(&mut state.staged_orders);
-                state.staging = false;
+            KIND_PHASE => {
+                if state.staging {
+                    state.live.products = std::mem::take(&mut state.staged_products);
+                    state.live.owned = std::mem::take(&mut state.staged_owned);
+                    state.live.orders = std::mem::take(&mut state.staged_orders);
+                    state.staging = false;
+                }
+                state.live.phase = match arg0 {
+                    PHASE_READY => StorePhase::Ready,
+                    PHASE_CONNECTING => StorePhase::Connecting,
+                    PHASE_BLOCKED => StorePhase::Blocked,
+                    PHASE_UNAVAILABLE => StorePhase::Unavailable,
+                    _ => StorePhase::Unavailable,
+                };
+                state.live.error = take(a);
             }
-            state.live.phase = match arg0 {
-                PHASE_READY => StorePhase::Ready,
-                PHASE_CONNECTING => StorePhase::Connecting,
-                PHASE_BLOCKED => StorePhase::Blocked,
-                PHASE_UNAVAILABLE => StorePhase::Unavailable,
-                // An unreadable code is the phase that invites a retry, never
-                // the one that tells the user to give up.
-                _ => StorePhase::Unavailable,
-            };
-            state.live.error = take(a);
-        }
-        KIND_BUSY => state.live.busy = arg0 != 0,
-        KIND_EVENT => {
-            let event = match arg0 {
-                EVENT_PURCHASED => PurchaseEvent::Purchased(take(a).unwrap_or_default()),
-                EVENT_CANCELLED => PurchaseEvent::Cancelled,
-                EVENT_PENDING => PurchaseEvent::Pending,
-                EVENT_FAILED => PurchaseEvent::Failed(
-                    take(a).unwrap_or_else(|| "The purchase could not be completed".to_string()),
-                ),
-                EVENT_RESTORED => PurchaseEvent::Restored {
-                    restored: arg1.max(0) as usize,
-                },
-                _ => return,
-            };
-            // Bound the queue: a UI that never drains events (a headless run,
-            // a screen the user never opens) must not grow memory forever.
-            if state.events.len() >= 32 {
-                state.events.pop_front();
+            KIND_BUSY => state.live.busy = arg0 != 0,
+            KIND_EVENT => {
+                let event = match arg0 {
+                    EVENT_PURCHASED => PurchaseEvent::Purchased(take(a).unwrap_or_default()),
+                    EVENT_CANCELLED => PurchaseEvent::Cancelled,
+                    EVENT_PENDING => PurchaseEvent::Pending,
+                    EVENT_FAILED => PurchaseEvent::Failed(
+                        take(a)
+                            .unwrap_or_else(|| "The purchase could not be completed".to_string()),
+                    ),
+                    EVENT_RESTORED => PurchaseEvent::Restored {
+                        restored: arg1.max(0) as usize,
+                    },
+                    _ => return,
+                };
+                if state.events.len() >= 32 {
+                    state.events.pop_front();
+                }
+                state.events.push_back(event);
+                drop(state);
+                cranpose_services::note_store_news();
+                return;
             }
-            state.events.push_back(event);
-            drop(state);
-            cranpose_services::note_store_news();
-            return;
+            _ => {}
         }
-        _ => {}
+        drop(state);
+        cranpose_services::note_store_news();
     }
-    drop(state);
-    cranpose_services::note_store_news();
 }
-
-// ------------------------------------------------------------------ backend
 
 /// The App Store backend. Install it with [`register`].
 pub struct StoreKitPurchases;
@@ -221,15 +206,10 @@ impl Purchases for StoreKitPurchases {
             .lock()
             .unwrap_or_else(|error| error.into_inner()) =
             product_ids.iter().map(|id| (*id).to_owned()).collect();
-        // Newline-separated: product ids are `[A-Za-z0-9._-]` on both stores,
-        // so a newline cannot occur inside one and no escaping is needed.
         let joined = product_ids.join("\n");
         let Ok(joined) = CString::new(joined) else {
             return;
         };
-        // SAFETY: `joined` outlives the call; the Swift side copies what it
-        // needs before returning. `on_message` has the matching ABI and takes
-        // no context (its state is the `SHARED` static).
         unsafe {
             cranpose_storekit_start(joined.as_ptr(), std::ptr::null_mut(), on_message);
         }
@@ -243,12 +223,10 @@ impl Purchases for StoreKitPurchases {
         let Ok(id) = CString::new(product_id) else {
             return;
         };
-        // SAFETY: `id` outlives the call and is NUL-terminated.
         unsafe { cranpose_storekit_purchase(id.as_ptr()) }
     }
 
     fn restore(&self) {
-        // SAFETY: no arguments; the Swift side is a no-op before `configure`.
         unsafe { cranpose_storekit_restore() }
     }
 
@@ -310,7 +288,6 @@ mod tests {
                 title.as_ptr(),
                 body.as_ptr(),
             );
-            // Still staging: nothing visible yet.
             assert!(StoreKitPurchases.state().products.is_empty());
             on_message(
                 std::ptr::null_mut(),
@@ -339,7 +316,6 @@ mod tests {
         assert_eq!(state.display_price("com.example.pro"), Some("34,99 €"));
         assert!(state.owns("com.example.pro"));
 
-        // A "connecting" ping with no rows must not wipe the committed list.
         unsafe {
             on_message(
                 std::ptr::null_mut(),
@@ -360,7 +336,6 @@ mod tests {
 
     #[test]
     fn events_queue_and_drain_in_order_and_are_bounded() {
-        // Start from a known state; the snapshot test shares the static.
         while StoreKitPurchases.take_event().is_some() {}
         let msg = CString::new("card declined").unwrap();
         let null = std::ptr::null();
@@ -410,7 +385,6 @@ mod tests {
         );
         assert_eq!(StoreKitPurchases.take_event(), None);
 
-        // An undrained queue is capped, not unbounded.
         for _ in 0..100 {
             unsafe {
                 on_message(

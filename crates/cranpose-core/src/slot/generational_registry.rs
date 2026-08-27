@@ -46,15 +46,6 @@ impl<S> GenerationalRegistryStorage<S> {
             self.sparse_states.get(&id)
         }
     }
-
-    pub(crate) fn slot_mut(&mut self, id: usize) -> Option<&mut GenerationalSlot<S>> {
-        if Self::uses_dense_storage(id) {
-            self.dense_states.get_mut(id)
-        } else {
-            self.sparse_states.get_mut(&id)
-        }
-    }
-
     pub(crate) fn slots(&self) -> impl Iterator<Item = (usize, &GenerationalSlot<S>)> + '_ {
         self.dense_states
             .iter()
@@ -143,10 +134,10 @@ impl<S: RegistryState> GenerationalRegistryStorage<S> {
     }
 
     pub(crate) fn set_state(&mut self, id: usize, generation: u32, state: S) -> Option<S> {
-        if let Some(slot) = self.slot(id) {
-            if slot.generation != generation {
-                return None;
-            }
+        if let Some(slot) = self.slot(id)
+            && slot.generation != generation
+        {
+            return None;
         }
         let previous = self.insert_slot(id, generation, state);
         self.adjust_state_counts(previous.map(|slot| slot.state), Some(state));

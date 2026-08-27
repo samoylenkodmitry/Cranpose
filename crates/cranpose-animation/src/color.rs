@@ -9,7 +9,7 @@
 
 #![allow(non_snake_case)]
 
-use cranpose_core::{with_current_composer, Owned, State};
+use cranpose_core::{Owned, State, with_current_composer};
 use cranpose_ui_graphics::Color;
 
 use crate::animation::{Animatable, AnimationType, Lerp, SpringScalar};
@@ -70,11 +70,14 @@ impl SpringScalar for Color {
 ///
 /// The interpolation happens linearly per RGBA channel, including alpha (see
 /// [`Lerp`] for [`Color`] for how this relates to Compose's Oklab lerp).
+#[track_caller]
 pub fn animateColorAsState(target: Color, animation: AnimationType, label: &str) -> State<Color> {
     let _ = label;
+    let caller = cranpose_core::caller_location_key();
     with_current_composer(|composer| {
         let runtime = composer.runtime_handle();
-        let anim: Owned<Animatable<Color>> = composer.remember(|| Animatable::new(target, runtime));
+        let anim: Owned<Animatable<Color>> =
+            composer.remember_at(caller, || Animatable::new(target, runtime));
         anim.update(|animatable| {
             let is_new_target = animatable.target() != target;
             let is_new_animation = animatable.animation_type() != animation;

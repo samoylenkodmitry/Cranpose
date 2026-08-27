@@ -21,14 +21,15 @@ fn subcompose_reuses_nodes_across_calls() {
     let mut applier = test_applier();
     let mut state = SubcomposeState::default();
     let first_id;
+    fn content(composer: &Composer) -> NodeId {
+        composer.emit_node(|| TestDummyNode)
+    }
 
     {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
-        let (_, first_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode)
-        });
+        let (_, first_nodes) = composer.subcompose(&mut state, SlotId::new(7), content);
         assert_eq!(first_nodes.len(), 1);
         first_id = first_nodes[0];
         drop(composer);
@@ -39,9 +40,7 @@ fn subcompose_reuses_nodes_across_calls() {
         let (composer, slots_host, applier_host) =
             setup_composer(&mut slots, &mut applier, handle.clone(), None);
         composer.set_phase(Phase::Measure);
-        let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), |composer| {
-            composer.emit_node(|| TestDummyNode)
-        });
+        let (_, second_nodes) = composer.subcompose(&mut state, SlotId::new(7), content);
         assert_eq!(second_nodes.len(), 1);
         assert_eq!(second_nodes[0], first_id);
         drop(composer);
@@ -802,13 +801,13 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
-                    if key == 0 {
-                        if let Some(rx) = receiver.borrow_mut().take() {
-                            scope.launch_background(
-                                move |_| async move { rx.recv().expect("value available") },
-                                move |value| result_state.set_value(value),
-                            );
-                        }
+                    if key == 0
+                        && let Some(rx) = receiver.borrow_mut().take()
+                    {
+                        scope.launch_background(
+                            move |_| async move { rx.recv().expect("value available") },
+                            move |value| result_state.set_value(value),
+                        );
                     }
                 });
             })
@@ -824,13 +823,13 @@ fn launched_effect_background_ignores_late_result_after_cancel() {
                 let key = key_state.value();
                 let receiver = Rc::clone(&receiver);
                 LaunchedEffect!(key, move |scope| {
-                    if key == 0 {
-                        if let Some(rx) = receiver.borrow_mut().take() {
-                            scope.launch_background(
-                                move |_| async move { rx.recv().expect("value available") },
-                                move |value| result_state.set_value(value),
-                            );
-                        }
+                    if key == 0
+                        && let Some(rx) = receiver.borrow_mut().take()
+                    {
+                        scope.launch_background(
+                            move |_| async move { rx.recv().expect("value available") },
+                            move |value| result_state.set_value(value),
+                        );
                     }
                 });
             })

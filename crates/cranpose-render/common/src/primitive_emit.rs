@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
 use cranpose_ui::text::{
-    text_style_for_draw_style, AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle,
+    AnnotatedString, TextLayoutOptions, TextOverflow, TextStyle, text_style_for_draw_style,
 };
 use cranpose_ui_graphics::{
-    arc_band, inflate_rect, ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii,
-    DrawPrimitive, GraphicsLayer, ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape,
-    ShadowPrimitive, Stroke, TextPrimitive,
+    ArcGeometry, BlendMode, Brush, Color, ColorFilter, CornerRadii, DrawPrimitive, GraphicsLayer,
+    ImageBitmap, ImageSampling, Point, Rect, RoundedCornerShape, ShadowPrimitive, Stroke,
+    TextPrimitive, arc_band, inflate_rect,
 };
 
 use crate::{
@@ -16,8 +16,8 @@ use crate::{
         apply_layer_to_rect, layer_uniform_scale,
     },
     style_shared::{
-        apply_layer_to_color, compose_color_filters, resolve_layer_brush, scale_corner_radii,
-        ResolvedBrush,
+        ResolvedBrush, apply_layer_to_color, compose_color_filters, resolve_layer_brush,
+        scale_corner_radii,
     },
 };
 
@@ -592,32 +592,34 @@ mod tests {
 
     #[test]
     fn draw_shape_params_for_primitive_rejects_non_shape_primitives() {
-        assert!(draw_shape_params_for_primitive(
-            DrawPrimitive::Image {
-                rect: Rect::from_size(cranpose_ui_graphics::Size {
-                    width: 4.0,
-                    height: 4.0,
+        assert!(
+            draw_shape_params_for_primitive(
+                DrawPrimitive::Image {
+                    rect: Rect::from_size(cranpose_ui_graphics::Size {
+                        width: 4.0,
+                        height: 4.0,
+                    }),
+                    image: cranpose_ui_graphics::ImageBitmap::from_rgba8(
+                        1,
+                        1,
+                        vec![255, 255, 255, 255],
+                    )
+                    .expect("image"),
+                    alpha: 1.0,
+                    color_filter: None,
+                    sampling: ImageSampling::Nearest,
+                    src_rect: None,
+                },
+                Rect::from_size(cranpose_ui_graphics::Size {
+                    width: 10.0,
+                    height: 10.0,
                 }),
-                image: cranpose_ui_graphics::ImageBitmap::from_rgba8(
-                    1,
-                    1,
-                    vec![255, 255, 255, 255],
-                )
-                .expect("image"),
-                alpha: 1.0,
-                color_filter: None,
-                sampling: ImageSampling::Nearest,
-                src_rect: None,
-            },
-            Rect::from_size(cranpose_ui_graphics::Size {
-                width: 10.0,
-                height: 10.0,
-            }),
-            &GraphicsLayer::default(),
-            None,
-            BlendMode::SrcOver,
-        )
-        .is_none());
+                &GraphicsLayer::default(),
+                None,
+                BlendMode::SrcOver,
+            )
+            .is_none()
+        );
     }
 
     // ── Stroke / arc lowering ───────────────────────────────────────────────

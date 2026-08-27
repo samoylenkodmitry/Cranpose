@@ -21,7 +21,7 @@
 #![cfg(feature = "embedded-default-font")]
 
 use cranpose_render_common::software_text_raster::{
-    default_software_text_font, SoftwareTextFontSet, SoftwareTextMeasurer,
+    SoftwareTextFontSet, SoftwareTextMeasurer, default_software_text_font,
 };
 use cranpose_ui::text::{
     AnnotatedString, FontFamily, FontWeight, SpanStyle, TextMeasurer, TextStyle, TextUnit,

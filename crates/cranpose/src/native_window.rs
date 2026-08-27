@@ -25,7 +25,7 @@ use std::{
 };
 
 use cranpose_core::MutableState;
-use cranpose_ui::{composable, Modifier, Point, PointerEventKind, PointerInputScope, Size};
+use cranpose_ui::{Modifier, Point, PointerEventKind, PointerInputScope, Size, composable};
 
 /// A stable identifier for a declarative operating-system window.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -364,6 +364,7 @@ impl WindowState {
 /// Remembers native-window position and size across recompositions.
 #[allow(non_snake_case)]
 #[composable]
+#[track_caller]
 pub fn rememberWindowState(width: f32, height: f32) -> WindowState {
     WindowState {
         position: cranpose_core::rememberMutableStateOf(|| None::<Point>),
@@ -2169,7 +2170,7 @@ mod tests {
     fn drag_area_callbacks_follow_accepted_native_drag_lifecycle() {
         use std::cell::Cell;
 
-        use cranpose_ui::{collect_slices_from_modifier, PointerEvent};
+        use cranpose_ui::{PointerEvent, collect_slices_from_modifier};
 
         let (_app_context, _app_context_scope) = test_app_context_scope();
         let started = Rc::new(Cell::new(0));
@@ -2526,9 +2527,7 @@ mod tests {
         graph.start_drag(&start, main);
 
         assert!(
-            graph
-                .finish_drag(&finish_with_peer_position_lag)
-                .is_empty(),
+            graph.finish_drag(&finish_with_peer_position_lag).is_empty(),
             "release snapping must not drop a start-captured peer from the moving component because OS move events arrived out of phase"
         );
     }

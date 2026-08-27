@@ -24,8 +24,9 @@
 use std::{
     ffi::c_void,
     sync::{
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     thread::{self, JoinHandle},
 };
@@ -37,7 +38,7 @@ use ndk::audio::{
 };
 
 use crate::{
-    backend::{AudioSink, Renderer, NOMINAL_CHANNELS},
+    backend::{AudioSink, NOMINAL_CHANNELS, Renderer},
     mixer::RenderStatus,
 };
 

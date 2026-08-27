@@ -10,11 +10,11 @@
 
 use std::{cell::RefCell, sync::Arc};
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
 use crate::{
-    file_picker::{default_file_picker, FileFilter, FilePickerOptions, PickerFuture},
+    file_picker::{FileFilter, FilePickerOptions, PickerFuture, default_file_picker},
     registry::ServiceRegistry,
 };
 

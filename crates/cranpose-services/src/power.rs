@@ -8,11 +8,11 @@
 //! a screen reacts to thermal pressure instead of sampling it.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_core::{rememberEventStream, State};
+use cranpose_core::{State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 
@@ -250,6 +250,7 @@ pub fn publish_power_state(state: PowerState) {
 /// The device's power state, observed for as long as this call stays in the
 /// composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberPowerState() -> State<PowerState> {
     let updates = rememberEventStream((), |sender| {
         observe_power_state(move |state| sender.send(state))

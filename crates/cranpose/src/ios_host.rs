@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use cranpose_services::{
-    set_application_id, set_host_controller, HostController, PlatformDirectories,
+    HostController, PlatformDirectories, set_application_id, set_host_controller,
 };
 use objc2::MainThreadMarker;
 use objc2_foundation::{NSBundle, NSHomeDirectory};
@@ -54,12 +54,10 @@ fn bundle_identifier() -> Option<String> {
 }
 
 pub(crate) fn register() {
-    if let Some(identifier) = bundle_identifier() {
-        if let Err(error) = set_application_id(&identifier) {
-            log::warn!(
-                "cranpose: the iOS bundle identifier is not a usable application id: {error}"
-            );
-        }
+    if let Some(identifier) = bundle_identifier()
+        && let Err(error) = set_application_id(&identifier)
+    {
+        log::warn!("cranpose: the iOS bundle identifier is not a usable application id: {error}");
     }
     set_host_controller(Arc::new(IosHost));
 }

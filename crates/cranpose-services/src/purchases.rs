@@ -39,8 +39,8 @@ use std::sync::Mutex;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -446,6 +446,7 @@ pub fn take_event() -> Option<PurchaseEvent> {
 /// and no frame loop is required for a purchase that completes while the screen
 /// is idle.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
     let updates = cranpose_core::rememberEventStream((), |sender| {
         observe_store_news(move || sender.send(store_state()))
@@ -458,6 +459,7 @@ pub fn rememberStoreState() -> cranpose_core::State<StoreState> {
 /// Each event is delivered exactly once. Collect it with
 /// [`cranpose_core::CollectEvents`].
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberPurchaseEvents() -> cranpose_core::EventStream<PurchaseEvent> {
     cranpose_core::rememberEventStream((), |sender| {
         observe_store_news(move || {

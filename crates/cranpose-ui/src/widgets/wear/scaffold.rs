@@ -20,11 +20,11 @@ use crate::{
     composable,
     modifier::Modifier,
     widgets::{
+        Box as CranposeBox, BoxSpec,
         wear::{
             scaling_list::WearScalingListState,
             scroll_indicator::{ScrollIndicator, ScrollIndicatorSpec},
         },
-        Box as CranposeBox, BoxSpec,
     },
 };
 

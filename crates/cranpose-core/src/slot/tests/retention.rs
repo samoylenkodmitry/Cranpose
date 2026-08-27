@@ -60,7 +60,11 @@ fn identity_snapshot_captures_active_and_retained_identities() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        child_slot = Some(session.value_slot_with_kind(PayloadKind::Internal, || 17_i32));
+        child_slot = Some(session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 17_i32,
+        ));
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -148,7 +152,12 @@ fn retention_take_preserves_retained_node_lifecycle_until_restore() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(child_id, child_generation, None);
+        session.record_node_with_parent(
+            child_id,
+            child_generation,
+            None,
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -947,8 +956,13 @@ fn retention_debug_stats_report_retained_payload_anchor_and_heap_counts() {
 
         let child = begin_unkeyed(session, CHILD_KEY, None);
         session.set_group_scope(child.group, CHILD_SCOPE);
-        let _remembered = session.remember(|| 91_i32);
-        session.record_node_with_parent(child_id, child_generation, None);
+        let _remembered = session.remember(crate::slot::BRANCH_PATH_ROOT, || 91_i32);
+        session.record_node_with_parent(
+            child_id,
+            child_generation,
+            None,
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -1006,7 +1020,12 @@ fn finalize_pass_disposes_removed_child_nodes() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(child_id, child_generation, None);
+        session.record_node_with_parent(
+            child_id,
+            child_generation,
+            None,
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -1054,8 +1073,12 @@ fn finalize_pass_returns_root_level_detached_subtree_for_caller_cleanup() {
     harness.begin_pass(SlotPassMode::Compose);
     let root_slot = harness.session(|session| {
         begin_unkeyed(session, ROOT_KEY, None);
-        let slot = session.value_slot_with_kind(PayloadKind::Internal, || 73_i32);
-        session.record_node_with_parent(ROOT_NODE, 1, None);
+        let slot = session.value_slot_with_kind(
+            PayloadKind::Internal,
+            crate::slot::BRANCH_PATH_ROOT,
+            || 73_i32,
+        );
+        session.record_node_with_parent(ROOT_NODE, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let result = session.finish_group_body();
         assert!(result.detached_children.is_empty());
         session.end_group();
@@ -1112,7 +1135,12 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(child_id, child_generation, None);
+        session.record_node_with_parent(
+            child_id,
+            child_generation,
+            None,
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         let child_result = session.finish_group_body();
         assert!(child_result.detached_children.is_empty());
         session.end_group();
@@ -1152,10 +1180,15 @@ fn retained_detached_child_nodes_stay_live_across_restore() {
         assert_eq!(child.kind, GroupStartKind::Restored);
         assert_eq!(
             session.current_node_record(),
-            Some((child_id, child_generation)),
+            Some((child_id, child_generation, crate::slot::BRANCH_PATH_ROOT)),
             "restored children must expose their retained node for explicit reuse"
         );
-        let recorded = session.record_node_with_parent(child_id, child_generation, None);
+        let recorded = session.record_node_with_parent(
+            child_id,
+            child_generation,
+            None,
+            crate::slot::BRANCH_PATH_ROOT,
+        );
         assert_eq!(
             recorded,
             NodeSlotUpdate::Reused {

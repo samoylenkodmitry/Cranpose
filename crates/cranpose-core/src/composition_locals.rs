@@ -1,33 +1,53 @@
 use std::{any::Any, cell::RefCell, rc::Rc, sync::Arc};
 
 use crate::{
-    composer_context,
+    Composer, LocalKey, RuntimeHandle, composer_context,
     state::{MutationPolicy, OwnedMutableState},
-    Composer, LocalKey, RuntimeHandle,
 };
+
+/// The identity of one `provides` call: the local's own salt and the call
+/// site. Same-local providers at different sites must not adopt each other's
+/// entries when a neighbor leaves. Deliberately composer-free: a provider may
+/// be constructed anywhere, including inside a slot initializer that already
+/// holds the writer.
+fn provider_entry_source(key: &LocalKey, caller: crate::Key) -> crate::Key {
+    (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3)
+}
 
 pub struct ProvidedValue {
     key: LocalKey,
     #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
-    apply: Box<dyn Fn(&Composer) -> Rc<dyn Any>>,
+    apply: Box<dyn Fn(&Composer, crate::Key) -> Rc<dyn Any>>,
 }
 
 impl ProvidedValue {
-    pub(crate) fn into_entry(self, composer: &Composer) -> (LocalKey, Rc<dyn Any>) {
+    pub(crate) fn key(&self) -> &LocalKey {
+        &self.key
+    }
+
+    /// `site` is the provider call this value is applied under: two sibling
+    /// provider scopes fed from one construction site must not share entries.
+    pub(crate) fn into_entry(
+        self,
+        composer: &Composer,
+        site: crate::Key,
+    ) -> (LocalKey, Rc<dyn Any>) {
         let ProvidedValue { key, apply } = self;
-        let entry = apply(composer);
+        let entry = apply(composer, site);
         (key, entry)
     }
 }
 
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn CompositionLocalProvider(
     values: impl IntoIterator<Item = ProvidedValue>,
     content: impl FnOnce(),
 ) {
+    let site = crate::caller_location_key();
     composer_context::with_composer(|composer| {
         let provided: Vec<ProvidedValue> = values.into_iter().collect();
-        composer.with_composition_locals(provided, |_composer| content());
+        composer.with_composition_locals(provided, site, |_composer| content());
     })
 }
 
@@ -103,14 +123,17 @@ impl<T: Clone + 'static> PartialEq for CompositionLocal<T> {
 impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 
 impl<T: Clone + 'static> CompositionLocal<T> {
+    #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key.clone();
+        let entry_source = provider_entry_source(&key, crate::caller_location_key());
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
-            apply: Box::new(move |composer: &Composer| {
+            apply: Box::new(move |composer: &Composer, site: crate::Key| {
                 let runtime = composer.runtime_handle();
-                let entry_ref = composer.remember_internal(|| {
+                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let entry_ref = composer.remember_internal(source, || {
                     Rc::new(LocalStateEntry::new(
                         value.clone(),
                         runtime.clone(),
@@ -140,7 +163,7 @@ pub(crate) fn malformed_composition_local_for_test<T: Clone + 'static>(
     let key = local.key.clone();
     ProvidedValue {
         key,
-        apply: Box::new(move |_| entry.clone()),
+        apply: Box::new(move |_, _| entry.clone()),
     }
 }
 
@@ -188,13 +211,16 @@ impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
 impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
+    #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key.clone();
+        let entry_source = provider_entry_source(&key, crate::caller_location_key());
         ProvidedValue {
             key,
-            apply: Box::new(move |composer: &Composer| {
-                let entry_ref =
-                    composer.remember_internal(|| Rc::new(StaticLocalEntry::new(value.clone())));
+            apply: Box::new(move |composer: &Composer, site: crate::Key| {
+                let source = (entry_source ^ site).wrapping_mul(0x0000_0100_0000_01b3);
+                let entry_ref = composer
+                    .remember_internal(source, || Rc::new(StaticLocalEntry::new(value.clone())));
                 entry_ref.update(|entry| entry.set(value.clone()));
                 entry_ref.with(|entry| entry.clone() as Rc<dyn Any>)
             }),
@@ -218,7 +244,7 @@ pub(crate) fn malformed_static_composition_local_for_test<T: Clone + 'static>(
     let key = local.key.clone();
     ProvidedValue {
         key,
-        apply: Box::new(move |_| entry.clone()),
+        apply: Box::new(move |_, _| entry.clone()),
     }
 }
 

@@ -30,6 +30,7 @@ mod lazy_scrollbar;
 mod liquid_ui;
 mod markdown;
 mod mineswapper2;
+mod recomposition_lab;
 pub mod rotary;
 mod shader_rect;
 mod shaders;
@@ -56,6 +57,7 @@ use markdown::{
     markdown_viewer_tab, MarkdownScrollStabilityFixtureTab, MarkdownScrollStressFixtureTab,
     MarkdownScrollStressFixtureTabWithState,
 };
+use recomposition_lab::RecompositionLabTab;
 use rotary::rotary_tab;
 use shader_rect::ShaderRectTab;
 pub use shaders::ShaderSection;
@@ -94,6 +96,7 @@ pub enum DemoTab {
     ModifierShowcase,
     LazyList,
     Mineswapper2,
+    RecompositionLab,
     HackerNews,
     Images,
     Text,
@@ -125,6 +128,7 @@ impl DemoTab {
             DemoTab::ModifierShowcase => "Modifiers Showcase",
             DemoTab::LazyList => "Lazy List",
             DemoTab::Mineswapper2 => "Mineswapper2",
+            DemoTab::RecompositionLab => "Recomposition Lab",
             DemoTab::HackerNews => "Hacker News",
             DemoTab::Images => "Images",
             DemoTab::Text => "Text",
@@ -161,6 +165,7 @@ impl DemoTab {
             "modifiers" | "modifiersshowcase" | "modifiershowcase" => Some(Self::ModifierShowcase),
             "lazylist" => Some(Self::LazyList),
             "mineswapper2" => Some(Self::Mineswapper2),
+            "recompositionlab" => Some(Self::RecompositionLab),
             "hackernews" => Some(Self::HackerNews),
             "images" => Some(Self::Images),
             "text" => Some(Self::Text),
@@ -175,7 +180,7 @@ impl DemoTab {
     }
 }
 
-pub const DEMO_TABS: [DemoTab; 23] = [
+pub const DEMO_TABS: [DemoTab; 24] = [
     DemoTab::Counter,
     DemoTab::Liquid,
     DemoTab::CompositionLocal,
@@ -187,6 +192,7 @@ pub const DEMO_TABS: [DemoTab; 23] = [
     DemoTab::ModifierShowcase,
     DemoTab::LazyList,
     DemoTab::Mineswapper2,
+    DemoTab::RecompositionLab,
     DemoTab::HackerNews,
     DemoTab::Images,
     DemoTab::Text,
@@ -585,6 +591,7 @@ fn render_active_tab(active: DemoTab, startup: StartupSelection, winamp_tab_stat
         DemoTab::ModifierShowcase => modifier_showcase_tab(),
         DemoTab::LazyList => lazy_list_example(),
         DemoTab::Mineswapper2 => mineswapper2::mineswapper2_tab(),
+        DemoTab::RecompositionLab => RecompositionLabTab(),
         DemoTab::HackerNews => HackerNewsTab(),
         DemoTab::Images => images_tab(),
         DemoTab::Text => TextShowcaseTab(),

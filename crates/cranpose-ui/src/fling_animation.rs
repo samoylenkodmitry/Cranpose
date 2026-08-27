@@ -9,8 +9,8 @@ use std::{
 
 use cranpose_animation::{FloatDecayAnimationSpec, SplineBasedDecaySpec};
 use cranpose_core::{
-    internal::{FrameCallbackRegistration, FrameClock},
     RuntimeHandle,
+    internal::{FrameCallbackRegistration, FrameClock},
 };
 
 /// Minimum velocity (in px/sec) to trigger a fling animation.

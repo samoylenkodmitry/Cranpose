@@ -15,11 +15,11 @@ mod shared_test_support;
 use std::sync::Arc;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         DrawPrimitiveNode, PrimitiveEntry, PrimitiveNode, PrimitivePhase, ProjectiveTransform,
         RenderGraph, RenderNode,
     },
-    Renderer,
 };
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::AppContext;

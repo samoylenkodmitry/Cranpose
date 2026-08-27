@@ -320,8 +320,8 @@ fn a_subtree_given_a_different_density_is_measured_on_that_grid() -> Result<(), 
 /// given, not whatever the host installed on the shell nor whatever composer
 /// the measuring thread happens to be inside.
 #[test]
-fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid(
-) -> Result<(), NodeError> {
+fn a_subcomposed_subtree_given_a_different_density_is_measured_on_that_grid()
+-> Result<(), NodeError> {
     let host_seen = Rc::new(Cell::new(-1.0_f32));
     let inner_seen = Rc::new(Cell::new(-1.0_f32));
 
@@ -1604,8 +1604,8 @@ fn layout_reconciles_child_measurables_by_child_identity() -> Result<(), NodeErr
 }
 
 #[test]
-fn layout_reuses_modifier_coordinator_chain_until_modifier_identity_changes(
-) -> Result<(), NodeError> {
+fn layout_reuses_modifier_coordinator_chain_until_modifier_identity_changes()
+-> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
@@ -2263,23 +2263,25 @@ fn semantics_tree_carries_the_controls_a_canvas_published() -> Result<(), NodeEr
                     let paused = StdRc::clone(&paused);
                     move || paused.set(true)
                 })];
-                config.canvas_children = vec![CanvasSemanticsNode::control(
-                    9,
-                    Rect {
-                        x: 4.0,
-                        y: 8.0,
-                        width: 100.0,
-                        height: 52.0,
-                    },
-                    "Haptics",
-                )
-                .with_role(SemanticsWidgetRole::Switch)
-                .with_toggled(false)
-                .with_state_description("Off")
-                .with_custom_action(SemanticsCustomAction::new("Toggle", {
-                    let toggled = StdRc::clone(&toggled);
-                    move || toggled.set(true)
-                }))];
+                config.canvas_children = vec![
+                    CanvasSemanticsNode::control(
+                        9,
+                        Rect {
+                            x: 4.0,
+                            y: 8.0,
+                            width: 100.0,
+                            height: 52.0,
+                        },
+                        "Haptics",
+                    )
+                    .with_role(SemanticsWidgetRole::Switch)
+                    .with_toggled(false)
+                    .with_state_description("Off")
+                    .with_custom_action(SemanticsCustomAction::new("Toggle", {
+                        let toggled = StdRc::clone(&toggled);
+                        move || toggled.set(true)
+                    })),
+                ];
             }
         }),
         Rc::new(MaxSizePolicy),
@@ -2368,8 +2370,8 @@ fn measure_layout_can_skip_semantics_until_consumer_is_enabled() -> Result<(), N
 }
 
 #[test]
-fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_storage(
-) -> Result<(), NodeError> {
+fn measure_layout_debug_allocation_stats_cover_layout_semantics_and_modifier_storage()
+-> Result<(), NodeError> {
     let _app_context = crate::render_state::app_context_test_scope();
     let mut applier = MemoryApplier::new();
 
@@ -2626,7 +2628,7 @@ impl MeasurePolicy for PanickingMeasurePolicy {
 #[test]
 fn measure_layout_panic_preserves_applier_and_slots() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let mut applier = MemoryApplier::new();
 
@@ -2700,7 +2702,7 @@ fn measure_layout_panic_preserves_applier_and_slots() {
 #[test]
 fn measure_layout_panic_returns_frame_arena_after_retained_child_binding() {
     let _app_context = crate::render_state::app_context_test_scope();
-    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     let mut applier = MemoryApplier::new();
 

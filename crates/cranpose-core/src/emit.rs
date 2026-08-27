@@ -1,9 +1,9 @@
 use std::any::TypeId;
 
 use crate::{
-    debug_scope_label, slot::NodeSlotUpdate, Applier, ChildList, Command, CommandQueue, Composer,
-    DirtyBubble, EmittedNode, MutableState, Node, NodeError, NodeId, OwnedMutableState,
-    ParentAttachMode, ParentFrame,
+    Applier, ChildList, Command, CommandQueue, Composer, DirtyBubble, EmittedNode, MutableState,
+    Node, NodeError, NodeId, OwnedMutableState, ParentAttachMode, ParentFrame, debug_scope_label,
+    slot::NodeSlotUpdate,
 };
 
 impl Composer {
@@ -29,88 +29,101 @@ impl Composer {
         self.commands_mut().push(Command::RemoveNode { id: old_id });
     }
 
+    #[track_caller]
     pub fn use_state<T: Clone + 'static>(&self, init: impl FnOnce() -> T) -> MutableState<T> {
+        let source = crate::caller_location_key();
         let runtime = self.runtime_handle();
         let state = self.with_slot_session_mut(|slots| {
-            slots.remember(|| OwnedMutableState::with_runtime(init(), runtime.clone()))
+            slots.remember(source, || {
+                OwnedMutableState::with_runtime(init(), runtime.clone())
+            })
         });
         state.with(|state| state.handle())
     }
 
     fn emit_node_box<N: Node + 'static>(
         &self,
+        source: crate::Key,
         make_node: impl FnOnce(&mut dyn Applier) -> EmittedNode,
     ) -> NodeId {
-        // Peek at the slot without advancing cursor
-        let (existing_id, existing_generation, type_matches, gen_matches) = {
-            if let Some((id, slot_gen)) =
-                self.with_slot_session_mut(|slots| slots.current_node_record())
-            {
-                let mut applier = self.borrow_applier();
-                let gen_ok = applier.node_generation(id) == slot_gen;
-                let type_ok = match applier.get_mut(id) {
-                    Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
-                    Err(_) => false,
+        let adopted = {
+            let mut skip = 0;
+            loop {
+                let Some((id, slot_gen)) = self
+                    .with_slot_session_mut(|slots| slots.peek_node_record_by_source(source, skip))
+                else {
+                    break None;
                 };
-                (Some(id), Some(slot_gen), type_ok, gen_ok)
-            } else {
-                (None, None, false, false)
+                let (type_ok, gen_ok) = {
+                    let mut applier = self.borrow_applier();
+                    let gen_ok = applier.node_generation(id) == slot_gen;
+                    let type_ok = match applier.get_mut(id) {
+                        Ok(node) => node.as_any_mut().downcast_ref::<N>().is_some(),
+                        Err(_) => false,
+                    };
+                    (type_ok, gen_ok)
+                };
+                if type_ok && gen_ok {
+                    let committed = self.with_slot_session_mut(|slots| {
+                        slots.adopt_node_record_by_source(source, skip)
+                    });
+                    debug_assert_eq!(committed, Some((id, slot_gen)));
+                    break Some((id, slot_gen));
+                }
+                skip += 1;
             }
         };
 
-        // If we have a matching node with correct generation, advance cursor and reuse it
-        if let (Some(id), Some(slot_gen)) = (existing_id, existing_generation) {
-            if type_matches && gen_matches {
-                let scope_debug = self
-                    .current_recompose_scope()
-                    .map(|scope| (scope.id(), debug_scope_label(scope.id())))
-                    .unwrap_or((0, None));
-                log::trace!(
-                    target: "cranpose::compose::emit",
-                    "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
-                    std::any::type_name::<N>(),
-                    scope_debug.0,
-                    scope_debug.1,
-                );
-                self.commands_mut().push(Command::update_node::<N>(id));
-                self.attach_to_parent(id);
-                let parent_id = self.recorded_node_parent(id);
-                let recorded = self.with_slot_session_mut(|slots| {
-                    slots.record_node_with_parent(id, slot_gen, parent_id)
-                });
-                match recorded {
-                    NodeSlotUpdate::Reused {
-                        id: recorded_id,
-                        generation,
-                    } => {
-                        debug_assert_eq!(recorded_id, id);
-                        debug_assert_eq!(generation, slot_gen);
-                    }
-                    NodeSlotUpdate::Inserted { .. } => {
-                        log::warn!(
-                            target: "cranpose::compose::emit",
-                            "slot writer inserted node #{id} while reusing the same node identity",
-                        );
-                    }
-                    NodeSlotUpdate::Replaced {
-                        old_id,
-                        old_generation,
-                        ..
-                    } => {
-                        log::warn!(
-                            target: "cranpose::compose::emit",
-                            "slot writer replaced node #{old_id} while reusing node #{id}",
-                        );
-                        self.queue_replaced_slot_node_removal(old_id, old_generation);
-                    }
+        if let Some((id, slot_gen)) = adopted {
+            let scope_debug = self
+                .current_recompose_scope()
+                .map(|scope| (scope.id(), debug_scope_label(scope.id())))
+                .unwrap_or((0, None));
+            log::trace!(
+                target: "cranpose::compose::emit",
+                "reusing node #{id} as {} [scope_id={} scope_label={:?}]",
+                std::any::type_name::<N>(),
+                scope_debug.0,
+                scope_debug.1,
+            );
+            self.commands_mut().push(Command::update_node::<N>(id));
+            self.attach_to_parent(id);
+            let parent_id = self.recorded_node_parent(id);
+            let recorded = self.with_slot_session_mut(|slots| {
+                slots.record_node_with_parent(id, slot_gen, parent_id, source)
+            });
+            match recorded {
+                NodeSlotUpdate::Reused {
+                    id: recorded_id,
+                    generation,
+                } => {
+                    debug_assert_eq!(recorded_id, id);
+                    debug_assert_eq!(generation, slot_gen);
                 }
-                self.core.last_node_reused.set(Some(true));
-                return id;
+                NodeSlotUpdate::Inserted { .. } => {
+                    log::warn!(
+                        target: "cranpose::compose::emit",
+                        "slot writer inserted node #{id} while reusing the same node identity",
+                    );
+                }
+                NodeSlotUpdate::Replaced {
+                    old_id,
+                    old_generation,
+                    ..
+                } => {
+                    log::warn!(
+                        target: "cranpose::compose::emit",
+                        "slot writer replaced node #{old_id} while reusing node #{id}",
+                    );
+                    self.queue_replaced_slot_node_removal(old_id, old_generation);
+                }
             }
+            self.core.last_node_reused.set(Some(true));
+            return id;
         }
 
         // Type mismatch, stale generation, or no node: create new node
-        let (id, gen) = {
+        let (id, generation) = {
             let mut applier = self.borrow_applier();
             let emitted = make_node(&mut *applier);
             let id = match emitted {
@@ -128,8 +141,8 @@ impl Composer {
                     insertion.id
                 }
             };
-            let gen = applier.node_generation(id);
-            (id, gen)
+            let generation = applier.node_generation(id);
+            (id, generation)
         };
         let scope_debug = self
             .current_recompose_scope()
@@ -139,7 +152,7 @@ impl Composer {
             target: "cranpose::compose::emit",
             "creating node #{} (gen={}) as {} [scope_id={} scope_label={:?}]",
             id,
-            gen,
+            generation,
             std::any::type_name::<N>(),
             scope_debug.0,
             scope_debug.1,
@@ -147,15 +160,16 @@ impl Composer {
         self.commands_mut().push(Command::MountNode { id });
         self.attach_to_parent(id);
         let parent_id = self.recorded_node_parent(id);
-        let recorded =
-            self.with_slot_session_mut(|slots| slots.record_node_with_parent(id, gen, parent_id));
+        let recorded = self.with_slot_session_mut(|slots| {
+            slots.record_node_with_parent(id, generation, parent_id, source)
+        });
         match recorded {
             NodeSlotUpdate::Inserted {
                 id: recorded_id,
-                generation,
+                generation: recorded_generation,
             } => {
                 debug_assert_eq!(recorded_id, id);
-                debug_assert_eq!(generation, gen);
+                debug_assert_eq!(recorded_generation, generation);
             }
             NodeSlotUpdate::Replaced {
                 old_id,
@@ -164,7 +178,7 @@ impl Composer {
                 new_generation,
             } => {
                 debug_assert_eq!(new_id, id);
-                debug_assert_eq!(new_generation, gen);
+                debug_assert_eq!(new_generation, generation);
                 self.queue_replaced_slot_node_removal(old_id, old_generation);
             }
             NodeSlotUpdate::Reused { .. } => {
@@ -178,16 +192,20 @@ impl Composer {
         id
     }
 
+    #[track_caller]
     pub fn emit_node<N: Node + 'static>(&self, init: impl FnOnce() -> N) -> NodeId {
-        self.emit_node_box::<N>(|_| EmittedNode::Fresh(Box::new(init())))
+        let source = crate::caller_location_key();
+        self.emit_node_box::<N>(source, |_| EmittedNode::Fresh(Box::new(init())))
     }
 
+    #[track_caller]
     pub fn emit_recyclable_node<N: Node + 'static>(
         &self,
         init: impl FnOnce() -> N,
         reset: impl FnOnce(&mut N),
     ) -> NodeId {
-        self.emit_node_box::<N>(|applier| {
+        let source = crate::caller_location_key();
+        self.emit_node_box::<N>(source, |applier| {
             let key = TypeId::of::<N>();
             if let Some(mut recycled) = applier.take_recycled_node(key) {
                 if let Some(typed) = recycled.node_mut().as_any_mut().downcast_mut::<N>() {

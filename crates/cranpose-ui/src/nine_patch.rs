@@ -363,9 +363,11 @@ mod tests {
     fn tiling_reads_from_the_region_it_was_given_not_the_whole_atlas() {
         let quads = tile_quads(rect(64.0, 32.0, 8.0, 8.0), rect(0.0, 0.0, 16.0, 8.0));
         assert_eq!(quads.len(), 2);
-        assert!(quads
-            .iter()
-            .all(|quad| quad.source.x == 64.0 && quad.source.y == 32.0));
+        assert!(
+            quads
+                .iter()
+                .all(|quad| quad.source.x == 64.0 && quad.source.y == 32.0)
+        );
     }
 
     #[test]
@@ -376,14 +378,16 @@ mod tests {
             tile_count(rect(0.0, 0.0, 0.0, 0.0), rect(0.0, 0.0, 8.0, 8.0)),
             0
         );
-        assert!(nine_patch_quads(
-            rect(0.0, 0.0, 0.0, 0.0),
-            rect(0.0, 0.0, 20.0, 20.0),
-            NinePatchInsets::uniform(4.0),
-            PatchFill::Stretch,
-            PatchFill::Stretch,
-        )
-        .is_empty());
+        assert!(
+            nine_patch_quads(
+                rect(0.0, 0.0, 0.0, 0.0),
+                rect(0.0, 0.0, 20.0, 20.0),
+                NinePatchInsets::uniform(4.0),
+                PatchFill::Stretch,
+                PatchFill::Stretch,
+            )
+            .is_empty()
+        );
     }
 
     #[test]

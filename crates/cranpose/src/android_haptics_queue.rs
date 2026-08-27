@@ -26,8 +26,8 @@
 use std::{
     collections::VecDeque,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Condvar, Mutex, MutexGuard, PoisonError,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -136,12 +136,12 @@ impl HapticQueue {
                 state.queue.push_back(command);
                 break;
             }
-            if matches!(command, HapticCommand::Waveform { .. }) {
-                if let Some(tail @ HapticCommand::Waveform { .. }) = state.queue.back_mut() {
-                    *tail = command;
-                    state.coalesced += 1;
-                    break;
-                }
+            if matches!(command, HapticCommand::Waveform { .. })
+                && let Some(tail @ HapticCommand::Waveform { .. }) = state.queue.back_mut()
+            {
+                *tail = command;
+                state.coalesced += 1;
+                break;
             }
             // A discrete effect must not be dropped and a waveform must not
             // jump past one: wait for the delivery thread to free a slot.
@@ -219,34 +219,42 @@ mod tests {
         let queue = Arc::new(HapticQueue::new(4));
 
         // Fill to capacity: three discrete commands and a waveform tail.
-        assert!(queue
-            .enqueue(HapticCommand::Perform(HapticFeedback::ImpactLight))
-            .is_ok());
-        assert!(queue
-            .enqueue(HapticCommand::OneShot {
-                duration_ms: 10,
-                amplitude: 0,
-            })
-            .is_ok());
+        assert!(
+            queue
+                .enqueue(HapticCommand::Perform(HapticFeedback::ImpactLight))
+                .is_ok()
+        );
+        assert!(
+            queue
+                .enqueue(HapticCommand::OneShot {
+                    duration_ms: 10,
+                    amplitude: 0,
+                })
+                .is_ok()
+        );
         assert!(queue.enqueue(HapticCommand::Cancel).is_ok());
-        assert!(queue
-            .enqueue(HapticCommand::Waveform {
-                timings_ms: vec![1],
-                amplitudes: vec![1],
-                repeat: -1,
-            })
-            .is_ok());
+        assert!(
+            queue
+                .enqueue(HapticCommand::Waveform {
+                    timings_ms: vec![1],
+                    amplitudes: vec![1],
+                    repeat: -1,
+                })
+                .is_ok()
+        );
 
         // Saturated with a waveform at the tail: newer waveforms coalesce
         // into that slot without blocking; the last one written wins.
         for step in [2i64, 3] {
-            assert!(queue
-                .enqueue(HapticCommand::Waveform {
-                    timings_ms: vec![step],
-                    amplitudes: vec![step as i32],
-                    repeat: if step == 3 { 0 } else { -1 },
-                })
-                .is_ok());
+            assert!(
+                queue
+                    .enqueue(HapticCommand::Waveform {
+                        timings_ms: vec![step],
+                        amplitudes: vec![step as i32],
+                        repeat: if step == 3 { 0 } else { -1 },
+                    })
+                    .is_ok()
+            );
         }
 
         // A discrete effect never coalesces and never drops: it waits for the
@@ -254,9 +262,11 @@ mod tests {
         let enqueuer = std::thread::spawn({
             let queue = Arc::clone(&queue);
             move || {
-                assert!(queue
-                    .enqueue(HapticCommand::Effect(HapticEffect::Tick))
-                    .is_ok());
+                assert!(
+                    queue
+                        .enqueue(HapticCommand::Effect(HapticEffect::Tick))
+                        .is_ok()
+                );
             }
         });
         std::thread::sleep(std::time::Duration::from_millis(50));

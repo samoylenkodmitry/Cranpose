@@ -24,12 +24,11 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use cranpose_services::purchases::{set_platform_purchases, PurchaseEvent, Purchases, StoreState};
+use cranpose_services::purchases::{PurchaseEvent, Purchases, StoreState, set_platform_purchases};
 use jni::{
-    jni_sig, jni_str,
+    Env, EnvUnowned, Outcome, jni_sig, jni_str,
     objects::{JClass, JObject, JString, JValue},
     sys::jint,
-    Env, EnvUnowned, Outcome,
 };
 
 use crate::{
@@ -231,7 +230,7 @@ impl Purchases for AndroidPurchases {
 /// account owns. The payload is the whole snapshot, so it replaces the
 /// previous one wholesale.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingSnapshot<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
@@ -259,7 +258,7 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingSn
 /// Something happened that a snapshot cannot express — the user cancelled, the
 /// payment is waiting on someone else, a restore finished.
 #[doc(hidden)]
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_dev_cranpose_android_CranposeBilling_nativeBillingEvent<'local>(
     mut env: EnvUnowned<'local>,
     _class: JClass<'local>,

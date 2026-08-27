@@ -1,4 +1,4 @@
-use super::{inspector_metadata, Color, Modifier, RoundedCornerShape};
+use super::{Color, Modifier, RoundedCornerShape, inspector_metadata};
 use crate::modifier_nodes::{BackgroundElement, CornerShapeElement};
 
 impl Modifier {

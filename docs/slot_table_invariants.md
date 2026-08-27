@@ -12,6 +12,16 @@ This document is the short operational checklist for the slot table implementati
 - Direct siblings are contiguous inside their parent-bounded range.
 - Group identity matching searches only direct siblings, never grandchildren.
 - Duplicate explicit sibling keys are invalid.
+- Branch identity is a fold, not a structure: a conditional site pushes a
+  location key on the pass's fold stack, and every group static key and value
+  slot source opened under it mixes in the folds pushed since the enclosing
+  group frame opened. No group is ever created for a branch; an arm's content
+  is ordinary unvisited content when the arm is departed, detached and
+  dispose-or-retained like any other.
+- A value slot resolves by position first, then by identity: a cursor whose
+  record mismatches on `(type, source)` scans forward within its group for the
+  first record that matches and rotates it up, so slots after a branch keep
+  their state when the branch's slot count changes.
 
 ## Payloads
 

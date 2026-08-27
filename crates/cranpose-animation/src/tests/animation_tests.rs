@@ -1,8 +1,8 @@
 use std::{cell::RefCell, rc::Rc};
 
 use cranpose_core::{
-    location_key, with_current_composer, Composer, Composition, MemoryApplier, MutableState, Node,
-    SnapshotStateObserver, State,
+    Composer, Composition, MemoryApplier, MutableState, Node, SnapshotStateObserver, State,
+    location_key, with_current_composer,
 };
 
 use super::*;
@@ -21,26 +21,24 @@ fn animate_float_as_state_interpolates_over_time() {
     let state_slot = Rc::new(RefCell::new(None::<State<f32>>));
     let target = Rc::new(RefCell::new(0.0f32));
 
-    {
+    let mut pass = {
         let state_slot = Rc::clone(&state_slot);
         let target = Rc::clone(&target);
-        composition
-            .render(root_key, move || {
-                let state_slot = Rc::clone(&state_slot);
-                let target = Rc::clone(&target);
-                with_current_composer(|composer| {
-                    composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(
-                            *target.borrow(),
-                            AnimationType::default(),
-                            "alpha",
-                        );
-                        state_slot.borrow_mut().replace(state);
-                    });
+        move || {
+            let state_slot = Rc::clone(&state_slot);
+            let target = Rc::clone(&target);
+            with_current_composer(|composer| {
+                composer.with_group(group_key, |_| {
+                    let state =
+                        animateFloatAsState(*target.borrow(), AnimationType::default(), "alpha");
+                    state_slot.borrow_mut().replace(state);
                 });
-            })
-            .expect("render succeeds");
-    }
+            });
+        }
+    };
+    composition
+        .render(root_key, &mut pass)
+        .expect("render succeeds");
 
     let mut samples = Vec::new();
     let initial = state_slot.borrow().as_ref().expect("state available").get();
@@ -50,26 +48,9 @@ fn animate_float_as_state_interpolates_over_time() {
 
     *target.borrow_mut() = 1.0;
 
-    {
-        let state_slot = Rc::clone(&state_slot);
-        let target = Rc::clone(&target);
-        composition
-            .render(root_key, move || {
-                let state_slot = Rc::clone(&state_slot);
-                let target = Rc::clone(&target);
-                with_current_composer(|composer| {
-                    composer.with_group(group_key, |_| {
-                        let state = animateFloatAsState(
-                            *target.borrow(),
-                            AnimationType::default(),
-                            "alpha",
-                        );
-                        state_slot.borrow_mut().replace(state);
-                    });
-                });
-            })
-            .expect("render succeeds");
-    }
+    composition
+        .render(root_key, &mut pass)
+        .expect("render succeeds");
 
     let immediate = state_slot.borrow().as_ref().expect("state available").get();
     samples.push(immediate);
@@ -386,11 +367,13 @@ fn infinite_transition_animates_float_over_time() {
         || state_slot.borrow().as_ref().expect("state available").get(),
     );
     assert_eq!(initial, 0.0);
-    assert!(state_slot
-        .borrow()
-        .as_ref()
-        .expect("state available")
-        .has_subscribers());
+    assert!(
+        state_slot
+            .borrow()
+            .as_ref()
+            .expect("state available")
+            .has_subscribers()
+    );
     runtime.drain_ui();
     composition
         .render(root_key, &mut render)
@@ -770,5 +753,51 @@ fn an_animatable_reports_the_spec_currently_driving_it() {
         animatable.animation_type(),
         spring,
         "the animatable kept reporting the spec it replaced"
+    );
+}
+
+#[test]
+fn a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves() {
+    fn through_helper(target: f32) -> State<f32> {
+        animateFloatAsState(target, AnimationType::default(), "first")
+    }
+
+    let mut composition = Composition::new(MemoryApplier::new());
+    let root_key = location_key(file!(), line!(), column!());
+    let second_state = Rc::new(RefCell::new(None::<State<f32>>));
+    let enabled = Rc::new(RefCell::new(true));
+
+    let mut pass = {
+        let second_state = Rc::clone(&second_state);
+        let enabled = Rc::clone(&enabled);
+        move || {
+            let second_state = Rc::clone(&second_state);
+            let enabled = Rc::clone(&enabled);
+            let (_first, second) = (
+                enabled.borrow().then_some(100.0).map(through_helper),
+                animateFloatAsState(200.0, AnimationType::default(), "second"),
+            );
+            second_state.borrow_mut().replace(second);
+            let _ = &second_state;
+        }
+    };
+
+    composition
+        .render(root_key, &mut pass)
+        .expect("initial composition");
+    let read = |slot: &Rc<RefCell<Option<State<f32>>>>| {
+        slot.borrow().as_ref().expect("state recorded").value()
+    };
+    assert_eq!(read(&second_state), 200.0);
+
+    *enabled.borrow_mut() = false;
+    composition
+        .render(root_key, &mut pass)
+        .expect("drop the first animation");
+    assert_eq!(
+        read(&second_state),
+        200.0,
+        "the surviving animation's target did not change, so it must keep its \
+         own settled state, not adopt the vanished neighbor's and re-animate"
     );
 }

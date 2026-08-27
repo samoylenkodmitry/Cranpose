@@ -7,10 +7,9 @@
 //! checks is a rule that quietly changes.
 
 use cranpose_ui::{
-    run_test_composition,
+    ParagraphStyle, ScrollMetrics, ScrollState, run_test_composition,
     text::{AnnotatedString, LinkAnnotation},
     widgets::swipe_to_dismiss::{SwipeDismissDirection, SwipeToDismissSpec},
-    ParagraphStyle, ScrollMetrics, ScrollState,
 };
 
 #[test]
@@ -91,9 +90,11 @@ fn an_annotated_string_carries_the_annotations_pushed_into_it() {
     assert_eq!(found[0].item.annotation, "payload");
 
     // A tag nobody pushed answers with nothing rather than with everything.
-    assert!(annotated
-        .get_string_annotations("other", 0, annotated.text.len())
-        .is_empty());
+    assert!(
+        annotated
+            .get_string_annotations("other", 0, annotated.text.len())
+            .is_empty()
+    );
 }
 
 #[test]

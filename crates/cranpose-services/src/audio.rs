@@ -32,7 +32,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 use parking_lot::Mutex;
 
@@ -200,11 +200,7 @@ impl PlaybackParams {
     /// is why a `NaN` rate from app arithmetic cannot wedge a voice.
     pub fn sanitized(self) -> PlaybackParams {
         fn finite(value: f32, fallback: f32) -> f32 {
-            if value.is_finite() {
-                value
-            } else {
-                fallback
-            }
+            if value.is_finite() { value } else { fallback }
         }
         PlaybackParams {
             volume: finite(self.volume, 1.0).clamp(0.0, PlaybackParams::MAX_VOLUME),
@@ -912,6 +908,7 @@ impl Index<usize> for SoundBank {
 /// resource that costs a decode.
 #[allow(non_snake_case)]
 #[composable(no_skip)]
+#[track_caller]
 pub fn rememberSoundBank(specs: &[SoundSpec<'_>]) -> SoundBank {
     let key = sound_bank_key(specs);
     let player = local_audio().current();

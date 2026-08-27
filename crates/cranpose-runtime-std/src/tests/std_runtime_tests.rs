@@ -1,14 +1,14 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     cell::{Cell, RefCell},
     panic::{self, AssertUnwindSafe},
     rc::Rc,
 };
 
-use cranpose_core::{location_key, Composition, MemoryApplier, MutableState, RuntimeScheduler};
+use cranpose_core::{Composition, MemoryApplier, MutableState, RuntimeScheduler, location_key};
 
 use super::StdRuntime;
 

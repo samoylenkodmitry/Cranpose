@@ -5,12 +5,12 @@ use std::{
     collections::{HashMap, HashSet},
     rc::{Rc, Weak},
     sync::{
-        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     },
 };
 
-use cranpose_core::{current_runtime_handle, NodeId, SnapshotStateObserver};
+use cranpose_core::{NodeId, SnapshotStateObserver, current_runtime_handle};
 
 pub(crate) type ModifierChainTraceCallback =
     dyn Fn(&[crate::modifier::ModifierChainInspectorNode]) + Send + Sync + 'static;
@@ -111,10 +111,9 @@ pub(crate) fn clear_draw_observations_for_node(node_id: NodeId) {
 pub fn prune_draw_observations_to_nodes(retained: &HashSet<NodeId>) {
     with_draw_observer(|observer| {
         observer.clear_if(|scope| {
-            let remove = scope
+            scope
                 .downcast_ref::<DrawObservationScope>()
-                .is_some_and(|scope| !retained.contains(&scope.node_id));
-            remove
+                .is_some_and(|scope| !retained.contains(&scope.node_id))
         });
     });
 }
@@ -384,8 +383,8 @@ pub(crate) fn emit_modifier_chain_trace(nodes: &[crate::modifier::ModifierChainI
 
 pub(crate) fn take_layout_frame_arena() -> crate::layout::FrameLayoutArena {
     let context = require_current_app_context("layout frame arena access");
-    let arena = std::mem::take(&mut *context.layout_frame_arena.borrow_mut());
-    arena
+
+    std::mem::take(&mut *context.layout_frame_arena.borrow_mut())
 }
 
 pub(crate) fn replace_layout_frame_arena(arena: crate::layout::FrameLayoutArena) {
@@ -448,11 +447,11 @@ pub fn clear_transient_scroll_motion_contexts() {
 #[cfg(test)]
 pub(crate) fn layout_frame_arena_placement_scratch_count() -> usize {
     let context = require_current_app_context("layout frame arena access");
-    let count = context
+
+    context
         .layout_frame_arena
         .borrow()
-        .available_placement_scratch_count();
-    count
+        .available_placement_scratch_count()
 }
 
 pub(crate) fn with_layout_node_registry<R>(
@@ -1032,7 +1031,7 @@ pub(crate) fn render_state_test_guard() -> RenderStateTestGuard {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{mpsc, Arc};
+    use std::sync::{Arc, mpsc};
 
     use super::*;
     use crate::text::{AnnotatedString, TextLayoutResult, TextMeasurer, TextMetrics, TextStyle};

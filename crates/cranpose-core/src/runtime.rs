@@ -6,8 +6,9 @@ use std::{
     pin::Pin,
     rc::{Rc, Weak},
     sync::{
+        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc, Arc,
+        mpsc,
     },
     task::{Context, Poll, Waker},
     thread::ThreadId,
@@ -17,10 +18,10 @@ use std::{
 #[cfg(any(feature = "internal", test))]
 use crate::frame_clock::FrameClock;
 use crate::{
+    Applier, Command, FrameCallbackId, MutableStateInner, NodeError, RecomposeScopeInner, ScopeId,
     collections::map::{HashMap, HashSet},
     platform::{RuntimeScheduler, SchedulerRef},
     state::{MutationPolicy, NeverEqual},
-    Applier, Command, FrameCallbackId, MutableStateInner, NodeError, RecomposeScopeInner, ScopeId,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -508,8 +509,7 @@ impl RuntimeInner {
     }
 
     fn take_updates(&self) -> Vec<Command> {
-        let updates = self.node_updates.borrow_mut().drain(..).collect::<Vec<_>>();
-        updates
+        self.node_updates.borrow_mut().drain(..).collect::<Vec<_>>()
     }
 
     fn has_updates(&self) -> bool {

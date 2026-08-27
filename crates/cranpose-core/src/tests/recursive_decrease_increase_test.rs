@@ -1,6 +1,6 @@
 use cranpose_macros::composable;
 
-use crate::{location_key, tests::test_composition, Composition, MemoryApplier, MutableState};
+use crate::{Composition, MemoryApplier, MutableState, location_key, tests::test_composition};
 
 /// Simple recursive function that creates keyed groups similar to the desktop demo
 #[composable]
@@ -118,11 +118,9 @@ fn recursive_decrease_increase_preserves_structure() {
     eprintln!("  Restored groups: {}", restored_groups);
 
     assert_eq!(
-        restored_groups,
-        initial_groups,
+        restored_groups, initial_groups,
         "After decrease-increase cycle, should restore exact same number of groups. Initial: {}, Restored: {}",
-        initial_groups,
-        restored_groups
+        initial_groups, restored_groups
     );
 }
 

@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
 use crate::{
-    debug_scope_invalidation_sources, debug_scope_label, Command, Composer, ComposerCore,
-    DirtyBubble, NodeId, RecomposeScope,
+    Command, Composer, ComposerCore, DirtyBubble, NodeId, RecomposeScope,
+    debug_scope_invalidation_sources, debug_scope_label,
 };
 
 impl Composer {

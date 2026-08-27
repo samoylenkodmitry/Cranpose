@@ -1,6 +1,6 @@
 use cranpose_ui::{
-    run_test_composition, Modifier, TextLayoutOptions, TextOptions, TextOverflow, TextStyle,
-    TextWithOptions,
+    Modifier, TextLayoutOptions, TextOptions, TextOverflow, TextStyle, TextWithOptions,
+    run_test_composition,
 };
 
 #[test]

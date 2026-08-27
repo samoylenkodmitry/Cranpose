@@ -13,13 +13,13 @@ use std::{
 };
 
 use cranpose_services::{
-    app_updates_supported, camera, camera_supported, check_for_app_update,
-    clear_platform_app_updater, clear_platform_camera, clear_platform_host_surface,
-    clear_platform_media_player, clear_platform_purchases, host_surface, install_app_update,
-    media_capabilities, media_playback_supported, media_player, open_media, play_media,
-    request_camera_still, seek_media, set_media_analysis_enabled, set_media_speed, start_camera,
-    store_available, AppUpdateError, CameraError, GitHubReleaseUpdate, MediaCapabilities,
-    MediaError, MediaItem, PackageDigest, ResizeRefused, UpdatePackage,
+    AppUpdateError, CameraError, GitHubReleaseUpdate, MediaCapabilities, MediaError, MediaItem,
+    PackageDigest, ResizeRefused, UpdatePackage, app_updates_supported, camera, camera_supported,
+    check_for_app_update, clear_platform_app_updater, clear_platform_camera,
+    clear_platform_host_surface, clear_platform_media_player, clear_platform_purchases,
+    host_surface, install_app_update, media_capabilities, media_playback_supported, media_player,
+    open_media, play_media, request_camera_still, seek_media, set_media_analysis_enabled,
+    set_media_speed, start_camera, store_available,
 };
 
 /// The services are one registry for the process, so tests that clear it take
@@ -126,7 +126,9 @@ fn a_package_nobody_can_verify_is_one_nobody_installs() {
             .is_verifiable(),
         "a digest this framework cannot read is not a check"
     );
-    assert!(UpdatePackage::new("2.0.0", "https://host/app.apk")
-        .with_digest(PackageDigest::sha256("00".repeat(32)))
-        .is_verifiable());
+    assert!(
+        UpdatePackage::new("2.0.0", "https://host/app.apk")
+            .with_digest(PackageDigest::sha256("00".repeat(32)))
+            .is_verifiable()
+    );
 }

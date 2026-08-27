@@ -3,7 +3,7 @@ use std::mem;
 #[cfg(any(test, debug_assertions))]
 use super::SlotInvariantError;
 use super::{ActiveGroupId, AnchorRegistry, GroupRecord, SlotTable};
-use crate::{collections::map::HashMap, AnchorId, ScopeId};
+use crate::{AnchorId, ScopeId, collections::map::HashMap};
 
 #[derive(Default)]
 pub(crate) struct ScopeIndex {
@@ -64,14 +64,14 @@ impl ScopeIndex {
     }
 
     pub(super) fn assign(&mut self, group: &mut GroupRecord, scope_id: ScopeId) -> bool {
-        if let Some(existing_anchor) = self.anchor(scope_id) {
-            if existing_anchor != group.anchor {
-                log::error!(
-                    "scope id {scope_id:?} is already assigned to group anchor {existing_anchor:?}; rejecting assignment to {:?}",
-                    group.anchor
-                );
-                return false;
-            }
+        if let Some(existing_anchor) = self.anchor(scope_id)
+            && existing_anchor != group.anchor
+        {
+            log::error!(
+                "scope id {scope_id:?} is already assigned to group anchor {existing_anchor:?}; rejecting assignment to {:?}",
+                group.anchor
+            );
+            return false;
         }
 
         if let Some(previous) = group.scope_id.replace(scope_id) {
@@ -94,13 +94,13 @@ impl ScopeIndex {
         entries: impl IntoIterator<Item = (ScopeId, AnchorId)>,
     ) {
         for (scope_id, group_anchor) in entries {
-            if let Some(existing_anchor) = self.anchor(scope_id) {
-                if existing_anchor != group_anchor {
-                    log::error!(
-                        "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; skipping restored anchor {group_anchor:?}"
-                    );
-                    continue;
-                }
+            if let Some(existing_anchor) = self.anchor(scope_id)
+                && existing_anchor != group_anchor
+            {
+                log::error!(
+                    "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; skipping restored anchor {group_anchor:?}"
+                );
+                continue;
             }
             self.by_scope.insert(scope_id, group_anchor);
         }
@@ -109,13 +109,13 @@ impl ScopeIndex {
     pub(super) fn restore_entries_available(&self, entries: &[(ScopeId, AnchorId)]) -> bool {
         let mut available = true;
         for &(scope_id, group_anchor) in entries {
-            if let Some(existing_anchor) = self.anchor(scope_id) {
-                if existing_anchor != group_anchor {
-                    available = false;
-                    log::error!(
-                        "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; restored anchor {group_anchor:?} needs a fresh scope"
-                    );
-                }
+            if let Some(existing_anchor) = self.anchor(scope_id)
+                && existing_anchor != group_anchor
+            {
+                available = false;
+                log::error!(
+                    "restored scope id {scope_id:?} is already assigned to active group anchor {existing_anchor:?}; restored anchor {group_anchor:?} needs a fresh scope"
+                );
             }
         }
         available

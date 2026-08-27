@@ -8,11 +8,11 @@
 //! platform API and a resize callback of its own.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_core::{rememberEventStream, State};
+use cranpose_core::{State, rememberEventStream};
 
 use crate::registry::ServiceRegistry;
 
@@ -207,6 +207,7 @@ pub fn publish_host_surface_size(size: HostSurfaceSize) {
 /// The host surface's size, observed for as long as this call stays in the
 /// composition.
 #[allow(non_snake_case)]
+#[track_caller]
 pub fn rememberHostSurfaceSize() -> State<HostSurfaceSize> {
     let updates = rememberEventStream((), |sender| {
         observe_host_surface_size(move |size| sender.send(size))

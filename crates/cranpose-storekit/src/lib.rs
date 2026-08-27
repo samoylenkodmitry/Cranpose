@@ -37,7 +37,7 @@
 mod apple;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
-pub use apple::{register, StoreKitPurchases};
+pub use apple::{StoreKitPurchases, register};
 
 /// Installs the StoreKit backend — a no-op on targets without an App Store.
 ///

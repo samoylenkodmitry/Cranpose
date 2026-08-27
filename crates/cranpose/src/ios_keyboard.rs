@@ -18,15 +18,15 @@ use std::{
     cell::RefCell,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
         Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
 };
 
-use cranpose_ui::text_input_session::{set_platform_text_input_handler, PlatformTextInputHandler};
+use cranpose_ui::text_input_session::{PlatformTextInputHandler, set_platform_text_input_handler};
 use objc2::{
-    define_class, msg_send, rc::Retained, runtime::ProtocolObject, DefinedClass, MainThreadMarker,
-    MainThreadOnly,
+    DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained,
+    runtime::ProtocolObject,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_foundation::{NSArray, NSComparisonResult, NSObjectProtocol, NSRange, NSString};
@@ -667,14 +667,12 @@ struct IosKeyboard {
 
 impl PlatformTextInputHandler for IosKeyboard {
     fn show_keyboard(&self) {
-        if let Some(mtm) = MainThreadMarker::new() {
-            if self.view.superview().is_none() {
-                if let Some(root) = crate::ios_file_picker::root_view_controller(mtm) {
-                    if let Some(root_view) = root.view() {
-                        root_view.addSubview(&self.view);
-                    }
-                }
-            }
+        if let Some(mtm) = MainThreadMarker::new()
+            && self.view.superview().is_none()
+            && let Some(root) = crate::ios_file_picker::root_view_controller(mtm)
+            && let Some(root_view) = root.view()
+        {
+            root_view.addSubview(&self.view);
         }
         self.view.becomeFirstResponder();
         // Track the keyboard rising: poll the layout guide over the animation.
@@ -704,10 +702,10 @@ pub(crate) fn register() {
         return;
     };
     let view = KeyInputView::new(mtm);
-    if let Some(root) = crate::ios_file_picker::root_view_controller(mtm) {
-        if let Some(root_view) = root.view() {
-            root_view.addSubview(&view);
-        }
+    if let Some(root) = crate::ios_file_picker::root_view_controller(mtm)
+        && let Some(root_view) = root.view()
+    {
+        root_view.addSubview(&view);
     }
     VIEW.with(|cell| *cell.borrow_mut() = Some(view.clone()));
     set_platform_text_input_handler(
@@ -734,10 +732,10 @@ static KEYBOARD_HIDING: AtomicBool = AtomicBool::new(false);
 
 /// Wakes the iOS event loop (if a waker is installed) so the next frame runs.
 fn wake() {
-    if let Ok(w) = wake_slot().lock() {
-        if let Some(wake) = w.as_ref() {
-            wake();
-        }
+    if let Ok(w) = wake_slot().lock()
+        && let Some(wake) = w.as_ref()
+    {
+        wake();
     }
 }
 

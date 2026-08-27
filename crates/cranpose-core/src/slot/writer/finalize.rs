@@ -1,6 +1,6 @@
 use super::super::{
-    detach::{dispose_detached_node_now, dispose_detached_subtree_now},
     DetachedSubtree, SlotWriteSession,
+    detach::{dispose_detached_node_now, dispose_detached_subtree_now},
 };
 use crate::{Applier, NodeError};
 

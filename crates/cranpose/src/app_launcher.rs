@@ -11,8 +11,8 @@ use std::path::PathBuf;
 use cranpose_app_shell::FramePacingMode;
 use cranpose_render_common::{
     font_source::{
-        FontLoadError, SoftwareTextFontRegistry, ANDROID_SYSTEM_FONT_DIR,
-        DEFAULT_SYSTEM_FAMILY_WEIGHTS,
+        ANDROID_SYSTEM_FONT_DIR, DEFAULT_SYSTEM_FAMILY_WEIGHTS, FontLoadError,
+        SoftwareTextFontRegistry,
     },
     software_text_raster::SoftwareTextFontSet,
 };
@@ -331,7 +331,7 @@ pub(crate) fn exit_after_launch_error(context: &str, error: LaunchError) -> ! {
 ///
 /// // Android
 /// #[cfg(all(feature = "android", target_os = "android"))]
-/// #[no_mangle]
+/// #[unsafe(no_mangle)]
 /// fn android_main(app: android_activity::AndroidApp) {
 ///     AppLauncher::new().with_title("My App").run(app, || {
 ///         // Your composable UI here
@@ -442,8 +442,8 @@ impl AppLauncher {
     ///
     /// ```no_run
     /// use cranpose::{
-    ///     text::{FontFamily, FontFile, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontFile, FontWeight},
     /// };
     ///
     /// let roboto = FontFamily::file_backed(vec![
@@ -472,8 +472,8 @@ impl AppLauncher {
     ///
     /// ```no_run
     /// use cranpose::{
-    ///     text::{FontFamily, FontStyle, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontStyle, FontWeight},
     /// };
     ///
     /// # fn load(bytes: Vec<u8>) {
@@ -512,8 +512,8 @@ impl AppLauncher {
     /// # #[cfg(target_os = "android")]
     /// # fn main(app: android_activity::AndroidApp) {
     /// use cranpose::{
-    ///     text::{FontFamily, FontStyle, FontWeight},
     ///     AppLauncher,
+    ///     text::{FontFamily, FontStyle, FontWeight},
     /// };
     ///
     /// let launcher = AppLauncher::new().with_android_asset_font(

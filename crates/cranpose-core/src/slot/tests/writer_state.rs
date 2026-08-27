@@ -19,9 +19,9 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_A_KEY, None);
-        session.record_node_with_parent(10, 1, None);
+        session.record_node_with_parent(10, 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.record_node_with_parent(20, 1, Some(10));
+        session.record_node_with_parent(20, 1, Some(10), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -30,7 +30,7 @@ fn skip_group_advances_by_exact_subtree_size_and_keeps_nodes_stable() {
         session.end_group();
 
         begin_unkeyed(session, CHILD_B_KEY, None);
-        session.record_node_with_parent(30, 1, None);
+        session.record_node_with_parent(30, 1, None, crate::slot::BRANCH_PATH_ROOT);
         let child_b_result = session.finish_group_body();
         assert!(child_b_result.detached_children.is_empty());
         session.end_group();
@@ -263,9 +263,14 @@ fn node_count_adjustment_stops_at_corrupt_parent_anchor() {
 
     harness.table.groups[1].parent_anchor = AnchorId::new(99_999);
 
-    let update = harness
-        .table
-        .record_node_at_cursor(child_anchor, 0, 42, None, 1);
+    let update = harness.table.record_node_at_cursor(
+        child_anchor,
+        0,
+        42,
+        None,
+        1,
+        crate::slot::BRANCH_PATH_ROOT,
+    );
 
     assert_eq!(
         update,
@@ -326,7 +331,9 @@ fn value_slot_with_stale_group_frame_uses_recovery_group() {
             .write_session(&mut harness.lifecycle, &mut harness.state);
         let started = begin_unkeyed(&mut session, GROUP_KEY, None);
         session.table.anchors.set_active(started.anchor, 99);
-        session.value_slot_with_kind(PayloadKind::Internal, || 17_i32)
+        session.value_slot_with_kind(PayloadKind::Internal, crate::slot::BRANCH_PATH_ROOT, || {
+            17_i32
+        })
     };
 
     assert!(harness.state.group_stack.is_empty());
@@ -429,9 +436,9 @@ fn detached_subtree_preserves_root_nodes_from_stored_parent_links() {
         begin_unkeyed(session, PARENT_KEY, None);
 
         begin_unkeyed(session, CHILD_KEY, None);
-        session.record_node_with_parent(41, 1, None);
+        session.record_node_with_parent(41, 1, None, crate::slot::BRANCH_PATH_ROOT);
         begin_unkeyed(session, GRANDCHILD_KEY, None);
-        session.record_node_with_parent(42, 1, Some(41));
+        session.record_node_with_parent(42, 1, Some(41), crate::slot::BRANCH_PATH_ROOT);
         let grandchild_result = session.finish_group_body();
         assert!(grandchild_result.detached_children.is_empty());
         session.end_group();
@@ -882,4 +889,36 @@ fn moved_group_invalidates_previous_active_group_id() {
     });
     harness.finish_pass();
     assert_eq!(harness.table.active_group_anchor(resolved), second_anchor);
+}
+
+#[test]
+fn a_non_lifo_fold_close_does_not_restore_a_dead_entry() {
+    let mut state = crate::slot::SlotWriteSessionState::default();
+    state.reset_for_pass(crate::slot::SlotPassMode::Compose);
+
+    let first = state.push_branch_fold(0x1111);
+    let _ = state.branch_fold();
+    let second = state.push_branch_fold(0x2222);
+    let _ = state.branch_fold();
+    let third = state.push_branch_fold(0x3333);
+    let _ = state.branch_fold();
+    let fourth = state.push_branch_fold(0x4444);
+    let _ = state.branch_fold();
+    let _ = first;
+
+    state.close_branch_fold(second);
+    state.close_branch_fold(fourth);
+
+    let observed = state.branch_fold();
+    let mut expected = crate::slot::BRANCH_PATH_ROOT;
+    for key in [0x1111_u64, 0x3333] {
+        expected ^= key;
+        expected = expected.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    assert_eq!(
+        observed, expected,
+        "the fold after non-LIFO closes must contain exactly the live entries"
+    );
+    state.close_branch_fold(third);
+    state.close_branch_fold(first);
 }

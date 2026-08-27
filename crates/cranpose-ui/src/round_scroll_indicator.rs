@@ -20,7 +20,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use crate::{
     round_scaling_list::ScalingParams,
-    scrollbar::{thumb_geometry, ThumbBounds},
+    scrollbar::{ThumbBounds, thumb_geometry},
 };
 
 /// `ScrollIndicatorDefaults.indicatorHeight` — how far the track reaches up and
@@ -459,11 +459,7 @@ fn odd_pixel(pixels: f32) -> f32 {
 }
 
 fn finite(value: f32) -> f32 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+    if value.is_finite() { value } else { 0.0 }
 }
 
 /// One piece of the indicator, ready to draw.

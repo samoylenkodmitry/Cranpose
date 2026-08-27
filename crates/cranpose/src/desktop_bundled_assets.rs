@@ -21,8 +21,8 @@ use std::{
 };
 
 use cranpose_services::{
-    set_platform_bundled_assets, BundledAssetError, BundledAssetReader, BundledAssets,
-    StreamingAssetReader,
+    BundledAssetError, BundledAssetReader, BundledAssets, StreamingAssetReader,
+    set_platform_bundled_assets,
 };
 
 /// Installs the desktop bundled-asset backend.
@@ -77,15 +77,15 @@ impl BundledAssets for DesktopBundledAssets {
 /// Where this executable's resources may live, nearest first.
 fn roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Ok(executable) = std::env::current_exe() {
-        if let Some(directory) = executable.parent() {
-            roots.push(directory.to_path_buf());
-            // A macOS `.app` puts the binary in `Contents/MacOS` and its data
-            // one directory over.
-            let resources = directory.join("..").join("Resources");
-            if resources.is_dir() {
-                roots.push(resources);
-            }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+    {
+        roots.push(directory.to_path_buf());
+        // A macOS `.app` puts the binary in `Contents/MacOS` and its data
+        // one directory over.
+        let resources = directory.join("..").join("Resources");
+        if resources.is_dir() {
+            roots.push(resources);
         }
     }
     if let Ok(working) = std::env::current_dir() {

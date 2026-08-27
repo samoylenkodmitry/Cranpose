@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use cranpose_render_common::{
     font_source::SoftwareTextFontRegistry,
     software_text_raster::{
-        collect_solid_text_atlas_run, SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache,
-        SoftwareTextFontSet, SoftwareTextMeasurer,
+        SoftwareGlyphAtlasRunGlyph, SoftwareGlyphRasterCache, SoftwareTextFontSet,
+        SoftwareTextMeasurer, collect_solid_text_atlas_run,
     },
 };
 use cranpose_ui::text::{

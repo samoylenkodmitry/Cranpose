@@ -49,13 +49,13 @@
 mod support;
 
 use cranpose_render_common::{
+    Renderer,
     graph::{
         CachePolicy, DrawCommandId, DrawRunNode, IsolationReasons, LayerNode, PrimitivePhase,
         ProjectiveTransform, RenderGraph, RenderNode,
     },
     raster_cache::LayerRasterCacheHashes,
     style_shared::DrawPlacement,
-    Renderer,
 };
 use cranpose_ui_graphics::{
     Brush, Color, CommandReplayState, DrawScope, DrawScopeDefault, GraphicsLayer, Point, Rect,
@@ -227,17 +227,16 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
     // per-frame numbers must reproduce byte-for-byte. Letting the quad arm
     // drift onto `vs_shape_instanced` would fold the separate instancing
     // fma envelope (covered by `instanced_quad_parity`) into this one.
-    std::env::set_var("CRANPOSE_INSTANCED_QUADS", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", Some("0"));
     let mut renderer = match support::headless_renderer() {
         Ok(renderer) => renderer,
         Err(err) => {
-            std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+            cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
             eprintln!("skipping arc mesh parity: headless WGPU init failed: {err}");
             return;
         }
     };
-    std::env::set_var("CRANPOSE_SIMILARITY_REPLAY", "1");
-    std::env::set_var("CRANPOSE_COMMAND_FEED", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", Some("1"));
 
     // Identical scenes under distinct command identities: node 7's slots
     // capture with the mesh disabled, node 8's with it enabled. The flag is
@@ -246,23 +245,22 @@ fn retained_arc_mesh_stays_within_the_interpolation_envelope() {
     let graphs_quad = build_sequence(7);
     let graphs_mesh = build_sequence(8);
 
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let _capture_quad = render_sequence(&mut renderer, &graphs_quad);
-    std::env::set_var("CRANPOSE_ARC_MESH", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let _capture_mesh = render_sequence(&mut renderer, &graphs_mesh);
 
     // Same-position control passes: every slot of both arms is live from
     // here on, matching the renderer positions command_feed_parity proved
     // byte-stable against each other.
-    std::env::set_var("CRANPOSE_ARC_MESH", "0");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("0"));
     let quad_frames = render_sequence(&mut renderer, &graphs_quad);
-    std::env::set_var("CRANPOSE_ARC_MESH", "1");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", Some("1"));
     let mesh_frames = render_sequence(&mut renderer, &graphs_mesh);
 
-    std::env::remove_var("CRANPOSE_ARC_MESH");
-    std::env::remove_var("CRANPOSE_COMMAND_FEED");
-    std::env::remove_var("CRANPOSE_SIMILARITY_REPLAY");
-    std::env::remove_var("CRANPOSE_INSTANCED_QUADS");
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_ARC_MESH", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_COMMAND_FEED", None);
+    cranpose_render_wgpu::set_debug_toggle("CRANPOSE_INSTANCED_QUADS", None);
     assert!(
         !renderer.instanced_quads_active(),
         "the pinned-off selection must have latched at construction"

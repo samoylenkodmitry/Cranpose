@@ -5,7 +5,7 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use cranpose_core::{rememberKeyed, MutableState};
+use cranpose_core::{MutableState, rememberKeyed};
 use cranpose_macros::composable;
 use cranpose_testing::ComposeTestRule;
 use cranpose_ui::*;

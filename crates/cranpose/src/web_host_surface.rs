@@ -8,7 +8,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
-use cranpose_services::{set_platform_host_surface, HostSurface, HostSurfaceSize, ResizeRefused};
+use cranpose_services::{HostSurface, HostSurfaceSize, ResizeRefused, set_platform_host_surface};
 
 fn pending() -> &'static Mutex<Option<(f32, f32)>> {
     static SLOT: OnceLock<Mutex<Option<(f32, f32)>>> = OnceLock::new();

@@ -82,10 +82,10 @@ impl ClipboardSessionState {
     }
 
     fn read(&self) -> Option<String> {
-        if let Some(platform) = self.platform.borrow().clone() {
-            if let Some(text) = platform.read_text() {
-                return Some(text);
-            }
+        if let Some(platform) = self.platform.borrow().clone()
+            && let Some(text) = platform.read_text()
+        {
+            return Some(text);
         }
         self.fallback.borrow().clone()
     }

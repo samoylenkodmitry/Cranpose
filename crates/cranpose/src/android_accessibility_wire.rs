@@ -22,7 +22,7 @@
 //! payload, plus `%1F` for the separator that packs custom action labels into
 //! one field, because every one of these strings is app-authored.
 
-use crate::accessibility::{element_ids, AccessibilityElement, AccessibilityRole};
+use crate::accessibility::{AccessibilityElement, AccessibilityRole, element_ids};
 
 /// Separator between the custom action labels packed into one wire field.
 /// ASCII unit separator, escaped like every other delimiter so a label

@@ -1,4 +1,4 @@
-use ab_glyph::{point, Font, Glyph, OutlinedGlyph, Point, PxScale, ScaleFont};
+use ab_glyph::{Font, Glyph, OutlinedGlyph, Point, PxScale, ScaleFont, point};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FontVerticalMetrics {

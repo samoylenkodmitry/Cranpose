@@ -5,6 +5,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod cost_tuner;
+pub(crate) use cranpose_render_common::debug_toggles;
+pub use debug_toggles::{debug_toggle, debug_toggle_os, set_debug_toggle, set_debug_toggle_os};
 mod display_clip;
 mod effect_renderer;
 mod frame_graph;
@@ -43,18 +45,18 @@ use std::{rc::Rc, sync::Arc};
 
 use cranpose_core::{MemoryApplier, NodeId};
 use cranpose_render_common::{
+    RenderScene, Renderer,
     graph::RenderGraph,
     software_text_raster::{
-        software_text_font_set_from_fonts_or_default, SoftwareTextFontSet, SoftwareTextMeasurer,
+        SoftwareTextFontSet, SoftwareTextMeasurer, software_text_font_set_from_fonts_or_default,
     },
-    RenderScene, Renderer,
 };
 use cranpose_ui::{LayoutTree, TextMeasurer};
 use cranpose_ui_graphics::{Rect, Size};
+pub use display_clip::DisplayVisibleRegion;
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]
 pub use display_clip::pixel_is_visible as display_clip_pixel_is_visible;
-pub use display_clip::DisplayVisibleRegion;
 pub use frame_packet::PresentTimings;
 use frame_packet::RenderReturns;
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,8 +72,8 @@ pub use pipeline::retained_feed_generation;
 use present_runtime::{
     PresentControl, PresentHandle, PresentMsg, PresentRuntimeInit, PresentState,
 };
-pub use render::frames_presented;
 use render::GpuRenderer;
+pub use render::frames_presented;
 pub use scene::{ClickAction, HitRegion, Scene};
 #[doc(hidden)]
 #[cfg(not(target_arch = "wasm32"))]

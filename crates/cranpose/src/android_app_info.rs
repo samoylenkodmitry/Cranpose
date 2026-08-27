@@ -12,7 +12,7 @@
 
 use std::rc::Rc;
 
-use cranpose_services::app_info::{set_platform_app_info, AppInfo};
+use cranpose_services::app_info::{AppInfo, set_platform_app_info};
 use jni::{jni_sig, jni_str, objects::JString};
 
 struct AndroidAppInfo {

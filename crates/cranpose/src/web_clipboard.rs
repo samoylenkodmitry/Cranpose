@@ -33,7 +33,7 @@ use cranpose_app_shell::AppShell;
 use cranpose_render_wgpu::WgpuRenderer;
 use cranpose_ui::clipboard_session::PlatformClipboard;
 use wasm_bindgen::JsValue;
-use wasm_bindgen_futures::{spawn_local, JsFuture};
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 /// Installs the browser clipboard for `app`'s context.
 ///

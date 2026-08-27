@@ -17,7 +17,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use cranpose_core::{compositionLocalOfWithPolicy, CompositionLocal, CompositionLocalProvider};
+use cranpose_core::{CompositionLocal, CompositionLocalProvider, compositionLocalOfWithPolicy};
 use cranpose_macros::composable;
 
 use crate::registry::ServiceRegistry;
@@ -170,13 +170,13 @@ impl HapticPattern {
         if timings_ms.iter().all(|step| *step == 0) {
             return Err(HapticError::ZeroDuration);
         }
-        if let Some(index) = repeat {
-            if index >= timings_ms.len() {
-                return Err(HapticError::RepeatOutOfRange {
-                    index,
-                    len: timings_ms.len(),
-                });
-            }
+        if let Some(index) = repeat
+            && index >= timings_ms.len()
+        {
+            return Err(HapticError::RepeatOutOfRange {
+                index,
+                len: timings_ms.len(),
+            });
         }
         Ok(HapticPattern {
             timings_ms: timings_ms.to_vec(),

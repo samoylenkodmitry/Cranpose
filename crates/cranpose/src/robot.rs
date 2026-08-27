@@ -11,7 +11,7 @@
 use std::{
     any::Any,
     collections::HashMap,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
 use cranpose_app_shell::{AppShell, KeyCode, PointerSource, RuntimeLeakDebugStats};
@@ -1209,10 +1209,10 @@ impl Robot {
         text: &str,
     ) -> Option<&'a SemanticElement> {
         for elem in elements {
-            if let Some(elem_text) = &elem.text {
-                if elem_text.contains(text) {
-                    return Some(elem);
-                }
+            if let Some(elem_text) = &elem.text
+                && elem_text.contains(text)
+            {
+                return Some(elem);
             }
             if let Some(found) = Self::find_by_text(&elem.children, text) {
                 return Some(found);
@@ -1248,10 +1248,10 @@ impl Robot {
     /// Helper: check if element or any descendants contain text
     fn contains_text(elem: &SemanticElement, text: &str) -> bool {
         // Check element itself
-        if let Some(elem_text) = &elem.text {
-            if elem_text.contains(text) {
-                return true;
-            }
+        if let Some(elem_text) = &elem.text
+            && elem_text.contains(text)
+        {
+            return true;
         }
         // Check children recursively
         for child in &elem.children {
@@ -1682,14 +1682,14 @@ fn find_text_in_semantics_tree(
     match_kind: SemanticTextMatchKind,
 ) -> Option<SemanticQueryResult> {
     let owner = semantic_rect_for_node(bounds_by_node, sem_node.node_id);
-    if let Some(text) = semantics_node_text(sem_node) {
-        if semantics_text_matches(text, query, match_kind) {
-            return Some(SemanticQueryResult {
-                node_id: sem_node.node_id,
-                bounds: owner,
-                text: Some(text.to_string()),
-            });
-        }
+    if let Some(text) = semantics_node_text(sem_node)
+        && semantics_text_matches(text, query, match_kind)
+    {
+        return Some(SemanticQueryResult {
+            node_id: sem_node.node_id,
+            bounds: owner,
+            text: Some(text.to_string()),
+        });
     }
 
     if let Some(result) = find_canvas_child(owner, sem_node, query, match_kind, false) {
@@ -1795,10 +1795,10 @@ pub(crate) fn subtree_contains_matching_text(
     query: &str,
     match_kind: SemanticTextMatchKind,
 ) -> bool {
-    if let Some(text) = semantics_node_text(sem_node) {
-        if semantics_text_matches(text, query, match_kind) {
-            return true;
-        }
+    if let Some(text) = semantics_node_text(sem_node)
+        && semantics_text_matches(text, query, match_kind)
+    {
+        return true;
     }
 
     sem_node
@@ -1818,11 +1818,11 @@ mod tests {
     };
 
     use super::{
-        bounds_from_layout_box, find_button_in_semantics_tree, find_text_in_semantics_tree,
-        panic_payload_message, robot_wait_for_idle_animation_loop_only,
-        semantic_element_from_semantics_node, semantics_node_clickable, semantics_node_text,
-        semantics_text_matches, subtree_contains_matching_text, HashMap, SemanticQueryResult,
-        SemanticRect, SemanticTextMatchKind,
+        HashMap, SemanticQueryResult, SemanticRect, SemanticTextMatchKind, bounds_from_layout_box,
+        find_button_in_semantics_tree, find_text_in_semantics_tree, panic_payload_message,
+        robot_wait_for_idle_animation_loop_only, semantic_element_from_semantics_node,
+        semantics_node_clickable, semantics_node_text, semantics_text_matches,
+        subtree_contains_matching_text,
     };
 
     fn find_text_in_trees(
@@ -1831,14 +1831,14 @@ mod tests {
         query: &str,
         match_kind: SemanticTextMatchKind,
     ) -> Option<SemanticQueryResult> {
-        if let Some(text) = semantics_node_text(sem_node) {
-            if semantics_text_matches(text, query, match_kind) {
-                return Some(SemanticQueryResult {
-                    node_id: layout_box.node_id,
-                    bounds: bounds_from_layout_box(layout_box),
-                    text: Some(text.to_string()),
-                });
-            }
+        if let Some(text) = semantics_node_text(sem_node)
+            && semantics_text_matches(text, query, match_kind)
+        {
+            return Some(SemanticQueryResult {
+                node_id: layout_box.node_id,
+                bounds: bounds_from_layout_box(layout_box),
+                text: Some(text.to_string()),
+            });
         }
 
         sem_node
@@ -1993,13 +1993,15 @@ mod tests {
 
         // The unclickable label is not a button, and the canvas node behind it
         // must not be offered in its place.
-        assert!(find_button_in_semantics_tree(
-            &bounds_by_node,
-            &canvas,
-            "CROWN",
-            SemanticTextMatchKind::Exact,
-        )
-        .is_none());
+        assert!(
+            find_button_in_semantics_tree(
+                &bounds_by_node,
+                &canvas,
+                "CROWN",
+                SemanticTextMatchKind::Exact,
+            )
+            .is_none()
+        );
     }
 
     /// A robot snapshot of an immediate-mode screen has to show the controls

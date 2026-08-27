@@ -43,11 +43,7 @@ pub fn find_word_start(text: &str, pos: usize) -> usize {
         idx -= 1;
     }
 
-    if idx == 0 {
-        0
-    } else {
-        chars_before[idx].0
-    }
+    if idx == 0 { 0 } else { chars_before[idx].0 }
 }
 
 /// Finds the position at the end of the next word.

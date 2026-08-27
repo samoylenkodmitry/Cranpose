@@ -15,8 +15,8 @@ use std::{
 };
 
 use cranpose_services::{
-    set_platform_bundled_assets, BundledAssetError, BundledAssetReader, BundledAssets,
-    StreamingAssetReader,
+    BundledAssetError, BundledAssetReader, BundledAssets, StreamingAssetReader,
+    set_platform_bundled_assets,
 };
 use objc2_foundation::NSBundle;
 

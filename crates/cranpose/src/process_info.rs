@@ -18,7 +18,7 @@
 
 use std::{rc::Rc, time::Duration};
 
-use cranpose_services::{device_info, set_platform_device_info, DeviceInfo, DeviceInfoRef};
+use cranpose_services::{DeviceInfo, DeviceInfoRef, device_info, set_platform_device_info};
 
 /// Installs the process readings over whatever device info is registered.
 ///
@@ -96,7 +96,7 @@ fn darwin_resident_memory_bytes() -> Option<u64> {
     use mach2::{
         kern_return::KERN_SUCCESS,
         task::task_info,
-        task_info::{mach_task_basic_info, MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT},
+        task_info::{MACH_TASK_BASIC_INFO, MACH_TASK_BASIC_INFO_COUNT, mach_task_basic_info},
         traps::mach_task_self,
     };
 
@@ -136,11 +136,7 @@ fn page_size_bytes() -> u64 {
     // safe to call from any thread at any time. A non-positive return means
     // the name is unsupported, which is checked rather than cast.
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
-    if size > 0 {
-        size as u64
-    } else {
-        4096
-    }
+    if size > 0 { size as u64 } else { 4096 }
 }
 
 /// Processor time this process has used, user and system together.

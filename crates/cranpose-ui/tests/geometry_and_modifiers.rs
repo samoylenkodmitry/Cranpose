@@ -7,12 +7,12 @@
 //! drops what it was handed, is invisible in a screenshot and obvious here.
 
 use cranpose_ui::{
+    Modifier,
     density::Density,
     font_scale::FontScaleCurve,
     round_scaling_list::{leading_auto_centring_spacer, trailing_auto_centring_spacer},
     run_test_composition,
     widgets::wear::color_appearance::hct_solve,
-    Modifier,
 };
 
 #[test]

@@ -51,9 +51,9 @@ pub mod ring;
 
 use std::sync::{Arc, OnceLock};
 
-use cranpose_services::{set_platform_audio, AudioPlayerRef};
+use cranpose_services::{AudioPlayerRef, set_platform_audio};
 pub use engine::AudioEngine;
-pub use mixer::{RenderStatus, IDLE_GRACE_SECONDS, MAX_CLIPS, MAX_VOICES};
+pub use mixer::{IDLE_GRACE_SECONDS, MAX_CLIPS, MAX_VOICES, RenderStatus};
 
 static INSTALLED_ENGINE: OnceLock<Arc<AudioEngine>> = OnceLock::new();
 
@@ -84,11 +84,18 @@ pub fn has_device_backend() -> bool {
 #[cfg(test)]
 mod tests {
     use cranpose_services::{clear_platform_audio, default_audio};
+    use parking_lot::{Mutex, MutexGuard};
 
     use super::*;
 
+    fn platform_audio_guard() -> MutexGuard<'static, ()> {
+        static PLATFORM_AUDIO_LOCK: Mutex<()> = Mutex::new(());
+        PLATFORM_AUDIO_LOCK.lock()
+    }
+
     #[test]
     fn install_registers_the_engine_as_the_platform_player() {
+        let _guard = platform_audio_guard();
         clear_platform_audio();
         assert!(!default_audio().is_available());
         install();
@@ -99,6 +106,7 @@ mod tests {
 
     #[test]
     fn create_does_not_register_anything() {
+        let _guard = platform_audio_guard();
         clear_platform_audio();
         let engine = create();
         assert!(!engine.is_running());
@@ -107,6 +115,7 @@ mod tests {
 
     #[test]
     fn install_reuses_the_registered_engine() {
+        let _guard = platform_audio_guard();
         let first = install();
         let second = install();
 

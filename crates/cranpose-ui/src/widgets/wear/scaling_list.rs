@@ -98,12 +98,12 @@ use std::{
 };
 
 use cranpose_core::{
-    internal::FrameCallbackRegistration, remember, rememberMutableStateOf, MutableState, NodeId,
-    SlotId,
+    MutableState, NodeId, SlotId, internal::FrameCallbackRegistration, remember,
+    rememberMutableStateOf,
 };
 use cranpose_foundation::{
+    DRAG_THRESHOLD, MAX_FLING_VELOCITY, VelocityTracker1D,
     lazy::{LazyItems, LazyLayoutKey},
-    VelocityTracker1D, DRAG_THRESHOLD, MAX_FLING_VELOCITY,
 };
 use cranpose_ui_graphics::{CompositingStrategy, Point, Rect, Size};
 use cranpose_ui_layout::{
@@ -116,10 +116,10 @@ use crate::{
     fling_animation::FlingAnimation,
     modifier::{GraphicsLayer, Modifier, PointerEventKind, PointerInputScope, TransformOrigin},
     round_scaling_list::{
-        leading_auto_centring_spacer, place_row_with, round_to_px, trailing_auto_centring_spacer,
-        CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams,
+        CentreAnchor, PlacedRow, ScaleAlpha, ScalingParams, leading_auto_centring_spacer,
+        place_row_with, round_to_px, trailing_auto_centring_spacer,
     },
-    round_scroll_indicator::{scaling_list_items_with, IndicatorItem, ScalingList, ThumbLength},
+    round_scroll_indicator::{IndicatorItem, ScalingList, ThumbLength, scaling_list_items_with},
     subcompose_layout::{
         MeasurePolicy as SubcomposeMeasurePolicy, SubcomposeChild, SubcomposeLayoutNode,
         SubcomposeMeasureScope, SubcomposeMeasureScopeImpl,
@@ -756,15 +756,12 @@ fn signed_span(heights: &ItemHeights, from: usize, to: usize) -> f32 {
     }
     let (low, high) = if from < to { (from, to) } else { (to, from) };
     let span: f32 = (low..high).map(|index| heights.height_of(index)).sum();
-    if from < to {
-        span
-    } else {
-        -span
-    }
+    if from < to { span } else { -span }
 }
 
 /// Remembers a scaling list's scroll position.
 #[composable]
+#[track_caller]
 pub fn rememberWearScalingListState(initial: CentreAnchor) -> WearScalingListState {
     let anchor = rememberMutableStateOf(move || initial);
     let inner = remember(|| {

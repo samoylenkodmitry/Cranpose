@@ -11,9 +11,9 @@ use cranpose_foundation::{
 };
 
 use super::{
-    local::ModifierLocalManager, modifier_debug_enabled, DimensionConstraint, EdgeInsets,
-    LayoutProperties, Modifier, ModifierInspectorRecord, ModifierLocalAncestorResolver,
-    ModifierLocalToken, Point, ResolvedModifiers,
+    DimensionConstraint, EdgeInsets, LayoutProperties, Modifier, ModifierInspectorRecord,
+    ModifierLocalAncestorResolver, ModifierLocalToken, Point, ResolvedModifiers,
+    local::ModifierLocalManager, modifier_debug_enabled,
 };
 use crate::modifier_nodes::{
     AlignmentNode, FillDirection, FillNode, IntrinsicAxis, IntrinsicSizeNode, OffsetNode,
@@ -302,10 +302,10 @@ impl ModifierChainHandle {
         self.chain.visit_nodes_mut(|node, capabilities| {
             if capabilities.contains(NodeCapabilities::LAYOUT) {
                 let any = node.as_any_mut();
-                if let Some(text_field) = any.downcast_mut::<crate::TextFieldModifierNode>() {
-                    if result.is_none() {
-                        result = Some(f(text_field));
-                    }
+                if let Some(text_field) = any.downcast_mut::<crate::TextFieldModifierNode>()
+                    && result.is_none()
+                {
+                    result = Some(f(text_field));
                 }
             }
         });

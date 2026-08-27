@@ -99,7 +99,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use cranpose_core::{location_key, Composition, MemoryApplier};
+    use cranpose_core::{Composition, MemoryApplier, location_key};
 
     use super::*;
 

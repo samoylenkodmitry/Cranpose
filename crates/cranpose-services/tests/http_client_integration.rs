@@ -1,9 +1,9 @@
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use cranpose_core::{location_key, Composition, CompositionLocalProvider, MemoryApplier};
+use cranpose_core::{Composition, CompositionLocalProvider, MemoryApplier, location_key};
 use cranpose_services::{
-    local_http_client, BytesBody, HttpClient, HttpClientRef, HttpControl, HttpFuture, HttpRequest,
-    HttpResponse,
+    BytesBody, HttpClient, HttpClientRef, HttpControl, HttpFuture, HttpRequest, HttpResponse,
+    local_http_client,
 };
 
 struct TestHttpClient;

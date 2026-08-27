@@ -24,7 +24,7 @@
 #![allow(unsafe_code)]
 
 use std::{
-    ffi::{c_void, CString},
+    ffi::{CString, c_void},
     sync::atomic::{AtomicBool, AtomicI64, Ordering},
 };
 
@@ -459,11 +459,7 @@ impl AndroidFrameTelemetry {
 
     /// Timestamp helper that compiles to nothing when telemetry is off.
     pub(crate) fn now(&self) -> i64 {
-        if self.enabled {
-            monotonic_nanos()
-        } else {
-            0
-        }
+        if self.enabled { monotonic_nanos() } else { 0 }
     }
 
     /// A loop iteration that woke up but presented nothing.
@@ -585,7 +581,8 @@ impl AndroidFrameTelemetry {
             ms(percentile(&values, 0.90)),
             ms(percentile(&values, 0.99)),
             ms(*values.last().unwrap_or(&0)),
-            values.iter().map(|value| *value as f64).sum::<f64>() / values.len().max(1) as f64
+            values.iter().map(|value| *value as f64).sum::<f64>()
+                / values.len().max(1) as f64
                 / 1000.0,
         );
     }

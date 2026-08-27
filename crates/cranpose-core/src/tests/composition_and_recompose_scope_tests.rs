@@ -1451,9 +1451,10 @@ fn retained_scope_stays_inactive_until_restored() {
         }
     }
 
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("initial composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_branch, observed))
+    };
+    pass(&mut composition).expect("initial composition");
     assert_composition_valid(&composition);
 
     let initial_snapshot = composition.debug_slot_snapshot();
@@ -1489,9 +1490,7 @@ fn retained_scope_stays_inactive_until_restored() {
     );
 
     show_branch.set_value(false);
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("hide branch render");
+    pass(&mut composition).expect("hide branch render");
     assert_composition_valid(&composition);
 
     let hidden_snapshot = composition.debug_slot_snapshot();
@@ -1557,9 +1556,7 @@ fn retained_scope_stays_inactive_until_restored() {
     );
 
     show_branch.set_value(true);
-    composition
-        .render(root_key, || root(show_branch, observed))
-        .expect("restore retained branch");
+    pass(&mut composition).expect("restore retained branch");
     assert_composition_valid(&composition);
 
     let restored_snapshot = composition.debug_slot_snapshot();
@@ -1633,9 +1630,10 @@ fn restored_retained_scope_processes_forced_recompose() {
         }
     }
 
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("initial composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_branch))
+    };
+    pass(&mut composition).expect("initial composition");
     assert_composition_valid(&composition);
     assert_eq!(INVOCATIONS.with(|count| count.get()), 1);
 
@@ -1645,17 +1643,13 @@ fn restored_retained_scope_processes_forced_recompose() {
     assert!(initial_scope.is_active());
 
     show_branch.set_value(false);
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("hide retained branch");
+    pass(&mut composition).expect("hide retained branch");
     assert_composition_valid(&composition);
     assert!(!initial_scope.is_active());
     assert_eq!(composition.debug_slot_snapshot().retained_scope_count, 1);
 
     show_branch.set_value(true);
-    composition
-        .render(root_key, || root(show_branch))
-        .expect("restore retained branch");
+    pass(&mut composition).expect("restore retained branch");
     assert_composition_valid(&composition);
 
     let restored_scope = CAPTURED_SCOPE
@@ -3794,9 +3788,10 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
         });
     }
 
-    composition
-        .render(root_key, || root(show_first))
-        .expect("initial keyed composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_first))
+    };
+    pass(&mut composition).expect("initial keyed composition");
 
     let second = SECOND_SLOT
         .with(|cell| cell.borrow().clone())
@@ -3804,9 +3799,7 @@ fn with_key_keeps_callsite_identity_when_user_key_repeats() {
     second.replace(99);
 
     show_first.set_value(false);
-    composition
-        .render(root_key, || root(show_first))
-        .expect("hide first keyed branch");
+    pass(&mut composition).expect("hide first keyed branch");
 
     let second_after = SECOND_SLOT
         .with(|cell| cell.borrow().clone())
@@ -3848,9 +3841,10 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
         });
     }
 
-    composition
-        .render(root_key, || root(show_children))
-        .expect("initial retained sibling composition");
+    let pass = |composition: &mut Composition<MemoryApplier>| {
+        composition.render(root_key, || root(show_children))
+    };
+    pass(&mut composition).expect("initial retained sibling composition");
 
     CAPTURED.with(|slots| {
         let slots = slots.borrow();
@@ -3860,14 +3854,10 @@ fn retained_siblings_with_same_raw_key_keep_distinct_state() {
     });
 
     show_children.set_value(false);
-    composition
-        .render(root_key, || root(show_children))
-        .expect("hide retained siblings");
+    pass(&mut composition).expect("hide retained siblings");
 
     show_children.set_value(true);
-    composition
-        .render(root_key, || root(show_children))
-        .expect("restore retained siblings");
+    pass(&mut composition).expect("restore retained siblings");
 
     let restored = CAPTURED.with(|slots| {
         slots
@@ -4272,18 +4262,17 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
     let value = MutableState::with_runtime(0, runtime);
     let root_key = location_key(file!(), line!(), column!());
 
+    let mut content = || {
+        Root(value);
+    };
     composition
-        .render(root_key, || {
-            Root(value);
-        })
+        .render(root_key, &mut content)
         .expect("initial render");
     let root_id = ROOT_ID.with(|slot| slot.get()).expect("root id");
 
     composition.request_root_render();
     composition
-        .reconcile(root_key, || {
-            Root(value);
-        })
+        .reconcile(root_key, &mut content)
         .expect("forced root replay");
     assert_eq!(root_raw_parent(&mut composition, root_id), None);
 
@@ -4297,5 +4286,365 @@ fn scoped_recompose_after_root_replay_does_not_self_parent_root() {
         root_raw_parent(&mut composition, root_id),
         None,
         "a root scope replay must not attach its root node as its own child",
+    );
+}
+
+#[test]
+fn a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves() {
+    thread_local! {
+        static KEYED_INITS: Cell<usize> = const { Cell::new(0) };
+        static KEYED_SEEN: Cell<i32> = const { Cell::new(0) };
+    }
+
+    fn keyed_through_helper(key: u32) -> i32 {
+        rememberKeyed(key, |key| {
+            KEYED_INITS.with(|count| count.set(count.get() + 1));
+            100 + *key as i32
+        })
+    }
+
+    #[composable]
+    fn keyed_pair(with_first: bool) {
+        let (_first, second) = (
+            with_first.then_some(1u32).map(keyed_through_helper),
+            rememberKeyed(9u32, |_| {
+                KEYED_INITS.with(|count| count.set(count.get() + 1));
+                200
+            }),
+        );
+        KEYED_SEEN.with(|slot| slot.set(second));
+    }
+
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
+        composition.render(861, || keyed_pair(with_first))
+    };
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!(KEYED_INITS.with(Cell::get), 2);
+    assert_eq!(KEYED_SEEN.with(Cell::get), 200);
+
+    pass(&mut composition, false).expect("drop the first keyed remember");
+    assert_eq!(
+        (KEYED_INITS.with(Cell::get), KEYED_SEEN.with(Cell::get)),
+        (2, 200),
+        "the surviving call's key did not change, so its initializer must not rerun; \
+         adopting the vanished neighbor's slot forces a spurious key mismatch"
+    );
+}
+
+#[test]
+fn a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves() {
+    thread_local! {
+        static SECOND_SCOPE: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn scope_through_helper(_slot: u32) -> CoroutineScope {
+        rememberCoroutineScope()
+    }
+
+    #[composable]
+    fn scope_pair(with_first: bool) {
+        let (_first, second) = (
+            with_first.then_some(1u32).map(scope_through_helper),
+            rememberCoroutineScope(),
+        );
+        SECOND_SCOPE.with(|slot| slot.set(second.probe_identity()));
+    }
+
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
+        composition.render(862, || scope_pair(with_first))
+    };
+    pass(&mut composition, true).expect("initial composition");
+    let original = SECOND_SCOPE.with(Cell::get);
+
+    pass(&mut composition, false).expect("drop the first scope");
+    assert_eq!(
+        SECOND_SCOPE.with(Cell::get),
+        original,
+        "the surviving call must keep its own scope; adopting the vanished \
+         neighbor's scope silently rebinds every task the survivor launched"
+    );
+}
+
+#[test]
+fn a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves() {
+    thread_local! {
+        static SECOND_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let first = compositionLocalOf(|| 0);
+    let second = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_first = MutableState::with_runtime(true, runtime.clone());
+    let second_value = MutableState::with_runtime(20, runtime.clone());
+
+    #[composable]
+    fn reader(second: CompositionLocal<i32>) {
+        let value = second.current();
+        SECOND_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        first: CompositionLocal<i32>,
+        second: CompositionLocal<i32>,
+        with_first: MutableState<bool>,
+        second_value: MutableState<i32>,
+    ) {
+        let mut provided = Vec::new();
+        if with_first.value() {
+            provided.push(first.provides(10));
+        }
+        provided.push(second.provides(second_value.value()));
+        CompositionLocalProvider(provided, || reader(second.clone()));
+    }
+
+    composition
+        .render(863, || {
+            tree(first.clone(), second.clone(), with_first, second_value)
+        })
+        .expect("initial composition");
+    assert_eq!(SECOND_READ.with(Cell::get), 20);
+
+    with_first.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the first provider")
+    {}
+
+    second_value.set_value(30);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving provider's value")
+    {}
+    assert_eq!(
+        SECOND_READ.with(Cell::get),
+        30,
+        "the surviving provider must keep its own entry; adopting the vanished \
+         neighbor's entry orphans the reader's subscription"
+    );
+}
+
+#[test]
+fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
+    thread_local! {
+        static SAME_LOCAL_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        SAME_LOCAL_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+    ) {
+        let mut provided = Vec::new();
+        if with_leading.value() {
+            provided.push(local.provides(10));
+        }
+        provided.push(local.provides(survivor_value.value()));
+        CompositionLocalProvider(provided, || reader(local.clone()));
+    }
+
+    composition
+        .render(864, || tree(local.clone(), with_leading, survivor_value))
+        .expect("initial composition");
+    assert_eq!(SAME_LOCAL_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading provider")
+    {}
+
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving provider's value")
+    {}
+    assert_eq!(
+        SAME_LOCAL_READ.with(Cell::get),
+        20,
+        "the surviving provider of the same local must keep its own entry; \
+         adopting the departed leader's entry orphans the reader's subscription"
+    );
+}
+
+#[test]
+fn a_provider_built_inside_a_slot_initializer_does_not_reenter_the_writer() {
+    thread_local! {
+        static INIT_BUILT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+
+    #[composable]
+    fn build_in_initializer(local: CompositionLocal<i32>) {
+        let held = remember(|| {
+            INIT_BUILT.with(|built| built.set(true));
+            local.provides(1)
+        });
+        held.with(|provided| {
+            let _ = provided;
+        });
+    }
+
+    composition
+        .render(865, || build_in_initializer(local.clone()))
+        .expect("a provider constructed inside a remember initializer");
+    assert!(INIT_BUILT.with(Cell::get));
+}
+
+fn same_site_provider_rows(keyed: bool) {
+    thread_local! {
+        static ROW_READ: Cell<i32> = const { Cell::new(0) };
+    }
+    ROW_READ.with(|slot| slot.set(0));
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        ROW_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+        keyed: bool,
+    ) {
+        let mut rows = Vec::new();
+        if with_leading.value() {
+            rows.push((1u32, 1));
+        }
+        rows.push((2u32, survivor_value.value()));
+        let provided = rows
+            .into_iter()
+            .map(|(id, value)| {
+                if keyed {
+                    let mut provider = None;
+                    with_key(&id, || provider = Some(local.provides(value)));
+                    provider.expect("keyed provider")
+                } else {
+                    local.provides(value)
+                }
+            })
+            .collect::<Vec<_>>();
+        CompositionLocalProvider(provided, || reader(local.clone()));
+    }
+
+    composition
+        .render(866, || {
+            tree(local.clone(), with_leading, survivor_value, keyed)
+        })
+        .expect("initial composition");
+    assert_eq!(ROW_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading row")
+    {}
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving row's value")
+    {}
+    assert_eq!(
+        ROW_READ.with(Cell::get),
+        20,
+        "one construction site feeding one provider list must still leave the \
+         surviving provider its own entry and its reader's subscription"
+    );
+}
+
+#[test]
+fn same_site_provider_occurrences_keep_identity() {
+    same_site_provider_rows(false);
+}
+
+#[test]
+fn with_key_distinguishes_same_site_provider_occurrences() {
+    same_site_provider_rows(true);
+}
+
+#[test]
+fn sibling_provider_scopes_from_one_construction_site_stay_distinct() {
+    thread_local! {
+        static SIBLING_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    fn build(local: &CompositionLocal<i32>, value: i32) -> Vec<ProvidedValue> {
+        vec![local.provides(value)]
+    }
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        SIBLING_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+    ) {
+        if with_leading.value() {
+            CompositionLocalProvider(build(&local, 1), || {});
+        }
+        CompositionLocalProvider(build(&local, survivor_value.value()), {
+            let local = local.clone();
+            move || reader(local)
+        });
+    }
+
+    composition
+        .render(867, || tree(local.clone(), with_leading, survivor_value))
+        .expect("initial composition");
+    assert_eq!(SIBLING_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading sibling scope")
+    {}
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving sibling's value")
+    {}
+    assert_eq!(
+        SIBLING_READ.with(Cell::get),
+        20,
+        "two sibling provider scopes fed from one construction site must not \
+         share entries; the survivor keeps its reader's subscription"
     );
 }

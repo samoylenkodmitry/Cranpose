@@ -7,10 +7,10 @@
 //! claim about the buffer that comes back rather than the picture that goes out.
 
 use cranpose_ui::{
-    command_draw_scope_retained, command_draw_scope_reusing, format_layout_tree,
-    format_modifier_chain, format_render_scene, format_screen_summary, log_layout_tree,
-    log_modifier_chain, log_render_scene, log_screen_summary, measure_layout, run_test_composition,
-    Modifier, RecordedRenderScene, ZoomState,
+    Modifier, RecordedRenderScene, ZoomState, command_draw_scope_retained,
+    command_draw_scope_reusing, format_layout_tree, format_modifier_chain, format_render_scene,
+    format_screen_summary, log_layout_tree, log_modifier_chain, log_render_scene,
+    log_screen_summary, measure_layout, run_test_composition,
 };
 use cranpose_ui_graphics::Size;
 

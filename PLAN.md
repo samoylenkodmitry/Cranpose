@@ -26,54 +26,232 @@ matched names as substrings so `with_timeout` read as covered because
 `exit_with_timeout` exists, and it excluded the robot suite. A proxy metric that
 is quietly wrong sends work to the wrong places for as long as nobody reads it.
 
-### Conditional branches share one composition slot
+### Branch groups: fold-only identity
 
-Compose's compiler plugin gives every `if`/`else` and `match` branch a group of
-its own, so a branch that leaves takes its nodes with it. Cranpose has no
-plugin, and a `#[composable]` opens one group keyed on where it is *defined*,
-not where it is called. Two branches emitting the same widget are therefore one
-slot: the arriving branch is handed the node the departing one was using,
-together with whatever that node was carrying.
+Every conditional site of a `#[composable]` body — `if`/`else` branch,
+`match` arm and guard, `for`/`while`/`loop` body — a `for` statement
+whole, so a composing `IntoIterator`/`Iterator::next` outside the body
+is covered too — each `&&`/`||` condition operand and `let` scrutinee, and every closure or executable
+nested item defined inside a branch — pushes an RAII **branch fold**: a
+location key on a per-pass stack. Nothing ever materializes; a guard costs a push and a pop, and
+closing folds in any order is safe (entries are marked dead and trimmed).
+Branch identity is mixed into every slot identity instead of being
+represented structurally:
 
-What it cost, on a Pixel Watch 3: starting CranOrbit's Daily run from the title
-ring left the ball parked on the paddle through any number of taps. The taps
-arrived and the simulation ran — the run ended `TIME UP` at score 0 while it
-was being tapped — but the ring's gesture loop was still the one reading them,
-because `pointer_input` restarts only when its key changes and both branches
-passed `()`. Campaign works only because it stops at a screen of a different
-shape on the way to the arena. Two earlier fixes missed it by reasoning about
-`AppState`, which was never at fault.
+- A group's static key mixes the folds pushed since its parent group
+  opened, so a group opened in one arm can never be resolved by another
+  arm, keyed rows stay flat indexed siblings with their toggle cost, and a
+  scoped recomposition re-enters cleanly because folds are always relative
+  to the enclosing frame.
+- A value slot's source stamp — the caller location of the `remember`/
+  `use_state`/hook that created it, captured before the session borrow —
+  mixes the same fold. A slot whose stamp mismatches is never adopted;
+  when a branch's slots vanish, following same-group slots resynchronize
+  by a forward scan for their `(type, source)` identity instead of
+  reinitializing, so neighbors keep state across branch cardinality
+  changes.
+- A `#[composable]` fn is `#[track_caller]` (an explicit `extern "Rust"`
+  keeps it — `an_extern_rust_composable_keeps_caller_identity`; only
+  non-Rust ABIs skip it, where the attribute is illegal and an FFI entry
+  point has no composable caller to distinguish —
+  `an_extern_abi_composable_still_compiles`) and
+  keys its group by its definition location mixed with the caller's
+  location
+  (`composable_identity_key`, definition key cached in a per-fn static):
+  every call site is its own identity, Compose's positional-key parity,
+  and two different composables selected through one collapsed call site
+  — a fn pointer, a macro-expanded router — still key apart because
+  their definitions differ. `emit_node` is `#[track_caller]` the same
+  way, so a raw node record carries a folded source and an arm can never
+  adopt another arm's node. Every public hook that wraps `remember` or
+  keys an effect group propagates the same caller identity, in every
+  crate: a hook fn is `#[track_caller]` rather than baking its own
+  definition line, a hook whose `remember` sits inside a
+  `with_composer` closure captures `caller_location_key()` at its entry
+  and passes it through `Composer::remember_at` (the closure severs the
+  `#[track_caller]` chain), and a hook that expands an effect macro in
+  its own body calls the effect impl directly with the captured caller
+  key mixed into its site key (the macro's `file!()` is lexical and
+  would stamp the wrapper). So two same-statement calls stay apart when
+  one leaves
+  (`a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves`,
+  `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`,
+  `a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves`).
+  A composition-local provider entry is keyed by the `LocalKey`, the
+  `provides` call site, and the provider call it is applied under —
+  never by composer state, so a provider can be built anywhere,
+  including inside a slot initializer
+  (`a_provider_built_inside_a_slot_initializer_does_not_reenter_the_writer`).
+  Within one provider list only the last provider per local gets an
+  entry — the others are unreadable by map semantics, and applying them
+  would leave same-identity siblings that adopt each other when the
+  list shrinks — so an iterator building same-local providers from one
+  site keeps the survivor's entry and its reader's subscription
+  (`same_site_provider_occurrences_keep_identity`,
+  `with_key_distinguishes_same_site_provider_occurrences`), sibling
+  provider scopes fed from one construction site stay distinct by their
+  own call sites
+  (`sibling_provider_scopes_from_one_construction_site_stay_distinct`),
+  and neither two same-typed locals nor two providers of the same local
+  adopt each other's entries when a neighbor leaves
+  (`a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves`,
+  `a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves`).
+  Same-site provider calls repeated in a loop share their site like any
+  positional identity; the escape is `with_key` around the provider
+  call, whose keyed group namespaces the entries it applies.
 
-`a_branch_switch_hands_the_gesture_to_the_branch_that_is_on_screen` in
-`cranpose-app-shell` is the reproduction: before the fix it reported
-`(menu, arena) = (2, 0)`, the departed branch having eaten the arriving one's
-tap.
+Branch departure needs no special lifecycle: an arm's groups and slots are
+ordinary unvisited content, detached and dispose-or-retained exactly as
+before branches existed (`docs/slot_table_invariants.md`,
+`branch_group_tests`, `robot_recomposition_lab` end to end). The remaining
+edges, each the price of running on names before expansion rather than on
+typed IR:
 
-Gestures are closed: a handler's identity is now the declaration — this call,
-with these keys — so a node handed to a different `pointer_input` call
-restarts. **The general case is open.** A reused node still carries the
-departed branch's `remember`ed state, its animations and its scroll offsets,
-and nothing warns the author. The same shape already produced a second
-reported bug in the same application, where every list screen shared one
-scroll position because one call site is one slot.
+- **A conditional expanded out of a `macro_rules!` body shares its slots
+  unless the arms call different composables.** The attribute macro runs
+  before function-like macros expand, and `Location::caller()` for code
+  inside an expansion collapses to the invocation site, so folds and
+  caller keys cannot tell the expanded arms apart. The definition half of
+  `composable_identity_key` still separates arms that route to different
+  composables
+  (`two_composables_selected_through_one_macro_call_site_stay_distinct`);
+  what remains collapsed is one composable called with different
+  arguments across arms, and raw `remember` slots in the arms (pinned as
+  `a_macro_rules_conditional_shares_slots_by_construction` and
+  `a_macro_rules_conditional_collapses_composable_caller_identity`; the
+  escape hatch is an explicit `with_key` per arm). Compose's plugin runs
+  on IR after inlining, which is what closing this would take.
+- **Composition reached only through a place path folds into the
+  surrounding context.** A `ref` pattern binds into the place, so a `let`
+  scrutinee that is a place expression keeps its structure; its value
+  sub-parts carry folds, but a composing `Deref` impl on the place chain
+  itself runs under the enclosing fold, and every `let`-bearing
+  condition is covered by the
+  whole-statement fold: an `if` or `while` whose condition contains any
+  `let` is enclosed in a block holding a fold guard, so every scrutinee
+  evaluation — chained or plain, place or value, however many times a
+  `while let` repeats — carries an identity the code after the statement
+  never shares, the place syntax is untouched, and no let-chain syntax is
+  ever fabricated (a `let` is gated by its own span's edition, so a
+  fabricated chain around a user's edition-2021 `let` would not compile;
+  pinned as `a_short_circuited_place_deref_does_not_leak_into_a_later_deref`
+  and `a_shrinking_while_let_scrutinee_does_not_feed_a_later_helper_call`). A closure
+  consumed-and-returned by a helper (`store(make_pair(|| A(1)).0)`)
+  still folds into the surrounding context, bounded by source stamps.
+- **A reuse-retained scope inside a keyed wrapper recomposes fresh when the
+  wrapper leaves composition.** Dispose-or-retain engages only when the
+  detached root is itself the reuse scope; a `with_key` wrapper above it
+  hides it. This reproduces on origin/main and is independent of branches
+  (pinned as
+  `keyed_wrapper_retention_behaves_identically_in_both_shell_classes`);
+  making retention descend into detached subtrees is filed as its own task.
 
-Applications can state the identity themselves with `cranpose_core::with_key`,
-Compose's `key(…) { }`, and CranOrbit's router now does. That is the framework
-asking every author to remember what Compose's compiler never makes them think
-about, and the failure is quiet: a stale gesture or a wrong scroll offset reads
-as a rendering glitch, not as shared state.
+- **A call through an erased callable is positional per statement, not per
+  call site — and folds exist only inside `#[composable]` bodies.**
+  `#[track_caller]` cannot survive coercion to a fn pointer
+  or `dyn Fn`: the shim reports the definition site, so every invocation
+  of one erased callable shares one caller. Inside an attributed body,
+  every suspension-free statement carries its own fold — expression
+  statements by enclosure, binding statements and macro statements
+  (braced or semicoloned, except a tail-position macro that may be the
+  block's value) by a guard pushed before the untouched statement and
+  dropped after it, which leaves initializer temporaries, `let`-`else`,
+  and coercions exactly as written (pinned as
+  `a_let_bound_erased_call_keeps_its_own_identity`,
+  `a_braced_macro_statement_does_not_feed_the_tail`). An attribute macro
+  cannot see any other function, so a plain helper that composes has no
+  folds and its erased calls are purely positional — the contract is
+  that every composing function is `#[composable]`, which restores the
+  per-branch identity, or keys its calls with `with_key`
+  (`erased_calls_in_an_uninstrumented_helper_share_position_by_construction`,
+  `erased_calls_in_a_composable_helper_keep_their_identity`).
+  What remains collapsed is several erased invocations inside one
+  statement, which vanish and adopt positionally (pinned as
+  `erased_calls_inside_one_statement_are_positional_by_construction`),
+  and an erased invocation sharing its statement with an await — no fold
+  can close mid-expression without altering temporaries, so exclusive
+  arms whose erased calls ride awaiting statements collapse (pinned as
+  `erased_calls_beside_an_await_share_position_by_construction`); the
+  escape is `with_key` or a named composable. Compose keys every invocation site in its compiler plugin;
+  a runtime fold per call was tried and each wrapper shape violates a
+  different language contract — blocks change statement-temporary
+  lifetimes, a generic identity fn hardens operator inference, match
+  arms end scrutinee temporary extension — so the statement is the
+  finest sound granularity for a syntactic transform.
 
-Closing it means what the plugin does — a group per branch. The macro parses
-the function with `syn` and could wrap branch bodies, but the group API is
-closure-shaped (`Composer::with_group_seed`), and wrapping an arbitrary branch
-in a closure breaks `return`, `?`, `break` and `continue` inside it. So this
-wants an RAII group guard on the composer first, then the macro transform,
-then a sweep of the repo's own conditionals. It is a slot-table change and
-deserves its own validation pass rather than riding along with a bug fix.
+- **Const evaluation and suspension are not composition territory, but
+  what they define is.** A `const fn` body, like every const context,
+  stays untouched for const-eval legality while the callables it defines
+  or returns are instrumented through the interior visitor
+  (`a_const_fn_returned_callable_keeps_branch_identity`). A naked
+  function's body must stay a single `naked_asm!` invocation, so both
+  spellings of the attribute leave the body entirely alone
+  (`a_naked_nested_fn_stays_untouched`).
+- **An async body that awaits is not composition territory, but what it
+  defines is.** An await-free async block, closure, or nested `async fn`
+  runs synchronously when polled, so its conditionals carry folds like
+  any other code and its future stays `Send` — no guard can cross a
+  suspension point that does not exist (pinned as
+  `an_await_free_async_block_keeps_branch_identity` and
+  `an_await_free_async_fn_keeps_branch_identity`; a nested item's
+  awaits belong to its own future and do not mark the block,
+  `a_dormant_async_item_does_not_mark_the_block_suspending`). Inside a
+  suspending body, instrumentation recurses to the exact expression that
+  suspends: suspension-free statements keep their folds
+  (`a_harmless_macro_does_not_disable_the_rest_of_an_async_body`), and a
+  control-flow statement containing an await keeps folds on its
+  await-free conditions and sub-blocks — an arm that composes and then
+  awaits closes its guards before the suspension point, so the future
+  stays `Send` (`a_composing_arm_before_an_await_keeps_branch_identity`,
+  `a_suspending_arm_future_stays_send`,
+  `an_expression_bodied_suspending_async_closure_stays_send` — every
+  guard a future's body emits resolves the composer through the deferred
+  thread-local lookup, never through the outer alias, whatever shape the
+  body takes). The same split runs through every aggregate: a condition
+  whose spine awaits folds its await-free `&&`/`||` operands
+  individually
+  (`an_await_free_operand_of_a_suspending_condition_keeps_branch_identity`),
+  and an await-free child of a suspending tuple, call, or binary gets
+  the normal visitor whole, its guards closing before the awaiting
+  sibling evaluates
+  (`an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity`).
+  An await-free tail expression of a suspending block gets a guard
+  opened just before it — nothing follows a tail, so the guard cannot
+  cross an await, and the tail's value and temporaries stay untouched
+  (`an_await_free_tail_of_a_suspending_block_keeps_branch_identity`).
+  What stays bare is only the awaiting chain link itself and any opaque
+  macro invocation — its expansion may suspend, and
+  under-instrumentation is the `Send`-safe side. A value-position
+  let-scrutinee inside such a statement also carries no fold of its own:
+  the sync path covers that spot with a whole-statement fold, and a
+  whole-statement fold across an await would poison `Send`. The
+  synchronous closures and functions a suspending body defines are
+  instrumented normally, since their guards live only while those bodies
+  run (`a_sync_closure_from_a_suspending_async_body_keeps_branch_identity`).
+
+And identity across *data* is still the author's statement: one call site
+fed different values is one slot in Compose too, so a list screen that
+renders per-route content keys it with `cranpose_core::with_key`, as
+CranOrbit's router does.
 
 ## Limits that are correct, and surprising
 
 These are deliberate. They are here so nobody rediscovers them as bugs.
+
+- **A module `const` named exactly like a crate-internal generated binding
+  is not supported.** Every binding `#[composable]` generates uses
+  `Span::mixed_site()`, so it neither captures nor is captured by user
+  *locals* of the same name
+  (`generated_identifiers_survive_local_shadowing`, and a user `let
+  __composer` shadow is separately pinned). Items are different: pattern
+  resolution treats a visible `const` as a const pattern, and mixed-site
+  tokens resolve items at the call site, so `const __cranpose_caller_key:
+  u64` in the composable's module still turns the generated `let` into a
+  refutable pattern. `macro_rules!` has the identical hole — a macro
+  emitting `let value = 1` under a call-site `const value: u8` fails the
+  same way — and only nightly `def_site` hygiene closes it, so on stable
+  Rust the crate-prefixed `__cranpose`/`__composer` names are the
+  boundary, matching what serde-style derives live with.
 
 - **Desktop and iOS can discover an update but not install one.** App Store
   Review Guideline 3.3.2 forbids an iOS application replacing its own binary,
@@ -115,9 +293,10 @@ Both are verified on the watch against `v1.3.3`.
 
 A Daily run that would not launch the ball on a tap is fixed in `v1.3.6`, by
 CranOrbit naming its three gesture surfaces and keying the router on them. The
-cause was not in this application, though: see *Conditional branches share one
-composition slot* above, which is what let the ring go on reading the arena's
-taps. What is left:
+cause was not in this application, though: conditional branches used to share
+one composition slot, which is what let the ring go on reading the arena's
+taps — closed by branch groups (see *A branch that composes only through
+names the macro cannot see* above for what remains). What is left:
 
 ### Campaign's level intro is a scrolling list where Daily's is the ring
 

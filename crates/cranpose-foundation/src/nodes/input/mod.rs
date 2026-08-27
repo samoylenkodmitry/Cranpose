@@ -4,8 +4,8 @@ pub mod rotary;
 pub mod types;
 
 pub use rotary::{
-    rotary_scroll_pixels_from_detents, RotaryScrollEvent, RotaryStepAccumulator,
-    DEFAULT_ROTARY_SCROLL_FACTOR_DP,
+    DEFAULT_ROTARY_SCROLL_FACTOR_DP, RotaryScrollEvent, RotaryStepAccumulator,
+    rotary_scroll_pixels_from_detents,
 };
 pub use types::{
     Modifiers, PointerButton, PointerButtons, PointerEvent, PointerEventKind, PointerId,

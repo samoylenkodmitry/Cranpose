@@ -21,22 +21,22 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     rc::Rc,
     sync::Arc,
 };
 
 use android_activity::{
-    input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState},
     AndroidApp,
+    input::{KeyAction, KeyCharacterMap, KeyMapChar, Keycode, MetaState},
 };
 use cranpose_app_shell::{
     ImeEditorState, KeyCode, KeyEvent, KeyEventType, Modifiers, PlatformTextInputHandler,
 };
 
 use crate::android_text_input::{
-    hide_android_text_input, show_android_text_input, update_android_text_input_state,
-    AndroidImeEventQueue,
+    AndroidImeEventQueue, hide_android_text_input, show_android_text_input,
+    update_android_text_input_state,
 };
 
 /// Android `KeyEvent` action constants (`ACTION_DOWN` / `ACTION_UP`).

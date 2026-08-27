@@ -1,5 +1,5 @@
-use cranpose_core::{location_key, Composition, MemoryApplier};
-use cranpose_ui::{composable, Column, ColumnSpec, Modifier, Text, TextStyle};
+use cranpose_core::{Composition, MemoryApplier, location_key};
+use cranpose_ui::{Column, ColumnSpec, Modifier, Text, TextStyle, composable};
 
 #[composable]
 fn inner_content() {
