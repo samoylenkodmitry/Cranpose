@@ -76,9 +76,94 @@ fn print_usage() {
     );
 }
 
-const WORKSPACE_ALLOWED_DUPLICATE_PACKAGES: &[&str] = &[];
+/// Every target triple the project ships, from the release workflow and the
+/// `ios-sim`/`ios-device`/`android`/`web` recipes.
+///
+/// The dependency budget resolves the graph for all of them at once, so its
+/// verdict is identical on every host. Without the pins `cargo tree` filters by
+/// host platform, and a budget that is green on a Linux CI runner can be red on
+/// macOS. Per-architecture entries matter as much as per-OS ones: families like
+/// `windows_x86_64_msvc` are architecture-specific, so dropping an Android ABI
+/// or the iOS simulator here would let a split hide. Resolving all of them
+/// costs no measurable time over resolving one.
+///
+/// Adding a shipped target means adding it here.
+const SHIPPED_TARGETS: &[&str] = &[
+    "aarch64-apple-darwin",
+    "aarch64-apple-ios",
+    "aarch64-apple-ios-sim",
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "i686-linux-android",
+    "wasm32-unknown-unknown",
+    "x86_64-linux-android",
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+];
 
-const ALL_FEATURES_ALLOWED_DUPLICATE_PACKAGES: &[&str] = &[];
+/// A duplicate dependency version family the workspace knowingly carries.
+#[derive(Debug, PartialEq, Eq)]
+struct DuplicateDebt {
+    family: &'static str,
+    reason: &'static str,
+}
+
+/// Duplicate dependency version families in the default-feature graph.
+///
+/// Every entry is upstream debt: the crate pinning the old family is at its
+/// latest published release, so the split cannot be collapsed from this side.
+/// Each reason names the concrete upstream event that clears it. The budget
+/// fails on any family missing from this table, and also on any entry whose
+/// split no longer exists, so the table shrinks the moment that event lands.
+///
+/// These are not a licence to add duplicates. A split this workspace can
+/// collapse itself -- by aligning a version, dropping a dependency, or
+/// patching a crate to an upstream rev the way `gpu-descriptor` is patched --
+/// must be collapsed instead of recorded here.
+const WORKSPACE_DUPLICATE_DEBT: &[DuplicateDebt] = &[
+    DuplicateDebt {
+        family: "jni-sys",
+        reason: "ndk 0.9.0 and ndk-sys 0.6.0 (latest) pin jni-sys ^0.3 while jni 0.22 is on ^0.4",
+    },
+    DuplicateDebt {
+        family: "objc2",
+        reason: "winit 0.31 is still a beta; accesskit_macos 0.26.3 (latest) holds objc2 0.5 on purpose until winit 0.31 ships stable (AccessKit/accesskit#616), while winit-appkit 0.31.0-beta.2 is already on 0.6",
+    },
+    DuplicateDebt {
+        family: "objc2-app-kit",
+        reason: "follows the objc2 split via accesskit_macos 0.26.3",
+    },
+    DuplicateDebt {
+        family: "objc2-foundation",
+        reason: "follows the objc2 split via accesskit_macos 0.26.3",
+    },
+    DuplicateDebt {
+        family: "thiserror",
+        reason: "ndk 0.9.0 (latest) pins thiserror ^1 while the workspace is on 2",
+    },
+    DuplicateDebt {
+        family: "thiserror-impl",
+        reason: "follows the thiserror split via ndk 0.9.0",
+    },
+    DuplicateDebt {
+        family: "windows-sys",
+        reason: "winit-win32 0.31.0-beta.2 pins ^0.59 and arboard 3.6.1 pins <0.61 while the rest of the graph is on 0.61",
+    },
+    DuplicateDebt {
+        family: "windows-targets",
+        reason: "follows the windows-sys split",
+    },
+    DuplicateDebt {
+        family: "windows_x86_64_msvc",
+        reason: "follows the windows-targets split",
+    },
+];
+
+/// Additional duplicate families that only appear with `--all-features`.
+const ALL_FEATURES_EXTRA_DUPLICATE_DEBT: &[DuplicateDebt] = &[DuplicateDebt {
+    family: "env_filter",
+    reason: "android_logger 0.15.1 (latest) pins env_filter ^0.1 while env_logger 0.11 is past 1.0",
+}];
 
 const RENDERER_PIXELS_FORBIDDEN_PACKAGES: &[&str] =
     &["pixels", "wgpu", "wgpu-core", "wgpu-hal", "naga"];
@@ -97,91 +182,48 @@ impl DependencyBudgetScope {
         }
     }
 
-    fn cargo_tree_args(self) -> &'static [&'static str] {
-        match self {
-            Self::Workspace => &["tree", "--duplicates", "--workspace"],
-            Self::AllFeatures => &["tree", "--duplicates", "--workspace", "--all-features"],
+    fn cargo_tree_args(self) -> Vec<String> {
+        let mut args: Vec<String> = ["tree", "--duplicates", "--workspace"]
+            .map(str::to_owned)
+            .into();
+        if let Self::AllFeatures = self {
+            args.push("--all-features".to_owned());
         }
+        args.extend(shipped_target_args());
+        args
     }
 
-    fn allowed_duplicate_packages(self) -> &'static [&'static str] {
+    fn recorded_debt(self) -> Vec<&'static DuplicateDebt> {
         match self {
-            Self::Workspace => WORKSPACE_ALLOWED_DUPLICATE_PACKAGES,
-            Self::AllFeatures => ALL_FEATURES_ALLOWED_DUPLICATE_PACKAGES,
+            Self::Workspace => WORKSPACE_DUPLICATE_DEBT.iter().collect(),
+            Self::AllFeatures => WORKSPACE_DUPLICATE_DEBT
+                .iter()
+                .chain(ALL_FEATURES_EXTRA_DUPLICATE_DEBT)
+                .collect(),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DependencyBudgetSlice {
-    WgpuStack,
-    DesktopPlatform,
-    OptionalFeatures,
-}
-
-impl DependencyBudgetSlice {
-    const ALL: [Self; 3] = [
-        Self::WgpuStack,
-        Self::DesktopPlatform,
-        Self::OptionalFeatures,
-    ];
-
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "wgpu-stack" => Ok(Self::WgpuStack),
-            "desktop-platform" => Ok(Self::DesktopPlatform),
-            "optional-features" => Ok(Self::OptionalFeatures),
-            other => Err(format!("unknown dependency-budget slice `{other}`")),
-        }
-    }
-
-    fn target_families(self) -> &'static [&'static str] {
-        match self {
-            Self::WgpuStack => &["foldhash", "hashbrown"],
-            Self::DesktopPlatform => &["tiny-skia", "tiny-skia-path"],
-            Self::OptionalFeatures => {
-                &["async-channel", "event-listener", "getrandom", "roxmltree"]
-            }
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::WgpuStack => "wgpu-stack",
-            Self::DesktopPlatform => "desktop-platform",
-            Self::OptionalFeatures => "optional-features",
-        }
-    }
+fn shipped_target_args() -> impl Iterator<Item = String> {
+    SHIPPED_TARGETS
+        .iter()
+        .flat_map(|target| ["--target".to_owned(), (*target).to_owned()])
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct DependencyBudgetOptions {
     scopes: Vec<DependencyBudgetScope>,
     explain: bool,
-    strict: bool,
-    slice: Option<DependencyBudgetSlice>,
 }
 
 impl DependencyBudgetOptions {
     fn parse(args: &[String]) -> Result<Self, String> {
         let mut scopes = Vec::new();
         let mut explain = false;
-        let mut strict = false;
-        let mut slice = None;
 
-        let mut index = 0;
-        while index < args.len() {
-            match args[index].as_str() {
+        for arg in args {
+            match arg.as_str() {
                 "--explain" => explain = true,
-                "--strict" => strict = true,
-                "--slice" => {
-                    let value = required_value(args, &mut index, "--slice")?;
-                    slice = Some(DependencyBudgetSlice::parse(&value)?);
-                }
-                value if value.starts_with("--slice=") => {
-                    let value = value.trim_start_matches("--slice=");
-                    slice = Some(DependencyBudgetSlice::parse(value)?);
-                }
                 "--workspace-only" => {
                     scopes.clear();
                     scopes.push(DependencyBudgetScope::Workspace);
@@ -192,23 +234,14 @@ impl DependencyBudgetOptions {
                 }
                 other => return Err(format!("unknown dependency-budget option `{other}`")),
             }
-            index += 1;
         }
 
-        if slice.is_some() && !strict {
-            return Err("--slice requires --strict".to_owned());
-        }
         if scopes.is_empty() {
             scopes.push(DependencyBudgetScope::Workspace);
             scopes.push(DependencyBudgetScope::AllFeatures);
         }
 
-        Ok(Self {
-            scopes,
-            explain,
-            strict,
-            slice,
-        })
+        Ok(Self { scopes, explain })
     }
 }
 
@@ -383,7 +416,7 @@ fn print_dist_min_usage() {
 
 fn print_dependency_budget_usage() {
     eprintln!(
-        "usage: cargo xtask dependency-budget [--workspace-only | --all-features-only] [--explain] [--strict] [--slice wgpu-stack|desktop-platform|optional-features]"
+        "usage: cargo xtask dependency-budget [--workspace-only | --all-features-only] [--explain]"
     );
 }
 
@@ -1260,9 +1293,7 @@ fn check_dependency_budget(options: DependencyBudgetOptions) -> Result<(), Strin
         errors.push(error);
     }
     for scope in options.scopes {
-        if let Err(error) =
-            check_dependency_budget_scope(scope, options.explain, options.strict, options.slice)
-        {
+        if let Err(error) = check_dependency_budget_scope(scope, options.explain) {
             errors.push(error);
         }
     }
@@ -1280,6 +1311,7 @@ fn check_renderer_pixels_feature_boundary(explain: bool) -> Result<(), String> {
             "--features",
             "renderer-pixels",
         ])
+        .args(shipped_target_args())
         .output()
         .map_err(|error| format!("failed to run cargo tree for renderer-pixels: {error}"))?;
     if !output.status.success() {
@@ -1326,8 +1358,6 @@ fn dependency_budget_result(errors: Vec<String>) -> Result<(), String> {
 fn check_dependency_budget_scope(
     scope: DependencyBudgetScope,
     explain: bool,
-    strict: bool,
-    slice: Option<DependencyBudgetSlice>,
 ) -> Result<(), String> {
     let output = Command::new("cargo")
         .args(scope.cargo_tree_args())
@@ -1341,154 +1371,66 @@ fn check_dependency_budget_scope(
         .map_err(|error| format!("cargo tree returned invalid UTF-8: {error}"))?;
     let duplicate_details = duplicate_package_details(&stdout);
     let duplicate_version_families = duplicate_version_package_families(&duplicate_details);
-    let duplicate_families = duplicate_version_families.clone();
-    let strict_duplicate_families =
-        select_strict_duplicate_families(&duplicate_version_families, slice);
-    let allowed = scope.allowed_duplicate_packages();
+    let recorded_debt = scope.recorded_debt();
 
-    if let Some(error) = duplicate_budget_violation(
-        scope,
-        &duplicate_families,
-        &strict_duplicate_families,
-        allowed,
-        strict,
-    ) {
-        if explain {
-            let details_to_print = if strict {
-                &strict_duplicate_families
-            } else {
-                &duplicate_families
-            };
-            print_duplicate_package_details(scope, &duplicate_details, details_to_print);
-            let slice_status_families = if strict && slice.is_some() {
-                &strict_duplicate_families
-            } else {
-                &duplicate_version_families
-            };
-            print_duplicate_version_slice_status(scope, slice_status_families);
-        }
-        Err(error)
-    } else {
-        print_dependency_budget_success(scope, strict, slice, &duplicate_families);
-        if explain {
-            let details_to_print = if strict {
-                &strict_duplicate_families
-            } else {
-                &duplicate_families
-            };
-            print_duplicate_package_details(scope, &duplicate_details, details_to_print);
-            let slice_status_families = if strict && slice.is_some() {
-                &strict_duplicate_families
-            } else {
-                &duplicate_version_families
-            };
-            print_duplicate_version_slice_status(scope, slice_status_families);
-        }
-        Ok(())
-    }
-}
-
-fn print_dependency_budget_success(
-    scope: DependencyBudgetScope,
-    strict: bool,
-    slice: Option<DependencyBudgetSlice>,
-    duplicate_families: &[String],
-) {
-    if strict {
-        match slice {
-            Some(slice) => println!(
-                "strict duplicate dependency version slice ok ({}, {}): none",
-                scope.label(),
-                slice.label()
-            ),
-            None => println!(
-                "strict duplicate dependency version check ok ({}): none",
-                scope.label()
-            ),
-        }
-    } else {
+    let violation = duplicate_budget_violation(scope, &duplicate_version_families, &recorded_debt);
+    if violation.is_none() {
         println!(
-            "duplicate dependency version budget ok ({}): {}",
+            "duplicate dependency version budget ok ({}): {} recorded families",
             scope.label(),
-            duplicate_families.join(", ")
+            recorded_debt.len()
         );
+    }
+    if explain {
+        print_duplicate_package_details(scope, &duplicate_details, &duplicate_version_families);
+        print_recorded_duplicate_debt(scope, &recorded_debt);
+    }
+    match violation {
+        Some(error) => Err(error),
+        None => Ok(()),
     }
 }
 
 fn duplicate_budget_violation(
     scope: DependencyBudgetScope,
-    duplicate_families: &[String],
     duplicate_version_families: &[String],
-    allowed: &[&str],
-    strict: bool,
+    recorded_debt: &[&DuplicateDebt],
 ) -> Option<String> {
-    if strict {
-        if duplicate_version_families.is_empty() {
-            return None;
-        }
-
-        return Some(format!(
-            "strict duplicate dependency version check failed for {}: {}",
-            scope.label(),
-            duplicate_version_families.join(", ")
-        ));
-    }
-
-    let unexpected = duplicate_families
+    let unexpected = duplicate_version_families
         .iter()
-        .filter(|package| !allowed.contains(&package.as_str()))
+        .filter(|family| !recorded_debt.iter().any(|debt| debt.family == **family))
         .cloned()
         .collect::<Vec<_>>();
-    if unexpected.is_empty() {
+    let stale = recorded_debt
+        .iter()
+        .filter(|debt| {
+            !duplicate_version_families
+                .iter()
+                .any(|family| family == debt.family)
+        })
+        .map(|debt| debt.family.to_owned())
+        .collect::<Vec<_>>();
+
+    let mut errors = Vec::new();
+    if !unexpected.is_empty() {
+        errors.push(format!(
+            "unexpected duplicate dependency version families for {}: {}; collapse the split or record it as upstream debt",
+            scope.label(),
+            unexpected.join(", ")
+        ));
+    }
+    if !stale.is_empty() {
+        errors.push(format!(
+            "stale duplicate dependency debt for {}: {}; the split is gone, remove the entries",
+            scope.label(),
+            stale.join(", ")
+        ));
+    }
+    if errors.is_empty() {
         None
     } else {
-        Some(format!(
-            "unexpected duplicate dependency version families for {}: {}; allowed: {}",
-            scope.label(),
-            unexpected.join(", "),
-            allowed.join(", ")
-        ))
+        Some(errors.join("\n"))
     }
-}
-
-fn select_strict_duplicate_families(
-    duplicate_version_families: &[String],
-    slice: Option<DependencyBudgetSlice>,
-) -> Vec<String> {
-    let Some(slice) = slice else {
-        return duplicate_version_families.to_vec();
-    };
-
-    let targets = slice.target_families();
-    duplicate_version_families
-        .iter()
-        .filter(|family| targets.contains(&family.as_str()))
-        .cloned()
-        .collect()
-}
-
-fn duplicate_version_slice_families(
-    duplicate_version_families: &[String],
-    slice: DependencyBudgetSlice,
-) -> Vec<String> {
-    let targets = slice.target_families();
-    duplicate_version_families
-        .iter()
-        .filter(|family| targets.contains(&family.as_str()))
-        .cloned()
-        .collect()
-}
-
-fn unclassified_duplicate_version_families(duplicate_version_families: &[String]) -> Vec<String> {
-    duplicate_version_families
-        .iter()
-        .filter(|family| {
-            !DependencyBudgetSlice::ALL
-                .iter()
-                .any(|slice| slice.target_families().contains(&family.as_str()))
-        })
-        .cloned()
-        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1503,38 +1445,6 @@ struct DuplicatePackageRoot {
     version: String,
     root: String,
     direct_dependents: Vec<String>,
-}
-
-#[cfg(test)]
-fn duplicate_package_families(cargo_tree: &str) -> Vec<String> {
-    budget_duplicate_package_families(cargo_tree)
-}
-
-#[cfg(test)]
-fn budget_duplicate_package_families(cargo_tree: &str) -> Vec<String> {
-    let mut packages = cargo_tree
-        .lines()
-        .filter_map(budget_duplicate_package)
-        .collect::<Vec<_>>();
-    packages.sort();
-    packages.dedup();
-    packages
-}
-
-#[cfg(test)]
-fn budget_duplicate_package(line: &str) -> Option<String> {
-    if line.starts_with(char::is_whitespace)
-        || line.starts_with('├')
-        || line.starts_with('└')
-        || line.starts_with('│')
-        || line.trim().is_empty()
-        || line.contains("(*)")
-    {
-        return None;
-    }
-
-    let version_index = line.find(" v")?;
-    Some(line[..version_index].to_owned())
 }
 
 fn duplicate_package_details(cargo_tree: &str) -> Vec<DuplicatePackageFamily> {
@@ -1677,28 +1587,14 @@ fn print_duplicate_package_details(
     }
 }
 
-fn print_duplicate_version_slice_status(
-    scope: DependencyBudgetScope,
-    duplicate_version_families: &[String],
-) {
-    println!("duplicate dependency version slices ({}):", scope.label());
-    for slice in DependencyBudgetSlice::ALL {
-        print_slice_status(
-            slice.label(),
-            &duplicate_version_slice_families(duplicate_version_families, slice),
-        );
+fn print_recorded_duplicate_debt(scope: DependencyBudgetScope, recorded_debt: &[&DuplicateDebt]) {
+    println!("recorded duplicate dependency debt ({}):", scope.label());
+    if recorded_debt.is_empty() {
+        println!("  none");
+        return;
     }
-    print_slice_status(
-        "unclassified",
-        &unclassified_duplicate_version_families(duplicate_version_families),
-    );
-}
-
-fn print_slice_status(label: &str, families: &[String]) {
-    if families.is_empty() {
-        println!("  {label}: none");
-    } else {
-        println!("  {label}: {}", families.join(", "));
+    for debt in recorded_debt {
+        println!("  {}: {}", debt.family, debt.reason);
     }
 }
 
@@ -1886,8 +1782,6 @@ mod tests {
             ]
         );
         assert!(!options.explain);
-        assert!(!options.strict);
-        assert_eq!(options.slice, None);
     }
 
     #[test]
@@ -1896,7 +1790,6 @@ mod tests {
             .expect("workspace-only options parse");
         assert_eq!(workspace.scopes, vec![DependencyBudgetScope::Workspace]);
         assert!(!workspace.explain);
-        assert_eq!(workspace.slice, None);
 
         let all_features = DependencyBudgetOptions::parse(&["--all-features-only".into()])
             .expect("all-features-only options parse");
@@ -1905,7 +1798,6 @@ mod tests {
             vec![DependencyBudgetScope::AllFeatures]
         );
         assert!(!all_features.explain);
-        assert_eq!(all_features.slice, None);
     }
 
     #[test]
@@ -1916,62 +1808,6 @@ mod tests {
 
         assert_eq!(options.scopes, vec![DependencyBudgetScope::Workspace]);
         assert!(options.explain);
-        assert!(!options.strict);
-        assert_eq!(options.slice, None);
-    }
-
-    #[test]
-    fn parse_dependency_budget_accepts_strict_with_explain() {
-        let options = DependencyBudgetOptions::parse(&[
-            "--all-features-only".into(),
-            "--explain".into(),
-            "--strict".into(),
-        ])
-        .expect("dependency-budget strict options parse");
-
-        assert_eq!(options.scopes, vec![DependencyBudgetScope::AllFeatures]);
-        assert!(options.explain);
-        assert!(options.strict);
-        assert_eq!(options.slice, None);
-    }
-
-    #[test]
-    fn parse_dependency_budget_accepts_strict_slice() {
-        let options = DependencyBudgetOptions::parse(&[
-            "--strict".into(),
-            "--slice".into(),
-            "wgpu-stack".into(),
-        ])
-        .expect("dependency-budget strict slice options parse");
-
-        assert!(options.strict);
-        assert_eq!(options.slice, Some(DependencyBudgetSlice::WgpuStack));
-    }
-
-    #[test]
-    fn parse_dependency_budget_accepts_equals_strict_slice() {
-        let options =
-            DependencyBudgetOptions::parse(&["--strict".into(), "--slice=desktop-platform".into()])
-                .expect("dependency-budget strict equals slice options parse");
-
-        assert!(options.strict);
-        assert_eq!(options.slice, Some(DependencyBudgetSlice::DesktopPlatform));
-    }
-
-    #[test]
-    fn parse_dependency_budget_rejects_slice_without_strict() {
-        let error = DependencyBudgetOptions::parse(&["--slice".into(), "wgpu-stack".into()])
-            .expect_err("slice without strict should fail");
-
-        assert!(error.contains("--slice requires --strict"));
-    }
-
-    #[test]
-    fn parse_dependency_budget_rejects_unknown_slice() {
-        let error = DependencyBudgetOptions::parse(&["--strict".into(), "--slice=unknown".into()])
-            .expect_err("unknown slice should fail");
-
-        assert!(error.contains("unknown dependency-budget slice"));
     }
 
     #[test]
@@ -2003,24 +1839,51 @@ hashbrown v0.16.1
 tiny-skia v0.12.0 (*)
 ";
 
+        let details = duplicate_package_details(tree);
         assert_eq!(
-            duplicate_package_families(tree),
+            duplicate_version_package_families(&details),
             vec!["hashbrown".to_owned()]
         );
     }
 
     #[test]
-    fn duplicate_budget_violation_rejects_duplicate_families_by_default() {
+    fn dependency_budget_cargo_tree_args_pin_shipped_targets() {
+        let shipped_targets = [
+            "aarch64-apple-darwin",
+            "aarch64-apple-ios",
+            "aarch64-apple-ios-sim",
+            "aarch64-linux-android",
+            "armv7-linux-androideabi",
+            "i686-linux-android",
+            "wasm32-unknown-unknown",
+            "x86_64-linux-android",
+            "x86_64-pc-windows-msvc",
+            "x86_64-unknown-linux-gnu",
+        ];
+
+        for scope in [
+            DependencyBudgetScope::Workspace,
+            DependencyBudgetScope::AllFeatures,
+        ] {
+            let args = scope.cargo_tree_args();
+            for target in shipped_targets {
+                assert!(
+                    args.windows(2)
+                        .any(|pair| pair[0] == "--target" && pair[1] == target),
+                    "budget cargo tree args for {} must pin --target {target}",
+                    scope.label()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn duplicate_budget_violation_rejects_unrecorded_families() {
         let families = vec!["foldhash".to_owned(), "hashbrown".to_owned()];
 
-        let violation = duplicate_budget_violation(
-            DependencyBudgetScope::Workspace,
-            &families,
-            &[],
-            WORKSPACE_ALLOWED_DUPLICATE_PACKAGES,
-            false,
-        )
-        .expect("duplicate-version families should fail the default budget");
+        let violation =
+            duplicate_budget_violation(DependencyBudgetScope::Workspace, &families, &[])
+                .expect("unrecorded duplicate-version families should fail the budget");
 
         assert!(violation.contains(
             "unexpected duplicate dependency version families for workspace: foldhash, hashbrown;"
@@ -2028,59 +1891,81 @@ tiny-skia v0.12.0 (*)
     }
 
     #[test]
-    fn duplicate_budget_violation_rejects_unbudgeted_families_by_default() {
-        let families = vec!["hashbrown".to_owned(), "new-family".to_owned()];
+    fn duplicate_budget_violation_rejects_stale_recorded_debt() {
+        let debt = DuplicateDebt {
+            family: "hashbrown",
+            reason: "an upstream split that no longer exists",
+        };
 
-        let violation = duplicate_budget_violation(
-            DependencyBudgetScope::Workspace,
-            &families,
-            &[],
-            WORKSPACE_ALLOWED_DUPLICATE_PACKAGES,
-            false,
-        )
-        .expect("unbudgeted duplicate-version family should fail");
+        let violation = duplicate_budget_violation(DependencyBudgetScope::Workspace, &[], &[&debt])
+            .expect("stale recorded debt should fail the budget");
 
-        assert!(violation.contains(
-            "unexpected duplicate dependency version families for workspace: hashbrown, new-family;"
-        ));
+        assert!(violation.contains("stale duplicate dependency debt for workspace: hashbrown;"));
     }
 
     #[test]
-    fn duplicate_budget_violation_rejects_version_families_in_strict_mode() {
-        let families = vec!["foldhash".to_owned(), "hashbrown".to_owned()];
-        let version_families = vec!["hashbrown".to_owned()];
+    fn duplicate_budget_violation_reports_unexpected_and_stale_together() {
+        let debt = DuplicateDebt {
+            family: "hashbrown",
+            reason: "an upstream split that no longer exists",
+        };
+        let families = vec!["new-family".to_owned()];
 
-        let violation = duplicate_budget_violation(
-            DependencyBudgetScope::Workspace,
-            &families,
-            &version_families,
-            WORKSPACE_ALLOWED_DUPLICATE_PACKAGES,
-            true,
-        )
-        .expect("strict duplicate check should fail");
+        let violation =
+            duplicate_budget_violation(DependencyBudgetScope::Workspace, &families, &[&debt])
+                .expect("unexpected and stale families should both fail the budget");
 
+        assert!(violation.contains("unexpected duplicate dependency version families"));
+        assert!(violation.contains("new-family"));
+        assert!(violation.contains("stale duplicate dependency debt"));
         assert!(violation.contains("hashbrown"));
-        assert!(!violation.contains("foldhash"));
     }
 
     #[test]
-    fn duplicate_budget_violation_accepts_empty_strict_mode() {
-        let violation = duplicate_budget_violation(
-            DependencyBudgetScope::Workspace,
-            &[],
-            &[],
-            WORKSPACE_ALLOWED_DUPLICATE_PACKAGES,
-            true,
-        );
+    fn duplicate_budget_violation_accepts_exact_debt_match() {
+        let debt = DuplicateDebt {
+            family: "hashbrown",
+            reason: "an upstream pin",
+        };
+        let families = vec!["hashbrown".to_owned()];
 
-        assert_eq!(violation, None);
+        assert_eq!(
+            duplicate_budget_violation(DependencyBudgetScope::Workspace, &families, &[&debt]),
+            None
+        );
+    }
+
+    #[test]
+    fn duplicate_budget_violation_accepts_empty_tree_and_empty_debt() {
+        assert_eq!(
+            duplicate_budget_violation(DependencyBudgetScope::Workspace, &[], &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn recorded_debt_families_are_unique_per_scope() {
+        for scope in [
+            DependencyBudgetScope::Workspace,
+            DependencyBudgetScope::AllFeatures,
+        ] {
+            let mut families = scope
+                .recorded_debt()
+                .iter()
+                .map(|debt| debt.family)
+                .collect::<Vec<_>>();
+            families.sort_unstable();
+            let mut deduped = families.clone();
+            deduped.dedup();
+            assert_eq!(families, deduped, "duplicate debt entry for {:?}", scope);
+        }
     }
 
     #[test]
     fn dependency_budget_result_aggregates_scope_errors() {
         let error = dependency_budget_result(vec![
-            "strict duplicate dependency version check failed for workspace: hashbrown".to_owned(),
-            "strict duplicate dependency version check failed for workspace all-features: roxmltree"
+            "unexpected duplicate dependency version families for workspace: hashbrown".to_owned(),
+            "unexpected duplicate dependency version families for workspace all-features: roxmltree"
                 .to_owned(),
         ])
         .expect_err("scope errors should be aggregated");
@@ -2093,98 +1978,6 @@ tiny-skia v0.12.0 (*)
     #[test]
     fn dependency_budget_result_accepts_no_scope_errors() {
         assert_eq!(dependency_budget_result(Vec::new()), Ok(()));
-    }
-
-    #[test]
-    fn strict_duplicate_families_can_focus_wgpu_slice() {
-        let families = vec![
-            "foldhash".to_owned(),
-            "hashbrown".to_owned(),
-            "tiny-skia".to_owned(),
-            "roxmltree".to_owned(),
-        ];
-
-        assert_eq!(
-            select_strict_duplicate_families(&families, Some(DependencyBudgetSlice::WgpuStack)),
-            vec!["foldhash".to_owned(), "hashbrown".to_owned()]
-        );
-    }
-
-    #[test]
-    fn strict_duplicate_families_can_focus_desktop_platform_slice() {
-        let families = vec![
-            "hashbrown".to_owned(),
-            "tiny-skia".to_owned(),
-            "tiny-skia-path".to_owned(),
-            "roxmltree".to_owned(),
-        ];
-
-        assert_eq!(
-            select_strict_duplicate_families(
-                &families,
-                Some(DependencyBudgetSlice::DesktopPlatform)
-            ),
-            vec!["tiny-skia".to_owned(), "tiny-skia-path".to_owned()]
-        );
-    }
-
-    #[test]
-    fn strict_duplicate_families_can_focus_optional_features_slice() {
-        let families = vec![
-            "async-channel".to_owned(),
-            "event-listener".to_owned(),
-            "getrandom".to_owned(),
-            "hashbrown".to_owned(),
-            "roxmltree".to_owned(),
-        ];
-
-        assert_eq!(
-            select_strict_duplicate_families(
-                &families,
-                Some(DependencyBudgetSlice::OptionalFeatures)
-            ),
-            vec![
-                "async-channel".to_owned(),
-                "event-listener".to_owned(),
-                "getrandom".to_owned(),
-                "roxmltree".to_owned()
-            ]
-        );
-    }
-
-    #[test]
-    fn duplicate_version_slice_families_report_single_slice() {
-        let families = vec![
-            "async-channel".to_owned(),
-            "hashbrown".to_owned(),
-            "tiny-skia".to_owned(),
-        ];
-
-        assert_eq!(
-            duplicate_version_slice_families(&families, DependencyBudgetSlice::DesktopPlatform),
-            vec!["tiny-skia".to_owned()]
-        );
-    }
-
-    #[test]
-    fn unclassified_duplicate_version_families_report_unknown_families() {
-        let families = vec![
-            "hashbrown".to_owned(),
-            "unknown-family".to_owned(),
-            "roxmltree".to_owned(),
-        ];
-
-        assert_eq!(
-            unclassified_duplicate_version_families(&families),
-            vec!["unknown-family".to_owned()]
-        );
-    }
-
-    #[test]
-    fn strict_duplicate_families_without_slice_keeps_all_version_families() {
-        let families = vec!["hashbrown".to_owned(), "tiny-skia".to_owned()];
-
-        assert_eq!(select_strict_duplicate_families(&families, None), families);
     }
 
     #[test]

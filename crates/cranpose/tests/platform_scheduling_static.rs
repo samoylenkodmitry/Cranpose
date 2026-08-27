@@ -107,14 +107,8 @@ fn ci_architecture_budget_runs_required_gates() {
         "the budgets recipe should print duplicate dependency owner details"
     );
     assert!(
-        justfile.contains("cargo xtask dependency-budget --strict --explain")
-            && justfile.contains(
-                "cargo xtask dependency-budget --strict --slice desktop-platform --explain"
-            )
-            && justfile.contains(
-                "cargo xtask dependency-budget --strict --slice optional-features --explain"
-            ),
-        "the budgets recipe should enforce full strict zero duplicates and keep focused clean-slice diagnostics"
+        !justfile.contains("dependency-budget --strict"),
+        "the dependency budget has no strict mode; the single gate rejects unrecorded and stale duplicate families"
     );
     assert!(
         justfile.contains("cargo xtask binary-size")
