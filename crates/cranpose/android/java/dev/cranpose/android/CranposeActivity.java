@@ -80,6 +80,7 @@ import org.json.JSONObject;
 public class CranposeActivity extends NativeActivity {
     private static native boolean nativeOnBackInvoked();
     private static native void nativeOnIncomingContent(String name, String mimeType, String uri);
+    private static native void nativeOnTrimMemory(int level);
     private static native void nativeOnAppUpdateStatus(int kind, String version,
             String downloadUrl, long downloaded, long total, String message, String digest);
     private static native void nativeOnCameraFrame(byte[] nv12, int width, int height,
@@ -1967,6 +1968,12 @@ public class CranposeActivity extends NativeActivity {
         super.onResume();
         cranposePaused = false;
         stopService(new Intent(this, CranposeBackgroundService.class));
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        nativeOnTrimMemory(level);
     }
 
     @Override

@@ -23,12 +23,13 @@ use cranpose_services::{
     AppUpdateCapabilities, AppUpdateError, AppUpdateStatus, AppUpdater, BackgroundActivity,
     BatteryStatus, BundledAssetError, BundledAssetReader, BundledAssets, GitHubReleaseUpdate,
     HapticEffect, HapticFeedback, HapticPattern, Haptics, IncomingContent, LaunchArgs,
-    NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, PackageDigest, PowerCapabilities,
-    PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet, StreamingAssetReader,
-    ThermalState, UpdatePackage, publish_incoming_content, push_notification_deeplink,
-    set_platform_app_updater, set_platform_background_activity, set_platform_bundled_assets,
-    set_platform_haptics, set_platform_launch_args, set_platform_network_monitor,
-    set_platform_notifier, set_platform_power_monitor, set_platform_share_sheet,
+    MemoryPressure, NetworkMonitor, NetworkStatus, Notifier, NotifyRequest, PackageDigest,
+    PowerCapabilities, PowerMonitor, PowerReading, ShareContent, ShareError, ShareSheet,
+    StreamingAssetReader, ThermalState, UpdatePackage, publish_incoming_content,
+    publish_memory_pressure, push_notification_deeplink, set_platform_app_updater,
+    set_platform_background_activity, set_platform_bundled_assets, set_platform_haptics,
+    set_platform_launch_args, set_platform_network_monitor, set_platform_notifier,
+    set_platform_power_monitor, set_platform_share_sheet,
 };
 use jni::{
     EnvUnowned, Outcome, jni_sig, jni_str,
@@ -1100,6 +1101,17 @@ pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnIncomi
         publish_incoming_content(shared);
         wake_native_loop();
     }
+}
+
+#[doc(hidden)]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_cranpose_android_CranposeActivity_nativeOnTrimMemory(
+    _env: EnvUnowned<'_>,
+    _class: JClass<'_>,
+    level: jint,
+) {
+    publish_memory_pressure(MemoryPressure::from_android_trim_level(level));
+    wake_native_loop();
 }
 
 #[doc(hidden)]
