@@ -3983,3 +3983,92 @@ fn a_conditional_assignee_of_a_suspending_assignment_keeps_branch_identity() {
     );
     assert_composition_valid(&composition);
 }
+
+macro_rules! maybe_lead_page {
+    ($enabled:expr, $page:expr) => {
+        if $enabled {
+            $page(0);
+        }
+    };
+}
+
+#[composable]
+fn braced_macro_statement_probe(enabled: bool) {
+    let page: fn(i32) = CountingPage;
+    maybe_lead_page! { enabled, page }
+    page(1)
+}
+
+#[test]
+fn a_braced_macro_statement_does_not_feed_the_tail() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, enabled: bool| {
+        composition.render(108, || braced_macro_statement_probe(enabled))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, false).expect("drop the macro's branch");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 72),
+        "a braced macro statement is sandwiched like a semicoloned one; the \
+         tail call must keep its own instance, not adopt the macro's"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+fn erased_call_beside_await_probe(flag: bool) {
+    poll_ready(async move {
+        let page: fn(i32) = CountingPage;
+        if flag {
+            let _pair = (page(501), std::future::ready(()).await);
+        } else {
+            let _pair = (page(502), std::future::ready(()).await);
+        }
+    });
+}
+
+#[test]
+fn erased_calls_beside_an_await_share_position_by_construction() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(109, || erased_call_beside_await_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 71));
+
+    pass(&mut composition, false).expect("switch the awaiting arms");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (1, 71),
+        "the floor: an erased call sharing its statement with an await has \
+         only positional identity — no fold can close mid-expression without \
+         altering temporaries — so exclusive arms collapse; a call that needs \
+         identity there goes through a named composable or with_key"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[composable]
+#[allow(non_snake_case)]
+extern "C" fn ExternEntryProbe() {
+    let value = remember_branch_marker(701);
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[test]
+fn an_extern_abi_composable_still_compiles() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    composition
+        .render(110, || ExternEntryProbe())
+        .expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 701));
+    assert_composition_valid(&composition);
+}

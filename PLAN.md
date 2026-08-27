@@ -50,8 +50,11 @@ represented structurally:
   by a forward scan for their `(type, source)` identity instead of
   reinitializing, so neighbors keep state across branch cardinality
   changes.
-- A `#[composable]` fn is `#[track_caller]` and keys its group by its
-  definition location mixed with the caller's location
+- A `#[composable]` fn is `#[track_caller]` (skipped on non-Rust ABIs,
+  where the attribute is illegal and an FFI entry point has no composable
+  caller to distinguish — `an_extern_abi_composable_still_compiles`) and
+  keys its group by its definition location mixed with the caller's
+  location
   (`composable_identity_key`, definition key cached in a per-fn static):
   every call site is its own identity, Compose's positional-key parity,
   and two different composables selected through one collapsed call site
@@ -129,15 +132,22 @@ typed IR:
 - **A call through an erased callable is positional per statement, not per
   call site.** `#[track_caller]` cannot survive coercion to a fn pointer
   or `dyn Fn`: the shim reports the definition site, so every invocation
-  of one erased callable shares one caller. Every statement carries its
-  own fold — expression statements by enclosure, binding statements by a
-  guard pushed before the untouched `let` and dropped after it, which
-  leaves initializer temporaries, `let`-`else`, and coercions exactly as
-  written (pinned as `a_let_bound_erased_call_keeps_its_own_identity`).
+  of one erased callable shares one caller. Every suspension-free
+  statement carries its own fold — expression statements by enclosure,
+  binding statements and macro statements (braced or semicoloned, except
+  a tail-position macro that may be the block's value) by a guard pushed
+  before the untouched statement and dropped after it, which leaves
+  initializer temporaries, `let`-`else`, and coercions exactly as
+  written (pinned as `a_let_bound_erased_call_keeps_its_own_identity`,
+  `a_braced_macro_statement_does_not_feed_the_tail`).
   What remains collapsed is several erased invocations inside one
   statement, which vanish and adopt positionally (pinned as
-  `erased_calls_inside_one_statement_are_positional_by_construction`);
-  the escape is `with_key`. Compose keys every invocation site in its compiler plugin;
+  `erased_calls_inside_one_statement_are_positional_by_construction`),
+  and an erased invocation sharing its statement with an await — no fold
+  can close mid-expression without altering temporaries, so exclusive
+  arms whose erased calls ride awaiting statements collapse (pinned as
+  `erased_calls_beside_an_await_share_position_by_construction`); the
+  escape is `with_key` or a named composable. Compose keys every invocation site in its compiler plugin;
   a runtime fold per call was tried and each wrapper shape violates a
   different language contract — blocks change statement-temporary
   lifetimes, a generic identity fn hardens operator inference, match

@@ -295,7 +295,9 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     branch_groups::inject_branch_groups(&core_path, &mut func.block);
-    func.attrs.push(syn::parse_quote!(#[track_caller]));
+    if func.sig.abi.is_none() {
+        func.attrs.push(syn::parse_quote!(#[track_caller]));
+    }
 
     let scope_label_ident = func.sig.ident.clone();
     let original_block = func.block.clone();

@@ -74,10 +74,10 @@ impl VisitMut for SyncInteriors<'_, '_> {
     }
 }
 
-fn wants_sandwich(stmt: &Stmt) -> bool {
+fn wants_sandwich(stmt: &Stmt, is_tail: bool) -> bool {
     match stmt {
         Stmt::Local(local) => local.init.is_some(),
-        Stmt::Macro(invocation) => invocation.semi_token.is_some(),
+        Stmt::Macro(invocation) => invocation.semi_token.is_some() || !is_tail,
         _ => false,
     }
 }
@@ -113,13 +113,19 @@ impl BranchGroupInjector<'_> {
     }
 
     fn fold_local_statements(&mut self, block: &mut Block) {
-        if !block.stmts.iter().any(wants_sandwich) {
+        let count = block.stmts.len();
+        if !block
+            .stmts
+            .iter()
+            .enumerate()
+            .any(|(index, stmt)| wants_sandwich(stmt, index + 1 == count))
+        {
             return;
         }
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
         let mut rebuilt = Vec::with_capacity(block.stmts.len());
-        for stmt in block.stmts.drain(..) {
-            if wants_sandwich(&stmt) {
+        for (index, stmt) in block.stmts.drain(..).enumerate() {
+            if wants_sandwich(&stmt, index + 1 == count) {
                 rebuilt.push(self.branch_guard_stmt(stmt.span()));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
@@ -380,8 +386,9 @@ impl BranchGroupInjector<'_> {
     fn instrument_nonsuspending_statements(&mut self, block: &mut Block) {
         let previous = std::mem::replace(&mut self.in_content_closure, true);
         let guard = syn::Ident::new("__cranpose_branch_group_guard", Span::mixed_site());
+        let count = block.stmts.len();
         let mut rebuilt = Vec::with_capacity(block.stmts.len());
-        for mut stmt in block.stmts.drain(..) {
+        for (index, mut stmt) in block.stmts.drain(..).enumerate() {
             if stmt_suspends(&stmt) {
                 match &mut stmt {
                     Stmt::Expr(expr, _) => self.instrument_suspending_expr(expr),
@@ -403,7 +410,7 @@ impl BranchGroupInjector<'_> {
                 continue;
             }
             self.visit_stmt_mut(&mut stmt);
-            if wants_sandwich(&stmt) {
+            if wants_sandwich(&stmt, index + 1 == count) {
                 rebuilt.push(self.branch_guard_stmt(stmt.span()));
                 rebuilt.push(stmt);
                 rebuilt.push(syn::parse_quote! { drop(#guard); });
