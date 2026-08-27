@@ -8,6 +8,11 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# What a Cargo.lock records for a crate resolved from crates.io. A lockfile
+# entry without it was resolved from somewhere else -- a `[patch]`, a path
+# dependency, a git dependency.
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+
 
 def load_toml(path: Path) -> dict:
     with path.open("rb") as handle:
@@ -23,26 +28,63 @@ def dependency_version(spec: object) -> str | None:
     return None
 
 
-def root_lock_versions(path: Path) -> dict[str, set[str]]:
+def cranpose_lock_packages(path: Path) -> list[dict]:
+    packages = load_toml(path).get("package")
+    if not isinstance(packages, list):
+        return []
+    return [
+        package
+        for package in packages
+        if isinstance(package, dict)
+        and isinstance(package.get("name"), str)
+        and package["name"].startswith("cranpose")
+    ]
+
+
+def lock_versions(packages: list[dict]) -> dict[str, set[str]]:
     versions: dict[str, set[str]] = {}
-    package_name: str | None = None
-
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if stripped == "[[package]]":
-            package_name = None
-            continue
-        if stripped.startswith("name = "):
-            package_name = stripped.split("=", 1)[1].strip().strip('"')
-            continue
-        if package_name is None or not package_name.startswith("cranpose"):
-            continue
-        if stripped.startswith("version = "):
-            version = stripped.split("=", 1)[1].strip().strip('"')
-            versions.setdefault(package_name, set()).add(version)
-            package_name = None
-
+    for package in packages:
+        version = package.get("version")
+        if isinstance(version, str):
+            versions.setdefault(package["name"], set()).add(version)
     return versions
+
+
+def check_published_lock(
+    path: Path, workspace_version: str, failures: list[str]
+) -> None:
+    """Assert a lockfile resolves every Cranpose crate from crates.io.
+
+    `apps/isolated-demo` is the canary that proves a release is consumable by
+    an outside project, so its lockfile has to pin the *published* crates. A
+    local `[patch]` -- the one `cargo xtask binary-size
+    --patch-workspace-cranpose` applies -- makes cargo drop the `source` and
+    `checksum` lines, which silently turns the canary into a path build that
+    verifies nothing.
+    """
+    relative = path.relative_to(ROOT)
+    packages = cranpose_lock_packages(path)
+    if not packages:
+        failures.append(f"{relative} locks no cranpose packages")
+        return
+
+    for package in packages:
+        name = package["name"]
+        source = package.get("source")
+        if source != CRATES_IO_SOURCE:
+            origin = source if isinstance(source, str) else "a local path"
+            failures.append(
+                f"{relative} resolves {name} from {origin}, expected the "
+                f"published crate at {CRATES_IO_SOURCE}"
+            )
+        elif not isinstance(package.get("checksum"), str):
+            failures.append(f"{relative} package {name} has no checksum")
+        version = package.get("version")
+        if version != workspace_version:
+            failures.append(
+                f"{relative} package {name} is {version}, "
+                f"expected {workspace_version}"
+            )
 
 
 def dependency_tables(manifest: dict) -> list[dict]:
@@ -81,11 +123,11 @@ def main() -> int:
                 f"workspace dependency {name} is {version}, expected {workspace_version}"
             )
 
-    lock_versions = root_lock_versions(ROOT / "Cargo.lock")
-    for name in sorted(expected_package_names.difference(lock_versions)):
+    root_versions = lock_versions(cranpose_lock_packages(ROOT / "Cargo.lock"))
+    for name in sorted(expected_package_names.difference(root_versions)):
         failures.append(f"Cargo.lock is missing workspace package {name}")
 
-    for name, versions in sorted(lock_versions.items()):
+    for name, versions in sorted(root_versions.items()):
         if versions != {workspace_version}:
             found = ", ".join(sorted(versions))
             failures.append(
@@ -103,6 +145,10 @@ def main() -> int:
                     "apps/isolated-demo dependency "
                     f"{name} is {version}, expected {workspace_version}"
                 )
+
+    check_published_lock(
+        ROOT / "apps/isolated-demo/Cargo.lock", workspace_version, failures
+    )
 
     if failures:
         for failure in failures:

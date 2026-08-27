@@ -1,8 +1,8 @@
-#[cfg(test)]
-use std::io;
 use std::{
-    collections::BTreeMap,
-    env, fs,
+    collections::{BTreeMap, BTreeSet},
+    env,
+    ffi::OsString,
+    fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
@@ -457,10 +457,11 @@ fn bundle_macos(options: BundleMacosOptions) -> Result<(), String> {
 
 fn report_binary_size(options: BinarySizeOptions) -> Result<(), String> {
     let workspace = workspace_root()?;
+    let binary = stage_patched_package(&workspace, &options.binary)?;
     if options.build {
-        build_binary(&workspace, &options.binary)?;
+        build_binary(&workspace, &binary)?;
     }
-    report_built_binary(&workspace, &options.binary, options.max_bytes)
+    report_built_binary(&workspace, &binary, options.max_bytes)
 }
 
 fn report_built_binary(
@@ -594,6 +595,7 @@ fn build_dist_min(mut options: DistMinOptions) -> Result<(), String> {
     if options.binary.target.is_none() {
         options.binary.target = Some(host_triple()?);
     }
+    options.binary = stage_patched_package(&workspace, &options.binary)?;
 
     // `cargo +nightly` only works through the rustup shim; inside `cargo
     // xtask` the PATH cargo is the toolchain binary itself, so go through
@@ -821,6 +823,225 @@ fn escape_toml_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+/// Staging root for out-of-workspace packages built with local Cranpose
+/// patches. It lives under the workspace `target/`, which is ignored, so the
+/// lockfile cargo rewrites there is a build artifact like any other.
+const PATCHED_PACKAGE_STAGE: &str = "target/patched-packages";
+
+/// The package files a staged build needs beside its sources.
+const STAGED_PACKAGE_FILES: &[&str] = &["Cargo.toml", "Cargo.lock"];
+
+/// Redirect a patched build at a staged copy of the package it measures.
+///
+/// `--patch-workspace-cranpose` hands cargo a `patch.crates-io.*.path` for
+/// every Cranpose crate. Cargo re-resolves under those patches and rewrites the
+/// package's `Cargo.lock`, dropping the `source` and `checksum` of every
+/// patched crate. `apps/isolated-demo` tracks its lockfile on purpose -- it is
+/// the canary proving a release resolves from crates.io -- so measuring a
+/// binary must not rewrite it. Building a staged copy keeps that lockfile
+/// untouched while the patched resolution lands in `target/`.
+///
+/// A workspace build needs no staging: with no `--manifest-path` cargo resolves
+/// the workspace's own lockfile, which already holds the Cranpose crates as
+/// workspace members.
+fn stage_patched_package(
+    workspace: &Path,
+    options: &CargoBinaryOptions,
+) -> Result<CargoBinaryOptions, String> {
+    let Some(manifest_path) = options.manifest_path.as_deref() else {
+        return Ok(options.clone());
+    };
+    if !options.patch_workspace_cranpose {
+        return Ok(options.clone());
+    }
+
+    let manifest_path = absolute_path(workspace, manifest_path);
+    let package_dir = manifest_path
+        .parent()
+        .ok_or_else(|| format!("`{}` has no package directory", manifest_path.display()))?;
+    let package_dir_name = package_dir
+        .file_name()
+        .ok_or_else(|| format!("`{}` has no package directory name", package_dir.display()))?;
+    let staged = workspace.join(PATCHED_PACKAGE_STAGE).join(package_dir_name);
+
+    let source_roots = package_source_roots(&manifest_path)?;
+    // Cargo reports canonical target paths, so the package directory has to be
+    // canonical as well for them to strip against it.
+    let package_dir = fs::canonicalize(package_dir)
+        .map_err(|error| format!("failed to resolve `{}`: {error}", package_dir.display()))?;
+    stage_package(&package_dir, &staged, &source_roots)?;
+
+    Ok(CargoBinaryOptions {
+        manifest_path: Some(staged.join("Cargo.toml")),
+        ..options.clone()
+    })
+}
+
+/// Mirror the files cargo compiles -- the manifest, the lockfile and every
+/// directory holding a declared target -- into `staged`.
+///
+/// Mirroring the whole package directory instead would drag in whatever other
+/// build systems left inside it (`android/app/build`, `ios/build`, `pkg`), so
+/// the set comes from what cargo itself reports as this package's targets.
+fn stage_package(
+    package_dir: &Path,
+    staged: &Path,
+    source_roots: &[PathBuf],
+) -> Result<(), String> {
+    fs::create_dir_all(staged)
+        .map_err(|error| format!("failed to create `{}`: {error}", staged.display()))?;
+
+    for name in STAGED_PACKAGE_FILES {
+        mirror_optional_file(&package_dir.join(name), &staged.join(name))?;
+    }
+
+    for root in source_roots {
+        let relative = root.strip_prefix(package_dir).map_err(|_| {
+            format!(
+                "cargo target directory `{}` lies outside package `{}`; a patched \
+                 build stages one package, not a workspace",
+                root.display(),
+                package_dir.display()
+            )
+        })?;
+        mirror_dir(root, &staged.join(relative))?;
+    }
+
+    Ok(())
+}
+
+/// The directories holding the cargo targets `manifest_path` declares.
+///
+/// `--no-deps` reports the manifest's own packages without resolving
+/// dependencies, so asking is free and -- unlike a build -- leaves the
+/// package's lockfile alone.
+fn package_source_roots(manifest_path: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .arg("--manifest-path")
+        .arg(manifest_path)
+        .output()
+        .map_err(|error| format!("failed to run cargo metadata: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .map_err(|error| format!("cargo metadata returned invalid UTF-8: {error}"))?;
+    let roots = parse_target_source_roots(&stdout);
+    if roots.is_empty() {
+        return Err(format!(
+            "cargo metadata reported no targets for `{}`",
+            manifest_path.display()
+        ));
+    }
+    Ok(roots)
+}
+
+fn parse_target_source_roots(metadata_json: &str) -> Vec<PathBuf> {
+    const KEY: &str = "\"src_path\":\"";
+    let mut roots = Vec::new();
+    let mut rest = metadata_json;
+
+    while let Some(start) = rest.find(KEY) {
+        rest = &rest[start + KEY.len()..];
+        let Some(end) = rest.find('"') else { break };
+        let src_path = PathBuf::from(unescape_json_string(&rest[..end]));
+        rest = &rest[end..];
+        let Some(root) = src_path.parent() else {
+            continue;
+        };
+        if !roots.iter().any(|known| known == root) {
+            roots.push(root.to_path_buf());
+        }
+    }
+
+    roots
+}
+
+/// Mirror `source` onto `destination`, copying only the files whose bytes
+/// differ and dropping whatever `source` no longer holds.
+///
+/// Copying unconditionally would restamp every mtime and make cargo rebuild the
+/// staged package from scratch on every run; comparing contents first keeps the
+/// measurement incremental.
+fn mirror_dir(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("failed to create `{}`: {error}", destination.display()))?;
+
+    let mut mirrored = BTreeSet::<OsString>::new();
+    for entry in read_dir_entries(source)? {
+        let name = entry.file_name();
+        let source_entry = source.join(&name);
+        let destination_entry = destination.join(&name);
+        if source_entry.is_dir() {
+            mirror_dir(&source_entry, &destination_entry)?;
+        } else {
+            mirror_file(&source_entry, &destination_entry)?;
+        }
+        mirrored.insert(name);
+    }
+
+    for entry in read_dir_entries(destination)? {
+        let name = entry.file_name();
+        if mirrored.contains(&name) {
+            continue;
+        }
+        let stale = destination.join(&name);
+        let removed = if stale.is_dir() {
+            fs::remove_dir_all(&stale)
+        } else {
+            fs::remove_file(&stale)
+        };
+        removed.map_err(|error| format!("failed to remove `{}`: {error}", stale.display()))?;
+    }
+
+    Ok(())
+}
+
+/// Copy `source` onto `destination` unless their bytes already match.
+fn mirror_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let bytes = fs::read(source)
+        .map_err(|error| format!("failed to read `{}`: {error}", source.display()))?;
+    if fs::read(destination).is_ok_and(|mirrored| mirrored == bytes) {
+        return Ok(());
+    }
+    // `fs::copy` rather than `fs::write`: it carries the permission bits over,
+    // so a staged script stays executable.
+    fs::copy(source, destination).map_err(|error| {
+        format!(
+            "failed to copy `{}` to `{}`: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Mirror `source` when it exists, and drop a `destination` left over from a
+/// run where it did.
+fn mirror_optional_file(source: &Path, destination: &Path) -> Result<(), String> {
+    if source.exists() {
+        return mirror_file(source, destination);
+    }
+    match fs::remove_file(destination) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove `{}`: {error}",
+            destination.display()
+        )),
+    }
+}
+
+fn read_dir_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
+    let read = |error| format!("failed to read `{}`: {error}", path.display());
+    fs::read_dir(path)
+        .map_err(read)?
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(read)
+}
+
 fn built_binary_path(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf {
     let mut path = cargo_target_root(workspace, options);
     if let Some(target) = options.target.as_deref() {
@@ -835,15 +1056,18 @@ fn cargo_target_root(workspace: &Path, options: &CargoBinaryOptions) -> PathBuf 
     let Some(manifest_path) = options.manifest_path.as_deref() else {
         return workspace.join("target");
     };
-    let manifest_path = if manifest_path.is_absolute() {
-        manifest_path.to_path_buf()
-    } else {
-        workspace.join(manifest_path)
-    };
-    manifest_path
+    absolute_path(workspace, manifest_path)
         .parent()
         .map(|parent| parent.join("target"))
         .unwrap_or_else(|| workspace.join("target"))
+}
+
+fn absolute_path(workspace: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace.join(path)
+    }
 }
 
 fn cargo_profile_dir(profile: &str) -> &str {
@@ -2183,6 +2407,176 @@ cranpose v0.1.0
             "Developer ID Application: Example"
         );
     }
+
+    #[test]
+    fn patched_isolated_build_never_touches_the_tracked_package() {
+        // `--patch-workspace-cranpose` makes cargo re-resolve and rewrite the
+        // package's Cargo.lock. apps/isolated-demo tracks its lockfile as the
+        // proof that a release resolves from crates.io, so the patched build
+        // has to compile a staged copy instead.
+        let workspace = unique_temp_dir();
+        let package_dir = workspace.join("apps/isolated-demo");
+        fs::create_dir_all(package_dir.join("src")).expect("create package");
+        fs::write(package_dir.join("Cargo.toml"), MINIMAL_MANIFEST).expect("write manifest");
+        fs::write(package_dir.join("Cargo.lock"), PUBLISHED_LOCKFILE).expect("write lockfile");
+        fs::write(package_dir.join("src/main.rs"), b"fn main() {}").expect("write source");
+        // Another build system's output next to the sources must not be staged.
+        fs::create_dir_all(package_dir.join("android/app/build")).expect("create gradle output");
+        fs::write(package_dir.join("android/app/build/huge.apk"), b"output").expect("write output");
+
+        let options = CargoBinaryOptions {
+            package: "isolated-demo".to_owned(),
+            bin: "isolated-demo".to_owned(),
+            profile: "release-small".to_owned(),
+            target: None,
+            manifest_path: Some(PathBuf::from("apps/isolated-demo/Cargo.toml")),
+            patch_workspace_cranpose: true,
+        };
+
+        let staged = stage_patched_package(&workspace, &options).expect("stage patched package");
+
+        let staged_dir = workspace.join(PATCHED_PACKAGE_STAGE).join("isolated-demo");
+        assert_eq!(
+            staged.manifest_path,
+            Some(staged_dir.join("Cargo.toml")),
+            "a patched build must not compile the tracked manifest"
+        );
+        assert_eq!(
+            fs::read_to_string(package_dir.join("Cargo.lock")).expect("read tracked lockfile"),
+            PUBLISHED_LOCKFILE,
+            "the tracked lockfile must survive staging byte for byte"
+        );
+        assert_eq!(
+            fs::read_to_string(staged_dir.join("Cargo.lock")).expect("read staged lockfile"),
+            PUBLISHED_LOCKFILE
+        );
+        assert!(staged_dir.join("src/main.rs").exists());
+        assert!(
+            !staged_dir.join("android").exists(),
+            "staging must copy cargo targets, not another build system's output"
+        );
+        assert_eq!(
+            built_binary_path(&workspace, &staged),
+            staged_dir.join("target/release-small/isolated-demo"),
+            "the measured binary must come from the staged target directory"
+        );
+    }
+
+    #[test]
+    fn staging_is_incremental_and_prunes_removed_sources() {
+        let package_dir = unique_temp_dir().join("package");
+        let source = package_dir.join("src");
+        fs::create_dir_all(source.join("nested")).expect("create sources");
+        fs::write(package_dir.join("Cargo.toml"), b"[package]").expect("write manifest");
+        fs::write(source.join("main.rs"), b"fn main() {}").expect("write source");
+        fs::write(source.join("nested/gone.rs"), b"mod gone;").expect("write source");
+
+        let staged = package_dir.join("staged");
+        let roots = [source.clone()];
+        stage_package(&package_dir, &staged, &roots).expect("stage package");
+        let first = fs::metadata(staged.join("src/main.rs"))
+            .and_then(|metadata| metadata.modified())
+            .expect("staged mtime");
+
+        // Unchanged sources must keep their timestamps, or every run would
+        // rebuild the package from scratch.
+        stage_package(&package_dir, &staged, &roots).expect("restage package");
+        let second = fs::metadata(staged.join("src/main.rs"))
+            .and_then(|metadata| metadata.modified())
+            .expect("restaged mtime");
+        assert_eq!(first, second, "an unchanged source must not be recopied");
+
+        fs::remove_dir_all(source.join("nested")).expect("remove sources");
+        fs::remove_file(package_dir.join("Cargo.toml")).expect("remove manifest");
+        stage_package(&package_dir, &staged, &roots).expect("restage pruned package");
+        assert!(
+            !staged.join("src/nested").exists(),
+            "staging must drop sources the package no longer has"
+        );
+        assert!(!staged.join("Cargo.toml").exists());
+    }
+
+    #[test]
+    fn unpatched_builds_compile_the_manifest_they_were_given() {
+        let workspace = unique_temp_dir();
+        let options = CargoBinaryOptions {
+            manifest_path: Some(PathBuf::from("apps/isolated-demo/Cargo.toml")),
+            ..CargoBinaryOptions::default()
+        };
+
+        let staged = stage_patched_package(&workspace, &options).expect("stage unpatched package");
+
+        assert_eq!(staged, options);
+    }
+
+    #[test]
+    fn workspace_builds_need_no_staging() {
+        let workspace = unique_temp_dir();
+        let options = CargoBinaryOptions {
+            patch_workspace_cranpose: true,
+            ..CargoBinaryOptions::default()
+        };
+
+        let staged = stage_patched_package(&workspace, &options).expect("stage workspace build");
+
+        assert_eq!(staged, options);
+    }
+
+    #[test]
+    fn target_source_roots_dedupe_the_directories_cargo_reports() {
+        let metadata = r#"{"packages":[{"targets":[
+            {"name":"isolated_demo","src_path":"/w/apps/isolated-demo/src/lib.rs"},
+            {"name":"isolated-demo","src_path":"/w/apps/isolated-demo/src/main.rs"},
+            {"name":"build-script-build","src_path":"/w/apps/isolated-demo/build.rs"}
+        ]}]}"#;
+
+        assert_eq!(
+            parse_target_source_roots(metadata),
+            vec![
+                PathBuf::from("/w/apps/isolated-demo/src"),
+                PathBuf::from("/w/apps/isolated-demo"),
+            ]
+        );
+    }
+
+    #[test]
+    fn staging_rejects_targets_outside_the_package() {
+        let root = unique_temp_dir();
+        let package_dir = root.join("package");
+        fs::create_dir_all(&package_dir).expect("create package");
+
+        let error = stage_package(
+            &package_dir,
+            &root.join("staged"),
+            &[root.join("elsewhere")],
+        )
+        .expect_err("a target outside the package must not be staged silently");
+
+        assert!(error.contains("lies outside package"), "{error}");
+    }
+
+    /// Staging asks cargo which directories hold the package's targets, so the
+    /// fixture manifest has to be one cargo accepts.
+    const MINIMAL_MANIFEST: &str = "\
+[package]
+name = \"isolated-demo\"
+version = \"0.1.0\"
+edition = \"2021\"
+
+[[bin]]
+name = \"isolated-demo\"
+path = \"src/main.rs\"
+
+[workspace]
+";
+
+    const PUBLISHED_LOCKFILE: &str = "\
+version = 4
+
+[[package]]
+name = \"isolated-demo\"
+version = \"0.1.0\"
+";
 
     fn unique_temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
