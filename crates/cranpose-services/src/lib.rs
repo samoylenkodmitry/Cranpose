@@ -168,8 +168,8 @@ pub use media::{
     uri_for_path,
 };
 pub use memory_pressure::{
-    observe_memory_pressure, publish_memory_pressure, rememberMemoryPressure, MemoryPressure,
-    MemoryPressureObserver,
+    MemoryPressure, MemoryPressureObserver, observe_memory_pressure, publish_memory_pressure,
+    rememberMemoryPressure,
 };
 pub use navigation::{
     BackRequestObserver, back_interception_enabled, exit_requested, observe_back_requests,

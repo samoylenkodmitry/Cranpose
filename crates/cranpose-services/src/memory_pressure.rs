@@ -7,11 +7,11 @@
 //! pools.
 
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     Arc, Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
-use cranpose_core::{rememberEventStream, EventStream};
+use cranpose_core::{EventStream, rememberEventStream};
 
 /// How hard the platform asks for memory back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
