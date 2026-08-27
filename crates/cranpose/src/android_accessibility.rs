@@ -2,8 +2,8 @@
 #![allow(unsafe_code)]
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 use cranpose_app_shell::AppShell;
@@ -118,7 +118,6 @@ pub(crate) fn sync(
         return Ok(());
     }
     *previous = elements;
-    policy.note_published(now);
     let payload = encode_elements(previous, density);
     with_android_activity_env(app, |env, activity| {
         let payload = env.new_string(payload).map_err(|error| {

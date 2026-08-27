@@ -25,10 +25,12 @@ pub(crate) const ACCESSIBILITY_PUBLISH_INTERVAL: Duration = Duration::from_milli
 /// The platform reports whether any assistive technology is active through
 /// [`update_enabled`](Self::update_enabled); the bridge asks
 /// [`try_begin_publish`](Self::try_begin_publish) before doing any snapshot
-/// work and confirms with [`note_published`](Self::note_published). A publish
-/// refused inside the throttle window leaves a [`wake_deadline`](Self::wake_deadline)
-/// so the event loop can wake once the window opens and flush the trailing
-/// state even if the app has gone idle.
+/// work. A granted probe starts the next throttle window whether or not a
+/// publish follows — a semantics revision that moves every frame while the
+/// projection stays identical must not re-run the snapshot walk per frame. A
+/// probe refused inside the window leaves a
+/// [`wake_deadline`](Self::wake_deadline) so the event loop can wake once the
+/// window opens and flush the trailing state even if the app has gone idle.
 pub(crate) struct AccessibilityPublishPolicy {
     enabled: bool,
     last_publish: Option<Instant>,
@@ -64,10 +66,12 @@ impl AccessibilityPublishPolicy {
         self.enabled
     }
 
-    /// Whether the bridge may publish right now. `false` either means no
-    /// assistive technology is listening, or the throttle window is still
-    /// closed — in the latter case a wake deadline is armed so the trailing
-    /// state cannot be lost to an idle loop.
+    /// Whether the bridge may probe-and-publish right now. `false` either
+    /// means no assistive technology is listening, or the throttle window is
+    /// still closed — in the latter case a wake deadline is armed so the
+    /// trailing state cannot be lost to an idle loop. `true` starts the next
+    /// window immediately: the probe is the cost being rationed, so it counts
+    /// whether or not a publish follows.
     pub(crate) fn try_begin_publish(&mut self, now: Instant) -> bool {
         if !self.enabled {
             return false;
@@ -80,14 +84,10 @@ impl AccessibilityPublishPolicy {
             _ => {
                 // Whatever was pending is being looked at right now.
                 self.pending_deadline = None;
+                self.last_publish = Some(now);
                 true
             }
         }
-    }
-
-    pub(crate) fn note_published(&mut self, now: Instant) {
-        self.last_publish = Some(now);
-        self.pending_deadline = None;
     }
 
     /// When a refused publish is waiting, the instant the loop should wake to
@@ -105,7 +105,6 @@ mod tests {
         let mut policy = AccessibilityPublishPolicy::new();
         assert!(policy.update_enabled(true));
         assert!(policy.try_begin_publish(now));
-        policy.note_published(now);
         policy
     }
 
@@ -171,6 +170,22 @@ mod tests {
         assert!(!policy.try_begin_publish(start + ACCESSIBILITY_PUBLISH_INTERVAL / 2));
         assert!(policy.try_begin_publish(start + ACCESSIBILITY_PUBLISH_INTERVAL));
         assert_eq!(policy.wake_deadline(), None);
+    }
+
+    #[test]
+    fn a_probe_consumes_the_window_even_when_nothing_publishes() {
+        // A revision that moves every frame while the projected elements stay
+        // identical (an animation-only subtree) must not let the full
+        // snapshot-and-compare run on every frame: the probe itself starts a
+        // new throttle window, publish or not.
+        let start = Instant::now();
+        let mut policy = policy_enabled_at(start);
+        let probe = start + ACCESSIBILITY_PUBLISH_INTERVAL;
+        assert!(policy.try_begin_publish(probe));
+        // The bridge found nothing to publish; the very next frame must be
+        // throttled anyway.
+        assert!(!policy.try_begin_publish(probe + Duration::from_millis(16)));
+        assert!(policy.try_begin_publish(probe + ACCESSIBILITY_PUBLISH_INTERVAL));
     }
 
     #[test]
