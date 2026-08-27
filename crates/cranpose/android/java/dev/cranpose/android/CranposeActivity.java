@@ -518,11 +518,17 @@ public class CranposeActivity extends NativeActivity {
     private volatile CranposeMedia cranposeMedia;
     private boolean cranposeBackgroundActive;
     private boolean cranposePaused;
+    // A launch with the screen off pauses without ever resuming. Asking for a
+    // foreground service from that state is a background start: the system
+    // accepts the request, never creates the service, and ends the process for
+    // the missing startForeground. Only an activity the user has actually seen
+    // may ask.
+    private boolean cranposeEverResumed;
 
     public void cranposeSetBackgroundActive(boolean active) {
         cranposeBackgroundActive = active;
         runOnUiThread(() -> {
-            if (active && cranposePaused) {
+            if (active && cranposePaused && cranposeEverResumed) {
                 startCranposeBackgroundService();
             } else if (!active) {
                 stopService(new Intent(this, CranposeBackgroundService.class));
@@ -1954,7 +1960,7 @@ public class CranposeActivity extends NativeActivity {
     @Override
     protected void onPause() {
         cranposePaused = true;
-        if (cranposeBackgroundActive) {
+        if (cranposeBackgroundActive && cranposeEverResumed) {
             startCranposeBackgroundService();
         }
         if (cranposeCamera != null) {
@@ -1967,6 +1973,7 @@ public class CranposeActivity extends NativeActivity {
     protected void onResume() {
         super.onResume();
         cranposePaused = false;
+        cranposeEverResumed = true;
         stopService(new Intent(this, CranposeBackgroundService.class));
     }
 
