@@ -50,9 +50,11 @@ represented structurally:
   by a forward scan for their `(type, source)` identity instead of
   reinitializing, so neighbors keep state across branch cardinality
   changes.
-- A `#[composable]` fn is `#[track_caller]` (skipped on non-Rust ABIs,
-  where the attribute is illegal and an FFI entry point has no composable
-  caller to distinguish — `an_extern_abi_composable_still_compiles`) and
+- A `#[composable]` fn is `#[track_caller]` (an explicit `extern "Rust"`
+  keeps it — `an_extern_rust_composable_keeps_caller_identity`; only
+  non-Rust ABIs skip it, where the attribute is illegal and an FFI entry
+  point has no composable caller to distinguish —
+  `an_extern_abi_composable_still_compiles`) and
   keys its group by its definition location mixed with the caller's
   location
   (`composable_identity_key`, definition key cached in a per-fn static):

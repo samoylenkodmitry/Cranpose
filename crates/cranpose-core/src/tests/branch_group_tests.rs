@@ -4072,3 +4072,37 @@ fn an_extern_abi_composable_still_compiles() {
     assert_eq!((branch_inits(), branch_seen()), (1, 701));
     assert_composition_valid(&composition);
 }
+
+#[composable]
+#[allow(non_snake_case)]
+extern "Rust" fn ExternRustProbe(marker: i32) {
+    let value = remember_branch_marker(marker);
+    BRANCH_SEEN.with(|seen| seen.set(value));
+}
+
+#[composable]
+fn extern_rust_pair_probe(with_first: bool) {
+    let page: fn(i32) = ExternRustProbe;
+    let (_first, _second) = (with_first.then_some(11).map(page), ExternRustProbe(22));
+}
+
+#[test]
+fn an_extern_rust_composable_keeps_caller_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, with_first: bool| {
+        composition.render(111, || extern_rust_pair_probe(with_first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 22));
+
+    pass(&mut composition, false).expect("drop the pointer call");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 22),
+        "extern \"Rust\" is the Rust ABI: the composable stays #[track_caller], \
+         so the direct call keeps its own identity beside an erased neighbor"
+    );
+    assert_composition_valid(&composition);
+}

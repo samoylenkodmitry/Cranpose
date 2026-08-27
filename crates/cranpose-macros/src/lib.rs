@@ -295,7 +295,11 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     branch_groups::inject_branch_groups(&core_path, &mut func.block);
-    if func.sig.abi.is_none() {
+    let has_rust_abi = match &func.sig.abi {
+        None => true,
+        Some(abi) => abi.name.as_ref().is_some_and(|name| name.value() == "Rust"),
+    };
+    if has_rust_abi {
         func.attrs.push(syn::parse_quote!(#[track_caller]));
     }
 
