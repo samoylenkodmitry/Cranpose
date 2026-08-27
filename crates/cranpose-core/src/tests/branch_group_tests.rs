@@ -4190,3 +4190,71 @@ fn generated_identifiers_survive_local_shadowing() {
         .expect("initial composition");
     assert_eq!(branch_seen(), 801);
 }
+
+fn uninstrumented_render_pair(render: fn(i32), include_first: bool) {
+    if include_first {
+        render(1);
+    }
+    render(2);
+}
+
+#[composable(no_skip)]
+fn instrumented_render_pair(render: fn(i32), include_first: bool) {
+    if include_first {
+        render(1);
+    }
+    render(2);
+}
+
+#[composable]
+fn helper_contract_probe(instrumented: bool, include_first: bool) {
+    let render: fn(i32) = CountingPage;
+    if instrumented {
+        instrumented_render_pair(render, include_first);
+    } else {
+        uninstrumented_render_pair(render, include_first);
+    }
+}
+
+#[test]
+fn erased_calls_in_an_uninstrumented_helper_share_position_by_construction() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, include_first: bool| {
+        composition.render(115, || helper_contract_probe(false, include_first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, false).expect("drop the first call");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 71),
+        "the floor: folds exist only inside #[composable] bodies, so a plain \
+         helper's erased calls are purely positional; a helper that composes \
+         is marked #[composable], or keys its calls with with_key"
+    );
+    assert_composition_valid(&composition);
+}
+
+#[test]
+fn erased_calls_in_a_composable_helper_keep_their_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, include_first: bool| {
+        composition.render(116, || helper_contract_probe(true, include_first))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (2, 72));
+
+    pass(&mut composition, false).expect("drop the first call");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 72),
+        "marking the helper #[composable] is the contract: its branches carry \
+         folds and the surviving call keeps its own state"
+    );
+    assert_composition_valid(&composition);
+}

@@ -147,16 +147,24 @@ typed IR:
   making retention descend into detached subtrees is filed as its own task.
 
 - **A call through an erased callable is positional per statement, not per
-  call site.** `#[track_caller]` cannot survive coercion to a fn pointer
+  call site — and folds exist only inside `#[composable]` bodies.**
+  `#[track_caller]` cannot survive coercion to a fn pointer
   or `dyn Fn`: the shim reports the definition site, so every invocation
-  of one erased callable shares one caller. Every suspension-free
-  statement carries its own fold — expression statements by enclosure,
-  binding statements and macro statements (braced or semicoloned, except
-  a tail-position macro that may be the block's value) by a guard pushed
-  before the untouched statement and dropped after it, which leaves
-  initializer temporaries, `let`-`else`, and coercions exactly as
-  written (pinned as `a_let_bound_erased_call_keeps_its_own_identity`,
-  `a_braced_macro_statement_does_not_feed_the_tail`).
+  of one erased callable shares one caller. Inside an attributed body,
+  every suspension-free statement carries its own fold — expression
+  statements by enclosure, binding statements and macro statements
+  (braced or semicoloned, except a tail-position macro that may be the
+  block's value) by a guard pushed before the untouched statement and
+  dropped after it, which leaves initializer temporaries, `let`-`else`,
+  and coercions exactly as written (pinned as
+  `a_let_bound_erased_call_keeps_its_own_identity`,
+  `a_braced_macro_statement_does_not_feed_the_tail`). An attribute macro
+  cannot see any other function, so a plain helper that composes has no
+  folds and its erased calls are purely positional — the contract is
+  that every composing function is `#[composable]`, which restores the
+  per-branch identity, or keys its calls with `with_key`
+  (`erased_calls_in_an_uninstrumented_helper_share_position_by_construction`,
+  `erased_calls_in_a_composable_helper_keep_their_identity`).
   What remains collapsed is several erased invocations inside one
   statement, which vanish and adopt positionally (pinned as
   `erased_calls_inside_one_statement_are_positional_by_construction`),
