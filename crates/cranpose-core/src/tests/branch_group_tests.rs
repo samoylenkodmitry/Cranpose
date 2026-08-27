@@ -3906,3 +3906,42 @@ fn an_expression_bodied_suspending_async_closure_stays_send() {
         .expect("initial composition");
     assert_composition_valid(&composition);
 }
+
+#[composable]
+fn suspending_aggregate_probe(flag: bool) {
+    poll_ready(async {
+        let _pair = (
+            if flag {
+                let value = remember_branch_marker(501);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+                value
+            } else {
+                let value = remember_branch_marker(502);
+                BRANCH_SEEN.with(|seen| seen.set(value));
+                value
+            },
+            std::future::ready(()).await,
+        );
+    });
+}
+
+#[test]
+fn an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity() {
+    reset_branch_probes();
+    let mut composition = test_composition();
+    let pass = |composition: &mut Composition<MemoryApplier>, flag: bool| {
+        composition.render(106, || suspending_aggregate_probe(flag))
+    };
+
+    pass(&mut composition, true).expect("initial composition");
+    assert_eq!((branch_inits(), branch_seen()), (1, 501));
+
+    pass(&mut composition, false).expect("switch arms inside the tuple");
+    assert_eq!(
+        (branch_inits(), branch_seen()),
+        (2, 502),
+        "an await-free conditional nested in an aggregate carries folds that \
+         close before the awaiting sibling evaluates; its arms must not share slots"
+    );
+    assert_composition_valid(&composition);
+}

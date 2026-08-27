@@ -23,6 +23,38 @@ pub(crate) fn inject_branch_groups(core_path: &TokenStream2, block: &mut Block) 
     }
 }
 
+/// One level of an aggregate expression that suspends somewhere: each
+/// immediate child is handed back whole — the normal visitor when the child
+/// is await-free (its guards close inside the child's own evaluation, before
+/// any sibling awaits), the suspension-aware walker when the child awaits.
+struct SuspendingChildren<'a, 'b> {
+    injector: &'a mut BranchGroupInjector<'b>,
+}
+
+impl SuspendingChildren<'_, '_> {
+    fn visit_expr_children(&mut self, expr: &mut Expr) {
+        visit_mut::visit_expr_mut(self, expr);
+    }
+}
+
+impl VisitMut for SuspendingChildren<'_, '_> {
+    fn visit_expr_mut(&mut self, expr: &mut Expr) {
+        self.injector.instrument_suspending_child(expr);
+    }
+
+    fn visit_item_mut(&mut self, item: &mut syn::Item) {
+        self.injector.visit_item_mut(item);
+    }
+
+    fn visit_type_mut(&mut self, _ty: &mut syn::Type) {}
+
+    fn visit_angle_bracketed_generic_arguments_mut(
+        &mut self,
+        _args: &mut syn::AngleBracketedGenericArguments,
+    ) {
+    }
+}
+
 struct SyncInteriors<'a, 'b> {
     injector: &'a mut BranchGroupInjector<'b>,
 }
@@ -237,6 +269,14 @@ impl BranchGroupInjector<'_> {
         }
     }
 
+    fn instrument_suspending_child(&mut self, expr: &mut Expr) {
+        if expr_contains_await(expr) {
+            self.instrument_suspending_expr(expr);
+        } else {
+            self.visit_expr_mut(expr);
+        }
+    }
+
     fn instrument_suspending_expr(&mut self, expr: &mut Expr) {
         match expr {
             Expr::If(expr_if) => {
@@ -252,11 +292,7 @@ impl BranchGroupInjector<'_> {
                 }
             }
             Expr::Match(expr_match) => {
-                if expr_contains_await(&expr_match.expr) {
-                    self.instrument_suspending_expr(&mut expr_match.expr);
-                } else {
-                    self.visit_expr_mut(&mut expr_match.expr);
-                }
+                self.instrument_suspending_child(&mut expr_match.expr);
                 for arm in &mut expr_match.arms {
                     if let Some((_, guard)) = &mut arm.guard {
                         self.instrument_suspending_condition(guard);
@@ -273,11 +309,7 @@ impl BranchGroupInjector<'_> {
                 self.instrument_block_by_suspension(&mut while_loop.body);
             }
             Expr::ForLoop(for_loop) => {
-                if expr_contains_await(&for_loop.expr) {
-                    self.instrument_suspending_expr(&mut for_loop.expr);
-                } else {
-                    self.visit_expr_mut(&mut for_loop.expr);
-                }
+                self.instrument_suspending_child(&mut for_loop.expr);
                 self.instrument_block_by_suspension(&mut for_loop.body);
             }
             Expr::Loop(loop_expr) => self.instrument_block_by_suspension(&mut loop_expr.body),
@@ -289,20 +321,20 @@ impl BranchGroupInjector<'_> {
             }
             Expr::Paren(paren) => self.instrument_suspending_expr(&mut paren.expr),
             Expr::Group(group) => self.instrument_suspending_expr(&mut group.expr),
-            Expr::Await(await_expr) => self.instrument_suspending_expr(&mut await_expr.base),
-            Expr::Let(let_expr) => self.instrument_suspending_expr(&mut let_expr.expr),
-            Expr::Assign(assign) => self.instrument_suspending_expr(&mut assign.right),
+            Expr::Await(await_expr) => self.instrument_suspending_child(&mut await_expr.base),
+            Expr::Let(let_expr) => self.instrument_suspending_child(&mut let_expr.expr),
+            Expr::Assign(assign) => self.instrument_suspending_child(&mut assign.right),
             Expr::Return(expr_return) => {
                 if let Some(value) = &mut expr_return.expr {
-                    self.instrument_suspending_expr(value);
+                    self.instrument_suspending_child(value);
                 }
             }
             Expr::Break(expr_break) => {
                 if let Some(value) = &mut expr_break.expr {
-                    self.instrument_suspending_expr(value);
+                    self.instrument_suspending_child(value);
                 }
             }
-            other => self.instrument_sync_interiors(other),
+            other => SuspendingChildren { injector: self }.visit_expr_children(other),
         }
     }
 

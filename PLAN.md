@@ -169,11 +169,16 @@ typed IR:
   `an_expression_bodied_suspending_async_closure_stays_send` — every
   guard a future's body emits resolves the composer through the deferred
   thread-local lookup, never through the outer alias, whatever shape the
-  body takes). A condition whose spine awaits
-  still folds its await-free `&&`/`||` operands individually
-  (`an_await_free_operand_of_a_suspending_condition_keeps_branch_identity`).
-  What stays bare is only the non-control-flow expression carrying the
-  await itself and any opaque macro invocation — its expansion may suspend, and
+  body takes). The same split runs through every aggregate: a condition
+  whose spine awaits folds its await-free `&&`/`||` operands
+  individually
+  (`an_await_free_operand_of_a_suspending_condition_keeps_branch_identity`),
+  and an await-free child of a suspending tuple, call, or binary gets
+  the normal visitor whole, its guards closing before the awaiting
+  sibling evaluates
+  (`an_await_free_conditional_beside_an_awaiting_sibling_keeps_branch_identity`).
+  What stays bare is only the awaiting chain link itself and any opaque
+  macro invocation — its expansion may suspend, and
   under-instrumentation is the `Send`-safe side. A value-position
   let-scrutinee inside such a statement also carries no fold of its own:
   the sync path covers that spot with a whole-statement fold, and a
