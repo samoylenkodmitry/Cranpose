@@ -17,6 +17,8 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -516,28 +518,60 @@ public class CranposeActivity extends NativeActivity {
     private CranposeAccessibilityProvider cranposeAccessibilityProvider;
     private CranposeCamera cranposeCamera;
     private volatile CranposeMedia cranposeMedia;
+    /** How long a pause must last before the foreground service is asked for.
+     * Launch-shaped pauses — a screen-off start that pauses without ever
+     * resuming, an EMUI start that pauses and resumes together — get
+     * {@code startForegroundService} accepted but the service never created,
+     * and the framework then ends the process for the missing
+     * {@code startForeground}. A real backgrounding outlives this delay, and
+     * the delayed ask still lands inside the grace window Android grants an
+     * app that just left the foreground. */
+    private static final long BACKGROUND_SERVICE_ASK_DELAY_MS = 700;
+
+    /** Background-service state, all of it confined to the UI thread: JNI
+     * callers cross over in {@link #cranposeSetBackgroundActive}, and
+     * {@link #onPause} reads on the UI thread, so an off-thread write would be
+     * a data race. */
     private boolean cranposeBackgroundActive;
     private boolean cranposePaused;
-    // A launch with the screen off pauses without ever resuming. Asking for a
-    // foreground service from that state is a background start: the system
-    // accepts the request, never creates the service, and ends the process for
-    // the missing startForeground. Only an activity the user has actually seen
-    // may ask.
     private boolean cranposeEverResumed;
+    private final Handler cranposeBackgroundServiceHandler = new Handler(Looper.getMainLooper());
+    private final Runnable cranposeBackgroundServiceAsk = this::startCranposeBackgroundService;
 
     public void cranposeSetBackgroundActive(boolean active) {
-        cranposeBackgroundActive = active;
         runOnUiThread(() -> {
-            if (active && cranposePaused && cranposeEverResumed) {
-                startCranposeBackgroundService();
+            cranposeBackgroundActive = active;
+            if (active && cranposePaused) {
+                askForCranposeBackgroundService();
             } else if (!active) {
-                stopService(new Intent(this, CranposeBackgroundService.class));
+                cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
+                CranposeBackgroundService.stop(this);
             }
         });
     }
 
+    private void askForCranposeBackgroundService() {
+        if (!cranposeEverResumed) {
+            // A lifetime that never reached the foreground must not ask:
+            // Android accepts the call, defers creating the service while the
+            // screen is off, and ends the process when nothing calls
+            // startForeground.
+            return;
+        }
+        cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
+        cranposeBackgroundServiceHandler.postDelayed(
+                cranposeBackgroundServiceAsk, BACKGROUND_SERVICE_ASK_DELAY_MS);
+    }
+
     private void startCranposeBackgroundService() {
+        if (!cranposeBackgroundActive || !cranposePaused) {
+            // The world moved while the ask waited: the work finished, or the
+            // activity resumed. Starting now would leave a foreground service
+            // with nothing to protect.
+            return;
+        }
         Intent service = new Intent(this, CranposeBackgroundService.class);
+        CranposeBackgroundService.noteStartRequested();
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 startForegroundService(service);
@@ -1961,8 +1995,8 @@ public class CranposeActivity extends NativeActivity {
     @Override
     protected void onPause() {
         cranposePaused = true;
-        if (cranposeBackgroundActive && cranposeEverResumed) {
-            startCranposeBackgroundService();
+        if (cranposeBackgroundActive) {
+            askForCranposeBackgroundService();
         }
         if (cranposeCamera != null) {
             cranposeCamera.stop();
@@ -1975,7 +2009,8 @@ public class CranposeActivity extends NativeActivity {
         super.onResume();
         cranposePaused = false;
         cranposeEverResumed = true;
-        stopService(new Intent(this, CranposeBackgroundService.class));
+        cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
+        CranposeBackgroundService.stop(this);
     }
 
     private static final java.util.concurrent.atomic.AtomicBoolean cranposeTrimHookInstalled =
@@ -2017,7 +2052,8 @@ public class CranposeActivity extends NativeActivity {
 
     @Override
     protected void onDestroy() {
-        stopService(new Intent(this, CranposeBackgroundService.class));
+        cranposeBackgroundServiceHandler.removeCallbacks(cranposeBackgroundServiceAsk);
+        CranposeBackgroundService.stop(this);
         try {
             unregisterReceiver(cranposeUpdateInstallReceiver);
         } catch (IllegalArgumentException ignored) {

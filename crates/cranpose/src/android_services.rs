@@ -290,7 +290,7 @@ struct AndroidBackgroundActivity {
 
 impl BackgroundActivity for AndroidBackgroundActivity {
     fn set_active(&self, active: bool) {
-        let _ = with_android_activity_env(&self.app, |env, activity| {
+        let result = with_android_activity_env(&self.app, |env, activity| {
             env.call_method(
                 &activity,
                 jni_str!("cranposeSetBackgroundActive"),
@@ -303,6 +303,11 @@ impl BackgroundActivity for AndroidBackgroundActivity {
                 error.to_string()
             })
         });
+        if let Err(error) = result {
+            // Swallowed, this failure reads as "the app never asked" when a
+            // backgrounded import later runs with no foreground service.
+            log::warn!("Android background activity set_active({active}) failed: {error}");
+        }
     }
 }
 
