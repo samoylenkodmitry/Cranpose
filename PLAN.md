@@ -72,10 +72,13 @@ represented structurally:
   (`a_surviving_keyed_remember_keeps_its_slot_when_a_same_statement_neighbor_leaves`,
   `a_surviving_coroutine_scope_keeps_its_identity_when_a_neighbor_leaves`,
   `a_surviving_animation_keeps_its_state_when_a_same_statement_neighbor_leaves`).
-  A composition-local provider entry is keyed by its `LocalKey` besides
-  its position, so two same-typed providers never adopt each other's
-  entry and subscriptions when a neighbor leaves
-  (`a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves`).
+  A composition-local provider entry is keyed by its creation site — the
+  `LocalKey`, the `provides` call site, and the branch fold in effect
+  while the provider list was built — so neither two same-typed locals
+  nor two providers of the same local adopt each other's entry and
+  subscriptions when a neighbor leaves
+  (`a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves`,
+  `a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves`).
 
 Branch departure needs no special lifecycle: an arm's groups and slots are
 ordinary unvisited content, detached and dispose-or-retained exactly as

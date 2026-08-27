@@ -13,6 +13,13 @@ impl SlotWriteSession<'_> {
             .debug_assert_no_pending_payload_location_refreshes("payload location flush");
     }
 
+    /// The branch fold currently in effect, for identity captured at a
+    /// creation site rather than at slot-write time — a provider entry built
+    /// in one arm must not share identity with one built in another.
+    pub(crate) fn active_branch_fold(&mut self) -> crate::Key {
+        self.state.branch_fold()
+    }
+
     /// Thin monomorphic shim: the payload machinery below works on a
     /// [`PayloadInit`] so it is compiled once instead of once per remembered
     /// value type.

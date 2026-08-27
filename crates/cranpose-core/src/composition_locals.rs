@@ -5,6 +5,19 @@ use crate::{
     state::{MutationPolicy, OwnedMutableState},
 };
 
+/// The identity of one `provides` call: the local's own salt, the call site,
+/// and the branch fold in effect while the provider list was built. Same-local
+/// providers at different sites or in different arms must not adopt each
+/// other's entries when a neighbor leaves.
+fn provider_entry_source(key: LocalKey, caller: crate::Key) -> crate::Key {
+    let fold = composer_context::try_with_composer(|composer| {
+        composer.with_slot_session_mut(|slots| slots.active_branch_fold())
+    })
+    .unwrap_or(crate::slot::BRANCH_PATH_ROOT);
+    let sited = (key.entry_source() ^ caller).wrapping_mul(0x0000_0100_0000_01b3);
+    (sited ^ fold).wrapping_mul(0x0000_0100_0000_01b3)
+}
+
 pub struct ProvidedValue {
     key: LocalKey,
     #[allow(clippy::type_complexity)] // Closure returns trait object for flexible local values
@@ -102,9 +115,10 @@ impl<T: Clone + 'static> PartialEq for CompositionLocal<T> {
 impl<T: Clone + 'static> Eq for CompositionLocal<T> {}
 
 impl<T: Clone + 'static> CompositionLocal<T> {
+    #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key;
-        let entry_source = key.entry_source();
+        let entry_source = provider_entry_source(key, crate::caller_location_key());
         let equivalent = Arc::clone(&self.equivalent);
         ProvidedValue {
             key,
@@ -188,9 +202,10 @@ impl<T: Clone + 'static> PartialEq for StaticCompositionLocal<T> {
 impl<T: Clone + 'static> Eq for StaticCompositionLocal<T> {}
 
 impl<T: Clone + 'static> StaticCompositionLocal<T> {
+    #[track_caller]
     pub fn provides(&self, value: T) -> ProvidedValue {
         let key = self.key;
-        let entry_source = key.entry_source();
+        let entry_source = provider_entry_source(key, crate::caller_location_key());
         ProvidedValue {
             key,
             apply: Box::new(move |composer: &Composer| {

@@ -4426,3 +4426,59 @@ fn a_surviving_provider_keeps_its_entry_when_a_same_typed_neighbor_leaves() {
          neighbor's entry orphans the reader's subscription"
     );
 }
+
+#[test]
+fn a_surviving_same_local_provider_keeps_its_entry_when_the_leader_leaves() {
+    thread_local! {
+        static SAME_LOCAL_READ: Cell<i32> = const { Cell::new(0) };
+    }
+
+    let local = compositionLocalOf(|| 0);
+    let mut composition = test_composition();
+    let runtime = composition.runtime_handle();
+    let with_leading = MutableState::with_runtime(true, runtime.clone());
+    let survivor_value = MutableState::with_runtime(10, runtime.clone());
+
+    #[composable]
+    fn reader(local: CompositionLocal<i32>) {
+        let value = local.current();
+        SAME_LOCAL_READ.with(|slot| slot.set(value));
+    }
+
+    #[composable]
+    fn tree(
+        local: CompositionLocal<i32>,
+        with_leading: MutableState<bool>,
+        survivor_value: MutableState<i32>,
+    ) {
+        let mut provided = Vec::new();
+        if with_leading.value() {
+            provided.push(local.provides(10));
+        }
+        provided.push(local.provides(survivor_value.value()));
+        CompositionLocalProvider(provided, || reader(local.clone()));
+    }
+
+    composition
+        .render(864, || tree(local.clone(), with_leading, survivor_value))
+        .expect("initial composition");
+    assert_eq!(SAME_LOCAL_READ.with(Cell::get), 10);
+
+    with_leading.set_value(false);
+    while composition
+        .process_invalid_scopes()
+        .expect("drop the leading provider")
+    {}
+
+    survivor_value.set_value(20);
+    while composition
+        .process_invalid_scopes()
+        .expect("change the surviving provider's value")
+    {}
+    assert_eq!(
+        SAME_LOCAL_READ.with(Cell::get),
+        20,
+        "the surviving provider of the same local must keep its own entry; \
+         adopting the departed leader's entry orphans the reader's subscription"
+    );
+}
