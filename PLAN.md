@@ -175,7 +175,10 @@ typed IR:
   what they define is.** A `const fn` body, like every const context,
   stays untouched for const-eval legality while the callables it defines
   or returns are instrumented through the interior visitor
-  (`a_const_fn_returned_callable_keeps_branch_identity`).
+  (`a_const_fn_returned_callable_keeps_branch_identity`). A naked
+  function's body must stay a single `naked_asm!` invocation, so both
+  spellings of the attribute leave the body entirely alone
+  (`a_naked_nested_fn_stays_untouched`).
 - **An async body that awaits is not composition territory, but what it
   defines is.** An await-free async block, closure, or nested `async fn`
   runs synchronously when polled, so its conditionals carry folds like

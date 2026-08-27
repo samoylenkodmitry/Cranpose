@@ -1650,6 +1650,11 @@ fn workspace_ffi_boundaries_are_explicit() {
         // android_purchase_wire.rs, which is built and tested on the host.
         "crates/cranpose/src/android_purchases.rs",
         "crates/cranpose/src/android_text_input.rs",
+        // Not a boundary: the `unsafe` tokens are parse-only fixtures in the
+        // injector's tests, pinning that a naked function's body — which must
+        // stay a single `naked_asm!` call — receives no instrumentation. The
+        // macro compiles no unsafe code of its own.
+        "crates/cranpose-macros/src/branch_groups.rs",
         // One `AChoreographer_postFrameCallback64` and the callback it posts,
         // which is how the frame loop learns when the display is ready for the
         // next frame.

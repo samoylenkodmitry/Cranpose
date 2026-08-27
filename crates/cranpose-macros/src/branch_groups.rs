@@ -89,6 +89,23 @@ fn stmt_suspends(stmt: &Stmt) -> bool {
     scan.found
 }
 
+/// Both spellings of the naked marker: `#[naked]` and the edition-2024
+/// `#[unsafe(naked)]`. A naked body must stay a single `naked_asm!` call, so
+/// it can carry no instrumentation at all.
+fn is_naked_attr(attr: &syn::Attribute) -> bool {
+    if attr.path().is_ident("naked") {
+        return true;
+    }
+    if let syn::Meta::List(list) = &attr.meta
+        && list.path.is_ident("unsafe")
+    {
+        return list.tokens.clone().into_iter().any(
+            |token| matches!(&token, proc_macro2::TokenTree::Ident(ident) if ident == "naked"),
+        );
+    }
+    false
+}
+
 fn composer_alias_ident() -> syn::Ident {
     syn::Ident::new("__cranpose_branch_composer", Span::mixed_site())
 }
@@ -438,6 +455,9 @@ impl BranchGroupInjector<'_> {
     ) {
         let runs_during_composition =
             signature.constness.is_none() && signature.asyncness.is_none();
+        if attrs.iter().any(is_naked_attr) {
+            return;
+        }
         let expands_itself = attrs.iter().any(|attr| {
             attr.path()
                 .segments
@@ -704,4 +724,53 @@ fn expr_contains_let(expr: &Expr) -> bool {
     let mut scan = LetScan { found: false };
     scan.visit_expr(expr);
     scan.found
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::{ToTokens, quote};
+
+    use super::*;
+
+    fn nested_fn_tokens(stmt: &Stmt) -> Option<String> {
+        match stmt {
+            Stmt::Item(syn::Item::Fn(item)) => Some(item.to_token_stream().to_string()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_naked_nested_fn_stays_untouched() {
+        let mut block: Block = syn::parse_quote!({
+            #[unsafe(naked)]
+            unsafe extern "C" fn trampoline() {
+                core::arch::naked_asm!("ret");
+            }
+            #[naked]
+            unsafe extern "C" fn older_spelling() {
+                core::arch::naked_asm!("ret");
+            }
+            let _ = trampoline as unsafe extern "C" fn();
+        });
+        let reference = block.clone();
+        let core_path = quote!(::cranpose_core);
+        inject_branch_groups(&core_path, &mut block);
+
+        let before: Vec<String> = reference
+            .stmts
+            .iter()
+            .filter_map(nested_fn_tokens)
+            .collect();
+        let after: Vec<String> = block.stmts.iter().filter_map(nested_fn_tokens).collect();
+        assert_eq!(before.len(), 2, "the probe declares both naked spellings");
+        assert_eq!(
+            before, after,
+            "a naked body must stay a single naked_asm! call; instrumentation \
+             inside it is a compile error for the user"
+        );
+        assert!(
+            block.stmts.len() > reference.stmts.len(),
+            "the sibling statements around the naked items are still instrumented"
+        );
+    }
 }
